@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Environment
+.env
+**/settings_local.yaml
+credentials*.yaml
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Reports / outputs
+reports/
+output/
+
+# Logs
+*.log
+
+# SDK cache (user-specific)
+AmazingData/
+
+# OS
+Thumbs.db
+.DS_Store

@@ -1,0 +1,61 @@
+# ============================================================
+# YuriQuant 个人量化研究系统 - 全局配置
+# ============================================================
+
+# --- 数据源配置 ---
+datasource:
+  # 数据源类型: amazing_data | csv | akshare
+  # 切换数据源只需改 type，不用动业务代码
+  type: amazing_data
+
+  amazing_data:
+    # 真实凭证请通过环境变量 AMAZINGDATA_USER / AMAZINGDATA_PWD 注入
+    # 这里仅占位，代码里优先读环境变量
+    username: ${AMAZINGDATA_USER:}
+    password: ${AMAZINGDATA_PWD:}
+    host: ${AMAZINGDATA_HOST:}
+    port: ${AMAZINGDATA_PORT:0}
+    # SDK 本地缓存目录（AmazingData 自带的 is_local 方案，SDK 内部用 pickle 格式）
+    sdk_local_path: e://data//sdk_cache//
+
+  csv:
+    # 备用 CSV 数据源：指向一个目录，里面按 表名/代码.csv 组织
+    root: e://data//csv//
+
+# --- 本地缓存（自建 Parquet 层，在数据源之上） ---
+cache:
+  # 自建 Parquet 缓存根目录
+  root: e://data//parquet//
+  # 压缩方式: snappy | zstd | gzip
+  compression: snappy
+
+# --- 股票池配置 ---
+universe:
+  # 默认股票池: hs300 | zz500 | all_a | custom
+  default: hs300
+  # 指数成分股相关
+  index_code: "000300.SH"   # 沪深300
+  # 是否使用后复权
+  adjust: backward           # backward | forward | none
+
+# --- 交易日历 ---
+calendar:
+  # 市场代码: SSE | SZSE | BSE | A
+  market: A
+
+# --- 数据拉取默认范围 ---
+fetch:
+  # 默认起始日期（8位整型，SDK 约定）
+  begin_date: 20260101
+  # end_date 留空表示"至今"，由代码动态取 calendar[-1]
+  end_date: null
+
+# --- 回测默认参数（后续阶段用） ---
+backtest:
+  commission_rate: 0.0001    # 双边佣金万1
+  commission_min: 5.0        # 单笔最低佣金5元
+  stamp_duty: 0.001          # 印花税卖出千1
+  slippage_bp: 5             # 滑点 5bp
+  initial_capital: 100000   # 初始资金 10万
+  rebalance_freq: M          # D=日 / W=周 / M=月调仓
+  benchmark: "000300.SH"
