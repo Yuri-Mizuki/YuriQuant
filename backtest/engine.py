@@ -78,6 +78,7 @@ class VectorBacktest:
         self,
         factor_panel: pd.DataFrame,
         returns_panel: pd.DataFrame,
+        executable_mask: pd.DataFrame | None = None,
     ) -> BacktestResult:
         """执行回测。
 
@@ -85,6 +86,10 @@ class VectorBacktest:
             factor_panel: DataFrame(index=date, columns=code), 因子值。
             returns_panel: DataFrame(index=date, columns=code), 日收益率。
                           通常 = close.pct_change()，用次日收益（信号日次日）。
+            executable_mask: DataFrame(index=date, columns=code), bool，
+                          True=当日可开仓/调仓。为 None 时不做任何限制（原有行为）。
+                          用于把停牌、涨跌停封板、不在当日成分股内的标的强制权重置零，
+                          避免回测悄悄假设这些不可能成交的仓位能够建立。
         Returns:
             BacktestResult
         """
@@ -98,6 +103,11 @@ class VectorBacktest:
         codes = fp.columns
         n_days = len(dates)
         n_codes = len(codes)
+
+        mask_values = None
+        if executable_mask is not None:
+            mask_aligned = executable_mask.reindex(index=dates, columns=codes).fillna(False)
+            mask_values = mask_aligned.values.astype(bool)
 
         # 调仓日
         rebalance_days = self._get_rebalance_days(dates)
@@ -131,6 +141,9 @@ class VectorBacktest:
                     new_arr = new_weights.reindex(codes).fillna(0.0).values.astype(np.float64)
                 else:
                     new_arr = np.zeros(n_codes, dtype=np.float64)
+
+                if mask_values is not None:
+                    new_arr = _apply_executable_mask(new_arr, mask_values[i])
 
                 # 换手
                 turnover = np.abs(new_arr - current_weights).sum() / 2
@@ -178,3 +191,30 @@ class VectorBacktest:
             return set(s.groupby(s.index.to_period("M")).first())
         else:
             return set(dates)
+
+
+def _apply_executable_mask(weights: np.ndarray, executable: np.ndarray) -> np.ndarray:
+    """把不可执行标的的权重强制置零，再按原符号结构重新归一化。
+
+    多头部分（正权重）归一到原多头权重之和，空头部分（负权重）归一到原空头
+    权重之和的绝对值；任何一侧被完全清零时该侧直接保持为 0（不做除零重分配）。
+    """
+    masked = weights * executable
+    out = np.zeros_like(masked)
+
+    pos_mask = masked > 0
+    neg_mask = masked < 0
+
+    orig_pos_sum = weights[weights > 0].sum()
+    orig_neg_sum = weights[weights < 0].sum()
+
+    masked_pos_sum = masked[pos_mask].sum()
+    masked_neg_sum = masked[neg_mask].sum()
+
+    if masked_pos_sum > 0 and orig_pos_sum > 0:
+        out[pos_mask] = masked[pos_mask] * (orig_pos_sum / masked_pos_sum)
+    if masked_neg_sum < 0 and orig_neg_sum < 0:
+        out[neg_mask] = masked[neg_mask] * (orig_neg_sum / masked_neg_sum)
+
+    return out
+

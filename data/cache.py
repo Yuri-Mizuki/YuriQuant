@@ -11,7 +11,9 @@
 --------
 cache_root/
 ├── daily.parquet          # 日K线 (date, code 多索引)
-├── adj_factor.parquet    # 复权因子
+├── adj_factor.parquet    # 单次复权因子
+├── backward_factor.parquet  # 累积后复权因子
+├── history_stock_status.parquet  # 历史涨跌停/停牌/ST (date, code 多索引)
 ├── calendar.parquet      # 交易日历
 ├── code_info.parquet     # 证券信息
 ├── index_constituent_000300SH.parquet  # 指数成分
@@ -20,7 +22,6 @@ cache_root/
 from __future__ import annotations
 
 import json
-from datetime import date
 from pathlib import Path
 from typing import Iterable
 
@@ -147,6 +148,63 @@ class DataCache:
             combined = combined.loc[:, ~combined.columns.duplicated(keep="last")]
             combined.to_parquet(p, compression="snappy")
             return combined.sort_index()
+        return local_df
+
+    def get_backward_factor(self, code_list: Iterable[str]) -> pd.DataFrame:
+        """累积后复权因子，缓存模式同 get_adj_factor（宽表全量刷新）。"""
+        p = self._root / "backward_factor.parquet"
+        codes = list(code_list)
+        local_df = pd.DataFrame()
+        if p.exists():
+            local_df = pd.read_parquet(p)
+            cols = [c for c in codes if c in local_df.columns]
+            local_df = local_df[cols]
+
+        new_df = self._ds.get_backward_factor(codes)
+        if not new_df.empty:
+            combined = pd.concat([local_df, new_df], axis=1)
+            combined = combined.loc[:, ~combined.columns.duplicated(keep="last")]
+            combined.to_parquet(p, compression="snappy")
+            return combined.sort_index()
+        return local_df
+
+    # ---- 历史涨跌停/停牌/ST ----
+    def get_history_stock_status(
+        self,
+        code_list: Iterable[str],
+        begin_date: int,
+        end_date: int,
+    ) -> pd.DataFrame:
+        """按日历史证券状态，增量更新模式同 get_daily_kline（长表 (date, code) 索引）。"""
+        p = self._root / "history_stock_status.parquet"
+        codes = list(code_list)
+
+        local_df = pd.DataFrame()
+        if p.exists():
+            local_df = pd.read_parquet(p)
+            if not local_df.empty:
+                local_df = local_df.reset_index()
+                local_df = local_df[local_df["code"].isin(codes)]
+                local_df = local_df.set_index(["date", "code"]).sort_index()
+
+        last = self._get_last_date("history_stock_status")
+        fetch_begin = begin_date
+        if last is not None:
+            fetch_begin = last + 1
+        if fetch_begin > end_date:
+            return local_df
+
+        new_df = self._ds.get_history_stock_status(codes, fetch_begin, end_date)
+        if not new_df.empty:
+            new_df = new_df.set_index(["date", "code"]).sort_index()
+            combined = pd.concat([local_df, new_df])
+            combined = combined[~combined.index.duplicated(keep="last")]
+            combined = combined.sort_index()
+            combined.to_parquet(p, compression="snappy")
+            max_date = combined.index.get_level_values("date").max()
+            last_int = int(pd.Timestamp(max_date).strftime("%Y%m%d"))
+            self._set_last_date("history_stock_status", last_int)
+            return combined
         return local_df
 
     # ---- 指数成分 ----
