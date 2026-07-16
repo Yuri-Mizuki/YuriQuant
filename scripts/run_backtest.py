@@ -34,7 +34,7 @@ import pandas as pd
 
 from backtest import VectorBacktest
 from factor import ALL_FACTORS
-from research import generate_comparison_report, generate_excel_report, generate_single_report
+from research import generate_excel_report
 from research.factor_analysis import factor_summary
 from strategy import QuantileLongShort, TopKLongOnly, TopKLongShort
 
@@ -207,23 +207,8 @@ def main():
                  result.metrics()["sharpe"],
                  fs.get("ic_mean", 0))
 
-    # 4. 报告
+    # 4. 报告（单一 Excel 文件：每个因子一个 sheet + 多因子时自动加对比 sheet）
     report_dir = Path("reports")
-    if len(results) == 1:
-        # 单因子 → 完整报告
-        name, result = list(results.items())[0]
-        fs = factor_summaries.get(name, {})
-        generate_single_report(result, name, factor_summary=fs, output_dir=report_dir)
-        log.info("单因子报告: %s/report_%s.png", report_dir.resolve(), name)
-    else:
-        # 多因子 → 每个单独报告 + 对比报告
-        for name, result in results.items():
-            fs = factor_summaries.get(name, {})
-            generate_single_report(result, name, factor_summary=fs, output_dir=report_dir)
-        generate_comparison_report(results, factor_summaries, output_dir=report_dir)
-        log.info("多因子对比报告: %s/comparison.png", report_dir.resolve())
-
-    # Excel 报告（所有情况都生成）
     xlsx_path = report_dir / "yuriquant_report.xlsx"
     generate_excel_report(results, factor_summaries, output_path=xlsx_path)
     log.info("Excel 报告: %s", xlsx_path.resolve())
