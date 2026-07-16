@@ -1,0 +1,49 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "yuriquant"
+version = "0.1.0"
+description = "YuriQuant — 个人量化研究系统（日频）"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Proprietary" }
+authors = [{ name = "mizuki" }]
+
+dependencies = [
+    "pandas>=2.0",
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "matplotlib>=3.7",
+    "openpyxl>=3.1",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+    "mypy>=1.10",
+]
+
+# AmazingData SDK 不在此列 —— 它是本地 wheel 分发（pip install AmazingData-*.whl，
+# 见 AmazingData开发手册.pdf 3.3），不通过标准依赖管理安装，见 README。
+
+[tool.hatch.build.targets.wheel]
+packages = ["backtest", "config", "data", "factor", "research", "scripts", "strategy"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+warn_unused_ignores = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

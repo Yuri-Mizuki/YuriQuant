@@ -16,13 +16,6 @@ from __future__ import annotations
 
 import argparse
 import logging
-import sys
-from pathlib import Path
-
-# 把项目根目录加入 sys.path，支持直接 python scripts/update_data.py 运行
-_PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)
-if _PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, _PROJECT_ROOT)
 
 from config import Config
 from data.cache import DataCache
@@ -73,10 +66,17 @@ def main():
     kline = cache.get_daily_kline(codes, begin, target_date)
     log.info("日K线行数: %d, 代码数: %d", len(kline), kline.index.get_level_values("code").nunique())
 
-    # 5. 复权因子
+    # 5. 复权因子（单次复权因子 + 累积后复权因子）
     log.info("拉取复权因子 ...")
     adj = cache.get_adj_factor(codes)
-    log.info("复权因子行数: %d, 列数: %d", len(adj), adj.shape[1])
+    log.info("单次复权因子行数: %d, 列数: %d", len(adj), adj.shape[1])
+    backward = cache.get_backward_factor(codes)
+    log.info("后复权因子行数: %d, 列数: %d", len(backward), backward.shape[1])
+
+    # 6. 历史涨跌停/停牌/ST 状态
+    log.info("拉取历史涨跌停/停牌状态: %s -> %s", begin, target_date)
+    status = cache.get_history_stock_status(codes, begin, target_date)
+    log.info("历史状态行数: %d", len(status))
 
     log.info("数据更新完成。缓存目录: %s", cache.root)
 

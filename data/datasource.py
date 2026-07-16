@@ -16,7 +16,6 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from datetime import date
 from typing import Iterable
 
 import pandas as pd
@@ -54,13 +53,32 @@ class DataSource(ABC):
     # ---- 复权因子 ----
     @abstractmethod
     def get_adj_factor(self, code_list: Iterable[str]) -> pd.DataFrame:
-        """单次复权因子。index=date, columns=code, values=adj_factor。"""
+        """单次复权因子（相邻两次除权除息之间的调整系数，不能直接乘到原始价格上
+        得到跨区间可比的复权价）。index=date, columns=code, values=adj_factor。"""
+
+    @abstractmethod
+    def get_backward_factor(self, code_list: Iterable[str]) -> pd.DataFrame:
+        """累积后复权因子。index=date, columns=code, values=backward_factor。
+        用于把原始价格转成后复权价: adjusted_price = raw_price * backward_factor。"""
 
     # ---- 基础信息 ----
     @abstractmethod
     def get_code_info(self, security_type: str = "EXTRA_STOCK_A") -> pd.DataFrame:
         """每日最新证券信息。index=code, 列含 symbol/status/pre_close/
         high_limited/low_limited/price_tick。"""
+
+    # ---- 历史涨跌停/停牌/ST ----
+    @abstractmethod
+    def get_history_stock_status(
+        self,
+        code_list: Iterable[str],
+        begin_date: int,
+        end_date: int,
+    ) -> pd.DataFrame:
+        """按日历史证券状态（涨跌停价、停牌、ST、除权除息标记）。
+
+        返回长表，列: date, code, pre_close, high_limited, low_limited,
+        is_st, is_suspended, is_ex_dividend, is_ex_rights。"""
 
 
 # ---------------------------------------------------------------------------
@@ -151,9 +169,53 @@ class AmazingDataSource(DataSource):
             list(code_list), local_path=local_path, is_local=False
         )
 
+    def get_backward_factor(self, code_list: Iterable[str]) -> pd.DataFrame:
+        cfg = self._cfg
+        local_path = cfg.get("sdk_local_path", "e://data//sdk_cache//")
+        return self._base.get_backward_factor(
+            list(code_list), local_path=local_path, is_local=False
+        )
+
     # ---- 基础信息 ----
     def get_code_info(self, security_type: str = "EXTRA_STOCK_A") -> pd.DataFrame:
         return self._base.get_code_info(security_type=security_type)
+
+    # ---- 历史涨跌停/停牌/ST ----
+    def get_history_stock_status(
+        self,
+        code_list: Iterable[str],
+        begin_date: int,
+        end_date: int,
+    ) -> pd.DataFrame:
+        cfg = self._cfg
+        local_path = cfg.get("sdk_local_path", "e://data//sdk_cache//")
+        raw = self._info.get_history_stock_status(
+            list(code_list), local_path=local_path, is_local=False,
+            begin_date=begin_date, end_date=end_date,
+        )
+        if raw.empty:
+            return pd.DataFrame(
+                columns=["date", "code", "pre_close", "high_limited", "low_limited",
+                         "is_st", "is_suspended", "is_ex_dividend", "is_ex_rights"]
+            )
+        out = raw.rename(columns={
+            "MARKET_CODE": "code",
+            "TRADE_DATE": "date",
+            "PRECLOSE": "pre_close",
+            "HIGH_LIMITED": "high_limited",
+            "LOW_LIMITED": "low_limited",
+            "IS_ST_SEC": "is_st",
+            "IS_SUSP_SEC": "is_suspended",
+            "IS_WD_SEC": "is_ex_dividend",
+            "IS_XR_SEC": "is_ex_rights",
+        })
+        out["date"] = pd.to_datetime(out["date"])
+        for col in ("is_st", "is_suspended", "is_ex_dividend", "is_ex_rights"):
+            if col in out.columns:
+                out[col] = out[col].astype(str) == "1"
+        keep = ["date", "code", "pre_close", "high_limited", "low_limited",
+                "is_st", "is_suspended", "is_ex_dividend", "is_ex_rights"]
+        return out[[c for c in keep if c in out.columns]]
 
 
 # ---------------------------------------------------------------------------
@@ -205,14 +267,29 @@ class CSVDataSource(DataSource):
     def get_adj_factor(self, code_list: Iterable[str]) -> pd.DataFrame:
         return pd.DataFrame()
 
+    def get_backward_factor(self, code_list: Iterable[str]) -> pd.DataFrame:
+        return pd.DataFrame()
+
     def get_code_info(self, security_type: str = "EXTRA_STOCK_A") -> pd.DataFrame:
         return pd.DataFrame()
+
+    def get_history_stock_status(
+        self,
+        code_list: Iterable[str],
+        begin_date: int,
+        end_date: int,
+    ) -> pd.DataFrame:
+        return pd.DataFrame(
+            columns=["date", "code", "pre_close", "high_limited", "low_limited",
+                     "is_st", "is_suspended", "is_ex_dividend", "is_ex_rights"]
+        )
 
 
 # ---------------------------------------------------------------------------
 # 工厂
 # ---------------------------------------------------------------------------
 from pathlib import Path
+
 
 def create_datasource(cfg: dict | None = None) -> DataSource:
     """根据 config 创建数据源实例。"""
