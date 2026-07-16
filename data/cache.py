@@ -14,6 +14,8 @@ cache_root/
 ├── adj_factor.parquet    # 单次复权因子
 ├── backward_factor.parquet  # 累积后复权因子
 ├── history_stock_status.parquet  # 历史涨跌停/停牌/ST (date, code 多索引)
+├── industry_classification_level1.parquet  # 一级行业分类
+├── equity_structure.parquet  # 股本结构变动事件表
 ├── calendar.parquet      # 交易日历
 ├── code_info.parquet     # 证券信息
 ├── index_constituent_000300SH.parquet  # 指数成分
@@ -63,6 +65,73 @@ class DataCache:
         self._meta.setdefault(table, {})["last_date"] = d
         self._save_meta()
 
+    # ---- 缓存模式：宽表全量刷新（index=date, columns=code）----
+    def _refresh_wide_table(self, filename: str, codes: list[str], fetch_fn) -> pd.DataFrame:
+        """本地按列过滤 + 从数据源全量拉取 + 按列去重落盘。
+
+        用于 SDK 自身已维护增量缓存、调用方每次总是传整个 code_list 的场景
+        （复权因子类接口），本地 parquet 只是这层再加一份离线可读的副本。
+        """
+        p = self._root / filename
+        local_df = pd.DataFrame()
+        if p.exists():
+            local_df = pd.read_parquet(p)
+            cols = [c for c in codes if c in local_df.columns]
+            local_df = local_df[cols]
+
+        new_df = fetch_fn(codes)
+        if not new_df.empty:
+            combined = pd.concat([local_df, new_df], axis=1)
+            combined = combined.loc[:, ~combined.columns.duplicated(keep="last")]
+            combined.to_parquet(p, compression="snappy")
+            return combined.sort_index()
+        return local_df
+
+    # ---- 缓存模式：长表增量更新（(date, code) 多索引）----
+    def _refresh_long_table(
+        self,
+        filename: str,
+        table_name: str,
+        codes: list[str],
+        begin_date: int,
+        end_date: int,
+        fetch_fn,
+    ) -> pd.DataFrame:
+        """本地按 code 过滤 + 只从数据源拉取本地缺失的日期段 + 合并去重落盘。
+
+        用于按 (date, code) 逐日记录、真正有"增量"概念的场景（日K线、
+        历史涨跌停停牌状态等）。fetch_fn 签名为 (codes, begin_date, end_date)。
+        """
+        p = self._root / filename
+        local_df = pd.DataFrame()
+        if p.exists():
+            local_df = pd.read_parquet(p)
+            if not local_df.empty:
+                local_df = local_df.reset_index()
+                local_df = local_df[local_df["code"].isin(codes)]
+                local_df = local_df.set_index(["date", "code"]).sort_index()
+
+        last = self._get_last_date(table_name)
+        fetch_begin = begin_date
+        if last is not None:
+            fetch_begin = last + 1
+        if fetch_begin > end_date:
+            return local_df
+
+        new_df = fetch_fn(codes, fetch_begin, end_date)
+        if not new_df.empty:
+            if not isinstance(new_df.index, pd.MultiIndex):
+                new_df = new_df.set_index(["date", "code"]).sort_index()
+            combined = pd.concat([local_df, new_df])
+            combined = combined[~combined.index.duplicated(keep="last")]
+            combined = combined.sort_index()
+            combined.to_parquet(p, compression="snappy")
+            max_date = combined.index.get_level_values("date").max()
+            last_int = int(pd.Timestamp(max_date).strftime("%Y%m%d"))
+            self._set_last_date(table_name, last_int)
+            return combined
+        return local_df
+
     # ---- 交易日历 ----
     def get_calendar(self, begin: int = 20100101, end: int | None = None) -> list[int]:
         p = self._root / "calendar.parquet"
@@ -89,84 +158,22 @@ class DataCache:
         end_date: int,
     ) -> pd.DataFrame:
         """获取日K线，本地缓存 + 增量补充。"""
-        p = self._root / "daily.parquet"
         codes = list(code_list)
-
-        # 1) 读本地
-        local_df = pd.DataFrame()
-        if p.exists():
-            local_df = pd.read_parquet(p)
-            # 过滤出本地已有但日期范围不足的代码
-            if not local_df.empty:
-                local_df = local_df.reset_index()
-                # 只保留请求的 code
-                local_df = local_df[local_df["code"].isin(codes)]
-                local_df = local_df.set_index(["date", "code"]).sort_index()
-
-        # 2) 判断需要增量的日期范围
-        last = self._get_last_date("daily")
-        fetch_begin = begin_date
-        if last is not None:
-            # 从 last 的下一个交易日开始拉
-            fetch_begin = last + 1
-        if fetch_begin > end_date:
-            return local_df.xs(slice(None), level="code", drop_level=False) if not local_df.empty else local_df
-
-        # 3) 从数据源拉增量
-        new_df = self._ds.get_daily_kline(codes, fetch_begin, end_date)
-
-        # 4. 合并、去重、落盘
-        if not new_df.empty:
-            combined = pd.concat([local_df, new_df])
-            # 去重：保留最新
-            combined = combined[~combined.index.duplicated(keep="last")]
-            combined = combined.sort_index()
-            combined.to_parquet(p, compression="snappy")
-            # 更新 meta
-            max_date = combined.index.get_level_values("date").max()
-            last_int = int(pd.Timestamp(max_date).strftime("%Y%m%d"))
-            self._set_last_date("daily", last_int)
-            return combined.xs(slice(None), level="code", drop_level=False).sort_index()
-        else:
-            return local_df
+        return self._refresh_long_table(
+            "daily.parquet", "daily", codes, begin_date, end_date, self._ds.get_daily_kline
+        )
 
     # ---- 复权因子 ----
     def get_adj_factor(self, code_list: Iterable[str]) -> pd.DataFrame:
-        p = self._root / "adj_factor.parquet"
         codes = list(code_list)
-        local_df = pd.DataFrame()
-        if p.exists():
-            local_df = pd.read_parquet(p)
-            # 只保留请求的 code（列）
-            cols = [c for c in codes if c in local_df.columns]
-            local_df = local_df[cols]
-
-        # 增量：从数据源全量拉（SDK 内部也维护本地缓存）
-        new_df = self._ds.get_adj_factor(codes)
-        if not new_df.empty:
-            combined = pd.concat([local_df, new_df], axis=1)
-            combined = combined.loc[:, ~combined.columns.duplicated(keep="last")]
-            combined.to_parquet(p, compression="snappy")
-            return combined.sort_index()
-        return local_df
+        return self._refresh_wide_table("adj_factor.parquet", codes, self._ds.get_adj_factor)
 
     def get_backward_factor(self, code_list: Iterable[str]) -> pd.DataFrame:
         """累积后复权因子，缓存模式同 get_adj_factor（宽表全量刷新）。"""
-        p = self._root / "backward_factor.parquet"
         codes = list(code_list)
-        local_df = pd.DataFrame()
-        if p.exists():
-            local_df = pd.read_parquet(p)
-            cols = [c for c in codes if c in local_df.columns]
-            local_df = local_df[cols]
-
-        new_df = self._ds.get_backward_factor(codes)
-        if not new_df.empty:
-            combined = pd.concat([local_df, new_df], axis=1)
-            combined = combined.loc[:, ~combined.columns.duplicated(keep="last")]
-            combined.to_parquet(p, compression="snappy")
-            return combined.sort_index()
-        return local_df
+        return self._refresh_wide_table(
+            "backward_factor.parquet", codes, self._ds.get_backward_factor
+        )
 
     # ---- 历史涨跌停/停牌/ST ----
     def get_history_stock_status(
@@ -176,36 +183,11 @@ class DataCache:
         end_date: int,
     ) -> pd.DataFrame:
         """按日历史证券状态，增量更新模式同 get_daily_kline（长表 (date, code) 索引）。"""
-        p = self._root / "history_stock_status.parquet"
         codes = list(code_list)
-
-        local_df = pd.DataFrame()
-        if p.exists():
-            local_df = pd.read_parquet(p)
-            if not local_df.empty:
-                local_df = local_df.reset_index()
-                local_df = local_df[local_df["code"].isin(codes)]
-                local_df = local_df.set_index(["date", "code"]).sort_index()
-
-        last = self._get_last_date("history_stock_status")
-        fetch_begin = begin_date
-        if last is not None:
-            fetch_begin = last + 1
-        if fetch_begin > end_date:
-            return local_df
-
-        new_df = self._ds.get_history_stock_status(codes, fetch_begin, end_date)
-        if not new_df.empty:
-            new_df = new_df.set_index(["date", "code"]).sort_index()
-            combined = pd.concat([local_df, new_df])
-            combined = combined[~combined.index.duplicated(keep="last")]
-            combined = combined.sort_index()
-            combined.to_parquet(p, compression="snappy")
-            max_date = combined.index.get_level_values("date").max()
-            last_int = int(pd.Timestamp(max_date).strftime("%Y%m%d"))
-            self._set_last_date("history_stock_status", last_int)
-            return combined
-        return local_df
+        return self._refresh_long_table(
+            "history_stock_status.parquet", "history_stock_status",
+            codes, begin_date, end_date, self._ds.get_history_stock_status,
+        )
 
     # ---- 指数成分 ----
     def get_index_constituent(self, index_code: str) -> pd.DataFrame:
@@ -225,6 +207,31 @@ class DataCache:
         df = self._ds.get_code_info(security_type)
         if not df.empty:
             df.to_parquet(p, compression="snappy")
+        return df
+
+    # ---- 行业分类 ----
+    def get_industry_classification(self, level: int = 1) -> pd.DataFrame:
+        """行业分类表体量小，整表覆盖缓存（同 get_index_constituent）。"""
+        p = self._root / f"industry_classification_level{level}.parquet"
+        if p.exists():
+            return pd.read_parquet(p)
+        df = self._ds.get_industry_classification(level)
+        if not df.empty:
+            df.to_parquet(p, compression="snappy")
+        return df
+
+    # ---- 股本结构 ----
+    def get_equity_structure(self, code_list: Iterable[str]) -> pd.DataFrame:
+        """稀疏事件表，没有"增量"概念，整表覆盖缓存（同 get_code_info）。"""
+        p = self._root / "equity_structure.parquet"
+        codes = list(code_list)
+        df = self._ds.get_equity_structure(codes)
+        if not df.empty:
+            df.to_parquet(p, compression="snappy")
+            return df
+        if p.exists():
+            cached = pd.read_parquet(p)
+            return cached[cached["code"].isin(codes)]
         return df
 
     # ---- 代码表 ----

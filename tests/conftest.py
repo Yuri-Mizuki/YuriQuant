@@ -113,6 +113,35 @@ class MockDataSource(DataSource):
                 })
         return pd.DataFrame(rows)
 
+    def get_industry_classification(self, level: int = 1) -> pd.DataFrame:
+        # 把 50 只 mock 股票均分到 3 个行业，纳入日期与成分股一致（2023-01-03）
+        industries = ["食品饮料", "银行", "电子"]
+        rows = []
+        for i, code in enumerate(self.MOCK_CODES):
+            industry = industries[i % len(industries)]
+            rows.append({
+                "code": code,
+                "industry_code": f"IND{i % len(industries):02d}.SI",
+                "industry_name": industry,
+                "level": level,
+                "in_date": "2023-01-03",
+                "out_date": pd.NaT,
+            })
+        return pd.DataFrame(rows)
+
+    def get_equity_structure(self, code_list) -> pd.DataFrame:
+        codes = list(code_list)
+        rng = np.random.default_rng(13)
+        rows = []
+        for code in codes:
+            rows.append({
+                "code": code,
+                "change_date": pd.Timestamp("2023-01-03"),
+                "tot_share": float(rng.uniform(5000, 100000)),   # 万股
+                "float_share": float(rng.uniform(3000, 80000)),  # 万股
+            })
+        return pd.DataFrame(rows)
+
 
 @pytest.fixture
 def mock_ds() -> MockDataSource:

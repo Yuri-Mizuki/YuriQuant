@@ -80,6 +80,21 @@ class DataSource(ABC):
         返回长表，列: date, code, pre_close, high_limited, low_limited,
         is_st, is_suspended, is_ex_dividend, is_ex_rights。"""
 
+    # ---- 行业分类 ----
+    @abstractmethod
+    def get_industry_classification(self, level: int = 1) -> pd.DataFrame:
+        """行业分类，point-in-time（个股在某个行业指数下的纳入/剔除区间）。
+
+        level: 1/2/3 对应申万一级/二级/三级行业。
+        返回长表，列: code, industry_code, industry_name, level, in_date, out_date。"""
+
+    # ---- 股本结构（用于构建市值面板）----
+    @abstractmethod
+    def get_equity_structure(self, code_list: Iterable[str]) -> pd.DataFrame:
+        """历史股本变动事件表（稀疏，一次变动一行，不是每日行情）。
+
+        返回长表，列: code, change_date, tot_share, float_share（单位：万股）。"""
+
 
 # ---------------------------------------------------------------------------
 # AmazingData 实现
@@ -93,6 +108,7 @@ class AmazingDataSource(DataSource):
 
     def __init__(self, cfg: dict):
         self._cfg = cfg
+        self._local_path = cfg.get("sdk_local_path", "e://data//sdk_cache//")
         self._ad = None       # 模块句柄
         self._base = None     # BaseData 实例
         self._market = None   # MarketData 实例
@@ -161,19 +177,15 @@ class AmazingDataSource(DataSource):
 
     # ---- 复权因子 ----
     def get_adj_factor(self, code_list: Iterable[str]) -> pd.DataFrame:
-        cfg = self._cfg
-        local_path = cfg.get("sdk_local_path", "e://data//sdk_cache//")
         # SDK 内部以 pickle 格式缓存到 local_path，首次 is_local=False 从服务端拉取并落地，
         # 之后 is_local=True 时直接读本地 pickle；两套缓存（SDK pickle / 自建 parquet）共存互补。
         return self._base.get_adj_factor(
-            list(code_list), local_path=local_path, is_local=False
+            list(code_list), local_path=self._local_path, is_local=False
         )
 
     def get_backward_factor(self, code_list: Iterable[str]) -> pd.DataFrame:
-        cfg = self._cfg
-        local_path = cfg.get("sdk_local_path", "e://data//sdk_cache//")
         return self._base.get_backward_factor(
-            list(code_list), local_path=local_path, is_local=False
+            list(code_list), local_path=self._local_path, is_local=False
         )
 
     # ---- 基础信息 ----
@@ -187,10 +199,8 @@ class AmazingDataSource(DataSource):
         begin_date: int,
         end_date: int,
     ) -> pd.DataFrame:
-        cfg = self._cfg
-        local_path = cfg.get("sdk_local_path", "e://data//sdk_cache//")
         raw = self._info.get_history_stock_status(
-            list(code_list), local_path=local_path, is_local=False,
+            list(code_list), local_path=self._local_path, is_local=False,
             begin_date=begin_date, end_date=end_date,
         )
         if raw.empty:
@@ -215,6 +225,59 @@ class AmazingDataSource(DataSource):
                 out[col] = out[col].astype(str) == "1"
         keep = ["date", "code", "pre_close", "high_limited", "low_limited",
                 "is_st", "is_suspended", "is_ex_dividend", "is_ex_rights"]
+        return out[[c for c in keep if c in out.columns]]
+
+    # ---- 行业分类 ----
+    def get_industry_classification(self, level: int = 1) -> pd.DataFrame:
+        base_info = self._info.get_industry_base_info(
+            local_path=self._local_path, is_local=False
+        )
+        if base_info.empty:
+            return pd.DataFrame(
+                columns=["code", "industry_code", "industry_name", "level", "in_date", "out_date"]
+            )
+        level_info = base_info[base_info["LEVEL_TYPE"] == level]
+        if level_info.empty:
+            return pd.DataFrame(
+                columns=["code", "industry_code", "industry_name", "level", "in_date", "out_date"]
+            )
+        level_codes = level_info["INDEX_CODE"].tolist()
+        name_col = f"LEVEL{level}_NAME"
+        name_map = level_info.set_index("INDEX_CODE")[name_col].to_dict()
+
+        constituent = self._info.get_industry_constituent(level_codes, is_local=False)
+        frames = []
+        for industry_code, df in constituent.items():
+            sub = df[["CON_CODE", "INDATE", "OUTDATE"]].copy()
+            sub["industry_code"] = industry_code
+            sub["industry_name"] = name_map.get(industry_code)
+            frames.append(sub)
+        if not frames:
+            return pd.DataFrame(
+                columns=["code", "industry_code", "industry_name", "level", "in_date", "out_date"]
+            )
+        out = pd.concat(frames, ignore_index=True).rename(
+            columns={"CON_CODE": "code", "INDATE": "in_date", "OUTDATE": "out_date"}
+        )
+        out["level"] = level
+        return out[["code", "industry_code", "industry_name", "level", "in_date", "out_date"]]
+
+    # ---- 股本结构 ----
+    def get_equity_structure(self, code_list: Iterable[str]) -> pd.DataFrame:
+        raw = self._info.get_equity_structure(
+            list(code_list), local_path=self._local_path, is_local=False
+        )
+        if raw.empty:
+            return pd.DataFrame(columns=["code", "change_date", "tot_share", "float_share"])
+        valid = raw[raw["IS_VALID"].astype(str) == "1"] if "IS_VALID" in raw.columns else raw
+        out = valid.rename(columns={
+            "MARKET_CODE": "code",
+            "CHANGE_DATE": "change_date",
+            "TOT_SHARE": "tot_share",
+            "FLOAT_SHARE": "float_share",
+        })
+        out["change_date"] = pd.to_datetime(out["change_date"])
+        keep = ["code", "change_date", "tot_share", "float_share"]
         return out[[c for c in keep if c in out.columns]]
 
 
@@ -283,6 +346,14 @@ class CSVDataSource(DataSource):
             columns=["date", "code", "pre_close", "high_limited", "low_limited",
                      "is_st", "is_suspended", "is_ex_dividend", "is_ex_rights"]
         )
+
+    def get_industry_classification(self, level: int = 1) -> pd.DataFrame:
+        return pd.DataFrame(
+            columns=["code", "industry_code", "industry_name", "level", "in_date", "out_date"]
+        )
+
+    def get_equity_structure(self, code_list: Iterable[str]) -> pd.DataFrame:
+        return pd.DataFrame(columns=["code", "change_date", "tot_share", "float_share"])
 
 
 # ---------------------------------------------------------------------------
