@@ -7,9 +7,15 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from dotenv import load_dotenv
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _CONFIG_PATH = _PROJECT_ROOT / "config" / "settings.yaml"
+
+# Real-data credentials are kept in the repository-local .env file.  Loading
+# it here keeps command-line runs and IDE runs consistent; existing process
+# environment variables still take precedence.
+load_dotenv(_PROJECT_ROOT / ".env", override=False)
 
 _ENV_PATTERN = re.compile(r"\$\{([A-Z_]+)(?::([^}]*))?\}")
 

@@ -11,24 +11,24 @@ Excel 报告生成
 """
 from __future__ import annotations
 
-import tempfile
 from pathlib import Path
+import tempfile
 
 import matplotlib
-
 matplotlib.use("Agg")
-import matplotlib.font_manager as fm
 import matplotlib.pyplot as plt
+import matplotlib.font_manager as fm
 import numpy as np
 import pandas as pd
 from openpyxl import Workbook
+from openpyxl.chart import LineChart, Reference
 from openpyxl.drawing.image import Image as XlImage
-from openpyxl.formatting.rule import ColorScaleRule, DataBarRule
+from openpyxl.formatting.rule import CellIsRule, ColorScaleRule, DataBarRule
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
 from backtest.engine import BacktestResult
-from backtest.metrics import METRIC_LABELS
+from backtest.metrics import METRIC_LABELS, calc_all_metrics
 
 # 中文字体
 for _font in ["Microsoft YaHei", "SimHei", "WenQuanYi Micro Hei", "Arial Unicode MS"]:

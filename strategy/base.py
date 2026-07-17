@@ -14,7 +14,9 @@ Strategy: 将因子值转换为组合权重。
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from typing import Literal
 
+import numpy as np
 import pandas as pd
 
 

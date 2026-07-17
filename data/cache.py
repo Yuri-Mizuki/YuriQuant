@@ -109,6 +109,16 @@ class DataCache:
             if not local_df.empty:
                 local_df = local_df.reset_index()
                 local_df = local_df[local_df["code"].isin(codes)]
+                # A cache hit must honour the caller's requested interval just
+                # like a source fetch does.  Without this filter, a request
+                # whose range is already cached returns every historical row;
+                # in particular an accidentally inverted range can silently
+                # feed unrelated dates into a backtest.
+                dates = pd.to_datetime(local_df["date"])
+                local_df = local_df.loc[
+                    (dates >= pd.Timestamp(str(begin_date)))
+                    & (dates <= pd.Timestamp(str(end_date)))
+                ]
                 local_df = local_df.set_index(["date", "code"]).sort_index()
 
         last = self._get_last_date(table_name)

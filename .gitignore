@@ -31,10 +31,3 @@ AmazingData/
 # OS
 Thumbs.db
 .DS_Store
-
-# 大文件手册：不适合频繁 commit 的仓库，本地保留但不再跟踪
-AmazingData开发手册.pdf
-
-# pytest / build artifacts
-.pytest_cache/
-*.egg-info/

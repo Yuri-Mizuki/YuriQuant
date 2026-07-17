@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from pathlib import Path
 from typing import Iterable
 
 import pandas as pd
@@ -119,13 +120,31 @@ class AmazingDataSource(DataSource):
     def _login(self, cfg: dict) -> None:
         import AmazingData as ad  # type: ignore
 
+        required = ("username", "password", "host", "port")
+        missing = [key for key in required if not cfg.get(key)]
+        if missing:
+            raise ValueError(
+                "AmazingData credentials are missing: "
+                f"{', '.join(missing)}. Set AMAZINGDATA_* environment variables "
+                "or provide them in the repository .env file."
+            )
+
         self._ad = ad
-        ad.login(
-            username=cfg["username"],
-            password=cfg["password"],
-            host=cfg["host"],
-            port=int(cfg["port"]),
-        )
+        try:
+            # The SDK calls exit(0) itself when authentication fails.  Convert
+            # that silent successful-looking process exit into an actionable
+            # application error.
+            ad.login(
+                username=cfg["username"],
+                password=cfg["password"],
+                host=cfg["host"],
+                port=int(cfg["port"]),
+            )
+        except SystemExit as exc:
+            raise ConnectionError(
+                "AmazingData login failed. Verify AMAZINGDATA_HOST/PORT, "
+                "credentials, and network access."
+            ) from exc
         self._base = ad.BaseData()
         calendar = self._base.get_calendar()
         self._market = ad.MarketData(calendar)
@@ -165,14 +184,19 @@ class AmazingDataSource(DataSource):
         )
         frames = []
         for code, df in kline_dict.items():
-            sub = df[["open", "high", "low", "close", "volume", "amount"]].copy()
-            sub.insert(0, "code", code)
+            # SDK 返回的 df 索引是普通位置索引，真正的交易日期在 kline_time 列里
+            # （不是 index），必须显式取出来重建索引，否则整数位置索引会被
+            # 误当成日期使用，下游所有 point-in-time / 日期对齐逻辑都会失效。
+            sub = df[["kline_time", "open", "high", "low", "close", "volume", "amount"]].copy()
+            sub = sub.rename(columns={"kline_time": "date"})
+            sub.insert(1, "code", code)
             frames.append(sub)
         if not frames:
-            return pd.DataFrame(columns=["date", "code", "open", "high", "low", "close", "volume", "amount"])
-        out = pd.concat(frames)
-        out.index.name = "date"
-        out = out.reset_index().set_index(["date", "code"])
+            return pd.DataFrame(
+                columns=["date", "code", "open", "high", "low", "close", "volume", "amount"]
+            )
+        out = pd.concat(frames, ignore_index=True)
+        out = out.set_index(["date", "code"])
         return out.sort_index()
 
     # ---- 复权因子 ----
@@ -203,6 +227,11 @@ class AmazingDataSource(DataSource):
             list(code_list), local_path=self._local_path, is_local=False,
             begin_date=begin_date, end_date=end_date,
         )
+        # AmazingData 1.0 returns a {code: DataFrame} mapping here (despite
+        # the manual describing a DataFrame).  Later SDK versions may return
+        # the table directly, so accept both wire formats.
+        if isinstance(raw, dict):
+            raw = pd.concat(raw.values(), ignore_index=True) if raw else pd.DataFrame()
         if raw.empty:
             return pd.DataFrame(
                 columns=["date", "code", "pre_close", "high_limited", "low_limited",
@@ -359,9 +388,6 @@ class CSVDataSource(DataSource):
 # ---------------------------------------------------------------------------
 # 工厂
 # ---------------------------------------------------------------------------
-from pathlib import Path
-
-
 def create_datasource(cfg: dict | None = None) -> DataSource:
     """根据 config 创建数据源实例。"""
     from config import Config

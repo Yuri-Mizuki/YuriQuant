@@ -143,7 +143,20 @@ def main():
         from config import Config
         cfg = Config.get()
         begin = cfg["fetch"]["begin_date"]
-        end = cfg["fetch"].get("end_date") or 20241231
+        # `end_date: null` means "latest available trading day".  Do not use
+        # a fixed date here: it can be earlier than `begin` as the configuration
+        # rolls forward, which turns a real-data run into an invalid range.
+        end = cfg["fetch"].get("end_date")
+        if end is None:
+            calendar = cache.get_calendar(begin)
+            if not calendar:
+                raise RuntimeError(f"No trading days are available on or after {begin}.")
+            end = calendar[-1]
+        end = int(end)
+        if begin > end:
+            raise ValueError(
+                f"fetch.begin_date ({begin}) must not be later than fetch.end_date ({end})."
+            )
         from data.tradability import build_executable_mask
         from data.universe import Universe
         uni = Universe(cache)

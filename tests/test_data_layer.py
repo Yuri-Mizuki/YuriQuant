@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pandas as pd
+
 from config import Config
 from data.cache import DataCache
 from data.universe import Universe
@@ -61,6 +63,18 @@ def test_daily_kline_incremental_update_only_adds_new_rows(tmp_path: Path, mock_
     assert n2 > n1
     # 增量更新不应重新产生重复的 (date, code) 行
     assert not kline2.index.duplicated().any()
+
+
+def test_daily_kline_cache_hit_respects_requested_dates(tmp_path: Path, mock_ds):
+    cache = DataCache(mock_ds, cache_root=tmp_path)
+    codes = Universe(cache).get_hs300(20240101)
+
+    cache.get_daily_kline(codes, 20230101, 20240131)
+    result = cache.get_daily_kline(codes, 20230115, 20230120)
+
+    dates = result.index.get_level_values("date")
+    assert dates.min() >= pd.Timestamp("2023-01-15")
+    assert dates.max() <= pd.Timestamp("2023-01-20")
 
 
 def test_backward_factor_cached(tmp_path: Path, mock_ds):

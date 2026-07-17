@@ -29,6 +29,29 @@ from config import Config
 from strategy.base import Strategy
 
 
+def _apply_executable_mask(
+    weights: np.ndarray,
+    executable: np.ndarray,
+) -> np.ndarray:
+    """将不可执行标的权重置零，并按多空组独立重新归一化。
+
+    多头（weights > 0）和空头（weights < 0）各自独立归一化，
+    保持原有资金在多空两端的分配比例。
+    """
+    weights = weights.copy()
+    weights[~executable] = 0.0
+
+    long_mask = weights > 0
+    if long_mask.any():
+        weights[long_mask] /= weights[long_mask].sum()
+
+    short_mask = weights < 0
+    if short_mask.any():
+        weights[short_mask] /= abs(weights[short_mask].sum())
+
+    return weights
+
+
 @dataclass
 class BacktestResult:
     """回测结果容器。"""
@@ -86,10 +109,8 @@ class VectorBacktest:
             factor_panel: DataFrame(index=date, columns=code), 因子值。
             returns_panel: DataFrame(index=date, columns=code), 日收益率。
                           通常 = close.pct_change()，用次日收益（信号日次日）。
-            executable_mask: DataFrame(index=date, columns=code), bool，
-                          True=当日可开仓/调仓。为 None 时不做任何限制（原有行为）。
-                          用于把停牌、涨跌停封板、不在当日成分股内的标的强制权重置零，
-                          避免回测悄悄假设这些不可能成交的仓位能够建立。
+            executable_mask: DataFrame(index=date, columns=code), dtype=bool，
+                            True 表示当日该股票可交易。为 None 时不做过滤。
         Returns:
             BacktestResult
         """
@@ -104,10 +125,11 @@ class VectorBacktest:
         n_days = len(dates)
         n_codes = len(codes)
 
-        mask_values = None
+        # 对齐 executable_mask
         if executable_mask is not None:
-            mask_aligned = executable_mask.reindex(index=dates, columns=codes).fillna(False)
-            mask_values = mask_aligned.values.astype(bool)
+            executable_mask = executable_mask.reindex(
+                index=common_dates, columns=common_codes
+            ).fillna(True)
 
         # 调仓日
         rebalance_days = self._get_rebalance_days(dates)
@@ -139,11 +161,13 @@ class VectorBacktest:
                 if len(factor_vals) > 0:
                     new_weights = self.strategy.get_weights(factor_vals)
                     new_arr = new_weights.reindex(codes).fillna(0.0).values.astype(np.float64)
+                    # 用 executable_mask 将不可执行标的权重归零并按多空组重新归一化
+                    if executable_mask is not None:
+                        new_arr = _apply_executable_mask(
+                            new_arr, executable_mask.iloc[i].values.astype(bool)
+                        )
                 else:
                     new_arr = np.zeros(n_codes, dtype=np.float64)
-
-                if mask_values is not None:
-                    new_arr = _apply_executable_mask(new_arr, mask_values[i])
 
                 # 换手
                 turnover = np.abs(new_arr - current_weights).sum() / 2
@@ -191,30 +215,3 @@ class VectorBacktest:
             return set(s.groupby(s.index.to_period("M")).first())
         else:
             return set(dates)
-
-
-def _apply_executable_mask(weights: np.ndarray, executable: np.ndarray) -> np.ndarray:
-    """把不可执行标的的权重强制置零，再按原符号结构重新归一化。
-
-    多头部分（正权重）归一到原多头权重之和，空头部分（负权重）归一到原空头
-    权重之和的绝对值；任何一侧被完全清零时该侧直接保持为 0（不做除零重分配）。
-    """
-    masked = weights * executable
-    out = np.zeros_like(masked)
-
-    pos_mask = masked > 0
-    neg_mask = masked < 0
-
-    orig_pos_sum = weights[weights > 0].sum()
-    orig_neg_sum = weights[weights < 0].sum()
-
-    masked_pos_sum = masked[pos_mask].sum()
-    masked_neg_sum = masked[neg_mask].sum()
-
-    if masked_pos_sum > 0 and orig_pos_sum > 0:
-        out[pos_mask] = masked[pos_mask] * (orig_pos_sum / masked_pos_sum)
-    if masked_neg_sum < 0 and orig_neg_sum < 0:
-        out[neg_mask] = masked[neg_mask] * (orig_neg_sum / masked_neg_sum)
-
-    return out
-
