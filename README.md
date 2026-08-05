@@ -59,8 +59,32 @@ python scripts/run_backtest.py --real --factors all
 更新本地数据缓存：
 
 ```bash
-python -m scripts.update_data
+python -m scripts.update_data                  # 日K线 + 配置的分钟档位（默认 5 分钟）
+python -m scripts.update_data --minute 1,5,15  # 指定分钟档位
+python -m scripts.update_data --no-minute      # 只更新日频数据
 ```
+
+分钟频率（日内研究）：`data/datasource.get_minute_kline` + `data/cache.get_minute_kline`
+按 AmazingData 手册 `query_kline` / `Period.minN` 实现，支持
+1/3/5/10/15/30/60/120 分钟八档，缓存文件 `min{period}.parquet`
+（索引 `(kline_time, code)`），按交易日增量更新、半拉天自动补全。
+
+## 日内研究：收益分解 + 时段效应分析
+
+第一步（解释性分析）：拆解隔夜 vs 日内收益结构、刻画成交量与波动率的
+时段 U 型、首根 bar 对全天的预测能力。复用现有因子库方法论但产出日频
+特征作为可入库因子（路径 A）。
+
+```bash
+python -m scripts.intraday_analysis --offline --begin 20250101 --end 20251231   # 读缓存（推荐）
+python -m scripts.intraday_analysis          # 真实数据（需 SDK 登录）
+python -m scripts.intraday_analysis --mock   # mock 验证管线
+```
+
+输出（默认到 `reports/`）：
+- `intraday_analysis_{year}.png`：收益分解 + 成交量 U 型 + 时段波动率 + 首根预测（4 面板）
+- `intraday_ts_{year}.csv`：日频时间序列（隔夜/日内/全日收益）
+- `intraday_summary_{year}.csv`：汇总指标（NW t、方差占比、时段均值等）
 
 ## 测试
 

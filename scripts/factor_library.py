@@ -1,0 +1,227 @@
+"""
+因子库 CLI
+=========
+
+管理持久化的因子库：列出、统一对比、查看某时间段回测、导出 Excel 对比报告、删除、迭代特征。
+
+子命令:
+    list                      列出所有因子（--kind raw|composite）
+    compare                   统一指标排名（默认按 IR；--metric ic_mean/sharpe/annual_return/max_drawdown/calmar/avg_turnover --config ls_M --top N）
+    view NAME                 查看某因子全期或指定时间段回测（--start --end --config）
+    report                    导出 Excel 对比报告（--names a,b,c 或 --all --config --out）
+    features                  列出可作为下一轮挖掘特征（迭代）的因子
+    delete NAME               删除一个因子（带确认）
+
+示例:
+    python scripts/factor_library.py datasets
+    python scripts/factor_library.py list --dataset hs300_2025
+    python scripts/factor_library.py compare --dataset hs300_2025 --metric sharpe --top 15
+    python scripts/factor_library.py view "ts_delta(amount,20)" --dataset hs300_2025 --start 20250101 --end 20250601
+    python scripts/factor_library.py report --dataset hs300_2025 --all --config ls_M --out reports/lib_report.xlsx
+"""
+from __future__ import annotations
+
+import argparse
+import logging
+from pathlib import Path
+
+import pandas as pd
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S")
+log = logging.getLogger("factor_library_cli")
+
+
+def _print_df(df: pd.DataFrame, cols=None, max_rows=40):
+    with pd.option_context("display.max_rows", max_rows, "display.width", 240,
+                           "display.float_format", lambda v: f"{v:.4f}" if isinstance(v, float) else str(v)):
+        print(df[cols] if cols else df)
+
+
+def cmd_list(args):
+    lib = _lib()
+    df = lib.list_all(kind=args.kind)
+    if df.empty:
+        print("因子库为空。先运行 `python scripts/mine_factors.py --save-library` 或合成 --save-library。")
+        return
+    cols = ["name", "kind", "ic_mean", "t_stat", "significant", "best_sharpe", "best_config", "created_at"]
+    _print_df(df, [c for c in cols if c in df.columns])
+
+
+def cmd_compare(args):
+    lib = _lib()
+    df = lib.compare(metric=args.metric, config=args.config, ascending=args.ascending, kind=args.kind, topn=args.top)
+    if df.empty:
+        print("因子库为空。")
+        return
+    show_cols = ["name", "kind", "ic_mean", "t_stat", "significant",
+                 "sharpe_ls_M", "annual_return_ls_M", "max_drawdown_ls_M", "calmar_ls_M",
+                 "sharpe_lo_M", "sharpe_ls_W", "best_config"]
+    _print_df(df, [c for c in show_cols if c in df.columns])
+    if args.csv:
+        out = Path(args.csv)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        df.to_csv(out, index=False)
+        log.info("对比结果已保存: %s", out)
+
+
+def cmd_view(args):
+    lib = _lib()
+    if not lib.has(args.name):
+        print(f"因子不存在: {args.name}")
+        print("可用因子:", [n for n in lib.list_all()['name'].tolist()][:10], "...")
+        return
+    info = lib.evaluate_period(args.name, start=args.start, end=args.end, config=args.config)
+    m = info["metrics"]
+    print(f"\n===== 因子 {args.name} @ {info['config']} =====")
+    print(f"时间段: {info['start']} ~ {info['end']}  (交易日 {info['n_days']})")
+    print(f"IC均值={info['ic_mean']:.4f}  IC_IR={info['ic_ir']:.3f}  IC胜率={info['ic_win_rate']:.2%}")
+    print(f"年化={m['annual_return']:.2%}  夏普={m['sharpe']:.3f}  索提诺={m['sortino']:.3f}")
+    print(f"最大回撤={m['max_drawdown']:.2%}  卡玛={m['calmar']:.3f}  胜率={m['win_rate']:.2%}")
+    if args.csv:
+        out = Path(args.csv)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame({"date": info["daily_returns"].index,
+                      "daily_return": info["daily_returns"].values,
+                      "equity": info["equity_curve"].reindex(info["daily_returns"].index).values,
+                      "ic": info["ic_series"].reindex(info["daily_returns"].index).values}).to_csv(out, index=False)
+        log.info("时间段回测已保存: %s", out)
+
+
+def cmd_report(args):
+    from research.xlsx_report import generate_excel_report
+
+    lib = _lib()
+    reg = lib.list_all()
+    if reg.empty:
+        print("因子库为空。")
+        return
+    if args.names:
+        names = [n.strip() for n in args.names.split(",") if n.strip()]
+    else:
+        names = reg["name"].tolist()
+    results = {}
+    summaries = {}
+    for name in names:
+        try:
+            res = lib.reconstruct_backtest(name, config=args.config)
+            ev = lib._load_eval(name)
+            ic = ev["ic"].dropna() if ev is not None else pd.Series(dtype=float)
+            summaries[name] = {
+                "ic_series": ic,
+                "ic_mean": float(ic.mean()) if len(ic) else float("nan"),
+                "ir": 0.0,
+                "ic_win_rate": float((ic > 0).mean()) if len(ic) else float("nan"),
+                "ic_decay": {},
+                "layer_returns": {},
+            }
+            results[name] = res
+        except Exception as e:
+            log.warning("跳过 %s: %s", name, e)
+    if not results:
+        print("没有可生成报告的因子。")
+        return
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    generate_excel_report(results, summaries, output_path=out)
+    log.info("Excel 对比报告已生成: %s", out)
+
+
+def cmd_features(args):
+    lib = _lib()
+    feats = lib.load_library_features(kind=args.kind)
+    if not feats:
+        print("库内暂无可用特征。先运行 mine/synthesize --save-library。")
+        return
+    print(f"可作为下一轮挖掘特征的因子（共 {len(feats)} 个）:")
+    for name in feats:
+        print(f"  - {name}")
+
+
+def cmd_delete(args):
+    lib = _lib()
+    if not lib.has(args.name):
+        print(f"因子不存在: {args.name}")
+        return
+    if not args.force:
+        print(f"确认删除 {args.name} ? 加 --force 强制执行。")
+        return
+    lib.delete(args.name)
+    print(f"已删除: {args.name}")
+
+
+def _lib() -> "FactorLibrary":
+    from research.factor_library import FactorLibrary
+    return FactorLibrary(
+        root=args.root if getattr(args, "root", None) else None,
+        dataset=getattr(args, "dataset", None),
+    )
+
+
+def cmd_datasets(args):
+    from research.factor_library import FactorLibrary
+    ds = FactorLibrary.list_datasets(root=args.root)
+    if not ds:
+        print("尚未创建任何数据集库。运行 mine/synthesize --library-dataset <name> 创建。")
+        return
+    print("可用数据集（按数据集分库根）:")
+    for name in ds:
+        lib = FactorLibrary(dataset=name, root=args.root)
+        n = len(lib.list_all())
+        print(f"  {name:24s} 因子数={n}")
+
+
+def main():
+    global args
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--root", default=None, help="因子库根目录（默认读 settings）")
+    common.add_argument("--dataset", default=None,
+                        help="数据集名（按数据集分库根；如 hs300_2025 / mock）。不填=legacy 默认库")
+
+    parser = argparse.ArgumentParser(description="YuriQuant 因子库管理")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+
+    p = sub.add_parser("datasets", parents=[common], help="列出所有数据集（库根）")
+    p.set_defaults(func=cmd_datasets)
+
+    p = sub.add_parser("list", parents=[common], help="列出因子")
+    p.add_argument("--kind", choices=["raw", "composite"], default=None)
+    p.set_defaults(func=cmd_list)
+
+    p = sub.add_parser("compare", parents=[common], help="统一指标排名")
+    p.add_argument("--metric", default="ir", help="排序指标（默认 ir=信息比率，业界统一主轴；也支持 ic_mean/sharpe/annual_return/max_drawdown/calmar/avg_turnover）")
+    p.add_argument("--config", default=None, help="指定配置列（如 ls_M）；默认用 best_<metric>")
+    p.add_argument("--ascending", action="store_true")
+    p.add_argument("--kind", choices=["raw", "composite"], default=None)
+    p.add_argument("--top", type=int, default=None)
+    p.add_argument("--csv", default=None)
+    p.set_defaults(func=cmd_compare)
+
+    p = sub.add_parser("view", parents=[common], help="查看某因子时间段回测")
+    p.add_argument("name")
+    p.add_argument("--start", default=None, help="YYYYMMDD 或 YYYY-MM-DD")
+    p.add_argument("--end", default=None)
+    p.add_argument("--config", default="ls_M")
+    p.add_argument("--csv", default=None)
+    p.set_defaults(func=cmd_view)
+
+    p = sub.add_parser("report", parents=[common], help="导出 Excel 对比报告")
+    p.add_argument("--names", default=None, help="逗号分隔；不填则全部")
+    p.add_argument("--config", default="ls_M")
+    p.add_argument("--out", default="reports/factor_library_report.xlsx")
+    p.set_defaults(func=cmd_report)
+
+    p = sub.add_parser("features", parents=[common], help="列出可迭代特征")
+    p.add_argument("--kind", choices=["raw", "composite"], default=None)
+    p.set_defaults(func=cmd_features)
+
+    p = sub.add_parser("delete", parents=[common], help="删除因子")
+    p.add_argument("name")
+    p.add_argument("--force", action="store_true")
+    p.set_defaults(func=cmd_delete)
+
+    args = parser.parse_args()
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()

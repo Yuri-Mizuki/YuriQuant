@@ -65,6 +65,27 @@ class DataCache:
         self._meta.setdefault(table, {})["last_date"] = d
         self._save_meta()
 
+    # ---- 数据指纹（P1，2026-08-03：实验结果绑定数据版本）----
+    def get_fingerprint(self) -> str:
+        """数据指纹：综合各缓存表的 (last_date, 文件大小, mtime) 的稳定 hash。
+
+        用途：实验管理（``research.experiments``）把每次结果的 ``data_fingerprint``
+        与数据版本绑定 —— 指纹相同 = 同一份数据，结果可比；指纹变化 = 数据
+        更新过，旧结果需重新验证。轻量实现：不读全表，只取 meta + 文件 stat。
+        """
+        import hashlib
+        parts: list[str] = []
+        for table, info in sorted(self._meta.items()):
+            parts.append(f"{table}:{info.get('last_date', '')}")
+        for p in sorted(self._root.glob("*.parquet")):
+            try:
+                st = p.stat()
+                parts.append(f"{p.stem}:{st.st_size}:{int(st.st_mtime)}")
+            except OSError:
+                continue
+        h = hashlib.md5("|".join(parts).encode("utf-8")).hexdigest()[:12]
+        return h
+
     # ---- 缓存模式：宽表全量刷新（index=date, columns=code）----
     def _refresh_wide_table(self, filename: str, codes: list[str], fetch_fn) -> pd.DataFrame:
         """本地按列过滤 + 从数据源全量拉取 + 按列去重落盘。
@@ -96,69 +117,150 @@ class DataCache:
         begin_date: int,
         end_date: int,
         fetch_fn,
+        time_col: str = "date",
+        last_inclusive: bool = False,
+        bars_per_day: int | None = None,
     ) -> pd.DataFrame:
         """本地按 code 过滤 + 只从数据源拉取本地缺失的日期段 + 合并去重落盘。
 
-        用于按 (date, code) 逐日记录、真正有"增量"概念的场景（日K线、
-        历史涨跌停停牌状态等）。fetch_fn 签名为 (codes, begin_date, end_date)。
+        用于按 (time_col, code) 逐条记录、真正有"增量"概念的场景（日K线、
+        历史涨跌停停牌状态、分钟K线等）。fetch_fn 签名为 (codes, begin_date, end_date)。
+
+        time_col: 索引时间列名，日频为 "date"（00:00 时间戳），分钟频为
+            "kline_time"（含时分的完整 datetime）。过滤/写盘按日期边界统一处理。
+        last_inclusive: 为 True（分钟频）时增量起点取 ``min(begin, last)``（而非
+            last+1）——请求早于缓存的历史可回补、last 当天重拉可补全半拉缺口。
+        bars_per_day: 分钟频传每日完整 bar 数（240//period）。当请求区间日期范围
+            已被本地覆盖时，用它检测"半拉天"（某交易日 bar 数不足）——存在半拉
+            则仍重拉补全，否则短路不访问数据源（离线可用）。
+
+        重要：写盘合并的是**全量本地数据**（所有 code / 所有日期），仅在返回值
+        上按 (codes, [begin_date, end_date]) 过滤。早期实现把过滤后的子集写回
+        parquet，一次窄区间查询就会永久丢失其余 code / 日期。
         """
         p = self._root / filename
-        local_df = pd.DataFrame()
+        local_full = pd.DataFrame()
         if p.exists():
-            local_df = pd.read_parquet(p)
-            if not local_df.empty:
-                local_df = local_df.reset_index()
-                local_df = local_df[local_df["code"].isin(codes)]
-                # A cache hit must honour the caller's requested interval just
-                # like a source fetch does.  Without this filter, a request
-                # whose range is already cached returns every historical row;
-                # in particular an accidentally inverted range can silently
-                # feed unrelated dates into a backtest.
-                dates = pd.to_datetime(local_df["date"])
-                local_df = local_df.loc[
-                    (dates >= pd.Timestamp(str(begin_date)))
-                    & (dates <= pd.Timestamp(str(end_date)))
-                ]
-                local_df = local_df.set_index(["date", "code"]).sort_index()
+            local_full = pd.read_parquet(p)
 
+        # ---- 确定增量拉取起点 ----
         last = self._get_last_date(table_name)
         fetch_begin = begin_date
         if last is not None:
-            fetch_begin = last + 1
+            if last_inclusive:
+                covered = False
+                if not local_full.empty:
+                    # 用交易日对齐判断"请求区间是否已被本地覆盖"：begin/end 可能是
+                    # 节假日（如 20250101 元旦），按自然日比较会把 20250102 的本地
+                    # 首日误判为未覆盖，触发无谓的 SDK 全量重拉。
+                    local_days = set(
+                        pd.to_datetime(
+                            local_full.index.get_level_values(time_col)
+                        ).normalize().strftime("%Y%m%d")
+                    )
+                    req_days = [str(d) for d in self.get_calendar(begin_date, end_date)]
+                    missing = [d for d in req_days if d not in local_days]
+                    covered = not missing
+                    if covered and bars_per_day is not None and time_col == "kline_time":
+                        # 半拉天检测：请求区间内某 (交易日, code) 的 bar 数不足完整数
+                        ts = local_full.index.get_level_values(time_col)
+                        per_day = local_full.groupby(
+                            [ts.normalize(), local_full.index.get_level_values("code")]
+                        ).size()
+                        incomplete = per_day[per_day < bars_per_day]
+                        req_begin = pd.Timestamp(str(begin_date))
+                        req_end = pd.Timestamp(str(end_date))
+                        if any(
+                            (d >= req_begin) & (d <= req_end)
+                            for d in incomplete.index.get_level_values(0).unique()
+                        ):
+                            covered = False
+                if covered:
+                    # 请求区间已被本地完整覆盖：短路不拉（离线可用）
+                    fetch_begin = int(
+                        (pd.Timestamp(str(end_date)) + pd.Timedelta(days=1)).strftime("%Y%m%d")
+                    )
+                else:
+                    # 补历史（begin < local_begin）或补半拉（last 当天重拉去重）
+                    fetch_begin = min(begin_date, last)
+            else:
+                # last 是 int YYYYMMDD，直接 +1 会得到 20240132 这样的非法日期，
+                # 必须经 Timestamp 加一天再转回 int。
+                fetch_begin = int(
+                    (pd.Timestamp(str(last)) + pd.Timedelta(days=1)).strftime("%Y%m%d")
+                )
+                # 历史回补：请求 begin 早于本地最早日期时，增量起点取 min(begin, last)。
+                # 否则只从 last+1 拉，2022-2024 这类更早的历史缺口永远不会被补上
+                # （2026-08-04 补拉 2022-2025 实测发现：daily 仍从 2025 起）。
+                if isinstance(local_full.index, pd.MultiIndex) and not local_full.empty:
+                    local_min = local_full.index.get_level_values(time_col).min()
+                    local_min_int = int(pd.Timestamp(local_min).strftime("%Y%m%d"))
+                    if begin_date < local_min_int:
+                        fetch_begin = min(begin_date, last)
+        # 若请求的 code 中有本地完全没有的（新上市票），从 begin_date 全量拉取，
+        # 否则全局 last_date 会跳过这些票上市以来的全部历史。
+        if not local_full.empty:
+            cached_codes = set(local_full.index.get_level_values("code").unique())
+            if cached_codes and any(c not in cached_codes for c in codes):
+                fetch_begin = begin_date
         if fetch_begin > end_date:
-            return local_df
+            return self._filter_long(local_full, codes, begin_date, end_date, time_col)
 
         new_df = fetch_fn(codes, fetch_begin, end_date)
         if not new_df.empty:
             if not isinstance(new_df.index, pd.MultiIndex):
-                new_df = new_df.set_index(["date", "code"]).sort_index()
-            combined = pd.concat([local_df, new_df])
+                new_df = new_df.set_index([time_col, "code"]).sort_index()
+            # 合并全量本地 + 新数据后写盘（不丢历史）
+            combined = pd.concat([local_full, new_df])
             combined = combined[~combined.index.duplicated(keep="last")]
             combined = combined.sort_index()
             combined.to_parquet(p, compression="snappy")
-            max_date = combined.index.get_level_values("date").max()
-            last_int = int(pd.Timestamp(max_date).strftime("%Y%m%d"))
+            max_ts = combined.index.get_level_values(time_col).max()
+            last_int = int(pd.Timestamp(max_ts).strftime("%Y%m%d"))
             self._set_last_date(table_name, last_int)
-            return combined
-        return local_df
+            return self._filter_long(combined, codes, begin_date, end_date, time_col)
+        return self._filter_long(local_full, codes, begin_date, end_date, time_col)
+
+    @staticmethod
+    def _filter_long(
+        df: pd.DataFrame, codes, begin_date: int, end_date: int, time_col: str = "date"
+    ) -> pd.DataFrame:
+        """按 (codes, [begin_date, end_date]) 过滤长表，仅用于返回值。
+
+        分钟频 time_col="kline_time" 含日内时分，上界必须取 end_date+1 天
+        （否则 end_date 当天除 00:00 外的全部 bar 都会被滤掉）。
+        """
+        if df.empty or not isinstance(df.index, pd.MultiIndex):
+            return df
+        df = df[df.index.get_level_values("code").isin(codes)]
+        ts = df.index.get_level_values(time_col)
+        if not pd.api.types.is_datetime64_any_dtype(ts):
+            # 兼容 int / str 型 YYYYMMDD 日期（pd.to_datetime(int) 会被当纳秒→1970）
+            ts = pd.to_datetime(ts.astype(str), format="%Y%m%d", errors="coerce")
+        start = pd.Timestamp(str(begin_date))
+        end = pd.Timestamp(str(end_date)) + pd.Timedelta(days=1)
+        df = df.loc[(ts >= start) & (ts < end)]
+        return df.sort_index()
 
     # ---- 交易日历 ----
     def get_calendar(self, begin: int = 20100101, end: int | None = None) -> list[int]:
         p = self._root / "calendar.parquet"
-        need_fetch = True
+        existing: list[int] = []
         if p.exists():
-            df = pd.read_parquet(p)
-            cal = sorted(df["date"].tolist())
-            # 本地最新日期 >= end 时直接用本地
-            if end is None or (cal and cal[-1] >= end):
-                need_fetch = False
+            existing = sorted(pd.read_parquet(p)["date"].tolist())
+        need_fetch = True
+        if existing and (end is None or existing[-1] >= end):
+            need_fetch = False
         if need_fetch:
-            cal = self._ds.get_calendar(begin, end)
-            pd.DataFrame({"date": cal}).to_parquet(p, compression="snappy")
-            self._set_last_date("calendar", cal[-1] if cal else begin)
+            fetched = self._ds.get_calendar(begin, end)
+            # 合并新旧日历去重后再写盘，避免窄区间查询覆盖丢失全部历史
+            merged = sorted(set(existing) | set(fetched))
+            pd.DataFrame({"date": merged}).to_parquet(p, compression="snappy")
+            self._set_last_date("calendar", merged[-1] if merged else begin)
+            cal = merged
         else:
-            cal = [d for d in cal if d >= begin and (end is None or d <= end)]
-        return cal
+            cal = existing
+        return [d for d in cal if d >= begin and (end is None or d <= end)]
 
     # ---- 日K线（增量更新核心）----
     def get_daily_kline(
@@ -171,6 +273,34 @@ class DataCache:
         codes = list(code_list)
         return self._refresh_long_table(
             "daily.parquet", "daily", codes, begin_date, end_date, self._ds.get_daily_kline
+        )
+
+    # ---- 分钟K线（日内研究，2026-08-03 新增）----
+    def get_minute_kline(
+        self,
+        code_list: Iterable[str],
+        begin_date: int,
+        end_date: int,
+        period: int = 5,
+    ) -> pd.DataFrame:
+        """获取分钟K线，本地缓存 + 增量补充。
+
+        period: 分钟数 {1,3,5,10,15,30,60,120}，缓存文件按档位分开
+        （min5.parquet / min15.parquet ...），互不串扰。
+
+        分钟 bar 的时间列是含时分的 kline_time（跨交易日增量按天对齐），
+        增量起点取 min(begin, last) 当天（last_inclusive=True）——即使某天
+        只按日内时段部分拉取过，重拉 + 去重也能补全，不会永久缺半天。
+        """
+        codes = list(code_list)
+        filename = f"min{period}.parquet"
+        table = f"min{period}"
+        return self._refresh_long_table(
+            filename, table, codes, begin_date, end_date,
+            lambda c, b, e: self._ds.get_minute_kline(c, b, e, period=period),
+            time_col="kline_time",
+            last_inclusive=True,
+            bars_per_day=240 // period,
         )
 
     # ---- 复权因子 ----
@@ -243,6 +373,82 @@ class DataCache:
             cached = pd.read_parquet(p)
             return cached[cached["code"].isin(codes)]
         return df
+
+    # ---- 分红 / 十大股东 / 股东户数（稀疏事件表，整表覆盖缓存，同股本结构）----
+    def get_dividend(self, code_list: Iterable[str]) -> pd.DataFrame:
+        p = self._root / "dividend.parquet"
+        codes = list(code_list)
+        df = self._ds.get_dividend(codes)
+        if not df.empty:
+            df.to_parquet(p, compression="snappy")
+            return df
+        if p.exists():
+            cached = pd.read_parquet(p)
+            return cached[cached["code"].isin(codes)] if "code" in cached.columns else cached
+        return df
+
+    def get_share_holder(self, code_list: Iterable[str]) -> pd.DataFrame:
+        p = self._root / "share_holder.parquet"
+        codes = list(code_list)
+        df = self._ds.get_share_holder(codes)
+        if not df.empty:
+            df.to_parquet(p, compression="snappy")
+            return df
+        if p.exists():
+            cached = pd.read_parquet(p)
+            return cached[cached["code"].isin(codes)] if "code" in cached.columns else cached
+        return df
+
+    def get_holder_num(self, code_list: Iterable[str]) -> pd.DataFrame:
+        p = self._root / "holder_num.parquet"
+        codes = list(code_list)
+        df = self._ds.get_holder_num(codes)
+        if not df.empty:
+            df.to_parquet(p, compression="snappy")
+            return df
+        if p.exists():
+            cached = pd.read_parquet(p)
+            return cached[cached["code"].isin(codes)] if "code" in cached.columns else cached
+        return df
+
+    # ---- 财务报表（稀疏报告期表，整表覆盖 + code 过滤）----
+    def _get_financial(self, filename: str, table_name: str,
+                       codes: list[str], fetch_fn) -> pd.DataFrame:
+        p = self._root / filename
+        df = fetch_fn(codes)
+        if not df.empty:
+            df.to_parquet(p, compression="snappy")
+            self._meta.setdefault(table_name, {})["last_date"] = (
+                int(pd.Timestamp(df["ann_date"].max()).strftime("%Y%m%d"))
+                if "ann_date" in df.columns and not df["ann_date"].isna().all() else 0
+            )
+            self._save_meta()
+            return df
+        if p.exists():
+            cached = pd.read_parquet(p)
+            return cached[cached["code"].isin(codes)] if "code" in cached.columns else cached
+        return df
+
+    def get_balance_sheet(self, code_list: Iterable[str],
+                          begin_date: int | None = None, end_date: int | None = None) -> pd.DataFrame:
+        codes = list(code_list)
+        return self._get_financial(
+            "balance_sheet.parquet", "balance_sheet", codes, self._ds.get_balance_sheet
+        )
+
+    def get_cash_flow(self, code_list: Iterable[str],
+                      begin_date: int | None = None, end_date: int | None = None) -> pd.DataFrame:
+        codes = list(code_list)
+        return self._get_financial(
+            "cash_flow.parquet", "cash_flow", codes, self._ds.get_cash_flow
+        )
+
+    def get_income(self, code_list: Iterable[str],
+                   begin_date: int | None = None, end_date: int | None = None) -> pd.DataFrame:
+        codes = list(code_list)
+        return self._get_financial(
+            "income.parquet", "income", codes, self._ds.get_income
+        )
 
     # ---- 代码表 ----
     def get_code_list(self, security_type: str = "EXTRA_STOCK_A") -> list[str]:

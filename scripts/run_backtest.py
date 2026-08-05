@@ -22,6 +22,14 @@ python -m scripts.run_backtest 都可以在任意 cwd 下运行；参见 README 
 
     # 指定策略和调仓
     python scripts/run_backtest.py --factors all --strategy topk_ls --k 30 --freq M
+
+    # 跳过因子预处理（去极值/中性化/标准化），直接用原始因子值
+    python scripts/run_backtest.py --factors all --no-preprocess
+
+因子预处理由 config/settings.yaml 的 preprocessing 段控制：
+真实数据模式下自动构建行业面板 + 市值面板做中性化（需先跑 update_data
+拉取行业分类与股本结构）；Mock 模式无行业/市值数据，中性化自动跳过，
+仅做去极值 + 标准化。
 """
 from __future__ import annotations
 
@@ -34,6 +42,7 @@ import pandas as pd
 
 from backtest import VectorBacktest
 from factor import ALL_FACTORS
+from factor.preprocessing import preprocess_factor
 from research import generate_excel_report
 from research.factor_analysis import factor_summary
 from strategy import QuantileLongShort, TopKLongOnly, TopKLongShort
@@ -87,11 +96,30 @@ def run_single_factor(
     freq: str,
     returns_panel: pd.DataFrame,
     executable_mask: pd.DataFrame | None = None,
+    preprocess_cfg: dict | None = None,
+    market_cap_panel: pd.DataFrame | None = None,
+    industry_panel: pd.DataFrame | None = None,
 ) -> tuple[str, object, dict]:
-    """跑单个因子回测，返回 (因子名, BacktestResult, factor_summary)。"""
+    """跑单个因子回测，返回 (因子名, BacktestResult, factor_summary)。
+
+    preprocess_cfg 非空且 enabled 时，因子值先经过标准预处理流程
+    （去极值 -> 行业/市值中性化 -> 标准化）再进入策略与因子分析；
+    market_cap_panel / industry_panel 为 None 时对应中性化自动跳过。
+    """
     factor_cls = ALL_FACTORS[factor_name]()
     factor_values = factor_cls.calc(panel)
     factor_panel = factor_values if isinstance(factor_values, pd.DataFrame) else factor_values.unstack("code")
+
+    if preprocess_cfg is not None and preprocess_cfg.get("enabled", True):
+        factor_panel = preprocess_factor(
+            factor_panel,
+            market_cap_panel=market_cap_panel,
+            industry_panel=industry_panel,
+            winsorize=preprocess_cfg.get("winsorize", "mad"),
+            neutralize_industry=preprocess_cfg.get("neutralize_industry", True),
+            neutralize_size=preprocess_cfg.get("neutralize_size", True),
+            standardize=preprocess_cfg.get("standardize", "zscore"),
+        )
 
     strat = build_strategy(strategy_name, k)
     bt = VectorBacktest(strategy=strat, rebalance_freq=freq)
@@ -118,6 +146,7 @@ def main():
     parser.add_argument("--strategy", default="topk_ls", choices=["topk_ls", "topk_lo", "quantile"], help="策略")
     parser.add_argument("--k", type=int, default=30, help="持仓数")
     parser.add_argument("--freq", default="M", choices=["D", "W", "M"], help="调仓频率")
+    parser.add_argument("--no-preprocess", action="store_true", help="跳过因子预处理，直接用原始因子值")
     args = parser.parse_args()
 
     # 确定因子列表
@@ -159,17 +188,21 @@ def main():
             )
         from data.tradability import build_executable_mask
         from data.universe import Universe
+        from data.industry import IndustryClassification
+        from data.market_cap import build_market_cap_panel
         uni = Universe(cache)
         codes = uni.get_hs300(end)
         kline = cache.get_daily_kline(codes, begin, end)
-        close = kline["close"].unstack("code")
+        close_raw = kline["close"].unstack("code")
         high = kline["high"].unstack("code")
         low = kline["low"].unstack("code")
         volume = kline["volume"].unstack("code")
         amount = kline["amount"].unstack("code")
 
-        # 复权：按 config.universe.adjust 决定是否把原始价转成后复权价
+        # 复权：按 config.universe.adjust 决定是否把原始价转成后复权价。
+        # 注意：市值面板用【未复权】收盘价计算，避免后复权价把历史市值放大。
         adjust_mode = cfg.get("universe", {}).get("adjust", "backward")
+        close = close_raw
         if adjust_mode == "backward":
             log.info("拉取后复权因子并应用到价格 ...")
             backward = cache.get_backward_factor(codes)
@@ -182,6 +215,36 @@ def main():
             log.warning("未知的 universe.adjust=%s，跳过复权", adjust_mode)
 
         panel = {"close": close, "high": high, "low": low, "volume": volume, "amount": amount}
+
+        # 中性化所需的行业面板与市值面板（仅当配置开启且数据可用时构建）。
+        market_cap_panel: pd.DataFrame | None = None
+        industry_panel: pd.DataFrame | None = None
+        pre_cfg = cfg.get("preprocessing", {})
+        need_neutralize = (
+            not args.no_preprocess
+            and pre_cfg.get("enabled", True)
+            and (pre_cfg.get("neutralize_industry", True) or pre_cfg.get("neutralize_size", True))
+        )
+        if need_neutralize:
+            if pre_cfg.get("neutralize_size", True):
+                log.info("构建市值面板（流通/总市值，基于未复权收盘价）...")
+                equity_structure = cache.get_equity_structure(codes)
+                if equity_structure is None or equity_structure.empty:
+                    log.warning("本地无股本结构数据，市值中性化将被跳过（请先跑 update_data）")
+                else:
+                    market_cap_panel = build_market_cap_panel(
+                        equity_structure, close_raw, share_field=pre_cfg.get("market_cap_field", "tot_share")
+                    )
+                    if market_cap_panel.dropna(how="all").empty:
+                        log.warning("市值面板全为空（股本与行情日期无重叠？），市值中性化将被跳过")
+                        market_cap_panel = None
+            if pre_cfg.get("neutralize_industry", True):
+                log.info("构建行业分类面板 ...")
+                ind = IndustryClassification(cache, level=int(pre_cfg.get("industry_level", 1)))
+                industry_panel = ind.get_industry_panel(codes, close.index)
+                if industry_panel is None or industry_panel.dropna(how="all").empty:
+                    log.warning("本地无行业分类数据，行业中性化将被跳过（请先跑 update_data）")
+                    industry_panel = None
 
         # 可执行性掩码：涨跌停/停牌 AND 动态(point-in-time)成分股归属
         log.info("拉取历史涨跌停/停牌状态 ...")
@@ -201,6 +264,24 @@ def main():
     else:
         log.info("使用 Mock 数据 ...")
         panel = gen_mock_data()
+        market_cap_panel = None
+        industry_panel = None
+
+    # 预处理配置（mock 模式下没有行业/市值数据，中性化会自动跳过）
+    from config import Config as _Config
+    pre_cfg = dict(_Config.get().get("preprocessing", {}))
+    if args.no_preprocess:
+        pre_cfg["enabled"] = False
+    if pre_cfg.get("enabled", True):
+        log.info(
+            "因子预处理: winsorize=%s, neutralize=[industry=%s, size=%s], standardize=%s",
+            pre_cfg.get("winsorize", "mad"),
+            industry_panel is not None and pre_cfg.get("neutralize_industry", True),
+            market_cap_panel is not None and pre_cfg.get("neutralize_size", True),
+            pre_cfg.get("standardize", "zscore"),
+        )
+    else:
+        log.info("因子预处理: 已关闭（使用原始因子值）")
 
     # 2. 收益率面板
     returns_panel = panel["close"].pct_change().shift(-1)
@@ -211,7 +292,10 @@ def main():
     for fn in factor_list:
         log.info("回测因子: %s (策略: %s, 调仓: %s)", fn, args.strategy, args.freq)
         name, result, fs = run_single_factor(
-            fn, panel, args.strategy, args.k, args.freq, returns_panel, executable_mask
+            fn, panel, args.strategy, args.k, args.freq, returns_panel, executable_mask,
+            preprocess_cfg=pre_cfg,
+            market_cap_panel=market_cap_panel,
+            industry_panel=industry_panel,
         )
         results[name] = result
         factor_summaries[name] = fs
@@ -225,6 +309,32 @@ def main():
     xlsx_path = report_dir / "yuriquant_report.xlsx"
     generate_excel_report(results, factor_summaries, output_path=xlsx_path)
     log.info("Excel 报告: %s", xlsx_path.resolve())
+
+    # 5. 实验记录
+    try:
+        import sys
+        from data.cache import DataCache
+        from data.datasource import create_datasource
+        from research.experiments import record_experiment
+        fingerprint = DataCache(create_datasource()).get_fingerprint()
+        metrics_summary = {
+            fn: {"annual_return": round(results[fn].metrics().get("annual_return", 0.0), 4),
+                 "sharpe": round(results[fn].metrics().get("sharpe", 0.0), 4),
+                 "ic_mean": round(factor_summaries[fn].get("ic_mean", 0.0), 4)}
+            for fn in factor_list if fn in results
+        }
+        record_experiment(
+            kind="backtest",
+            command=" ".join(sys.argv),
+            params={"real": args.real, "factors": factor_list,
+                    "strategy": args.strategy, "k": args.k, "freq": args.freq,
+                    "no_preprocess": args.no_preprocess},
+            data_fingerprint=fingerprint,
+            result_path=str(xlsx_path),
+            metrics=metrics_summary,
+        )
+    except Exception as e:
+        log.warning("实验记录写入失败（不影响结果）: %s", e)
 
     log.info("=== 完成 ===")
 

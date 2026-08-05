@@ -39,23 +39,42 @@ def annual_volatility(daily_returns: pd.Series, periods_per_year: int = 252) -> 
     return daily_returns.std() * np.sqrt(periods_per_year)
 
 
+def _rf_daily(rf: float, periods_per_year: int) -> float:
+    """年化 rf → 日频 rf（复利折算），用于超额收益序列。"""
+    if rf <= 0:
+        return 0.0
+    return (1 + rf) ** (1 / periods_per_year) - 1
+
+
 def sharpe_ratio(daily_returns: pd.Series, rf: float = 0.0, periods_per_year: int = 252) -> float:
-    """夏普比率 Sharpe Ratio。"""
+    """夏普比率 Sharpe Ratio。
+
+    rf 按日频复利折算为超额收益序列（(1+r)/(1+rf_daily)-1），再用几何年化口径：
+    Sharpe = 年化超额收益 / 年化波动率。rf=0 时与经典实现完全一致。
+    """
+    rfd = _rf_daily(rf, periods_per_year)
+    excess = (1 + daily_returns) / (1 + rfd) - 1
     vol = annual_volatility(daily_returns, periods_per_year)
     if vol == 0:
         return 0.0
-    return (annual_return(daily_returns, periods_per_year) - rf) / vol
+    return annual_return(excess, periods_per_year) / vol
 
 
 def sortino_ratio(daily_returns: pd.Series, rf: float = 0.0, periods_per_year: int = 252) -> float:
-    """索提诺比率 Sortino Ratio: 只用下行波动。"""
-    ar = annual_return(daily_returns, periods_per_year) - rf
-    downside = daily_returns[daily_returns < 0]
-    if len(downside) == 0:
+    """索提诺比率 Sortino Ratio: 只用下行波动。
+
+    下行偏差 = 半方差 downside deviation = sqrt(mean(min(excess, 0)²))，
+    衡量亏损深度（相对目标收益 0）；早期实现误用"负收益日样本的 std"，
+    度量的是亏损日之间的离散度，系统性高估 |Sortino|（实证 ~30%）。
+    rf 按日频折算为超额序列后再计算（与 Sharpe 同口径）。
+    """
+    rfd = _rf_daily(rf, periods_per_year)
+    excess = (1 + daily_returns) / (1 + rfd) - 1
+    ar = annual_return(excess, periods_per_year)
+    dd = float(np.sqrt(np.mean(np.minimum(excess, 0.0) ** 2)))
+    if dd == 0:
         return 0.0
-    downside_vol = downside.std() * np.sqrt(periods_per_year)
-    if downside_vol == 0:
-        return 0.0
+    downside_vol = dd * np.sqrt(periods_per_year)
     return ar / downside_vol
 
 
@@ -143,14 +162,23 @@ def calc_all_metrics(
     benchmark_returns: pd.Series | None = None,
     weights_history: pd.DataFrame | None = None,
     periods_per_year: int = 252,
+    rf: float = 0.0,
 ) -> dict:
-    """一次性计算所有指标。"""
+    """一次性计算所有指标。
+
+    Args:
+        daily_returns: 日收益序列。
+        benchmark_returns: 基准日收益（可选，计算 IR / 超额收益）。
+        weights_history: 权重历史（可选，计算平均换手率）。
+        periods_per_year: 年化周期数（默认 252 交易日）。
+        rf: 年化无风险利率（默认 0），用于 Sharpe / Sortino 的超额收益。
+    """
     m = {
         "annual_return": annual_return(daily_returns, periods_per_year),
         "total_return": (1 + daily_returns).prod() - 1,
         "annual_volatility": annual_volatility(daily_returns, periods_per_year),
-        "sharpe": sharpe_ratio(daily_returns, periods_per_year=periods_per_year),
-        "sortino": sortino_ratio(daily_returns, periods_per_year=periods_per_year),
+        "sharpe": sharpe_ratio(daily_returns, rf=rf, periods_per_year=periods_per_year),
+        "sortino": sortino_ratio(daily_returns, rf=rf, periods_per_year=periods_per_year),
         "max_drawdown": max_drawdown(daily_returns),
         "calmar": calmar_ratio(daily_returns, periods_per_year),
         "win_rate": win_rate(daily_returns),

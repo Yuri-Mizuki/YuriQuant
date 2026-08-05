@@ -22,6 +22,33 @@ from typing import Iterable
 import pandas as pd
 
 
+def _to_datetime_safe(s) -> pd.Series:
+    """日期列安全解析。
+
+    int 型 YYYYMMDD（如 20240105）必须按 ``%Y%m%d`` 解析——``pd.to_datetime``
+    会把整数当纳秒时间戳，得到 1970 年的垃圾时间戳（正是 calendar 那类 PIT
+    bug 的根因）。其余 dtype（str / datetime）走自动解析。
+    """
+    s = pd.Series(s) if not isinstance(s, pd.Series) else s
+    if pd.api.types.is_integer_dtype(s):
+        return pd.to_datetime(s.astype(str), format="%Y%m%d", errors="coerce")
+    return pd.to_datetime(s, errors="coerce")
+
+
+# 手册 4.1.7「数据周期 Period」支持的分钟档位（Period.minN）
+VALID_MINUTE_PERIODS = frozenset({1, 3, 5, 10, 15, 30, 60, 120})
+
+
+def validate_minute_period(period: int) -> int:
+    """校验分钟档位，非法抛 ValueError。返回原值（便于链式调用）。"""
+    if period not in VALID_MINUTE_PERIODS:
+        raise ValueError(
+            f"period 必须是 {sorted(VALID_MINUTE_PERIODS)} 之一（对应手册 "
+            f"Period.minN），got {period}"
+        )
+    return period
+
+
 class DataSource(ABC):
     """数据源抽象基类。"""
 
@@ -50,6 +77,26 @@ class DataSource(ABC):
     ) -> pd.DataFrame:
         """日K线。返回 multi-index (date, code) DataFrame，
         列: open/high/low/close/volume/amount。"""
+
+    @abstractmethod
+    def get_minute_kline(
+        self,
+        code_list: Iterable[str],
+        begin_date: int,
+        end_date: int,
+        period: int = 5,
+        begin_time: int | None = None,
+        end_time: int | None = None,
+    ) -> pd.DataFrame:
+        """分钟K线（AmazingData 手册 3.5.4.2 query_kline + 4.1.7 Period）。
+
+        period: 分钟数，取 {1,3,5,10,15,30,60,120}，对应手册 ``Period.minN``。
+        begin_time/end_time: 可选，限定日内时段（时分，如 930 / 1500）。
+
+        返回 multi-index (kline_time, code) DataFrame，
+        列: open/high/low/close/volume/amount。kline_time 为完整 datetime
+        （含时分，如 2026-01-05 09:35），跨交易日按天对齐。
+        """
 
     # ---- 复权因子 ----
     @abstractmethod
@@ -95,6 +142,53 @@ class DataSource(ABC):
         """历史股本变动事件表（稀疏，一次变动一行，不是每日行情）。
 
         返回长表，列: code, change_date, tot_share, float_share（单位：万股）。"""
+
+    # ---- 分红（用于股息率/股利支付率类因子）----
+    @abstractmethod
+    def get_dividend(self, code_list: Iterable[str]) -> pd.DataFrame:
+        """上市公司分红实施数据（稀疏事件表）。
+
+        返回长表，列: code, ann_date, record_date, ex_date, payout_date,
+        report_period, cash_per_share_pre_tax（每股派息税前元）, bonus_rate,
+        base_share（基准股本万股）。"""
+
+    # ---- 十大股东（用于机构持仓/股东集中度类因子）----
+    @abstractmethod
+    def get_share_holder(self, code_list: Iterable[str]) -> pd.DataFrame:
+        """十大股东明细（稀疏事件表，每期最多 10 行/股）。
+
+        返回长表，列: code, ann_date, holder_end_date, holder_name,
+        holder_pct（持股比例%）, holder_quantity（持股数股）, float_quantity。"""
+
+    # ---- 股东户数（用于股东数时序类因子）----
+    @abstractmethod
+    def get_holder_num(self, code_list: Iterable[str]) -> pd.DataFrame:
+        """股东户数（稀疏事件表，每披露期一行）。
+
+        返回长表，列: code, ann_date, holder_end_date, holder_num（A股户数）。"""
+
+    # ---- 财务报表（利润表/资产负债表/现金流量表）----
+    @abstractmethod
+    def get_balance_sheet(
+        self, code_list: Iterable[str], begin_date: int | None = None, end_date: int | None = None
+    ) -> pd.DataFrame:
+        """资产负债表（稀疏事件表，按报告期一行）。
+
+        point-in-time 关键字段为 ann_date（公告日）。返回长表，列:
+        code, ann_date, report_period, statement_type, report_type, + 各财务字段。
+        """
+
+    @abstractmethod
+    def get_cash_flow(
+        self, code_list: Iterable[str], begin_date: int | None = None, end_date: int | None = None
+    ) -> pd.DataFrame:
+        """现金流量表。schema 同 get_balance_sheet。"""
+
+    @abstractmethod
+    def get_income(
+        self, code_list: Iterable[str], begin_date: int | None = None, end_date: int | None = None
+    ) -> pd.DataFrame:
+        """利润表。schema 同 get_balance_sheet。"""
 
 
 # ---------------------------------------------------------------------------
@@ -199,6 +293,44 @@ class AmazingDataSource(DataSource):
         out = out.set_index(["date", "code"])
         return out.sort_index()
 
+    # ---- 分钟K线 ----
+    def get_minute_kline(
+        self,
+        code_list: Iterable[str],
+        begin_date: int,
+        end_date: int,
+        period: int = 5,
+        begin_time: int | None = None,
+        end_time: int | None = None,
+    ) -> pd.DataFrame:
+        codes = list(code_list)
+        validate_minute_period(period)
+        period_value = getattr(self._ad.constant.Period, f"min{period}").value
+        kwargs: dict = dict(begin_date=begin_date, end_date=end_date, period=period_value)
+        if begin_time is not None:
+            kwargs["begin_time"] = begin_time
+        if end_time is not None:
+            kwargs["end_time"] = end_time
+        kline_dict = self._market.query_kline(codes, **kwargs)
+        frames = []
+        for code, df in kline_dict.items():
+            if df is None or (hasattr(df, "empty") and df.empty):
+                continue
+            sub = df[["kline_time", "open", "high", "low", "close", "volume", "amount"]].copy()
+            sub.insert(1, "code", code)
+            frames.append(sub)
+        if not frames:
+            return pd.DataFrame(
+                columns=["kline_time", "code", "open", "high", "low", "close", "volume", "amount"]
+            )
+        out = pd.concat(frames, ignore_index=True)
+        # kline_time 含日内时分，是完整 datetime（不是 int YYYYMMDD），
+        # 走自动解析即可；个别脏值置 NaT 后丢弃。
+        out["kline_time"] = pd.to_datetime(out["kline_time"], errors="coerce")
+        out = out.dropna(subset=["kline_time"])
+        out = out.set_index(["kline_time", "code"])
+        return out.sort_index()
+
     # ---- 复权因子 ----
     def get_adj_factor(self, code_list: Iterable[str]) -> pd.DataFrame:
         # SDK 内部以 pickle 格式缓存到 local_path，首次 is_local=False 从服务端拉取并落地，
@@ -248,7 +380,7 @@ class AmazingDataSource(DataSource):
             "IS_WD_SEC": "is_ex_dividend",
             "IS_XR_SEC": "is_ex_rights",
         })
-        out["date"] = pd.to_datetime(out["date"])
+        out["date"] = _to_datetime_safe(out["date"])
         for col in ("is_st", "is_suspended", "is_ex_dividend", "is_ex_rights"):
             if col in out.columns:
                 out[col] = out[col].astype(str) == "1"
@@ -305,9 +437,182 @@ class AmazingDataSource(DataSource):
             "TOT_SHARE": "tot_share",
             "FLOAT_SHARE": "float_share",
         })
-        out["change_date"] = pd.to_datetime(out["change_date"])
+        out["change_date"] = _to_datetime_safe(out["change_date"])
         keep = ["code", "change_date", "tot_share", "float_share"]
         return out[[c for c in keep if c in out.columns]]
+
+    # ---- 分红 ----
+    def get_dividend(self, code_list: Iterable[str]) -> pd.DataFrame:
+        raw = self._info.get_dividend(
+            list(code_list), local_path=self._local_path, is_local=False
+        )
+        empty_cols = ["code", "ann_date", "record_date", "ex_date", "payout_date",
+                      "report_period", "cash_per_share_pre_tax", "bonus_rate", "base_share"]
+        if raw is None or (hasattr(raw, "empty") and raw.empty):
+            return pd.DataFrame(columns=empty_cols)
+        if isinstance(raw, dict):
+            raw = pd.concat(raw.values(), ignore_index=True) if raw else pd.DataFrame()
+        if raw.empty:
+            return pd.DataFrame(columns=empty_cols)
+        out = raw.rename(columns={
+            "MARKET_CODE": "code",
+            "DATE_DVD_ANN": "ann_date",
+            "DATE_EQY_RECORD": "record_date",
+            "DATE_EX": "ex_date",
+            "DATE_DVD_PAYOUT": "payout_date",
+            "REPORT_PERIOD": "report_period",
+            "DVD_PER_SHARE_PRE_TAX_CASH": "cash_per_share_pre_tax",
+            "DIV_BONUSRATE": "bonus_rate",
+            "DIV_BASESHARE": "base_share",
+        })
+        for col in ("ann_date", "record_date", "ex_date", "payout_date"):
+            if col in out.columns:
+                out[col] = _to_datetime_safe(out[col])
+        if "report_period" in out.columns:
+            out["report_period"] = _to_datetime_safe(out["report_period"])
+        for col in ("cash_per_share_pre_tax", "bonus_rate", "base_share"):
+            if col in out.columns:
+                out[col] = pd.to_numeric(out[col], errors="coerce")
+        return out[[c for c in empty_cols if c in out.columns]]
+
+    # ---- 十大股东 ----
+    def get_share_holder(self, code_list: Iterable[str]) -> pd.DataFrame:
+        raw = self._info.get_share_holder(
+            list(code_list), local_path=self._local_path, is_local=False
+        )
+        empty_cols = ["code", "ann_date", "holder_end_date", "holder_name",
+                      "holder_pct", "holder_quantity", "float_quantity"]
+        if raw is None or (hasattr(raw, "empty") and raw.empty):
+            return pd.DataFrame(columns=empty_cols)
+        if isinstance(raw, dict):
+            raw = pd.concat(raw.values(), ignore_index=True) if raw else pd.DataFrame()
+        if raw.empty:
+            return pd.DataFrame(columns=empty_cols)
+        out = raw.rename(columns={
+            "MARKET_CODE": "code",
+            "ANN_DATE": "ann_date",
+            "HOLDER_ENDDATE": "holder_end_date",
+            "HOLDER_NAME": "holder_name",
+            "HOLDER_PCT": "holder_pct",
+            "HOLDER_QUANTITY": "holder_quantity",
+            "FLOAT_QTY": "float_quantity",
+        })
+        for col in ("ann_date", "holder_end_date"):
+            if col in out.columns:
+                out[col] = _to_datetime_safe(out[col])
+        for col in ("holder_pct", "holder_quantity", "float_quantity"):
+            if col in out.columns:
+                out[col] = pd.to_numeric(out[col], errors="coerce")
+        return out[[c for c in empty_cols if c in out.columns]]
+
+    # ---- 股东户数 ----
+    def get_holder_num(self, code_list: Iterable[str]) -> pd.DataFrame:
+        raw = self._info.get_holder_num(
+            list(code_list), local_path=self._local_path, is_local=False
+        )
+        empty_cols = ["code", "ann_date", "holder_end_date", "holder_num"]
+        if raw is None or (hasattr(raw, "empty") and raw.empty):
+            return pd.DataFrame(columns=empty_cols)
+        if isinstance(raw, dict):
+            raw = pd.concat(raw.values(), ignore_index=True) if raw else pd.DataFrame()
+        if raw.empty:
+            return pd.DataFrame(columns=empty_cols)
+        out = raw.rename(columns={
+            "MARKET_CODE": "code",
+            "ANN_DT": "ann_date",
+            "HOLDER_ENDDATE": "holder_end_date",
+            "HOLDER_NUM": "holder_num",
+        })
+        for col in ("ann_date", "holder_end_date"):
+            if col in out.columns:
+                out[col] = _to_datetime_safe(out[col])
+        if "holder_num" in out.columns:
+            out["holder_num"] = pd.to_numeric(out["holder_num"], errors="coerce")
+        return out[[c for c in empty_cols if c in out.columns]]
+
+    # ---- 财务报表 ----
+    # 字符串/元数据列：归一化时排除，不作为数值字段保留。
+    _FINANCIAL_META_COLS = {
+        "MARKET_CODE", "SECURITY_NAME", "CURRENCY_CODE", "COMMENTS",
+        "_code", "code", "ann_date", "actual_ann_date", "report_period",
+        "statement_type", "report_type",
+    }
+
+    def _normalize_financial(self, raw) -> pd.DataFrame:
+        """把 SDK 的 {code: DataFrame} 财务报表归一化为长表。
+
+        - 统一字段名：MARKET_CODE→code, ANN_DATE→ann_date,
+          ACTUAL_ANN_DATE→actual_ann_date, REPORTING_PERIOD→report_period,
+          STATEMENT_TYPE→statement_type, REPORT_TYPE→report_type。
+        - 公告日取 actual_ann_date，缺失回退 ann_date（PIT 发布日）。
+        - 其余列强转 numeric（非数值变 NaN）。
+        """
+        empty_cols = ["code", "ann_date", "report_period", "statement_type", "report_type"]
+        if isinstance(raw, dict):
+            frames = []
+            for code, df in raw.items():
+                if df is None or (hasattr(df, "empty") and df.empty):
+                    continue
+                sub = df.copy()
+                sub["_code"] = code
+                frames.append(sub)
+            if not frames:
+                return pd.DataFrame(columns=empty_cols)
+            concat = pd.concat(frames, ignore_index=True)
+        elif isinstance(raw, pd.DataFrame) and not raw.empty:
+            concat = raw.copy()
+        else:
+            return pd.DataFrame(columns=empty_cols)
+
+        rename = {
+            "MARKET_CODE": "code",
+            "ANN_DATE": "ann_date",
+            "ACTUAL_ANN_DATE": "actual_ann_date",
+            "REPORTING_PERIOD": "report_period",
+            "STATEMENT_TYPE": "statement_type",
+            "REPORT_TYPE": "report_type",
+        }
+        out = concat.rename(columns=rename)
+        if "code" not in out.columns:
+            out["code"] = out.get("_code")
+
+        for col in ("ann_date", "actual_ann_date", "report_period"):
+            if col in out.columns:
+                out[col] = _to_datetime_safe(out[col])
+        # PIT 发布日：优先 actual_ann_date，回退 ann_date
+        if "actual_ann_date" in out.columns:
+            out["ann_date"] = out["actual_ann_date"].fillna(out.get("ann_date"))
+
+        keep = [c for c in ("code", "ann_date", "report_period",
+                            "statement_type", "report_type") if c in out.columns]
+        numeric = [c for c in out.columns if c not in self._FINANCIAL_META_COLS]
+        for c in numeric:
+            out[c] = pd.to_numeric(out[c], errors="coerce")
+        # 同一 (code, ann_date) 多条记录（不同 statement_type）时保留最新报告期
+        out = out.sort_values(["code", "ann_date", "report_period"])
+        out = out.drop_duplicates(subset=["code", "ann_date"], keep="last")
+        return out[keep + numeric].reset_index(drop=True)
+
+    def get_balance_sheet(self, code_list: Iterable[str],
+                          begin_date: int | None = None, end_date: int | None = None) -> pd.DataFrame:
+        raw = self._info.get_balance_sheet(
+            list(code_list), local_path=self._local_path, is_local=False
+        )
+        return self._normalize_financial(raw)
+
+    def get_cash_flow(self, code_list: Iterable[str],
+                      begin_date: int | None = None, end_date: int | None = None) -> pd.DataFrame:
+        raw = self._info.get_cash_flow(
+            list(code_list), local_path=self._local_path, is_local=False
+        )
+        return self._normalize_financial(raw)
+
+    def get_income(self, code_list: Iterable[str],
+                   begin_date: int | None = None, end_date: int | None = None) -> pd.DataFrame:
+        raw = self._info.get_income(
+            list(code_list), local_path=self._local_path, is_local=False
+        )
+        return self._normalize_financial(raw)
 
 
 # ---------------------------------------------------------------------------
@@ -356,6 +661,20 @@ class CSVDataSource(DataSource):
         out = pd.concat(frames).set_index(["date", "code"])
         return out.sort_index()
 
+    def get_minute_kline(
+        self,
+        code_list: Iterable[str],
+        begin_date: int,
+        end_date: int,
+        period: int = 5,
+        begin_time: int | None = None,
+        end_time: int | None = None,
+    ) -> pd.DataFrame:
+        # CSV 备用源暂无分钟数据，返回空表（列结构与真实实现一致）
+        return pd.DataFrame(
+            columns=["kline_time", "code", "open", "high", "low", "close", "volume", "amount"]
+        )
+
     def get_adj_factor(self, code_list: Iterable[str]) -> pd.DataFrame:
         return pd.DataFrame()
 
@@ -383,6 +702,30 @@ class CSVDataSource(DataSource):
 
     def get_equity_structure(self, code_list: Iterable[str]) -> pd.DataFrame:
         return pd.DataFrame(columns=["code", "change_date", "tot_share", "float_share"])
+
+    def get_dividend(self, code_list: Iterable[str]) -> pd.DataFrame:
+        return pd.DataFrame(columns=["code", "ann_date", "record_date", "ex_date",
+                                     "payout_date", "report_period",
+                                     "cash_per_share_pre_tax", "bonus_rate", "base_share"])
+
+    def get_share_holder(self, code_list: Iterable[str]) -> pd.DataFrame:
+        return pd.DataFrame(columns=["code", "ann_date", "holder_end_date", "holder_name",
+                                     "holder_pct", "holder_quantity", "float_quantity"])
+
+    def get_holder_num(self, code_list: Iterable[str]) -> pd.DataFrame:
+        return pd.DataFrame(columns=["code", "ann_date", "holder_end_date", "holder_num"])
+
+    def get_balance_sheet(self, code_list: Iterable[str],
+                          begin_date: int | None = None, end_date: int | None = None) -> pd.DataFrame:
+        return pd.DataFrame(columns=["code", "ann_date", "report_period", "statement_type", "report_type"])
+
+    def get_cash_flow(self, code_list: Iterable[str],
+                      begin_date: int | None = None, end_date: int | None = None) -> pd.DataFrame:
+        return pd.DataFrame(columns=["code", "ann_date", "report_period", "statement_type", "report_type"])
+
+    def get_income(self, code_list: Iterable[str],
+                   begin_date: int | None = None, end_date: int | None = None) -> pd.DataFrame:
+        return pd.DataFrame(columns=["code", "ann_date", "report_period", "statement_type", "report_type"])
 
 
 # ---------------------------------------------------------------------------

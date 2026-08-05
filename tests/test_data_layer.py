@@ -102,7 +102,6 @@ def test_history_stock_status_cached(tmp_path: Path, mock_ds):
 
 
 def test_membership_mask_point_in_time(tmp_path: Path, mock_ds):
-    import pandas as pd
 
     cache = DataCache(mock_ds, cache_root=tmp_path)
     uni = Universe(cache)
@@ -115,3 +114,37 @@ def test_membership_mask_point_in_time(tmp_path: Path, mock_ds):
     if len(before) > 0:
         assert not mask.loc[before].any().any()
     assert mask.loc[after].all().all()
+
+
+def test_narrow_fetch_does_not_overwrite_cache(tmp_path: Path, mock_ds):
+    """窄区间 + 少量 code 的增量查询不得覆盖丢失缓存里其余 code / 日期。
+
+    回归 P0：早期 _refresh_long_table 把按 (codes, 日期) 过滤后的子集写回
+    parquet，一次窄查询会永久销毁其余股票 / 历史日期。
+    """
+    cache = DataCache(mock_ds, cache_root=tmp_path)
+    codes = Universe(cache).get_hs300(20240101)
+    cache.get_daily_kline(codes, 20230101, 20240131)
+    p = cache.root / "daily.parquet"
+    full_rows = len(pd.read_parquet(p))
+    full_codes = set(pd.read_parquet(p).index.get_level_values("code").unique())
+
+    # 扩展数据源后，仅查 2 只票、半个月新区间（触发 fetch + 写盘）
+    mock_ds._cal = mock_ds._gen_calendar(20230101, 20240301)
+    cache.get_daily_kline(codes[:2], 20240201, 20240215)
+
+    after = pd.read_parquet(p)
+    # 其余 code 与历史日期仍在，未被窄查询覆盖
+    assert set(after.index.get_level_values("code").unique()) == full_codes
+    assert len(after) >= full_rows
+
+
+def test_narrow_calendar_query_does_not_truncate(tmp_path: Path, mock_ds):
+    """窄区间日历查询不得覆盖丢失已有的完整日历（回归 P0）。"""
+    cache = DataCache(mock_ds, cache_root=tmp_path)
+    cache.get_calendar(20230101, 20241231)
+    p = cache.root / "calendar.parquet"
+    full_len = len(pd.read_parquet(p))
+    # 窄区间再查一次
+    cache.get_calendar(20240101, 20240131)
+    assert len(pd.read_parquet(p)) == full_len

@@ -50,6 +50,33 @@ fetch:
   # end_date 留空表示"至今"，由代码动态取 calendar[-1]
   end_date: null
 
+# --- 分钟频率数据（日内研究） ---
+minute:
+  # 要拉取缓存的分钟档位（分钟数，可选 1/3/5/10/15/30/60/120，对应手册 Period.minN）
+  # 5 分钟为日内研究标准档位；空列表 [] 表示不拉分钟数据
+  periods: [5]
+
+# --- 因子预处理 ---
+preprocessing:
+  # 总开关：false 时回测直接用原始因子值
+  enabled: true
+  # 去极值方式: mad | quantile | null
+  winsorize: mad
+  # 标准化方式: zscore | rank | null
+  standardize: zscore
+  # 中性化开关（真实数据模式下生效；mock 模式无行业/市值数据自动跳过）
+  neutralize_industry: true
+  neutralize_size: true
+  # 市值口径: tot_share(总市值) | float_share(流通市值)
+  market_cap_field: tot_share
+  # 行业分类级别（申万一级=1）
+  industry_level: 1
+
+# --- 因子库（Factor Library / Factor Zoo）---
+factor_library:
+  # 因子持久化根目录：registry.csv + panels/*.parquet + evals/*.parquet
+  root: e://data//factor_library//
+
 # --- 回测默认参数（后续阶段用） ---
 backtest:
   commission_rate: 0.0001    # 双边佣金万1

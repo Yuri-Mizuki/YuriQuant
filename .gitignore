@@ -27,6 +27,14 @@ output/
 
 # SDK cache (user-specific)
 AmazingData/
+AmazingData开发手册.pdf
+
+# Local workspace data
+.workbuddy/
+_real_out.txt
+
+# Test temp
+tests/.test-tmp/
 
 # OS
 Thumbs.db

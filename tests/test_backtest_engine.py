@@ -82,3 +82,51 @@ def test_run_with_mask_excludes_unexecutable_stock(small_panels):
     # 第 1、2 天（mask 全 True）行为与不加 mask 时一致
     assert result.weights_history.loc[dates[0], "A"] == pytest.approx(0.5)
     assert result.weights_history.loc[dates[0], "B"] == pytest.approx(0.5)
+
+
+def test_transaction_costs_double_sided_and_zero_turnover():
+    """交易成本应按双边（佣金/滑点）+ 单边卖出（印花税）计费，零换手零成本。
+
+    回归 P0：早期实现佣金/滑点按单边、印花税按四分之一边（少算一倍），
+    且零换手时仍按最低佣金扣费。
+    """
+    from backtest.costs import TransactionCosts
+
+    c = TransactionCosts(commission_rate=0.0001, commission_min=5.0,
+                         stamp_duty=0.001, slippage_bp=5.0)
+    # 零换手 → 零成本
+    assert c.calc(np.zeros(3), np.zeros(3), 0.0, 1_000_000.0) == 0.0
+
+    # turnover=0.1 单边, capital=1e6 → 买入额=卖出额=1e5, 双边=2e5
+    cost = c.calc(np.zeros(3), np.array([0.1, 0.0, 0.0]), 0.1, 1_000_000.0)
+    expected_commission = max(2e5 * 0.0001, 5.0)   # 20
+    expected_stamp = 1e5 * 0.001                    # 100
+    expected_slip = 2e5 * 5.0 / 10000               # 10
+    assert cost == pytest.approx(expected_commission + expected_stamp + expected_slip)
+
+
+def test_daily_returns_net_of_cost():
+    """daily_returns 应为净收益（扣成本），与 equity_curve 一致。
+
+    回归 P0：早期实现 daily_returns 只存毛收益、成本仅从 capital 扣，
+    导致 Sharpe / 年化 / 最大回撤系统性虚高。
+    注：引擎对齐修复（2026-07-30）后，调仓日先建仓再赚当日收益，故首日
+    既有建仓成本又有收益，净收益 = 毛收益(0.01) - 成本 < 0.01。
+    """
+    dates = pd.date_range("2024-01-01", periods=4, freq="D")
+    codes = ["A", "B"]
+    # 因子恒定 → 每个调仓日权重不变，仅首日建仓有换手有成本
+    factor_panel = pd.DataFrame([[3, 2]] * 4, index=dates, columns=codes, dtype=float)
+    returns_panel = pd.DataFrame(0.01, index=dates, columns=codes)
+
+    bt = VectorBacktest(strategy=EqualWeightTop2(), rebalance_freq="D", initial_capital=1_000_000.0)
+    res = bt.run(factor_panel, returns_panel)
+
+    # 首日建仓产生成本 → 首日净收益低于毛收益 0.01（成本拖累）
+    assert res.daily_returns.iloc[0] < 0.01
+    # 之后权重不变 → 换手 0 → 无成本，净收益等于毛收益 0.01
+    assert res.daily_returns.iloc[1] == pytest.approx(0.01)
+    assert res.daily_returns.iloc[2] == pytest.approx(0.01)
+    # equity_curve 与 daily_returns 自洽：(1+r).cumprod() ≈ equity
+    recon = (1 + res.daily_returns).cumprod()
+    assert np.allclose(recon.values, res.equity_curve.values, rtol=1e-6, atol=1e-9)

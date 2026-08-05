@@ -67,6 +67,61 @@ class MockDataSource(DataSource):
         out = pd.concat(frames).reset_index().set_index(["date", "code"])
         return out.sort_index()
 
+    # ---- 分钟K线（mock：按 A 股交易时段生成，48 根/日 @5分钟）----
+    @staticmethod
+    def _intraday_times(date_int: int, period: int) -> list[pd.Timestamp]:
+        """A 股交易时段 9:30-11:30 / 13:00-15:00，bar 标签 = 时段开始时刻。
+
+        每半天 120//period 根：9:30, 9:30+period, ... （period=5 → 48 根/日）。
+        """
+        date = pd.Timestamp(str(date_int))
+        n = 120 // period
+        morning = [
+            date + pd.Timedelta(hours=9, minutes=30) + pd.Timedelta(minutes=period * i)
+            for i in range(n)
+        ]
+        afternoon = [
+            date + pd.Timedelta(hours=13) + pd.Timedelta(minutes=period * i)
+            for i in range(n)
+        ]
+        return morning + afternoon
+
+    def get_minute_kline(self, code_list, begin_date, end_date, period=5,
+                         begin_time=None, end_time=None) -> pd.DataFrame:
+        codes = list(code_list)
+        cal = [d for d in self._cal if begin_date <= d <= end_date]
+        if not cal:
+            return pd.DataFrame(
+                columns=["kline_time", "code", "open", "high", "low", "close", "volume", "amount"]
+            )
+        bars_per_day = 240 // period
+        rng = np.random.default_rng(42)
+        rows = []
+        for code in codes:
+            for d in cal:
+                times = self._intraday_times(d, period)
+                day_open = 10.0 * (1 + rng.normal(0, 0.01))
+                # 日内随机游走：首根 open = 当日开盘价，末根 close 为随机游走终点
+                path = np.cumsum(rng.normal(0, 0.002, bars_per_day))
+                opens = day_open * (1 + np.concatenate([[0.0], path[:-1]]))
+                closes = day_open * (1 + path)
+                highs = np.maximum(opens, closes) * (1 + rng.uniform(0, 0.003, bars_per_day))
+                lows = np.minimum(opens, closes) * (1 - rng.uniform(0, 0.003, bars_per_day))
+                vols = rng.integers(1e4, 1e6, bars_per_day)
+                for i in range(bars_per_day):
+                    rows.append({
+                        "kline_time": times[i],
+                        "code": code,
+                        "open": float(opens[i]),
+                        "high": float(highs[i]),
+                        "low": float(lows[i]),
+                        "close": float(closes[i]),
+                        "volume": float(vols[i]),
+                        "amount": float(vols[i] * closes[i]),
+                    })
+        out = pd.DataFrame(rows).set_index(["kline_time", "code"])
+        return out.sort_index()
+
     def get_adj_factor(self, code_list) -> pd.DataFrame:
         codes = list(code_list)
         cal = self._cal
@@ -141,6 +196,102 @@ class MockDataSource(DataSource):
                 "float_share": float(rng.uniform(3000, 80000)),  # 万股
             })
         return pd.DataFrame(rows)
+
+    # ---- 分红 / 十大股东 / 股东户数（mock：简化事件，2026-08-04 新增接口）----
+    def get_dividend(self, code_list) -> pd.DataFrame:
+        codes = list(code_list)
+        rows = []
+        for code in codes:
+            rows.append({
+                "code": code,
+                "ann_date": pd.Timestamp("2023-06-20"),
+                "record_date": pd.Timestamp("2023-06-23"),
+                "ex_date": pd.Timestamp("2023-06-26"),
+                "payout_date": pd.Timestamp("2023-06-26"),
+                "report_period": pd.Timestamp("2022-12-31"),
+                "cash_per_share_pre_tax": 0.5,
+                "bonus_rate": 0.0,
+                "base_share": 100000.0,   # 万股
+            })
+        return pd.DataFrame(rows)
+
+    def get_share_holder(self, code_list) -> pd.DataFrame:
+        codes = list(code_list)
+        rows = []
+        for code in codes:
+            for k in range(10):
+                rows.append({
+                    "code": code,
+                    "ann_date": pd.Timestamp("2023-04-30"),
+                    "holder_end_date": pd.Timestamp("2023-03-31"),
+                    "holder_name": f"机构{k}" if k < 5 else f"自然人{k}",
+                    "holder_pct": 3.0 - 0.2 * k,
+                    "holder_quantity": 1e6 * (10 - k),
+                    "float_quantity": 1e6 * (10 - k),
+                })
+        return pd.DataFrame(rows)
+
+    def get_holder_num(self, code_list) -> pd.DataFrame:
+        codes = list(code_list)
+        rows = []
+        for code in codes:
+            for q, base in zip(range(4), (20000, 21000, 20500, 22000)):
+                rows.append({
+                    "code": code,
+                    "ann_date": pd.Timestamp("2023-01-01") + pd.Timedelta(days=90 * q),
+                    "holder_end_date": pd.Timestamp("2023-01-01") + pd.Timedelta(days=90 * q),
+                    "holder_num": float(base + q * 100),
+                })
+        return pd.DataFrame(rows)
+
+    # ---- 财务报表（mock：返回一份简单季报）----
+    def _mock_financial(self, code_list, field, rng):
+        codes = list(code_list)
+        rows = []
+        for code in codes:
+            for q in range(4):  # 4 个报告期
+                rows.append({
+                    "code": code,
+                    "ann_date": pd.Timestamp("2023-01-01") + pd.Timedelta(days=90 * q),
+                    "report_period": pd.Timestamp("2023-01-01") + pd.Timedelta(days=90 * q),
+                    "statement_type": "1",
+                    "report_type": "年报" if q == 0 else "季报",
+                    field: float(rng.normal(1e8, 1e7)),
+                })
+        return pd.DataFrame(rows)
+
+    def get_balance_sheet(self, code_list, begin_date=None, end_date=None) -> pd.DataFrame:
+        df = self._mock_financial(code_list, "TOTAL_ASSETS", np.random.default_rng(21))
+        # 补 TOT_SHARE / EQUITY（市值、估值因子用；2026-08-04 分红因子依赖市值）
+        codes = list(code_list)
+        rng = np.random.default_rng(22)
+        rows = []
+        for code in codes:
+            for q in range(4):
+                rows.append({
+                    "code": code,
+                    "ann_date": pd.Timestamp("2023-01-01") + pd.Timedelta(days=90 * q),
+                    "report_period": pd.Timestamp("2023-01-01") + pd.Timedelta(days=90 * q),
+                    "statement_type": "1",
+                    "report_type": "年报" if q == 0 else "季报",
+                    "TOT_SHARE": float(rng.uniform(1e8, 1e9)),      # 股
+                    "TOT_SHARE_EQUITY_EXCL_MIN_INT": float(rng.uniform(1e9, 1e10)),
+                })
+        extra = pd.DataFrame(rows)
+        cols = ["code", "ann_date", "report_period", "statement_type", "report_type",
+                "TOTAL_ASSETS", "TOT_SHARE", "TOT_SHARE_EQUITY_EXCL_MIN_INT"]
+        out = df.merge(extra.drop(columns=["statement_type", "report_type"]),
+                       on=["code", "ann_date", "report_period"], how="left")
+        return out[[c for c in cols if c in out.columns]]
+
+    def get_cash_flow(self, code_list, begin_date=None, end_date=None) -> pd.DataFrame:
+        return self._mock_financial(code_list, "WS_OPERA_ACT", np.random.default_rng(22))
+
+    def get_income(self, code_list, begin_date=None, end_date=None) -> pd.DataFrame:
+        df = self._mock_financial(code_list, "OPERA_REV", np.random.default_rng(23))
+        df["NET_PRO_INCL_MIN_INT_INC"] = df["OPERA_REV"] * 0.1
+        df["BASIC_EPS"] = 0.5
+        return df
 
 
 @pytest.fixture

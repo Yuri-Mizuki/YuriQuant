@@ -148,14 +148,13 @@ class VectorBacktest:
         capital = self.initial_capital
 
         for i in range(n_days):
-            # 1) 当日收益: 用前一日权重 × 当日收益
-            if i > 0:
-                day_ret = np.nansum(current_weights * rp_values[i])
-                daily_ret_arr[i] = day_ret
-                capital *= (1 + day_ret)
-                equity_arr[i] = capital
+            cap_before = capital
 
-            # 2) 调仓: 在调仓日更新权重
+            # 1) 调仓: 在调仓日按【当日】因子值设权重。
+            #    信号在 close[t] 已知 → 当日建仓 → 捕获 return(t, t+1)（= returns_panel[t]），
+            #    与 IC 口径（factor[t] vs returns_panel[t]）严格对齐，无 1 日错位。
+            #    （旧实现先按旧权重赚 return[i] 再调仓，致 weights(t) 赚 returns_panel[t+1]，
+            #     对 1 日反转因子符号翻转——已于 2026-07-30 修复。）
             if dates[i] in rebalance_days and i < n_days - 1:
                 factor_vals = fp.iloc[i].dropna()
                 if len(factor_vals) > 0:
@@ -177,11 +176,20 @@ class VectorBacktest:
                 cost = self.costs.calc(current_weights, new_arr, turnover, capital)
                 cost_arr[i] = cost
                 capital -= cost
-                equity_arr[i] = capital
 
                 # 更新权重
                 current_weights = new_arr
                 weights_arr[i] = current_weights
+
+            # 2) 当日收益: 用当前权重 × 当日收益（与 IC 同口径：factor[t] 赚 return(t,t+1)）。
+            #    最后一日 returns_panel 通常为 NaN（无未来收益）→ nansum 为 0。
+            gross_ret = np.nansum(current_weights * rp_values[i])
+            capital *= (1 + gross_ret)
+
+            # 3) 净日收益 = 当日资金变动（毛收益 - 交易成本），与 equity_curve 一致。
+            #    使 (1+daily_returns).cumprod() 严格等于 equity_curve。
+            daily_ret_arr[i] = (capital / cap_before - 1.0) if cap_before > 0 else 0.0
+            equity_arr[i] = capital
 
         # 转 pandas
         daily_rets = pd.Series(daily_ret_arr, index=dates, name="portfolio_return")
