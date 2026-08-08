@@ -86,3 +86,6 @@ backtest:
   initial_capital: 100000   # 初始资金 10万
   rebalance_freq: M          # D=日 / W=周 / M=月调仓
   benchmark: "000300.SH"
+  # 空头腿成本（修正空头腿乐观偏差：多空策略借券费按日计提、保证金占用报告）
+  short_borrow_rate: 0.08    # 年化借券费率（A股融券常见 8%~10%；0=关闭）
+  short_margin_ratio: 1.0    # 融券保证金比例（监管最低 100% = 1.0）

@@ -29,6 +29,7 @@ from openpyxl.utils import get_column_letter
 
 from backtest.engine import BacktestResult
 from backtest.metrics import METRIC_LABELS, calc_all_metrics
+from research.metrics_format import is_pos_neg, monthly_returns
 
 # 中文字体
 for _font in ["Microsoft YaHei", "SimHei", "WenQuanYi Micro Hei", "Arial Unicode MS"]:
@@ -152,7 +153,8 @@ def _save_layers_png(layer_nav: pd.DataFrame, path: Path):
 
 
 def _save_monthly_png(daily_returns: pd.Series, path: Path):
-    monthly = (1 + daily_returns).resample("ME").apply(lambda x: (1 + x).prod() - 1)
+    # 月度复利共享 metrics_format.monthly_returns（双重加 1 bug 防复发）
+    monthly = monthly_returns(daily_returns)
     if monthly.empty:
         return
     pivot = monthly.to_frame("ret")
@@ -335,7 +337,8 @@ def _write_single_sheet(wb: Workbook, factor_name: str, result: BacktestResult, 
     ws[f"A{row}"] = "月度收益明细 Monthly Returns Detail"
     ws[f"A{row}"].font = _SUBTITLE_FONT
     row += 1
-    monthly = (1 + result.daily_returns).resample("ME").apply(lambda x: (1 + x).prod() - 1)
+    # 月度复利共享 metrics_format.monthly_returns（2026-08-05 修复双重加 1 的溢出 bug）
+    monthly = monthly_returns(result.daily_returns)
     if not monthly.empty:
         # 表头
         ws[f"A{row}"] = "年份 Year"
@@ -404,10 +407,8 @@ def _format_metric_cell(cell, key: str, value):
     cell.font = _VALUE_FONT
     cell.alignment = _RIGHT
     cell.border = _BORDER
-    # 正负色
-    if key in ("annual_return", "total_return", "sharpe", "sortino", "calmar",
-               "excess_return", "information_ratio", "ir", "ic_mean",
-               "avg_daily_return", "profit_loss_ratio"):
+    # 正负色（红涨绿跌；规则共享 metrics_format）
+    if is_pos_neg(key):
         if isinstance(value, float):
             cell.font = _POS_FONT if value >= 0 else _NEG_FONT
 

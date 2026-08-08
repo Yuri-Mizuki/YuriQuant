@@ -13,7 +13,8 @@ from factor.preprocessing import standardize_zscore
 from factor.synthesis import (
     CompositeInput, build_components, composite_stats, orthogonalize,
     synthesize_ic_weighted, synthesize_orthogonal, synthesize_pca,
-    synthesize_stacking,
+    synthesize_stacking, synthesize_stacking_gbdt, synthesize_stacking_gbdt_tuned,
+    synthesize_stacking_lambdarank,
 )
 
 
@@ -71,6 +72,50 @@ def test_synthesize_stacking_finite(mock_parts):
     comp = synthesize_stacking(comps, ret_panel, n_splits=5)
     assert comp.shape == comps[0].panel.shape
     # stacking 预测只覆盖测试折，可能部分 NaN，但不应出现 inf
+    assert np.isfinite(comp.dropna().values).all()
+
+
+def test_synthesize_stacking_gbdt_finite(mock_parts):
+    """GBDT stacking 冒烟：shape/有限性 + purged CV 不崩（lightgbm 缺失时跳过）。"""
+    pytest.importorskip("lightgbm")
+    ret_panel, comps = mock_parts
+    comp = synthesize_stacking_gbdt(comps, ret_panel, n_splits=3, embargo_days=2,
+                                    n_estimators=30, max_depth=3)
+    assert comp.shape == comps[0].panel.shape
+    assert np.isfinite(comp.dropna().values).all()
+
+
+def test_synthesize_stacking_gbdt_tuned_finite(mock_parts):
+    """optuna 调参版冒烟：嵌套时序 CV 不崩、输出有限（缺 optuna/lightgbm 跳过）。"""
+    pytest.importorskip("lightgbm")
+    pytest.importorskip("optuna")
+    ret_panel, comps = mock_parts
+    comp = synthesize_stacking_gbdt_tuned(comps, ret_panel, n_splits=2,
+                                          embargo_days=2, n_trials=3)
+    assert comp.shape == comps[0].panel.shape
+    assert np.isfinite(comp.dropna().values).all()
+
+
+def test_synthesize_stacking_rank_target(mock_parts):
+    """方案 A：截面秩目标（target_mode='rank'）不崩且输出有限。
+
+    秩目标应让 rank IC 评价下与 raw 目标可比（Spearman 对 y 单调变换不变）。
+    """
+    ret_panel, comps = mock_parts
+    comp_rank = synthesize_stacking(comps, ret_panel, n_splits=3, target_mode="rank")
+    comp_raw = synthesize_stacking(comps, ret_panel, n_splits=3, target_mode="raw")
+    assert comp_rank.shape == comps[0].panel.shape
+    assert np.isfinite(comp_rank.dropna().values).all()
+    assert np.isfinite(comp_raw.dropna().values).all()
+
+
+def test_synthesize_stacking_lambdarank_finite(mock_parts):
+    """方案 B：LambdaRank stacking 冒烟（按日 group + purged CV 不崩）。"""
+    pytest.importorskip("lightgbm")
+    ret_panel, comps = mock_parts
+    comp = synthesize_stacking_lambdarank(comps, ret_panel, n_splits=2,
+                                          embargo_days=2, n_estimators=30, max_depth=3)
+    assert comp.shape == comps[0].panel.shape
     assert np.isfinite(comp.dropna().values).all()
 
 

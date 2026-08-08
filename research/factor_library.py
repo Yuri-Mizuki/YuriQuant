@@ -38,6 +38,7 @@ import numpy as np
 import pandas as pd
 
 from backtest.engine import BacktestResult, VectorBacktest
+from backtest.costs import ShortCostModel
 from backtest.metrics import calc_all_metrics
 from research.factor_analysis import calc_ic_series, calc_ir, calc_ic_decay, factor_autocorr
 from strategy.examples import TopKLongOnly, TopKLongShort
@@ -69,12 +70,37 @@ CANONICAL_CONFIGS: list = [
     _Config("ls_W", "TopK多空·周", TopKLongShort, "W", 30),
 ]
 
-_METRIC_COLS = ["annual_return", "sharpe", "sortino", "max_drawdown", "calmar", "win_rate", "avg_turnover"]
+_METRIC_COLS = ["annual_return", "sharpe", "sortino", "max_drawdown", "calmar", "win_rate", "avg_turnover",
+                "avg_margin_usage", "borrow_fee_drag_annual"]
 
 
 def _slug(name: str) -> str:
     """把因子名（可能是长公式）映射为安全的文件名片段。"""
     return hashlib.md5(name.encode("utf-8")).hexdigest()[:12]
+
+
+def _write_parquet_robust(df: pd.DataFrame, path: Path, retries: int = 3) -> None:
+    """健壮写盘：先删旧文件再写 + 失败重试。
+
+    Windows 上 pyarrow 覆盖写已存在 parquet 偶发 PermissionError——外部服务
+    （Defender 实时扫描 / 索引）对特定文件的瞬态锁（2026-08-05 实测：文件可
+    删除但覆盖写被拒，且只发生在个别文件）。先 unlink 再 to_parquet 绕过
+    "打开已存在文件"路径；仍失败则退避重试。
+    """
+    import time
+    for attempt in range(retries):
+        try:
+            try:
+                if path.exists():
+                    path.unlink(missing_ok=True)
+            except OSError:
+                pass  # 沙箱 safe-delete / 回收站不可用时退回覆盖写
+            df.to_parquet(path, compression="snappy")
+            return
+        except PermissionError:
+            if attempt == retries - 1:
+                raise
+            time.sleep(1 + 2 * attempt)
 
 
 def _coerce_date(d) -> pd.Timestamp | None:
@@ -159,6 +185,8 @@ class FactorLibrary:
         parents: list[str] | None = None,
         source: str = "",
         ic_method: str = "spearman",
+        short_costs: ShortCostModel | None = None,
+        deleverage: bool = False,
     ) -> dict:
         """注册一个因子：预计算 IC 序列 + 各 canonical 回测，落盘面板/评估/registry。
 
@@ -171,6 +199,9 @@ class FactorLibrary:
             parents: 复合因子的父因子名列表（血缘）。
             source: 来源标注（如 "mining:factor_mining_xxx.csv" / "synthesis:ic_weighted"）。
             ic_method: IC 计算方式。
+            short_costs: 空头腿成本模型（默认 None=引擎默认：从配置读并启用借券费，
+                         修正空头腿乐观偏差；传 ShortCostModel(borrow_rate=0) 关闭）。
+            deleverage: 1 倍资金约束（总保证金需求 > 1 时降杠杆）。
         Returns:
             该因子的 registry 行（dict）。
         """
@@ -211,7 +242,8 @@ class FactorLibrary:
         best_sharpe = -np.inf
         best_config = CANONICAL_CONFIGS[0].key
         for cfg in CANONICAL_CONFIGS:
-            bt = VectorBacktest(cfg.strategy(k=cfg.k), rebalance_freq=cfg.freq)
+            bt = VectorBacktest(cfg.strategy(k=cfg.k), rebalance_freq=cfg.freq,
+                                short_costs=short_costs, deleverage=deleverage)
             res = bt.run(panel, returns_panel)
             dret = res.daily_returns
             eval_cols[f"dret_{cfg.key}"] = dret
@@ -224,10 +256,10 @@ class FactorLibrary:
                 best_sharpe = m["sharpe"]
                 best_config = cfg.key
 
-        # 3) 落盘
-        panel.to_parquet(panel_path, compression="snappy")
+        # 3) 落盘（先删旧文件再写，绕过 Windows 覆盖写偶发锁）
+        _write_parquet_robust(panel, panel_path)
         eval_df = pd.DataFrame(eval_cols).sort_index()
-        eval_df.to_parquet(eval_path, compression="snappy")
+        _write_parquet_robust(eval_df, eval_path)
 
         # 4) registry 行
         row = {
@@ -387,8 +419,16 @@ class FactorLibrary:
         reg = self.list_all(kind=kind).copy()
         if reg.empty:
             return reg
+        # IC 类指标无 config 后缀（单一口径，不随回测配置变，2026-08-05 修复：
+        # 原实现把 ic_mean 也拼成 ic_mean_ls_M 导致 KeyError）
+        _IC_COLS = {"ic_mean", "ic_std", "ic_ir", "t_stat", "t_stat_nw",
+                    "ic_win_rate", "ic_decay5", "autocorr", "significant"}
         if metric in ("ir", "ic_ir"):
             col = "ic_ir"
+        elif metric in _IC_COLS:
+            col = metric
+            if col not in reg.columns:
+                raise ValueError(f"列不存在: {col}")
         elif config is not None:
             col = f"{metric}_{config}"
             if col not in reg.columns:

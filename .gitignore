@@ -33,6 +33,9 @@ AmazingData开发手册.pdf
 .workbuddy/
 _real_out.txt
 
+# Root scratch scripts (one-off checks, memory dumps)
+/_*.py
+
 # Test temp
 tests/.test-tmp/
 

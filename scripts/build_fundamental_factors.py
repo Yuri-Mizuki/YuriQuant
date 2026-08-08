@@ -67,8 +67,10 @@ import pandas as pd
 
 from config import Config
 from data.cache import DataCache
+from data.cache_helpers import load_daily, load_financial_tables
 from data.datasource import create_datasource
 from data.financials import build_pit_panel
+from data.offline import OfflineDataSource
 from data.universe import Universe
 from factor.preprocessing import standardize_zscore
 from research.factor_library import FactorLibrary
@@ -139,19 +141,6 @@ FACTOR_DEFS: dict[str, str] = {
     "inst_holder_chg": "持仓机构个数变化",
     "holder_dispersion": "十大股东持股占比分散度（比例标准差）",
 }
-
-
-class _OfflineDataSource:
-    """离线模式数据源桩（同 intraday_analysis）。"""
-
-    def _raise(self, *a, **k):
-        raise RuntimeError("offline 模式不连接数据源：请先运行 scripts.update_data 拉取缓存")
-
-    get_calendar = get_code_list = get_index_constituent = _raise
-    get_daily_kline = get_minute_kline = get_adj_factor = get_backward_factor = _raise
-    get_code_info = get_history_stock_status = get_industry_classification = _raise
-    get_equity_structure = get_dividend = get_share_holder = get_holder_num = _raise
-    get_balance_sheet = get_cash_flow = get_income = _raise
 
 
 # ---- TTM / 同比（长表维度，按 (code, report_period)）----
@@ -266,36 +255,14 @@ def _add_sq_growth(df: pd.DataFrame, sq_col: str, yoy_col: str, qoq_col: str) ->
 
 
 def load_data(cache, uni, index_code, begin, end):
-    cal = cache.get_calendar(begin, end)
-    if not cal:
-        raise RuntimeError(f"交易日历为空（{begin}-{end}），请先更新数据")
-    codes = uni.get_constituent(index_code, end or cal[-1])
-    log.info("股票池: %s @ %d, %d 只", index_code, end or cal[-1], len(codes))
-    daily = cache.get_daily_kline(codes, begin, end or cal[-1])
-    # 财务表缓存是"整表覆盖"模式（每次调用都回调数据源），offline 桩会报错；
-    # 离线时直接读本地 parquet 并按股票池过滤。
-    if isinstance(cache._ds, _OfflineDataSource):
-        def _fin(name: str) -> pd.DataFrame:
-            p = Path(cache.root) / f"{name}.parquet"
-            df = pd.read_parquet(p)
-            return df[df["code"].isin(codes)] if "code" in df.columns else df
-        income, balance, cashflow = _fin("income"), _fin("balance_sheet"), _fin("cash_flow")
-        equity = _fin("equity_structure")
-        dividend = _fin("dividend")
-        share_holder = _fin("share_holder")
-        holder_num = _fin("holder_num")
-    else:
-        income = cache.get_income(codes)
-        balance = cache.get_balance_sheet(codes)
-        cashflow = cache.get_cash_flow(codes)
-        equity = cache.get_equity_structure(codes)
-        dividend = cache.get_dividend(codes)
-        share_holder = cache.get_share_holder(codes)
-        holder_num = cache.get_holder_num(codes)
+    codes, cal, daily = load_daily(cache, uni, index_code, begin, end)
+    fin = load_financial_tables(cache, codes)
     log.info("日线 %d 行 / 利润表 %d / 资产负债 %d / 现金流 %d / 股本 %d / 分红 %d / 十大股东 %d / 股东户数 %d",
-             len(daily), len(income), len(balance), len(cashflow), len(equity),
-             len(dividend), len(share_holder), len(holder_num))
-    return codes, cal, daily, income, balance, cashflow, equity, dividend, share_holder, holder_num
+             len(daily), len(fin["income"]), len(fin["balance_sheet"]), len(fin["cash_flow"]),
+             len(fin["equity_structure"]), len(fin["dividend"]),
+             len(fin["share_holder"]), len(fin["holder_num"]))
+    return (codes, cal, daily, fin["income"], fin["balance_sheet"], fin["cash_flow"],
+            fin["equity_structure"], fin["dividend"], fin["share_holder"], fin["holder_num"])
 
 
 def _equity_pit(equity: pd.DataFrame, cal, field: str) -> pd.DataFrame:
@@ -703,7 +670,7 @@ def main():
         cache = DataCache(ds, cache_root=tempfile.mkdtemp(prefix="mock_cache_"))
         dataset = args.dataset or "mock"
     elif args.offline:
-        ds = _OfflineDataSource()
+        ds = OfflineDataSource()
         begin, end = args.begin or 20250101, args.end or 20251231
         cache = DataCache(ds)
         dataset = args.dataset or "hs300_2025"

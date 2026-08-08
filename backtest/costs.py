@@ -6,6 +6,7 @@
 - 佣金: 费率制 + 最低5元
 - 印花税: 卖出千1
 - 滑点: 按基点扣除
+- 空头成本（ShortCostModel）: 借券费率按日计提 + 融券保证金占用
 
 用法:
     costs = TransactionCosts(commission_rate=0.0001, commission_min=5.0,
@@ -13,6 +14,8 @@
     fee = costs.calc(old_weights, new_weights, prices, shares_outstanding)
 """
 from __future__ import annotations
+
+from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
@@ -73,3 +76,42 @@ class TransactionCosts:
         slip = two_sided_value * self.slippage_bp / 10000
 
         return commission + stamp + slip
+
+
+@dataclass
+class ShortCostModel:
+    """空头腿成本模型：借券费率（按日计提）+ 融券保证金占用（资金效率报告）。
+
+    修正空头腿乐观偏差：旧引擎只计交易成本（佣金/印花税/滑点），空头持仓的
+    借券费完全忽略、保证金占用不报告 —— 多空策略（TopKLongShort 等）的收益
+    系统性虚高，长持空头时偏差尤其明显。
+
+    - borrow_rate: 年化借券费率。A 股融券常见 8%~10%，个股差异大，可配置；
+      设为 0 等价于关闭借券费（旧口径）。
+    - margin_ratio: 融券保证金比例，监管最低 100%（=1.0）。保证金占用 =
+      多头名义 + 空头名义 × margin_ratio，相对 1 倍资金计。
+    - days_per_year: 年化天数（交易日口径）。
+    """
+
+    borrow_rate: float = 0.08
+    margin_ratio: float = 1.0
+    days_per_year: int = 252
+
+    def daily_borrow_fee(self, short_exposure: float, capital: float) -> float:
+        """按日计提借券费（金额）：空头名义金额 × 年化费率 / 交易日数。
+
+        Args:
+            short_exposure: 空头名义敞口，相对资金的权重和（如 1.0 = 满仓做空 1 倍）。
+            capital: 当前总资金（元）。
+        """
+        if short_exposure <= 0.0 or capital <= 0.0 or self.borrow_rate <= 0.0:
+            return 0.0
+        return short_exposure * capital * self.borrow_rate / self.days_per_year
+
+    def margin_usage(self, long_exposure: float, short_exposure: float) -> float:
+        """保证金占用倍数：多头名义 + 空头名义×保证金比例（相对 1 倍资金）。
+
+        > 1 表示组合隐含超过 1 倍资金的杠杆需求（如等权多空各 1 倍 = 2.0，
+        需要 2 倍资金才能同时满仓两端）。
+        """
+        return long_exposure + short_exposure * self.margin_ratio

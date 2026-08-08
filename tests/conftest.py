@@ -17,7 +17,8 @@ class MockDataSource(DataSource):
     MOCK_CODES = [f"{600000+i:06d}.SH" for i in range(50)]
 
     def __init__(self):
-        self._cal = self._gen_calendar(20230101, 20241231)
+        # 日历含 2022 起：历史回补类测试（拉更早区间触发数据源）依赖 2022 交易日存在
+        self._cal = self._gen_calendar(20220101, 20241231)
 
     def _gen_calendar(self, begin: int, end: int) -> list[int]:
         dates = pd.date_range(str(begin), str(end), freq="B")
@@ -100,15 +101,23 @@ class MockDataSource(DataSource):
         for code in codes:
             for d in cal:
                 times = self._intraday_times(d, period)
+                # 日内时段过滤（与 AmazingDataSource 的 begin_time/end_time 行为一致）
+                if begin_time is not None:
+                    times = [t for t in times if t.hour * 100 + t.minute >= begin_time]
+                if end_time is not None:
+                    times = [t for t in times if t.hour * 100 + t.minute <= end_time]
+                if not times:
+                    continue
                 day_open = 10.0 * (1 + rng.normal(0, 0.01))
                 # 日内随机游走：首根 open = 当日开盘价，末根 close 为随机游走终点
-                path = np.cumsum(rng.normal(0, 0.002, bars_per_day))
+                n = len(times)
+                path = np.cumsum(rng.normal(0, 0.002, n))
                 opens = day_open * (1 + np.concatenate([[0.0], path[:-1]]))
                 closes = day_open * (1 + path)
-                highs = np.maximum(opens, closes) * (1 + rng.uniform(0, 0.003, bars_per_day))
-                lows = np.minimum(opens, closes) * (1 - rng.uniform(0, 0.003, bars_per_day))
-                vols = rng.integers(1e4, 1e6, bars_per_day)
-                for i in range(bars_per_day):
+                highs = np.maximum(opens, closes) * (1 + rng.uniform(0, 0.003, n))
+                lows = np.minimum(opens, closes) * (1 - rng.uniform(0, 0.003, n))
+                vols = rng.integers(1e4, 1e6, n)
+                for i in range(n):
                     rows.append({
                         "kline_time": times[i],
                         "code": code,
@@ -138,9 +147,15 @@ class MockDataSource(DataSource):
         return pd.DataFrame(data, index=pd.to_datetime([str(d) for d in cal]), columns=codes)
 
     def get_code_info(self, security_type="EXTRA_STOCK_A") -> pd.DataFrame:
+        # 列结构对齐基类 docstring：symbol/status/pre_close/high_limited/low_limited/price_tick
+        n = len(self.MOCK_CODES)
         return pd.DataFrame(
             {"symbol": [c[:6] for c in self.MOCK_CODES],
-             "pre_close": [10.0] * len(self.MOCK_CODES)},
+             "status": ["正常"] * n,
+             "pre_close": [10.0] * n,
+             "high_limited": [11.0] * n,
+             "low_limited": [9.0] * n,
+             "price_tick": [0.01] * n},
             index=self.MOCK_CODES,
         )
 

@@ -41,11 +41,14 @@ import numpy as np
 import pandas as pd
 
 from backtest import VectorBacktest
+from backtest.costs import ShortCostModel
 from factor import ALL_FACTORS
 from factor.preprocessing import preprocess_factor
 from research import generate_excel_report
 from research.factor_analysis import factor_summary
+from research.html_report import generate_html_report
 from strategy import QuantileLongShort, TopKLongOnly, TopKLongShort
+from strategy.examples import build_strategy
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S")
 log = logging.getLogger("backtest")
@@ -74,18 +77,6 @@ def gen_mock_data(begin: int = 20200101, end: int = 20231231, n_codes: int = 100
 
 
 # ---------------------------------------------------------------------------
-# 策略工厂
-# ---------------------------------------------------------------------------
-def build_strategy(name: str, k: int):
-    if name == "topk_ls":
-        return TopKLongShort(k=k)
-    elif name == "topk_lo":
-        return TopKLongOnly(k=k)
-    else:
-        return QuantileLongShort(n_quantiles=5)
-
-
-# ---------------------------------------------------------------------------
 # 单因子回测
 # ---------------------------------------------------------------------------
 def run_single_factor(
@@ -99,12 +90,15 @@ def run_single_factor(
     preprocess_cfg: dict | None = None,
     market_cap_panel: pd.DataFrame | None = None,
     industry_panel: pd.DataFrame | None = None,
+    short_costs: ShortCostModel | None = None,
+    deleverage: bool = False,
 ) -> tuple[str, object, dict]:
     """跑单个因子回测，返回 (因子名, BacktestResult, factor_summary)。
 
     preprocess_cfg 非空且 enabled 时，因子值先经过标准预处理流程
     （去极值 -> 行业/市值中性化 -> 标准化）再进入策略与因子分析；
     market_cap_panel / industry_panel 为 None 时对应中性化自动跳过。
+    short_costs / deleverage 透传给回测引擎（空头腿成本模型）。
     """
     factor_cls = ALL_FACTORS[factor_name]()
     factor_values = factor_cls.calc(panel)
@@ -122,7 +116,10 @@ def run_single_factor(
         )
 
     strat = build_strategy(strategy_name, k)
-    bt = VectorBacktest(strategy=strat, rebalance_freq=freq)
+    bt = VectorBacktest(
+        strategy=strat, rebalance_freq=freq,
+        short_costs=short_costs, deleverage=deleverage,
+    )
     result = bt.run(factor_panel, returns_panel, executable_mask=executable_mask)
 
     # 因子分析
@@ -147,7 +144,30 @@ def main():
     parser.add_argument("--k", type=int, default=30, help="持仓数")
     parser.add_argument("--freq", default="M", choices=["D", "W", "M"], help="调仓频率")
     parser.add_argument("--no-preprocess", action="store_true", help="跳过因子预处理，直接用原始因子值")
+    parser.add_argument("--no-short-cost", action="store_true",
+                        help="关闭空头腿成本（借券费=0，旧口径；默认启用 8% 年化）")
+    parser.add_argument("--borrow-rate", type=float, default=None, help="年化借券费率（默认读配置 0.08）")
+    parser.add_argument("--margin-ratio", type=float, default=None, help="融券保证金比例（默认读配置 1.0）")
+    parser.add_argument("--deleverage", action="store_true",
+                        help="1 倍资金约束：总保证金需求（多头+空头×保证金比例）>1 时按比例降杠杆")
+    parser.add_argument("--no-html", action="store_true",
+                        help="跳过交互式 HTML 报告（默认与 Excel 同时生成）")
     args = parser.parse_args()
+
+    # 空头腿成本模型：默认从配置读并启用（修正空头腿乐观偏差）
+    from config import Config as _CfgMain
+    _cfg_bt = dict(_CfgMain.get().get("backtest", {}))
+    _cfg_br = _cfg_bt.get("short_borrow_rate", 0.08)
+    _cfg_mr = _cfg_bt.get("short_margin_ratio", 1.0)
+    short_costs = ShortCostModel(
+        borrow_rate=0.0 if args.no_short_cost else (args.borrow_rate if args.borrow_rate is not None else _cfg_br),
+        margin_ratio=args.margin_ratio if args.margin_ratio is not None else _cfg_mr,
+    )
+    if short_costs.borrow_rate > 0:
+        log.info("空头腿成本: 借券费年化 %.2f%% 按日计提, 保证金比例 %.1f%% (--no-short-cost 可关闭)",
+                 short_costs.borrow_rate * 100, short_costs.margin_ratio * 100)
+    else:
+        log.info("空头腿成本: 已关闭（借券费=0，旧口径）")
 
     # 确定因子列表
     if args.factors:
@@ -296,6 +316,8 @@ def main():
             preprocess_cfg=pre_cfg,
             market_cap_panel=market_cap_panel,
             industry_panel=industry_panel,
+            short_costs=short_costs,
+            deleverage=args.deleverage,
         )
         results[name] = result
         factor_summaries[name] = fs
@@ -304,11 +326,22 @@ def main():
                  result.metrics()["sharpe"],
                  fs.get("ic_mean", 0))
 
-    # 4. 报告（单一 Excel 文件：每个因子一个 sheet + 多因子时自动加对比 sheet）
+    # 4. 报告（Excel + 交互式 HTML）
     report_dir = Path("reports")
     xlsx_path = report_dir / "yuriquant_report.xlsx"
     generate_excel_report(results, factor_summaries, output_path=xlsx_path)
     log.info("Excel 报告: %s", xlsx_path.resolve())
+
+    if not args.no_html:
+        html_path = report_dir / "yuriquant_report.html"
+        generate_html_report(
+            results, factor_summaries, output_path=html_path,
+            title="YuriQuant 因子回测报告",
+            meta=f"策略={args.strategy} k={args.k} 调仓={args.freq} · "
+                 f"借券费={short_costs.borrow_rate*100:.0f}%/年 保证金={short_costs.margin_ratio*100:.0f}%"
+                 + (" · 1倍资金降杠杆" if args.deleverage else ""),
+        )
+        log.info("HTML 报告: %s", html_path.resolve())
 
     # 5. 实验记录
     try:
@@ -328,7 +361,11 @@ def main():
             command=" ".join(sys.argv),
             params={"real": args.real, "factors": factor_list,
                     "strategy": args.strategy, "k": args.k, "freq": args.freq,
-                    "no_preprocess": args.no_preprocess},
+                    "no_preprocess": args.no_preprocess,
+                    "short_borrow_rate": short_costs.borrow_rate,
+                    "short_margin_ratio": short_costs.margin_ratio,
+                    "deleverage": args.deleverage,
+                    "html_report": not args.no_html},
             data_fingerprint=fingerprint,
             result_path=str(xlsx_path),
             metrics=metrics_summary,

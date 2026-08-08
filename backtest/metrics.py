@@ -131,6 +131,55 @@ def turnover_rate(weights_history: pd.DataFrame) -> float:
     return diffs.mean()
 
 
+def calc_short_metrics(
+    weights_history: pd.DataFrame,
+    borrow_fee_series: pd.Series,
+    initial_capital: float = 1.0,
+    margin_ratio: float = 1.0,
+    n_days: int = 0,
+    periods_per_year: int = 252,
+    exposure: pd.DataFrame | None = None,
+) -> dict:
+    """空头成本与资金占用指标（配合 ShortCostModel 使用）。
+
+    Args:
+        weights_history: 权重历史（date × code），多头 > 0、空头 < 0。
+        borrow_fee_series: 每日借券费（元）。
+        initial_capital: 初始资金（元），用于把费用折算为年化拖累。
+        margin_ratio: 融券保证金比例（与回测引擎一致）。
+        n_days: 交易日数（用于年化拖累；缺省取 borrow_fee_series 长度）。
+        periods_per_year: 年化周期数。
+        exposure: 每日实际敞口（DataFrame，列 long/short/margin，index=date）。
+                  由回测引擎在 run() 内按日记录，**比 weights_history（仅调仓日有
+                  记录）更准确地反映全年真实资金占用**；缺省时回退 weights_history。
+    """
+    if exposure is not None and len(exposure) > 0:
+        long_exp = exposure["long"].astype(float)
+        short_exp = exposure["short"].astype(float)
+        margin = exposure["margin"].astype(float)
+    else:
+        if weights_history is None or len(weights_history) == 0:
+            return {}
+        w = weights_history.fillna(0.0)
+        long_exp = w.clip(lower=0).sum(axis=1)
+        short_exp = (-w.clip(upper=0)).sum(axis=1)
+        margin = long_exp + short_exp * margin_ratio
+    fee = borrow_fee_series.reindex(long_exp.index).fillna(0.0)
+    n = n_days or len(long_exp)
+    n_years = n / periods_per_year
+    return {
+        "avg_long_exposure": float(long_exp.mean()),
+        "avg_short_exposure": float(short_exp.mean()),
+        "avg_margin_usage": float(margin.mean()),
+        "max_margin_usage": float(margin.max()),
+        "borrow_fee_total": float(fee.sum()),
+        "borrow_fee_drag_annual": (
+            float(fee.sum() / initial_capital / n_years)
+            if n_years > 0 and initial_capital > 0 else 0.0
+        ),
+    }
+
+
 # ===========================================================================
 # 指标中英文标签
 # ===========================================================================
@@ -154,6 +203,12 @@ METRIC_LABELS = {
     "ic_std":              "IC标准差 IC Std",
     "ic_win_rate":         "IC胜率 IC Win Rate",
     "ir":                  "信息比率 IR (IC-based)",
+    "avg_long_exposure":   "平均多头敞口 Avg Long Exposure",
+    "avg_short_exposure":  "平均空头敞口 Avg Short Exposure",
+    "avg_margin_usage":    "平均保证金占用 Avg Margin Usage",
+    "max_margin_usage":    "最大保证金占用 Max Margin Usage",
+    "borrow_fee_total":    "借券费总额 Borrow Fee Total (CNY)",
+    "borrow_fee_drag_annual": "借券费年化拖累 Borrow Fee Drag (Ann.)",
 }
 
 

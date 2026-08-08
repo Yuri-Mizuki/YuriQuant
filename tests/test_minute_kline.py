@@ -70,6 +70,22 @@ def test_mock_minute_sorted_and_intraday_times(mock_ds):
     assert all((t.minute % 5 == 0) for t in times)
 
 
+def test_mock_minute_begin_end_time_filter(mock_ds):
+    """get_minute_kline 的 begin_time/end_time 日内时段过滤（与 AmazingDataSource 一致）。"""
+    codes = mock_ds.MOCK_CODES[:3]
+    full = mock_ds.get_minute_kline(codes, 20230103, 20230103, period=5)
+    assert len(full) == 48 * 3
+    # 只取上午 9:30-11:30（begin_time=930, end_time=1130）
+    morning = mock_ds.get_minute_kline(codes, 20230103, 20230103, period=5,
+                                       begin_time=930, end_time=1130)
+    assert len(morning) == 24 * 3
+    assert (morning.index.get_level_values("kline_time").hour < 12).all()
+    # 只取尾盘 14:00 之后
+    tail = mock_ds.get_minute_kline(codes, 20230103, 20230103, period=5, begin_time=1400)
+    assert (tail.index.get_level_values("kline_time").hour == 14).all()
+    assert len(tail) == 12 * 3
+
+
 # ---- 缓存：幂等 / 增量 / 不丢历史 ----
 
 def test_cache_minute_power_idempotent(mock_ds, tmp_path):
@@ -171,6 +187,10 @@ def test_cache_minute_offline_reuse(mock_ds, tmp_path):
         def get_minute_kline(self, c, b, e, period=5, **kw):
             calls["n"] += 1
             return self._inner.get_minute_kline(c, b, e, period=period, **kw)
+        # 半拉天/覆盖检测会走 get_calendar（cache._refresh_long_table 用交易日
+        # 对齐判断"请求区间是否已被本地覆盖"），桩必须透传，否则 AttributeError
+        def get_calendar(self, begin=20100101, end=None):
+            return self._inner.get_calendar(begin, end)
 
     cache = DataCache(TrackingDS(mock_ds), cache_root=tmp_path)
     codes = mock_ds.MOCK_CODES[:5]

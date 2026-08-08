@@ -39,7 +39,9 @@ import pandas as pd
 
 from config import Config
 from data.cache import DataCache
+from data.cache_helpers import load_daily
 from data.datasource import create_datasource
+from data.offline import OfflineDataSource
 from data.universe import Universe
 from research.robust_stats import nw_tstat
 
@@ -56,22 +58,6 @@ plt.rcParams["axes.unicode_minus"] = False
 
 DEFAULT_PERIOD = 5
 
-
-class _OfflineDataSource:
-    """离线模式数据源桩：所有数据都从本地 Parquet 缓存读取，不连接 SDK。
-
-    依赖 DataCache 的"覆盖短路"机制——缓存已覆盖请求区间时不会回调数据源
-    （见 data/cache._refresh_long_table 的 covered 判断）。若某方法被意外调用
-    （缓存缺失），立即抛错暴露，避免静默返回空数据。
-    """
-
-    def _raise(self, *a, **k):
-        raise RuntimeError("offline 模式不连接数据源：请先运行 scripts.update_data 拉取缓存")
-
-    get_calendar = get_code_list = get_index_constituent = _raise
-    get_daily_kline = get_minute_kline = get_adj_factor = get_backward_factor = _raise
-    get_code_info = get_history_stock_status = get_industry_classification = _raise
-    get_equity_structure = get_balance_sheet = get_cash_flow = get_income = _raise
 
 # ---- 时段切分：5 分钟档 48 根 ----
 
@@ -115,21 +101,14 @@ def _filter_ex_dividend(df, status) -> pd.DataFrame:
 
 def load_data(cache, uni, index_code, begin, end, period):
     """拉取股票池、日线、5 分钟 K 线、状态表。返回各 DataFrame。"""
-    cal = cache.get_calendar(begin, end)
-    if not cal:
-        raise RuntimeError(f"交易日历为空（{begin}-{end}），请先更新数据")
-    codes = uni.get_constituent(index_code, end or cal[-1])
+    codes, cal, daily = load_daily(cache, uni, index_code, begin, end)
     if not codes:
         raise RuntimeError(f"{index_code} 在 {end or cal[-1]} 无成分股")
-    log.info("股票池: %s @ %d, %d 只", index_code, end or cal[-1], len(codes))
-
-    daily = cache.get_daily_kline(codes, begin, end or cal[-1])
+    target = end or cal[-1]
     log.info("日线: %d 行", len(daily))
-
-    mk = cache.get_minute_kline(codes, begin, end or cal[-1], period=period)
+    mk = cache.get_minute_kline(codes, begin, target, period=period)
     log.info("%d 分钟K线: %d 行", period, len(mk))
-
-    status = cache.get_history_stock_status(codes, begin, end or cal[-1])
+    status = cache.get_history_stock_status(codes, begin, target)
     log.info("历史状态: %d 行", len(status))
     return codes, daily, mk, status
 
@@ -375,7 +354,7 @@ def main():
         # mock 用独立临时缓存，避免污染真实缓存目录（e:/data/parquet 是 2025 数据）
         cache_root = tempfile.mkdtemp(prefix="mock_cache_")
     elif args.offline:
-        ds = _OfflineDataSource()
+        ds = OfflineDataSource()
         begin = args.begin or 20250101
         end = args.end or 20251231
         cache_root = None

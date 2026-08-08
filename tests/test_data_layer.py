@@ -30,6 +30,38 @@ def test_calendar_not_empty(tmp_path: Path, mock_ds):
     assert cal[-1] <= 20240131
 
 
+def test_code_info_schema(mock_ds):
+    """get_code_info 返回列与基类 docstring 一致（schema 断言，防实现跑偏）。
+
+    基类约定：index=code，列 symbol/status/pre_close/high_limited/low_limited/price_tick。
+    Amazing 实现会把 SDK 的 security_status 归一化为 status；Mock 应保持一致。
+    """
+    df = mock_ds.get_code_info()
+    assert list(df.columns) == [
+        "symbol", "status", "pre_close", "high_limited", "low_limited", "price_tick",
+    ]
+    # index 为股票代码
+    assert len(df) == len(mock_ds.MOCK_CODES)
+    assert set(df.index) == set(mock_ds.MOCK_CODES)
+    # 数值列合理：涨停价 >= 昨收 >= 跌停价，最小变动单位 > 0
+    assert (df["high_limited"] >= df["pre_close"]).all()
+    assert (df["low_limited"] <= df["pre_close"]).all()
+    assert (df["price_tick"] > 0).all()
+
+
+def test_code_info_rename_normalization(tmp_path: Path, mock_ds):
+    """Amazing 实现的归一化路径：security_status → status 由 DataCache 落盘后可见。
+
+    用 cache.get_code_info 落盘（Mock 直通），验证列名统一为小写 schema；
+    真实 SDK 的 security_status 列由 datasource 层 rename（无法在无 SDK 环境
+    直接单测，映射关系见 data/datasource.py 的 get_code_info 实现）。
+    """
+    cache = DataCache(mock_ds, cache_root=tmp_path)
+    df = cache.get_code_info()
+    assert "status" in df.columns
+    assert "security_status" not in df.columns
+
+
 def test_hs300_constituent_count(tmp_path: Path, mock_ds):
     cache = DataCache(mock_ds, cache_root=tmp_path)
     uni = Universe(cache)

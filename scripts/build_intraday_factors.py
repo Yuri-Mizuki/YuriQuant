@@ -45,7 +45,9 @@ import pandas as pd
 
 from config import Config
 from data.cache import DataCache
+from data.cache_helpers import load_daily
 from data.datasource import create_datasource
+from data.offline import OfflineDataSource
 from data.universe import Universe
 from factor.preprocessing import standardize_zscore
 from research.factor_library import FactorLibrary
@@ -83,27 +85,11 @@ FACTOR_DEFS: dict[str, str] = {
 }
 
 
-class _OfflineDataSource:
-    """离线模式数据源桩（同 intraday_analysis）：数据全在缓存时不被调用。"""
-
-    def _raise(self, *a, **k):
-        raise RuntimeError("offline 模式不连接数据源：请先运行 scripts.update_data 拉取缓存")
-
-    get_calendar = get_code_list = get_index_constituent = _raise
-    get_daily_kline = get_minute_kline = get_adj_factor = get_backward_factor = _raise
-    get_code_info = get_history_stock_status = get_industry_classification = _raise
-    get_equity_structure = get_balance_sheet = get_cash_flow = get_income = _raise
-
-
 def load_data(cache, uni, index_code, begin, end):
-    cal = cache.get_calendar(begin, end)
-    if not cal:
-        raise RuntimeError(f"交易日历为空（{begin}-{end}），请先更新数据")
-    codes = uni.get_constituent(index_code, end or cal[-1])
-    log.info("股票池: %s @ %d, %d 只", index_code, end or cal[-1], len(codes))
-    daily = cache.get_daily_kline(codes, begin, end or cal[-1])
-    mk = cache.get_minute_kline(codes, begin, end or cal[-1], period=PERIOD)
-    status = cache.get_history_stock_status(codes, begin, end or cal[-1])
+    codes, cal, daily = load_daily(cache, uni, index_code, begin, end)
+    target = end or cal[-1]
+    mk = cache.get_minute_kline(codes, begin, target, period=PERIOD)
+    status = cache.get_history_stock_status(codes, begin, target)
     log.info("日线 %d 行 / %d分钟 %d 行 / 状态 %d 行", len(daily), PERIOD, len(mk), len(status))
     return codes, daily, mk, status
 
@@ -280,7 +266,7 @@ def main():
         cache = DataCache(ds, cache_root=tempfile.mkdtemp(prefix="mock_cache_"))
         dataset = args.dataset or "mock"
     elif args.offline:
-        ds = _OfflineDataSource()
+        ds = OfflineDataSource()
         begin, end = args.begin or 20250101, args.end or 20251231
         cache = DataCache(ds)
         dataset = args.dataset or "hs300_2025"

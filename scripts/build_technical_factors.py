@@ -41,9 +41,12 @@ import pandas as pd
 
 from config import Config
 from data.cache import DataCache
+from data.cache_helpers import load_backward_factor, load_daily
 from data.datasource import create_datasource
+from data.offline import OfflineDataSource
 from data.universe import Universe
 from factor.preprocessing import standardize_zscore
+from factor.technical_indicators import TechnicalIndicators as _TI
 from research.factor_library import FactorLibrary
 
 logging.basicConfig(
@@ -65,17 +68,31 @@ FACTOR_DEFS: dict[str, str] = {
     "sar_dev": "(close-SAR)/close，Wilder抛物线SAR",
 }
 
-
-class _OfflineDataSource:
-    """离线模式数据源桩（同 intraday_analysis）。"""
-
-    def _raise(self, *a, **k):
-        raise RuntimeError("offline 模式不连接数据源：请先运行 scripts.update_data 拉取缓存")
-
-    get_calendar = get_code_list = get_index_constituent = _raise
-    get_daily_kline = get_minute_kline = get_adj_factor = get_backward_factor = _raise
-    get_code_info = get_history_stock_status = get_industry_classification = _raise
-    get_equity_structure = get_balance_sheet = get_cash_flow = get_income = _raise
+# 新增技术面因子（2026-08-05）：复用星耀 ad-technical-analysis skill 的
+# TechnicalIndicators 类（通达信口径，移植自 factor/technical_indicators.py）。
+# 结构：{因子名: (TI方法, 输出字段, 输入参数名列表, 公式说明)}
+EXTRA_TECH: dict[str, tuple] = {
+    "wr_14":    ("WR",    "WR10",  ("close", "high", "low"),                  "威廉%R(10) 超买超卖"),
+    "cci_14":   ("CCI",   "CCI",   ("close", "high", "low"),                  "顺势指标CCI(14)"),
+    "roc_12":   ("ROC",   "MAROC", ("close",),                                "变动率ROC(12,6)平滑"),
+    "mtm_12":   ("MTM",   "MAMTM", ("close",),                                "动量MTM(12,6)平滑"),
+    "skdj_d":   ("SKDJ",  "D",     ("close", "high", "low"),                  "慢速随机SKDJ-D(9,3)"),
+    "mfi_14":   ("MFI",   "MFI",   ("close", "high", "low", "volume"),        "资金流量MFI(14)"),
+    "osc_20":   ("OSC",   "MAOSC", ("close",),                                "震荡指标OSC(20,6)平滑"),
+    "accer_8":  ("ACCER", "ACCER", ("close",),                                "加速度ACCER(8)"),
+    "dmi_adx":  ("DMI",   "ADX",   ("close", "high", "low"),                  "趋向指标ADX(14,6)"),
+    "dma_dif":  ("DMA",   "DIF",   ("close",),                                "平行线差DMA-DIF(10,50)"),
+    "arbr":     ("ARBR",  "AR",    ("close", "open_", "high", "low"),         "人气指标AR(26)"),
+    "emv_14":   ("EMV",   "MAEMV", ("close", "high", "low", "volume"),        "简易波动EMV(14,9)平滑"),
+    "dpo_20":   ("DPO",   "MADPO", ("close",),                                "区间震荡DPO(20,6)平滑"),
+    "vhf_28":   ("VHF",   "VHF",   ("close",),                                "趋势效率VHF(28)"),
+    "cr_26":    ("CR",    "CR",    ("close", "high", "low"),                  "能量指标CR(26)"),
+    "psy_12":   ("PSY",   "PSY",   ("close",),                                "心理线PSY(12)"),
+    "vr_26":    ("VR",    "VR",    ("close", "volume"),                       "成交量比率VR(26)"),
+    "wvad":     ("WVAD",  "WVAD",  ("close", "open", "high", "low", "volume"),"威廉变异离散WVAD(24)"),
+    "bbi":      ("BBI",   "BBI",   ("close",),                                "多空均线BBI(3,6,12,24)"),
+    "atr_14":   ("ATR",   "ATR",   ("close", "high", "low"),                  "真实波幅ATR(14)"),
+}
 
 
 # ===========================================================================
@@ -238,22 +255,8 @@ def _calc_indicators(close, high, low, open_, volume) -> dict[str, pd.Series]:
 
 
 def load_data(cache, uni, index_code, begin, end):
-    cal = cache.get_calendar(begin, end)
-    if not cal:
-        raise RuntimeError(f"交易日历为空（{begin}-{end}），请先更新数据")
-    codes = uni.get_constituent(index_code, end or cal[-1])
-    log.info("股票池: %s @ %d, %d 只", index_code, end or cal[-1], len(codes))
-    daily = cache.get_daily_kline(codes, begin, end or cal[-1])
-    # 复权因子 wide 表会回调数据源（_refresh_wide_table），offline 时直接读 parquet
-    if isinstance(cache._ds, _OfflineDataSource):
-        p = Path(cache.root) / "backward_factor.parquet"
-        if p.exists():
-            bf = pd.read_parquet(p)
-            bf = bf[[c for c in codes if c in bf.columns]]
-        else:
-            bf = pd.DataFrame()
-    else:
-        bf = cache.get_backward_factor(codes)
+    codes, cal, daily = load_daily(cache, uni, index_code, begin, end)
+    bf = load_backward_factor(cache, codes)
     log.info("日线 %d 行 / 复权因子 %d 列", len(daily), bf.shape[1] if not bf.empty else 0)
     return codes, cal, daily, bf
 
@@ -287,6 +290,40 @@ def build_factor_panels(daily, bf) -> dict[str, pd.DataFrame]:
     return panels
 
 
+def calc_extra_panels(daily, codes) -> dict[str, pd.DataFrame]:
+    """用星耀 TechnicalIndicators 类批量计算 date×code 技术指标面板（EXTRA_TECH）。
+
+    daily: (date, code) 长表（已后复权）。逐股票调用静态方法，
+    输出 Series 按位置对齐后拼成宽表（不依赖 Series index）。
+    """
+    d = daily.reset_index()
+    d["date"] = d["date"].dt.normalize()
+    dates = pd.Index(sorted(d["date"].unique()))
+    panels: dict[str, pd.DataFrame] = {
+        name: pd.DataFrame(index=dates, columns=list(codes), dtype=float)
+        for name in EXTRA_TECH
+    }
+    for code in codes:
+        sub = d[d["code"] == code].sort_values("date")
+        if sub.empty:
+            continue
+        s_map = {
+            "close": sub["close"], "open": sub["open"], "open_": sub["open"],
+            "high": sub["high"], "low": sub["low"], "volume": sub["volume"],
+        }
+        for name, (method, field, args, _desc) in EXTRA_TECH.items():
+            try:
+                kw = {a: s_map[a].reset_index(drop=True) for a in args}
+                out = getattr(_TI, method)(**kw)
+                s = out[field]
+                vals = s.values if hasattr(s, "values") else np.asarray(s)
+                n = min(len(vals), len(dates))
+                panels[name].iloc[:n, panels[name].columns.get_loc(code)] = vals[:n]
+            except Exception:
+                continue
+    return panels
+
+
 def main():
     parser = argparse.ArgumentParser(description="技术面迭代/累积类指标构建入库")
     parser.add_argument("--mock", action="store_true")
@@ -296,6 +333,9 @@ def main():
     parser.add_argument("--end", type=int, default=None)
     parser.add_argument("--dataset", default=None)
     parser.add_argument("--no-save", action="store_true")
+    parser.add_argument("--only-extra", action="store_true",
+                        help="只注册新增星耀指标（EXTRA_TECH 20 个），跳过已有 9 个"
+                             "（已有因子内容正确时刷新无意义，且可避开个别文件被外部锁定的情况）")
     args = parser.parse_args()
 
     if args.mock:
@@ -306,7 +346,7 @@ def main():
         cache = DataCache(ds, cache_root=tempfile.mkdtemp(prefix="mock_cache_"))
         dataset = args.dataset or "mock"
     elif args.offline:
-        ds = _OfflineDataSource()
+        ds = OfflineDataSource()
         begin, end = args.begin or 20250101, args.end or 20251231
         cache = DataCache(ds)
         dataset = args.dataset or "hs300_2025"
@@ -322,11 +362,15 @@ def main():
         log.error("数据为空")
         sys.exit(1)
 
-    log.info("计算技术面指标（%d 个）...", len(FACTOR_DEFS))
+    all_defs = {**FACTOR_DEFS, **{k: v[3] for k, v in EXTRA_TECH.items()}}
+    log.info("计算技术面指标（%d 个）...", len(all_defs))
     panels = build_factor_panels(daily, bf)
+    log.info("计算星耀 TechnicalIndicators 指标（%d 个）...", len(EXTRA_TECH))
+    extra = calc_extra_panels(daily, codes)
+    panels.update(extra)
 
     if args.no_save:
-        for name in FACTOR_DEFS:
+        for name in all_defs:
             p = panels.get(name)
             if p is None:
                 log.info("  %-18s 缺失", name)
@@ -342,20 +386,29 @@ def main():
     returns_panel = close_w.pct_change().shift(-1)
 
     log.info("入库到数据集: %s", dataset)
-    for name in FACTOR_DEFS:
+    register_names = list(EXTRA_TECH) if args.only_extra else list(all_defs)
+    log.info("本次注册 %d 个因子（%s）", len(register_names),
+             "仅新增星耀指标" if args.only_extra else "全部技术面")
+    failed: list[tuple[str, str]] = []
+    for name in register_names:
         p = panels.get(name)
         if p is None or p.notna().sum().sum() == 0:
             log.warning("跳过 %s（无有效数据）", name)
             continue
         std = standardize_zscore(p)
-        row = lib.register(
-            name=name,
-            panel=std,
-            returns_panel=returns_panel,
-            kind="raw",
-            formula=FACTOR_DEFS[name],
-            source=f"technical:build_technical_factors:{begin}-{end}",
-        )
+        try:
+            row = lib.register(
+                name=name,
+                panel=std,
+                returns_panel=returns_panel,
+                kind="raw",
+                formula=all_defs[name],
+                source=f"technical:build_technical_factors:{begin}-{end}",
+            )
+        except Exception as e:
+            failed.append((name, str(e)[:120]))
+            log.warning("注册失败 %s: %s（继续其余因子）", name, e)
+            continue
         log.info("  已入库 %s（IC=%.4f, t_nw=%.2f, best_sharpe=%.3f@%s）",
                  name, row["ic_mean"], row["t_stat_nw"], row["best_sharpe"], row["best_config"])
 
@@ -367,12 +420,15 @@ def main():
             params={"index": args.index, "begin": begin, "end": end, "dataset": dataset},
             data_fingerprint=cache.get_fingerprint(),
             result_path=str(lib.root),
-            metrics={"n_factors": len(FACTOR_DEFS)},
-            note="技术面迭代/累积类指标入库",
+            metrics={"n_factors": len(all_defs)},
+            note="技术面指标入库（含星耀 TechnicalIndicators 扩展）",
         )
     except Exception as e:
         log.warning("实验记录写入失败: %s", e)
 
+    if failed:
+        log.warning("有 %d 个因子注册失败（环境文件锁，可稍后重跑补齐）: %s",
+                    len(failed), [n for n, _ in failed])
     log.info("完成。数据集 %s 现有 %d 个因子", dataset, len(lib.list_all()))
 
 

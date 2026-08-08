@@ -346,7 +346,22 @@ class AmazingDataSource(DataSource):
 
     # ---- 基础信息 ----
     def get_code_info(self, security_type: str = "EXTRA_STOCK_A") -> pd.DataFrame:
-        return self._base.get_code_info(security_type=security_type)
+        """每日最新证券信息。index=code，列对齐基类 docstring：
+        symbol/status/pre_close/high_limited/low_limited/price_tick。
+
+        SDK 返回列名已为小写，唯一差异是 security_status（产品状态标志）——
+        归一化为 status（2026-08-05，与 Mock/基类一致）；rename 对缺失列静默
+        跳过，兼容 SDK 版本差异。
+        """
+        raw = self._base.get_code_info(security_type=security_type)
+        empty_cols = ["symbol", "status", "pre_close", "high_limited", "low_limited", "price_tick"]
+        if raw is None or (hasattr(raw, "empty") and raw.empty):
+            return pd.DataFrame(columns=empty_cols)
+        out = raw.rename(columns={"security_status": "status"})
+        for col in ("pre_close", "high_limited", "low_limited", "price_tick"):
+            if col in out.columns:
+                out[col] = pd.to_numeric(out[col], errors="coerce")
+        return out[[c for c in empty_cols if c in out.columns]]
 
     # ---- 历史涨跌停/停牌/ST ----
     def get_history_stock_status(

@@ -38,47 +38,20 @@ import numpy as np
 import pandas as pd
 
 from backtest import VectorBacktest
+from backtest.costs import ShortCostModel
 from config import Config
 from data.cache import DataCache
+from data.cache_helpers import returns_from_cache
+from data.offline import OfflineDataSource
+from research.factor_library import FactorLibrary
 from data.datasource import create_datasource
 from research.factor_library import FactorLibrary
 from strategy import QuantileLongShort, TopKLongOnly, TopKLongShort
+from strategy.examples import build_strategy
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s",
                     datefmt="%H:%M:%S")
 log = logging.getLogger("select_stocks")
-
-
-class _OfflineDataSource:
-    """离线模式数据源桩（同 synthesize_library）。"""
-
-    def _raise(self, *a, **k):
-        raise RuntimeError("offline 模式不连接数据源：请先运行 scripts.update_data 拉取缓存")
-
-    get_calendar = get_code_list = get_index_constituent = _raise
-    get_daily_kline = get_minute_kline = get_adj_factor = get_backward_factor = _raise
-    get_code_info = get_history_stock_status = get_industry_classification = _raise
-    get_equity_structure = get_dividend = get_share_holder = get_holder_num = _raise
-    get_balance_sheet = get_cash_flow = get_income = _raise
-
-
-def returns_from_cache(cache, begin: int, end: int) -> pd.DataFrame:
-    """从日线缓存构造次日收益面板（与因子库 IC 口径一致）。"""
-    cal = cache.get_calendar(begin, end)
-    if not cal:
-        raise RuntimeError("交易日历为空")
-    d = pd.read_parquet(Path(cache.root) / "daily.parquet")
-    close_w = d.reset_index().pivot(index="date", columns="code", values="close").sort_index()
-    close_w = close_w.loc[str(begin): str(end)]
-    return close_w.pct_change().shift(-1)
-
-
-def build_strategy(name: str, k: int):
-    if name == "topk_ls":
-        return TopKLongShort(k=k)
-    elif name == "topk_lo":
-        return TopKLongOnly(k=k)
-    return QuantileLongShort(n_quantiles=5)
 
 
 def extract_holdings(factor_panel: pd.DataFrame, strategy_name: str, k: int,
@@ -107,9 +80,11 @@ def extract_holdings(factor_panel: pd.DataFrame, strategy_name: str, k: int,
 
 
 def run_one(factor_name: str, panel: pd.DataFrame, returns_panel: pd.DataFrame,
-            strategy_name: str, k: int, freq: str) -> tuple[pd.DataFrame, object, pd.DataFrame]:
+            strategy_name: str, k: int, freq: str,
+            short_costs=None, deleverage: bool = False) -> tuple[pd.DataFrame, object, pd.DataFrame]:
     strat = build_strategy(strategy_name, k)
-    bt = VectorBacktest(strategy=strat, rebalance_freq=freq)
+    bt = VectorBacktest(strategy=strat, rebalance_freq=freq,
+                        short_costs=short_costs, deleverage=deleverage)
     result = bt.run(panel, returns_panel)
     holdings = extract_holdings(panel, strategy_name, k, freq, returns_panel)
     m = result.metrics()
@@ -127,9 +102,25 @@ def main():
     parser.add_argument("--k", type=int, default=30)
     parser.add_argument("--freq", default="M", choices=["D", "W", "M"])
     parser.add_argument("--list-only", action="store_true", help="只输出选股清单，不画图")
+    parser.add_argument("--no-short-cost", action="store_true",
+                        help="关闭空头腿成本（借券费=0，旧口径；默认启用 8% 年化）")
+    parser.add_argument("--borrow-rate", type=float, default=None, help="年化借券费率（默认读配置 0.08）")
+    parser.add_argument("--margin-ratio", type=float, default=None, help="融券保证金比例（默认读配置 1.0）")
+    parser.add_argument("--deleverage", action="store_true",
+                        help="1 倍资金约束：总保证金需求>1 时按比例降杠杆")
     args = parser.parse_args()
 
-    cache = DataCache(_OfflineDataSource())
+    # 空头腿成本模型：默认从配置读并启用
+    from config import Config
+    _cfg_bt = dict(Config.get().get("backtest", {}))
+    short_costs = ShortCostModel(
+        borrow_rate=0.0 if args.no_short_cost else (args.borrow_rate if args.borrow_rate is not None
+                                                    else _cfg_bt.get("short_borrow_rate", 0.08)),
+        margin_ratio=args.margin_ratio if args.margin_ratio is not None
+                      else _cfg_bt.get("short_margin_ratio", 1.0),
+    )
+
+    cache = DataCache(OfflineDataSource())
     lib = FactorLibrary(dataset=args.dataset)
     reg = lib.list_all()
     if reg.empty:
@@ -158,7 +149,8 @@ def main():
             continue
         rp = returns_panel.reindex(index=panel.index, columns=panel.columns)
         try:
-            holdings, result, m = run_one(name, panel, rp, args.strategy, args.k, args.freq)
+            holdings, result, m = run_one(name, panel, rp, args.strategy, args.k, args.freq,
+                                          short_costs=short_costs, deleverage=args.deleverage)
         except Exception as e:
             log.warning("%s 回测失败: %s", name, e)
             continue

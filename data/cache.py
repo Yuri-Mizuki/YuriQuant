@@ -7,19 +7,37 @@
 2. 透明访问：上层调用与 DataSource 接口一致。
 3. 离线研究：本地有数据时无需连接数据源。
 
-存储布局
---------
-cache_root/
-├── daily.parquet          # 日K线 (date, code 多索引)
-├── adj_factor.parquet    # 单次复权因子
-├── backward_factor.parquet  # 累积后复权因子
-├── history_stock_status.parquet  # 历史涨跌停/停牌/ST (date, code 多索引)
-├── industry_classification_level1.parquet  # 一级行业分类
-├── equity_structure.parquet  # 股本结构变动事件表
-├── calendar.parquet      # 交易日历
-├── code_info.parquet     # 证券信息
-├── index_constituent_000300SH.parquet  # 指数成分
-└── _meta.json             # 各表最后更新日期
+存储布局（cache_root 默认 e:/data/parquet/，扁平存放，每表一个 parquet）
+------------------------------------------------------------------------
+行情类（长表增量更新，MultiIndex (time, code)，_meta.json 记水位）
+    daily.parquet                     # 日K线 (date, code)，OHLCV+amount
+    min{period}.parquet               # 分钟K线 (kline_time, code)，如 min5；按档位分文件
+    adj_factor.parquet                # 单次复权因子（宽表 date×code，全量刷新）
+    backward_factor.parquet           # 累积后复权因子（宽表 date×code，全量刷新）
+状态类（长表增量更新，MultiIndex (date, code)，记水位）
+    history_stock_status.parquet      # 历史涨跌停/停牌/ST/除权除息标记
+财务类（稀疏报告期事件表，整表覆盖 + code 过滤，记 ann_date 水位）
+    income.parquet                    # 利润表
+    balance_sheet.parquet             # 资产负债表
+    cash_flow.parquet                 # 现金流量表
+参考类（稀疏事件表，整表覆盖，无增量水位）
+    calendar.parquet                  # 交易日历（合并去重）
+    index_constituent_{code}.parquet  # 指数成分（如 000300SH）
+    industry_classification_level{N}.parquet  # 行业分类（申万，N=级别）
+    equity_structure.parquet          # 股本结构变动事件
+    dividend.parquet                  # 分红送转
+    share_holder.parquet              # 十大股东
+    holder_num.parquet                # 股东户数
+    code_info.parquet                 # 证券信息（当前未拉取则不落盘）
+元数据
+    _meta.json                        # 各表增量水位（last_date）/ 最近数据日期
+
+命名约定（2026-08-05 起，约束【后续新增】表；存量文件名保持不变）
+    <域>_<表>[_参数].parquet
+    域前缀：quote=行情 / fin=财务 / status=状态 / ref=参考事件 / meta=元数据
+    例：quote_min15、fin_income、ref_index_constituent_000300SH、
+        ref_industry_level1（参数后缀统一放末尾，与类型一致）。
+    完整映射表与规范见 README「数据层缓存」章节。
 """
 from __future__ import annotations
 
@@ -158,9 +176,16 @@ class DataCache:
                             local_full.index.get_level_values(time_col)
                         ).normalize().strftime("%Y%m%d")
                     )
-                    req_days = [str(d) for d in self.get_calendar(begin_date, end_date)]
-                    missing = [d for d in req_days if d not in local_days]
-                    covered = not missing
+                    try:
+                        req_days = [str(d) for d in self.get_calendar(begin_date, end_date)]
+                        missing = [d for d in req_days if d not in local_days]
+                        # req_days 为空（请求区间无交易日，如纯节假日或数据源日历
+                        # 范围外）时视为"未覆盖"：保守走补拉，避免空日历误判短路
+                        covered = bool(req_days) and not missing
+                    except (AttributeError, NotImplementedError):
+                        # 数据源无交易日历接口（如只实现了行情的 mock/桩）：
+                        # 无法确认覆盖，保守按"未覆盖"走补拉（多拉不丢数据）
+                        covered = False
                     if covered and bars_per_day is not None and time_col == "kline_time":
                         # 半拉天检测：请求区间内某 (交易日, code) 的 bar 数不足完整数
                         ts = local_full.index.get_level_values(time_col)

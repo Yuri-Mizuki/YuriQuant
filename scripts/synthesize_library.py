@@ -26,6 +26,8 @@ from pathlib import Path
 import pandas as pd
 
 from data.cache import DataCache
+from data.cache_helpers import returns_from_cache
+from data.offline import OfflineDataSource
 from factor.preprocessing import standardize_zscore
 from factor.synthesis import (
     CompositeInput,
@@ -33,6 +35,9 @@ from factor.synthesis import (
     synthesize_orthogonal,
     synthesize_pca,
     synthesize_stacking,
+    synthesize_stacking_gbdt,
+    synthesize_stacking_gbdt_tuned,
+    synthesize_stacking_lambdarank,
 )
 from research.factor_analysis import calc_ic_series, calc_ir
 from research.factor_library import FactorLibrary
@@ -43,41 +48,27 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
                     datefmt="%H:%M:%S")
 log = logging.getLogger("synthesize_library")
 
-METHODS = ["ic_weighted", "pca", "orthogonal", "stacking"]
-
-
-class _OfflineDataSource:
-    def _raise(self, *a, **k):
-        raise RuntimeError("offline 模式不连接数据源")
-
-    get_calendar = get_code_list = get_index_constituent = _raise
-    get_daily_kline = get_minute_kline = get_adj_factor = get_backward_factor = _raise
-    get_code_info = get_history_stock_status = get_industry_classification = _raise
-    get_equity_structure = get_balance_sheet = get_cash_flow = get_income = _raise
-
-
-def returns_from_cache(cache, begin: int, end: int) -> pd.DataFrame:
-    """从日线缓存构造次日收益面板（与因子库 IC 口径一致）。"""
-    cal = cache.get_calendar(begin, end)
-    if not cal:
-        raise RuntimeError("交易日历为空")
-    d = pd.read_parquet(Path(cache.root) / "daily.parquet")
-    close_w = d.reset_index().pivot(index="date", columns="code", values="close").sort_index()
-    close_w = close_w.loc[str(begin): str(end)]
-    return close_w.pct_change().shift(-1)
+METHODS = ["ic_weighted", "pca", "orthogonal", "stacking", "stacking_gbdt", "lambdarank"]
 
 
 def main():
     parser = argparse.ArgumentParser(description="因子库内因子合并合成（离线）")
     parser.add_argument("--dataset", default="hs300_2025")
-    parser.add_argument("--methods", default="all", help="ic_weighted,pca,orthogonal,stacking")
+    parser.add_argument("--methods", default="all",
+                        help="ic_weighted,pca,orthogonal,stacking,stacking_gbdt,lambdarank")
+    parser.add_argument("--tune-trials", type=int, default=0,
+                        help="stacking_gbdt 用 optuna 自动调参的 trials 数（>0 启用；"
+                             "默认 0=固定参数）")
+    parser.add_argument("--target-mode", choices=["raw", "rank"], default="raw",
+                        help="stacking 系拟合目标：raw=次日收益值；rank=当日截面收益"
+                             "百分比秩（与 rank IC 评价口径一致，方案 A）")
     parser.add_argument("--begin", type=int, default=20250101)
     parser.add_argument("--end", type=int, default=20251231)
     parser.add_argument("--out", default=None, help="对比报告 CSV（默认 reports/）")
     parser.add_argument("--no-save", action="store_true", help="只对比不入库")
     args = parser.parse_args()
 
-    cache = DataCache(_OfflineDataSource())
+    cache = DataCache(OfflineDataSource())
     lib = FactorLibrary(dataset=args.dataset)
     reg = lib.list_all(kind="raw")
     if reg.empty:
@@ -129,7 +120,18 @@ def main():
         elif m == "orthogonal":
             comp = synthesize_orthogonal(components, weight_by="ic_abs")
         elif m == "stacking":
-            comp = synthesize_stacking(components, returns_panel, n_splits=5)
+            comp = synthesize_stacking(components, returns_panel, n_splits=5,
+                                       target_mode=args.target_mode)
+        elif m == "stacking_gbdt":
+            if getattr(args, "tune_trials", 0) and args.tune_trials > 0:
+                comp = synthesize_stacking_gbdt_tuned(
+                    components, returns_panel, n_trials=args.tune_trials,
+                    target_mode=args.target_mode)
+            else:
+                comp = synthesize_stacking_gbdt(components, returns_panel, n_splits=5,
+                                                target_mode=args.target_mode)
+        elif m == "lambdarank":
+            comp = synthesize_stacking_lambdarank(components, returns_panel, n_splits=5)
         else:
             log.warning("未知方法 %s", m)
             continue

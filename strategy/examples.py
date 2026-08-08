@@ -100,3 +100,19 @@ class QuantileLongShort(Strategy):
         w_long = pd.Series(1.0 / len(long_codes), index=long_codes)
         w_short = pd.Series(-1.0 / len(short_codes), index=short_codes)
         return pd.concat([w_long, w_short])
+
+
+def build_strategy(name: str, k: int = 30):
+    """按名称构造策略实例（run_backtest / select_stocks 共用工厂，2026-08-05 统一）。
+
+    Args:
+        name: topk_ls（TopK 多空）| topk_lo（TopK 纯多）| quantile（分位多空）
+        k: TopK 持仓数（quantile 忽略）。
+    """
+    if name == "topk_ls":
+        return TopKLongShort(k=k)
+    elif name == "topk_lo":
+        return TopKLongOnly(k=k)
+    elif name == "quantile":
+        return QuantileLongShort(n_quantiles=5)
+    raise ValueError(f"未知策略: {name}（可选 topk_ls / topk_lo / quantile）")

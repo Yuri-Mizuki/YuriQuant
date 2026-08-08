@@ -17,6 +17,7 @@ import pandas as pd
 
 from backtest import VectorBacktest
 from data.cache import DataCache
+from data.offline import OfflineDataSource
 from strategy.examples import TopKLongOnly
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s",
@@ -34,16 +35,6 @@ COMPONENTS = [
 WARMUP_DAYS = 400  # 技术面/日内指标 warmup 长度
 
 
-class _OfflineDS:
-    def _raise(self, *a, **k):
-        raise RuntimeError("offline")
-    get_calendar = get_code_list = get_index_constituent = _raise
-    get_daily_kline = get_minute_kline = get_adj_factor = get_backward_factor = _raise
-    get_code_info = get_history_stock_status = get_industry_classification = _raise
-    get_equity_structure = get_dividend = get_share_holder = get_holder_num = _raise
-    get_balance_sheet = get_cash_flow = get_income = _raise
-
-
 def _load_daily(cache, codes, begin, end):
     cal = cache.get_calendar(begin, end)
     daily = cache.get_daily_kline(codes, begin, end)
@@ -59,7 +50,7 @@ def _load_daily(cache, codes, begin, end):
 
 def build_panels(begin: int, end: int) -> tuple[dict[str, pd.DataFrame], pd.DataFrame]:
     from data.universe import Universe
-    cache = DataCache(_OfflineDS())
+    cache = DataCache(OfflineDataSource())
     uni = Universe(cache)
     cal = cache.get_calendar(begin, end)
     if not cal:
@@ -111,15 +102,13 @@ def build_panels(begin: int, end: int) -> tuple[dict[str, pd.DataFrame], pd.Data
 
     # ---- 基本面（PIT 展开天然覆盖历史，无需 warmup）----
     try:
+        from data.cache_helpers import load_financial_tables
         from scripts.build_fundamental_factors import build_factor_panels
-        def _fin(name):
-            df = pd.read_parquet(CACHE_ROOT / f"{name}.parquet")
-            return df[df["code"].isin(codes)] if "code" in df.columns else df
-        income, balance, cashflow = _fin("income"), _fin("balance_sheet"), _fin("cash_flow")
-        equity, dividend = _fin("equity_structure"), _fin("dividend")
-        sh, hn = _fin("share_holder"), _fin("holder_num")
-        fund = build_factor_panels(dailyw, calw, income, balance, cashflow, equity,
-                                   dividend, sh, hn)
+        fin = load_financial_tables(cache, codes)
+        fund = build_factor_panels(dailyw, calw,
+                                   fin["income"], fin["balance_sheet"], fin["cash_flow"],
+                                   fin["equity_structure"], fin["dividend"],
+                                   fin["share_holder"], fin["holder_num"])
         for k in COMPONENTS:
             if k in fund:
                 panels[k] = fund[k].reindex(index=mask_dates)

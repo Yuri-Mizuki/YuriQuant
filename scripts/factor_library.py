@@ -124,6 +124,16 @@ def cmd_report(args):
     out.parent.mkdir(parents=True, exist_ok=True)
     generate_excel_report(results, summaries, output_path=out)
     log.info("Excel 对比报告已生成: %s", out)
+    if not args.no_html:
+        from research.html_report import generate_html_report
+        html_path = Path(args.html_out)
+        html_path.parent.mkdir(parents=True, exist_ok=True)
+        generate_html_report(
+            results, summaries, output_path=html_path,
+            title=f"因子库报告 — {lib.dataset or 'legacy'}",
+            meta=f"config={args.config} · 共 {len(results)} 个因子 · 点击表头排序 / 标签页切换因子",
+        )
+        log.info("HTML 交互报告已生成: %s", html_path)
 
 
 def cmd_features(args):
@@ -204,10 +214,13 @@ def main():
     p.add_argument("--csv", default=None)
     p.set_defaults(func=cmd_view)
 
-    p = sub.add_parser("report", parents=[common], help="导出 Excel 对比报告")
+    p = sub.add_parser("report", parents=[common], help="导出 Excel + HTML 对比报告")
     p.add_argument("--names", default=None, help="逗号分隔；不填则全部")
     p.add_argument("--config", default="ls_M")
     p.add_argument("--out", default="reports/factor_library_report.xlsx")
+    p.add_argument("--html-out", default="reports/factor_library_report.html",
+                   help="交互式 HTML 报告输出路径（--no-html 跳过）")
+    p.add_argument("--no-html", action="store_true", help="只导出 Excel，不生成 HTML")
     p.set_defaults(func=cmd_report)
 
     p = sub.add_parser("features", parents=[common], help="列出可迭代特征")
