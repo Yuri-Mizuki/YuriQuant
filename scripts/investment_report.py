@@ -93,11 +93,13 @@ def load_index_returns(index_code: str, begin: int, end: int,
     close = (df.reset_index()
              .pivot(index="date", columns="code", values="close").sort_index())
     close = close.iloc[:, 0]
-    close = close[close.index >= pd.Timestamp(str(begin))]
+    # 多留 10 天窗口再 pct_change，保证 begin 首日有真实收益（而非 NaN 被当 0）
+    close = close[close.index >= pd.Timestamp(str(begin)) - pd.Timedelta(days=10)]
     close = close[close.index <= pd.Timestamp(str(end))]
     ret = close.pct_change(fill_method=None)
+    ret = ret[ret.index >= pd.Timestamp(str(begin))]
     log.info("指数基准 %s: %s ~ %s (%d 日)",
-             index_code, ret.index[1].date(), ret.index[-1].date(), len(ret.dropna()))
+             index_code, ret.index[0].date(), ret.index[-1].date(), len(ret.dropna()))
     return ret
 
 
@@ -186,17 +188,15 @@ def plot_monthly_ic(monthly_ic: pd.Series) -> str:
     return _fig_to_b64(fig)
 
 
-def plot_equity_curves(equity: pd.DataFrame, bench_nav: pd.Series | None) -> str:
+def plot_equity_curves(equity: pd.DataFrame) -> str:
+    """净值曲线（equity 已含指数基准列，统一日历 + 起点 1.0，勿重复传基准）。"""
     fig, ax = plt.subplots(figsize=(9, 4.2))
     colors = {"等权top50": "#378ADD", "风险平价top50": "#D85A30"}
     for c in equity.columns:
-        ax.plot(equity.index, equity[c], label=c, linewidth=1.3,
-                color=colors.get(c))
-    if bench_nav is not None:
-        ax.plot(bench_nav.index, bench_nav.values, label="指数基准",
-                linewidth=1.4, color="#888780")
+        color = colors.get(c, "#888780")  # 指数基准列默认灰色
+        ax.plot(equity.index, equity[c], label=c, linewidth=1.4, color=color)
     ax.axhline(1.0, color="gray", linewidth=0.6, linestyle=":")
-    ax.set_title("策略 vs 指数基准 净值（费后）")
+    ax.set_title("策略 vs 指数基准 净值（费后，起点归一 1.0）")
     ax.set_ylabel("累计净值")
     ax.legend(fontsize=9)
     ax.grid(alpha=0.3)
@@ -346,16 +346,19 @@ def run(args) -> dict:
     monthly = pd.DataFrame({st["label"]: st.get("monthly", pd.Series(dtype=float))
                             for st in [stats_eq, stats_rp, stats_bm] if st is not None})
     monthly.to_csv(out_dir / "monthly_returns.csv", encoding="utf-8-sig")
-    equity = pd.DataFrame({st["label"]: st.get("equity", pd.Series(dtype=float))
-                           for st in [stats_eq, stats_rp, stats_bm] if st is not None})
-    equity.to_csv(out_dir / "equity_curve.csv", encoding="utf-8-sig")
+
+    # 净值曲线：统一日历（bt_days）+ 缺失收益填 0 + 起点归一 1.0，
+    # 保证策略与指数同长度、同起点可比（否则指数线多/少 NaN 日，视觉上像两条线）
+    plot_df = pd.DataFrame({
+        st["label"]: (1 + st["daily"].reindex(bt_days).fillna(0.0)).cumprod()
+        for st in [stats_eq, stats_rp, stats_bm] if st is not None})
+    plot_df.to_csv(out_dir / "equity_curve.csv", encoding="utf-8-sig")
 
     # ---- 9. HTML 报告 ----
-    bench_nav = (1 + bench_ret).cumprod() if bench_ret is not None else None
     img_layers = plot_layers(ft["layer_nav"])
     img_mic = plot_monthly_ic(ft["monthly_ic"])
-    img_eq = plot_equity_curves(equity, bench_nav)
-    img_dd = plot_drawdown(equity)
+    img_eq = plot_equity_curves(plot_df)
+    img_dd = plot_drawdown(plot_df)
 
     ft_rows = ""
     for lbl, s in [("稀疏(调仓日)", ft["sum_sparse"]), ("持仓(日频)", ft["sum_hold"])]:
