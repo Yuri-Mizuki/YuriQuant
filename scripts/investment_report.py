@@ -106,7 +106,7 @@ def load_index_returns(index_code: str, begin: int, end: int,
 # ---------------------------------------------------------------------------
 # 因子检验（模型预测作为因子）
 # ---------------------------------------------------------------------------
-def factor_test(pred_panel: pd.DataFrame, fwd: pd.DataFrame,
+def factor_test(pred_panel: pd.DataFrame, fwd: pd.DataFrame, close: pd.DataFrame,
                 out_dir: Path, label: str) -> dict:
     """把模型预测面板作为因子做标准检验。
 
@@ -114,29 +114,42 @@ def factor_test(pred_panel: pd.DataFrame, fwd: pd.DataFrame,
     - 稀疏：只在调仓日有预测值（纯信号检验，样本=调仓次数）
     - 持仓：预测值 ffill 到下一次调仓前（与组合持仓一致，样本=交易日）
 
+    口径纪律（修复 2026-08-25）：
+    - IC 检验用 fwd（未来 horizon 累计收益）——模型预测什么就评估什么；
+    - **分层回测必须用日频未来一期收益**（close.pct_change().shift(-1)），
+      若把 horizon 累计收益按日累乘 (1+r).cumprod()，5 日滚动窗口重叠会把
+      同一段收益重复算约 5 次（净值虚高 5 倍，Q1 曾显示 +556% 假象）；
+    - 网格裁剪到因子有效起始（2024-01），消除回测前全 NaN 的 1.0 平线段。
+
     Returns:
         {summary_sparse, summary_hold, layer_nav, ic_sparse, ic_hold, monthly_ic}
     """
-    from research.factor_analysis import quantile_backtest, standard_factor_summary
+    from research.factor_analysis import calc_ic_series, quantile_backtest, standard_factor_summary
 
     common = fwd.dropna(how="all").index
-    fwd_aligned = fwd.reindex(index=common)
-
-    # 稀疏口径
     sparse = pred_panel.reindex(index=common)
-    sum_sparse = standard_factor_summary(sparse, fwd_aligned)
-    ic_sparse = None
-
-    # 持仓口径：ffill 到调仓日之间
     hold = sparse.ffill()
-    sum_hold = standard_factor_summary(hold, fwd_aligned)
 
-    # 分层净值（持仓口径，与组合一致）
-    layer_nav = quantile_backtest(hold, fwd_aligned, n_quantiles=5)
+    # 裁剪到因子有效起始（2024-01）：消除 2022~2024 全 NaN 平线
+    valid = hold.dropna(how="all").index
+    if len(valid):
+        common = common[common >= valid[0]]
+        sparse = sparse.reindex(index=common)
+        hold = hold.reindex(index=common)
+    fwd_aligned = fwd.reindex(index=common)
+    log.info("因子检验网格: %s ~ %s (%d 日)", common[0].date(), common[-1].date(), len(common))
+
+    # IC 口径（模型预测 horizon 累计收益）
+    sum_sparse = standard_factor_summary(sparse, fwd_aligned)
+    sum_hold = standard_factor_summary(hold, fwd_aligned)
+    ic_sparse = calc_ic_series(sparse, fwd_aligned)
+
+    # 分层净值（持仓口径）：日频未来一期收益，避免 horizon 重叠放大
+    ret_d = close.pct_change(fill_method=None).shift(-1).reindex(index=common)
+    layer_nav = quantile_backtest(hold, ret_d, n_quantiles=5)
     layer_nav.to_csv(out_dir / f"layer_nav_{label}.csv", encoding="utf-8-sig")
 
-    # 月度 IC（持仓口径）
-    from research.factor_analysis import calc_ic_series
+    # 月度 IC（持仓口径，horizon 累计收益）
     ic_hold = calc_ic_series(hold, fwd_aligned)
     ic_hold.name = "ic"
     monthly_ic = ic_hold.groupby(ic_hold.index.to_period("M")).mean()
@@ -298,7 +311,7 @@ def run(args) -> dict:
 
     # ---- 5. 因子检验（模型预测作为因子）----
     log.info("因子检验：模型预测作为因子 ...")
-    ft = factor_test(pred_reb, fwd, out_dir, "model_pred")
+    ft = factor_test(pred_reb, fwd, close, out_dir, "model_pred")
 
     # ---- 6. 组合回测 ----
     bt_returns = returns.loc[bt_days[0]:bt_days[-1]]
@@ -444,9 +457,9 @@ img {{ width:100%; height:auto; border-radius:8px; }}
 <th>NW-t</th><th>IC胜率</th><th>样本日</th></tr>{ft_rows}</table>
 <p style="font-size:12px;color:#666;margin-top:8px;">IC 衰减（持仓口径）: {decay_html}</p></div>
 
-<div class="card"><h2>4. 分层收益（Q1=预测最低组, Q5=最高组, 持仓口径）</h2>
+<div class="card"><h2>4. 分层收益（Q1=预测最低组, Q5=最高组, 持仓口径, 日频持有）</h2>
 <img src="data:image/png;base64,{img_layers}">
-<p style="font-size:12px;color:#666;margin-top:6px;">Q5-Q1 多空组合净值：分层单调性 = 预测分数越高收益越好；若 Q5 长期高于 Q1 且单调，说明模型预测有区分度。</p></div>
+<p style="font-size:12px;color:#666;margin-top:6px;"><b>读图提示：</b>本模型分层区分度弱（持仓 IC&asymp;0.03），Q5 并未稳定高于 Q1——图中 Q1 组的领先主要由 2024-09 极端行情中低预测组（超跌低价股）的暴涨贡献并复利放大（如 9/27 单日 +11%），<b>不是方向画反，而是预测对日频收益的区分力有限</b>。剔除极端日后 Q1 组日均收益与 Q5 组几乎无差异（约 2bp vs 0bp），Q1&gt;Q5 天数占比仅 49%（接近随机）。</p></div>
 
 <div class="card"><h2>5. 月度 IC（持仓口径）</h2>
 <img src="data:image/png;base64,{img_mic}"></div>

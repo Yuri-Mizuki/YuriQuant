@@ -25,7 +25,7 @@ ROOT = Path(__file__).resolve().parents[1]
 # 单元测试
 # ---------------------------------------------------------------------------
 def _mock_pred_and_fwd():
-    """构造带预测力的 mock 预测面板 + 未来收益面板。"""
+    """构造带预测力的 mock：因子面板 + 价格面板（与因子同向收益）+ 未来收益。"""
     rng = np.random.RandomState(7)
     dates = pd.bdate_range("2024-01-01", periods=120)
     codes = [f"{600000+i:06d}.SH" for i in range(40)]
@@ -34,19 +34,23 @@ def _mock_pred_and_fwd():
         np.concatenate([rng.normal(1.0, 0.3, (120, 20)), rng.normal(-1.0, 0.3, (120, 20))],
                        axis=1),
         index=dates, columns=codes)
-    # 收益：与因子同向（预测力）+ 噪声
-    ret = score * 0.02 + rng.normal(0, 0.05, (120, 40))
-    ret = pd.DataFrame(ret, index=dates, columns=codes)
+    # 日收益与因子同向（预测力）+ 噪声（真实量级：日波动 ~1.2%）
+    ret_d = pd.DataFrame(score.values * 0.008 + rng.normal(0, 0.012, (120, 40)),
+                         index=dates, columns=codes)
+    # 价格面板（从日收益累乘）
+    close = pd.DataFrame(100 * (1 + ret_d).cumprod(), index=dates, columns=codes)
+    # 未来 5 日累计收益（IC 口径）
+    fwd = close.pct_change(5, fill_method=None).shift(-5)
     # 稀疏预测：仅月初
     sparse = score.copy()
     sparse.loc[~sparse.index.isin(score.index[::21])] = np.nan
-    return sparse, ret
+    return sparse, fwd, close
 
 
 def test_factor_test_structure(tmp_path):
     from scripts.investment_report import factor_test
-    sparse, fwd = _mock_pred_and_fwd()
-    out = factor_test(sparse, fwd, tmp_path, "mock")
+    sparse, fwd, close = _mock_pred_and_fwd()
+    out = factor_test(sparse, fwd, close, tmp_path, "mock")
     assert set(out) == {"sum_sparse", "sum_hold", "layer_nav", "ic_hold", "monthly_ic"}
     for key in ("ic_mean", "ic_std", "ir", "t_stat", "t_stat_nw", "ic_win_rate", "n"):
         assert key in out["sum_sparse"] and key in out["sum_hold"]
@@ -56,6 +60,22 @@ def test_factor_test_structure(tmp_path):
     assert list(out["layer_nav"].columns) == ["Q1", "Q2", "Q3", "Q4", "Q5"]
     assert (tmp_path / "factor_summary_mock.csv").exists()
     assert (tmp_path / "layer_nav_mock.csv").exists()
+
+
+def test_layer_nav_not_exploding():
+    """回归：分层净值不得因 horizon 累计收益按日累乘而重叠放大（曾出现 Q1=6.56 假象）。"""
+    from scripts.investment_report import factor_test
+    sparse, fwd, close = _mock_pred_and_fwd()
+    out = factor_test(sparse, fwd, close, Path("."), "explode_check")
+    nav = out["layer_nav"].dropna(how="all")
+    # 每条分层净值终点应处于合理量级（< 3），而非重叠放大的 6+/93
+    for c in nav.columns:
+        assert nav[c].iloc[-1] < 3.0, f"{c} 终点 {nav[c].iloc[-1]:.3f} 疑似重叠放大"
+    # 预测力 mock 下 Q5 应 >= Q1（方向正确）
+    assert nav["Q5"].iloc[-1] >= nav["Q1"].iloc[-1] - 0.2
+    # 网格应从因子有效起始开始（无 1.0 平线前缀）
+    first = nav[nav.ne(1.0).any(axis=1)].index
+    assert first[0] == nav.index[0]
 
 
 def test_load_index_returns_from_cache():
