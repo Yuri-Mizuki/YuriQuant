@@ -176,15 +176,19 @@ def _fig_to_b64(fig) -> str:
 
 
 def plot_layers(layer_nav: pd.DataFrame) -> str:
+    """分层累计收益图：Q1~Q5 与多空全部用累计收益（净值-1，0 起点），
+    同一量纲、Y 轴按百分比自动展开——避免净值 1 起点导致差异被压扁。"""
     fig, ax = plt.subplots(figsize=(9, 4))
+    ret = layer_nav - 1.0  # 累计收益，起点 0
     for q in layer_nav.columns:
-        ax.plot(layer_nav.index, layer_nav[q], label=q, linewidth=1.2)
-    ls = layer_nav["Q5"] - layer_nav["Q1"]
+        ax.plot(ret.index, ret[q], label=q, linewidth=1.2)
+    ls = ret["Q5"] - ret["Q1"]  # 多空 = 收益差，同样 0 起点
     ax.plot(ls.index, ls, label="Q5-Q1(多空)", linewidth=1.6,
             color="#A32D2D", linestyle="--")
-    ax.axhline(1.0, color="gray", linewidth=0.6, linestyle=":")
+    ax.axhline(0, color="gray", linewidth=0.6, linestyle=":")
     ax.set_title("模型预测因子分层累计收益（Q1=预测最低组, Q5=最高组）")
-    ax.set_ylabel("累计净值")
+    ax.set_ylabel("累计收益")
+    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v * 100:.0f}%"))
     ax.legend(ncol=3, fontsize=9)
     ax.grid(alpha=0.3)
     return _fig_to_b64(fig)
