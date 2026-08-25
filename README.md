@@ -162,6 +162,7 @@ mock 落 `reports/models_mock`，真实落 `reports/models`。
 | **选股与信号** | `scripts/select_stocks.py`、`generate_signals.py` | 每日选股明细 + 可执行交易信号 → `reports/select_hs300_2025/`、`reports/signals/` |
 | **端到端选股（今日信号）** | `scripts/e2e_stock_picks.py` | 因子筛选 → GBDT 预测 → risk_parity 组合 → 选股清单 → `reports/e2e_picks/` |
 | **端到端策略回测** | `scripts/e2e_backtest.py` | walk-forward 月频回测（2024-01~2026-08 跑输全池基准，见报告）→ `reports/e2e_backtest/` |
+| **投资收益报告** | `scripts/investment_report.py` | 模型预测作因子检验（IC/IR/NW-t/分层图）+ 组合 vs 大盘指数基准（沪深300→000300.SH，全A→000001.SH）→ `reports/investment_report/` |
 | **日内研究** | `scripts/intraday_analysis.py` | 隔夜 vs 日内收益分解、成交量/波动率时段效应 → `reports/intraday_analysis_{year}.png`、`intraday_summary_{year}.csv` |
 | **自动因子挖掘** | `scripts/gp_tune_budget.py`、`run_gflownet_phase0/1.py`、`train_htai_rl_p0.py`、`gflownet_library_ingest.py` | GP 调参 / GFlowNet TB+PPO / AlphaPool RL 最小闭环 → `reports/gp_tune/`、`reports/_htai_gp/` |
 | **文本挖掘** | `scripts/fetch_textmining.py` + `scripts/textmining/` | 研报/公告抓取 → FADT/SUE-文本 样本、BERT 编码、训练评估 → `reports/textmining*/` |
@@ -196,6 +197,14 @@ mock 落 `reports/models_mock`，真实落 `reports/models`。
   2026-08 月频回测，等权 top50 +16.2%（Sharpe 0.41）、risk_parity top50 +22.7%
   （Sharpe 0.60），**均跑输全池等权基准 +30.8%**——现有信号强度不足以支撑
   top-50 集中持仓跑赢全池。
+- **投资收益报告**（`scripts/investment_report.py`）：最终交付物，含两部分——
+  ① **模型预测作为因子的检验**（`standard_factor_summary`：IC/ICIR/NW-t/IC 衰减
+  + `quantile_backtest` 分层收益图 + 月度 IC 图；双口径：稀疏=调仓日信号、
+  持仓=ffill 到日频与组合一致）；② **组合 vs 大盘指数基准**（沪深300池→000300.SH、
+  全A→000001.SH，`--index` 指定；绩效含相对基准 alpha/β/信息比/超额）。
+  实测（2024-01~2026-08）：稀疏口径 IC=0.067（NW-t=2.50 显著）、持仓口径
+  IC=0.028（NW-t=1.70 边缘）；策略等权 +16.2% / risk_parity +23.2%，**沪深300
+  指数 +37.8%（Sharpe 0.71）——策略明显跑输指数**（β≈0.5，超额 −15%~−19%）。
 
 ## 安装
 

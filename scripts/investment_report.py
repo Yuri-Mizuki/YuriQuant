@@ -1,0 +1,508 @@
+"""
+投资收益报告 —— 端到端工作流的最终交付物
+==========================================
+
+把「因子筛选 → 模型预测 → 组合回测」的产出汇总成一份投资收益报告：
+
+1. **模型预测作为因子的检验**（回答"这个信号有没有预测力"）：
+   - rank IC 序列 / ICIR / Newey-West t / 月度 IC（`standard_factor_summary`）
+   - 分层收益图（Q1~Q5 累计净值 + 多空，`quantile_backtest`）
+   - 稀疏口径（仅调仓日信号）与持仓口径（ffill 到日频，与组合一致）并排
+2. **组合 vs 大盘指数基准**：
+   - 股票池为沪深300（因子库池）→ 基准 = 沪深300指数 000300.SH
+   - 全A 池 → 基准 = 上证指数 000001.SH（`--index` 指定，缓存无则真实模式拉取）
+   - 绩效：总收益/年化/波动/Sharpe/最大回撤/胜率 + 相对基准 alpha/beta/信息比
+3. **报告**：自包含 HTML（matplotlib 图 base64 内嵌）+ CSV
+
+用法：
+    D:/python/Python312/python.exe scripts/investment_report.py --real --top 50
+    D:/python/Python312/python.exe scripts/investment_report.py --real --top 50 --index 000001.SH
+    python scripts/investment_report.py --mock --top 20 --model ridge   # 测试
+"""
+from __future__ import annotations
+
+import argparse
+import base64
+import io
+import json
+import logging
+import sys
+import time
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from scripts.e2e_common import (  # noqa: E402
+    HORIZON, build_labels, compute_classic_features, drop_stale_factors,
+    load_daily_data, load_mock_data, select_features,
+)
+from scripts.e2e_backtest import (  # noqa: E402
+    walk_forward_predictions, run_equal_weight_backtest,
+    run_risk_parity_backtest, perf_stats,
+)
+
+logging.basicConfig(level=logging.INFO,
+                    format="%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S")
+log = logging.getLogger("investment_report")
+
+OUT_DIR = Path("reports/investment_report")
+BT_START = "2024-01-01"
+
+# matplotlib 中文字体（Windows 微软雅黑）
+import matplotlib  # noqa: E402
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt  # noqa: E402
+plt.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "Arial"]
+plt.rcParams["axes.unicode_minus"] = False
+
+
+# ---------------------------------------------------------------------------
+# 指数基准
+# ---------------------------------------------------------------------------
+def load_index_returns(index_code: str, begin: int, end: int,
+                       real: bool = False) -> pd.Series | None:
+    """加载指数日收益（优先本地缓存，缓存缺失时真实模式拉取）。
+
+    Returns:
+        Series(index=date, value=日收益)；不可用（mock / 无缓存且非 real）返回 None。
+    """
+    from config import Config
+
+    root = Path(Config.cache()["root"])
+    safe = str(index_code).replace(".", "_")
+    p = root / f"index_daily_{safe}.parquet"
+    if p.exists():
+        df = pd.read_parquet(p)
+    elif real:
+        try:
+            from data import get_cache
+            log.info("拉取指数数据 %s ...", index_code)
+            df = get_cache().get_index_daily(index_code, begin, end)
+        except Exception as e:
+            log.warning("指数 %s 拉取失败: %s", index_code, e)
+            return None
+    else:
+        log.warning("指数 %s 无缓存（mock 模式不可拉取），基准降级全池等权", index_code)
+        return None
+
+    close = (df.reset_index()
+             .pivot(index="date", columns="code", values="close").sort_index())
+    close = close.iloc[:, 0]
+    close = close[close.index >= pd.Timestamp(str(begin))]
+    close = close[close.index <= pd.Timestamp(str(end))]
+    ret = close.pct_change(fill_method=None)
+    log.info("指数基准 %s: %s ~ %s (%d 日)",
+             index_code, ret.index[1].date(), ret.index[-1].date(), len(ret.dropna()))
+    return ret
+
+
+# ---------------------------------------------------------------------------
+# 因子检验（模型预测作为因子）
+# ---------------------------------------------------------------------------
+def factor_test(pred_panel: pd.DataFrame, fwd: pd.DataFrame,
+                out_dir: Path, label: str) -> dict:
+    """把模型预测面板作为因子做标准检验。
+
+    两种口径：
+    - 稀疏：只在调仓日有预测值（纯信号检验，样本=调仓次数）
+    - 持仓：预测值 ffill 到下一次调仓前（与组合持仓一致，样本=交易日）
+
+    Returns:
+        {summary_sparse, summary_hold, layer_nav, ic_sparse, ic_hold, monthly_ic}
+    """
+    from research.factor_analysis import quantile_backtest, standard_factor_summary
+
+    common = fwd.dropna(how="all").index
+    fwd_aligned = fwd.reindex(index=common)
+
+    # 稀疏口径
+    sparse = pred_panel.reindex(index=common)
+    sum_sparse = standard_factor_summary(sparse, fwd_aligned)
+    ic_sparse = None
+
+    # 持仓口径：ffill 到调仓日之间
+    hold = sparse.ffill()
+    sum_hold = standard_factor_summary(hold, fwd_aligned)
+
+    # 分层净值（持仓口径，与组合一致）
+    layer_nav = quantile_backtest(hold, fwd_aligned, n_quantiles=5)
+    layer_nav.to_csv(out_dir / f"layer_nav_{label}.csv", encoding="utf-8-sig")
+
+    # 月度 IC（持仓口径）
+    from research.factor_analysis import calc_ic_series
+    ic_hold = calc_ic_series(hold, fwd_aligned)
+    ic_hold.name = "ic"
+    monthly_ic = ic_hold.groupby(ic_hold.index.to_period("M")).mean()
+    monthly_ic.to_csv(out_dir / f"monthly_ic_{label}.csv", encoding="utf-8-sig")
+
+    pd.DataFrame([sum_sparse, sum_hold], index=["稀疏(调仓日)", "持仓(日频)"]) \
+        .to_csv(out_dir / f"factor_summary_{label}.csv", encoding="utf-8-sig")
+
+    log.info("因子检验[%s]: 稀疏 IC=%.4f IR=%.2f t_nw=%.2f | 持仓 IC=%.4f IR=%.2f t_nw=%.2f",
+             label, sum_sparse["ic_mean"], sum_sparse["ir"], sum_sparse["t_stat_nw"],
+             sum_hold["ic_mean"], sum_hold["ir"], sum_hold["t_stat_nw"])
+    return {"sum_sparse": sum_sparse, "sum_hold": sum_hold, "layer_nav": layer_nav,
+            "ic_hold": ic_hold, "monthly_ic": monthly_ic}
+
+
+# ---------------------------------------------------------------------------
+# 图
+# ---------------------------------------------------------------------------
+def _fig_to_b64(fig) -> str:
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=110, bbox_inches="tight")
+    plt.close(fig)
+    return base64.b64encode(buf.getvalue()).decode()
+
+
+def plot_layers(layer_nav: pd.DataFrame) -> str:
+    fig, ax = plt.subplots(figsize=(9, 4))
+    for q in layer_nav.columns:
+        ax.plot(layer_nav.index, layer_nav[q], label=q, linewidth=1.2)
+    ls = layer_nav["Q5"] - layer_nav["Q1"]
+    ax.plot(ls.index, ls, label="Q5-Q1(多空)", linewidth=1.6,
+            color="#A32D2D", linestyle="--")
+    ax.axhline(1.0, color="gray", linewidth=0.6, linestyle=":")
+    ax.set_title("模型预测因子分层累计收益（Q1=预测最低组, Q5=最高组）")
+    ax.set_ylabel("累计净值")
+    ax.legend(ncol=3, fontsize=9)
+    ax.grid(alpha=0.3)
+    return _fig_to_b64(fig)
+
+
+def plot_monthly_ic(monthly_ic: pd.Series) -> str:
+    fig, ax = plt.subplots(figsize=(9, 3.2))
+    colors = ["#A32D2D" if v > 0 else "#3B6D11" for v in monthly_ic]
+    ax.bar(monthly_ic.index.astype(str), monthly_ic.values, color=colors)
+    ax.axhline(0, color="gray", linewidth=0.6)
+    ax.set_title("模型预测因子月度 IC（持仓口径）")
+    ax.tick_params(axis="x", rotation=60, labelsize=8)
+    ax.grid(alpha=0.3, axis="y")
+    return _fig_to_b64(fig)
+
+
+def plot_equity_curves(equity: pd.DataFrame, bench_nav: pd.Series | None) -> str:
+    fig, ax = plt.subplots(figsize=(9, 4.2))
+    colors = {"等权top50": "#378ADD", "风险平价top50": "#D85A30"}
+    for c in equity.columns:
+        ax.plot(equity.index, equity[c], label=c, linewidth=1.3,
+                color=colors.get(c))
+    if bench_nav is not None:
+        ax.plot(bench_nav.index, bench_nav.values, label="指数基准",
+                linewidth=1.4, color="#888780")
+    ax.axhline(1.0, color="gray", linewidth=0.6, linestyle=":")
+    ax.set_title("策略 vs 指数基准 净值（费后）")
+    ax.set_ylabel("累计净值")
+    ax.legend(fontsize=9)
+    ax.grid(alpha=0.3)
+    return _fig_to_b64(fig)
+
+
+def plot_drawdown(equity: pd.DataFrame) -> str:
+    fig, ax = plt.subplots(figsize=(9, 2.6))
+    for c in equity.columns:
+        eq = equity[c]
+        dd = eq / eq.cummax() - 1
+        ax.plot(dd.index, dd.values * 100, label=c, linewidth=1.2)
+    ax.fill_between(equity.index, 0, -20, color="gray", alpha=0.05)
+    ax.set_title("回撤（%）")
+    ax.set_ylabel("%")
+    ax.legend(fontsize=9)
+    ax.grid(alpha=0.3)
+    return _fig_to_b64(fig)
+
+
+# ---------------------------------------------------------------------------
+# 相对基准的绩效
+# ---------------------------------------------------------------------------
+def benchmark_stats(daily_ret: pd.Series, bench_ret: pd.Series) -> dict:
+    """alpha/beta/信息比/超额（相对基准指数）。"""
+    df = pd.DataFrame({"strat": daily_ret, "bench": bench_ret}).dropna()
+    if len(df) < 20 or df["bench"].std() == 0:
+        return {}
+    beta = float(np.cov(df["strat"], df["bench"])[0, 1] / df["bench"].var())
+    alpha_d = float(df["strat"].mean() - beta * df["bench"].mean())
+    excess = df["strat"] - df["bench"]
+    ir = float(excess.mean() / excess.std() * np.sqrt(252)) if excess.std() > 0 else 0.0
+    return {"beta": round(beta, 3), "alpha_annual": round(alpha_d * 252, 4),
+            "information_ratio": round(ir, 3),
+            "excess_total": round(float((1 + excess).prod() - 1), 4)}
+
+
+# ---------------------------------------------------------------------------
+# 主流程
+# ---------------------------------------------------------------------------
+def run(args) -> dict:
+    out_dir = Path(args.out)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    t0 = time.time()
+
+    log.info("=" * 60)
+    log.info(" 投资收益报告生成")
+    log.info(" 池: %s | 指数基准: %s | 调仓 %s | top-%d",
+             "沪深300(因子库池)" if args.real else "mock", args.index, args.freq, args.top)
+    log.info("=" * 60)
+
+    # ---- 1. 数据 + 因子 ----
+    if args.real:
+        px, lib_feats = load_daily_data(begin=20220101)
+    else:
+        px = load_mock_data(n_days=args.n_days, n_codes=args.n_codes, seed=args.seed)
+        lib_feats = {}
+    classic = compute_classic_features(px)
+    all_feats = {**classic, **lib_feats}
+    log.info("因子总池: %d（经典 %d + 因子库 %d）",
+             len(all_feats), len(classic), len(lib_feats))
+
+    close = px["close"]
+    returns = close.pct_change(fill_method=None)
+    labels, fwd = build_labels(close, horizon=HORIZON)
+
+    # 面板新鲜度守卫（真实模式）
+    if args.real:
+        all_feats = drop_stale_factors(all_feats, close.index[-1])
+
+    # ---- 2. 特征选择（只用回测前窗口）----
+    all_days = close.index
+    bt_start = pd.Timestamp(args.bt_start)
+    sel_days = all_days[all_days < bt_start]
+    if len(sel_days) < 60:
+        split = len(all_days) // 2
+        sel_days = all_days[:split]
+        bt_start_actual = all_days[split]
+    else:
+        bt_start_actual = bt_start
+    feats, quality = select_features(all_feats, fwd, sel_days, max_features=args.max_features)
+    log.info("特征选择: %d -> %d", len(all_feats), len(feats))
+
+    # ---- 3. 公共网格 + 调仓日 ----
+    common = None
+    for f in feats.values():
+        d = f.dropna(how="all").index
+        common = d if common is None else common.intersection(d)
+    common = common.intersection(labels.dropna(how="all").index)
+    bt_days = common[common >= bt_start_actual]
+    s = pd.Series(bt_days, index=bt_days)
+    reb_days = list(s.groupby(s.index.to_period(args.freq)).first())
+    log.info("回测区间: %s ~ %s, 调仓 %d 次", bt_days[0].date(), bt_days[-1].date(), len(reb_days))
+
+    # ---- 4. Walk-forward 预测 ----
+    log.info("Walk-forward 训练预测中（%s）...", args.model)
+    pred_reb = walk_forward_predictions(feats, labels, reb_days, common, model=args.model)
+    pred_reb.to_csv(out_dir / "walk_forward_predictions.csv", encoding="utf-8-sig")
+
+    # ---- 5. 因子检验（模型预测作为因子）----
+    log.info("因子检验：模型预测作为因子 ...")
+    ft = factor_test(pred_reb, fwd, out_dir, "model_pred")
+
+    # ---- 6. 组合回测 ----
+    bt_returns = returns.loc[bt_days[0]:bt_days[-1]]
+    log.info("回测 A：等权 top-%d ...", args.top)
+    result_eq = run_equal_weight_backtest(pred_reb, returns, bt_days, args.top)
+    stats_eq = perf_stats(result_eq.daily_returns, f"等权top{args.top}")
+
+    stats_rp = None
+    if not args.skip_rp:
+        try:
+            import cvxpy  # noqa: F401
+            log.info("回测 B：risk_parity top-%d ...", args.top)
+            result_rp = run_risk_parity_backtest(pred_reb, returns, bt_days, args.top,
+                                                 args.max_weight)
+            stats_rp = perf_stats(result_rp.daily_returns, f"风险平价top{args.top}")
+        except Exception as e:
+            log.warning("risk_parity 跳过: %s", e)
+
+    # ---- 7. 指数基准 ----
+    bench_ret = load_index_returns(args.index, int(bt_days[0].strftime("%Y%m%d")),
+                                   int(bt_days[-1].strftime("%Y%m%d")), real=args.real)
+    bench_ret = bench_ret.reindex(bt_days) if bench_ret is not None else None
+    if bench_ret is None:
+        bench_ret = bt_returns.mean(axis=1)
+        bench_label = "全池等权(指数不可用)"
+    else:
+        bench_label = f"指数基准 {args.index}"
+    stats_bm = perf_stats(bench_ret, bench_label)
+
+    # ---- 8. 汇总 ----
+    rows = []
+    for st in [stats_eq, stats_rp, stats_bm]:
+        if st is None:
+            continue
+        row = {k: v for k, v in st.items() if k not in ("monthly", "equity", "daily")}
+        if st is not stats_bm and bench_ret is not None:
+            row.update(benchmark_stats(st["daily"], bench_ret))
+        rows.append(row)
+    summary = pd.DataFrame(rows).set_index("label").T
+    print("\n===== 投资收益对照（%s ~ %s, %s 调仓）=====" %
+          (bt_days[0].date(), bt_days[-1].date(), args.freq))
+    print(summary.to_string())
+    summary.to_csv(out_dir / "investment_summary.csv", encoding="utf-8-sig")
+
+    monthly = pd.DataFrame({st["label"]: st.get("monthly", pd.Series(dtype=float))
+                            for st in [stats_eq, stats_rp, stats_bm] if st is not None})
+    monthly.to_csv(out_dir / "monthly_returns.csv", encoding="utf-8-sig")
+    equity = pd.DataFrame({st["label"]: st.get("equity", pd.Series(dtype=float))
+                           for st in [stats_eq, stats_rp, stats_bm] if st is not None})
+    equity.to_csv(out_dir / "equity_curve.csv", encoding="utf-8-sig")
+
+    # ---- 9. HTML 报告 ----
+    bench_nav = (1 + bench_ret).cumprod() if bench_ret is not None else None
+    img_layers = plot_layers(ft["layer_nav"])
+    img_mic = plot_monthly_ic(ft["monthly_ic"])
+    img_eq = plot_equity_curves(equity, bench_nav)
+    img_dd = plot_drawdown(equity)
+
+    ft_rows = ""
+    for lbl, s in [("稀疏(调仓日)", ft["sum_sparse"]), ("持仓(日频)", ft["sum_hold"])]:
+        ft_rows += (
+            f"<tr><td>{lbl}</td>"
+            f"<td>{s['ic_mean']:.4f}</td><td>{s['ic_std']:.4f}</td>"
+            f"<td>{s['ir']:.2f}</td><td>{s['t_stat']:.2f}</td>"
+            f"<td>{s['t_stat_nw']:.2f}</td><td>{s['ic_win_rate']*100:.0f}%</td>"
+            f"<td>{s['n']}</td></tr>")
+
+    decay = ft["sum_hold"]["ic_decay"]
+    decay_html = " | ".join(f"lag{l}: {v:.4f}" for l, v in decay.items())
+
+    pct = lambda v, d=2: (v if isinstance(v, str) else "—"
+                          if v is None or (isinstance(v, float) and np.isnan(v))
+                          else f"{v * 100:.{d}f}%")
+    srow = lambda st, k: pct(st.get(k)) if st else "—"
+
+    perf_html = ""
+    for st in [stats_eq, stats_rp, stats_bm]:
+        if st is None:
+            continue
+        beta = st.get("beta", "—")
+        alpha = st.get("alpha_annual", "—")
+        ir = st.get("information_ratio", "—")
+        ex = st.get("excess_total", "—")
+        if isinstance(beta, float):
+            beta = f"{beta:.2f}"
+        perf_html += (
+            f"<tr><td><b>{st['label']}</b></td>"
+            f"<td>{pct(st['total_return'])}</td><td>{pct(st['annual_return'])}</td>"
+            f"<td>{pct(st['annual_vol'])}</td><td>{st['sharpe']:.2f}</td>"
+            f"<td>{pct(st['max_drawdown'])}</td><td>{st['win_rate_monthly']*100:.0f}%</td>"
+            f"<td>{alpha if isinstance(alpha,str) else f'{alpha*100:.2f}%'}</td>"
+            f"<td>{beta}</td><td>{ir}</td><td>{pct(ex)}</td></tr>")
+
+    mrows = ""
+    for d, row in monthly.iterrows():
+        cells = "".join(f'<td class="{"pos" if v > 0 else "neg"}">{v*100:+.1f}%</td>'
+                        for v in row)
+        mrows += f"<tr><td>{d.strftime('%Y-%m')}</td>{cells}</tr>"
+
+    html = f"""<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<title>YuriQuant 投资收益报告</title>
+<style>
+* {{ margin:0; padding:0; box-sizing:border-box; }}
+body {{ font-family:-apple-system,'PingFang SC',sans-serif; background:#f5f7fa; color:#1a1a2e; line-height:1.6; }}
+.container {{ max-width:1000px; margin:0 auto; padding:24px 16px; }}
+.header {{ background:linear-gradient(135deg,#1a1a2e,#16213e); color:#fff; padding:28px 24px; border-radius:12px; margin-bottom:20px; }}
+.header h1 {{ font-size:20px; margin-bottom:6px; }}
+.header .meta {{ font-size:13px; opacity:.85; }}
+.card {{ background:#fff; border-radius:10px; padding:18px; margin-bottom:14px; box-shadow:0 1px 4px rgba(0,0,0,.06); }}
+.card h2 {{ font-size:15px; color:#16213e; margin-bottom:12px; border-bottom:2px solid #e8e8e8; padding-bottom:6px; }}
+table {{ width:100%; border-collapse:collapse; font-size:13px; }}
+th {{ padding:8px 10px; background:#f8f9fa; text-align:right; border-bottom:2px solid #e0e0e0; }}
+th:first-child {{ text-align:left; }}
+td {{ padding:7px 10px; border-bottom:1px solid #f0f0f0; text-align:right; }}
+td:first-child {{ text-align:left; }}
+.pos {{ color:#c0392b; }} .neg {{ color:#27ae60; }}
+img {{ width:100%; height:auto; border-radius:8px; }}
+.kpi {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:10px; margin-bottom:12px; }}
+.kpi .item {{ background:#f8f9fa; border-radius:8px; padding:12px; }}
+.kpi .l {{ font-size:11px; color:#888; }} .kpi .v {{ font-size:17px; font-weight:700; }}
+.warning {{ background:#fff3cd; border:1px solid #ffe082; border-radius:8px; padding:14px; font-size:12px; color:#856404; }}
+</style></head><body><div class="container">
+
+<div class="header"><h1>YuriQuant 投资收益报告</h1>
+<div class="meta">回测区间 {bt_days[0].date()} ~ {bt_days[-1].date()} | 调仓 {args.freq} 频（{len(reb_days)} 次）| 基准 {bench_label} | top-{args.top} | 因子 {len(feats)}/候选 {len(all_feats)}</div></div>
+
+<div class="card"><h2>1. 绩效总览（费后，相对基准）</h2>
+<table><tr>
+<th>组合</th><th>总收益</th><th>年化</th><th>波动</th><th>Sharpe</th><th>最大回撤</th>
+<th>月胜率</th><th>年化α</th><th>β</th><th>信息比</th><th>超额</th></tr>
+{perf_html}</table></div>
+
+<div class="card"><h2>2. 净值曲线（策略 vs {bench_label}）</h2>
+<img src="data:image/png;base64,{img_eq}"><br>
+<img src="data:image/png;base64,{img_dd}"></div>
+
+<div class="card"><h2>3. 模型预测作为因子的检验</h2>
+<table><tr><th>口径</th><th>IC均值</th><th>IC标准差</th><th>ICIR</th><th>t统计</th>
+<th>NW-t</th><th>IC胜率</th><th>样本日</th></tr>{ft_rows}</table>
+<p style="font-size:12px;color:#666;margin-top:8px;">IC 衰减（持仓口径）: {decay_html}</p></div>
+
+<div class="card"><h2>4. 分层收益（Q1=预测最低组, Q5=最高组, 持仓口径）</h2>
+<img src="data:image/png;base64,{img_layers}">
+<p style="font-size:12px;color:#666;margin-top:6px;">Q5-Q1 多空组合净值：分层单调性 = 预测分数越高收益越好；若 Q5 长期高于 Q1 且单调，说明模型预测有区分度。</p></div>
+
+<div class="card"><h2>5. 月度 IC（持仓口径）</h2>
+<img src="data:image/png;base64,{img_mic}"></div>
+
+<div class="card"><h2>6. 月度收益</h2>
+<table><tr><th>月份</th>{''.join(f'<th>{st["label"]}</th>' for st in [stats_eq, stats_rp, stats_bm] if st is not None)}</tr>{mrows}</table></div>
+
+<div class="warning"><b>口径与局限：</b><br>
+1. 股票池 = 因子库 significant 面板列并集（沪深300 PIT 历史成员 ~420 股），基准按池匹配：沪深300 → 000300.SH；全A → 000001.SH（--index 指定）<br>
+2. 因子检验的"稀疏"口径 = 仅调仓日信号（样本=调仓次数）；"持仓"口径 = 预测 ffill 到下次调仓（与组合一致，样本=交易日）<br>
+3. 组合回测成本：佣金 0.01% + 印花税 0.1%(卖出) + 滑点 5bp，已扣除<br>
+4. 未过滤涨跌停/停牌可执行性；特征选择只用回测前窗口防前视；embargo=5<br>
+5. 模型预测仅月频重训，信号在调仓间衰减；更高频调仓（--freq W）可能改变结论<br>
+6. 非投资建议</div>
+</div></body></html>"""
+    (out_dir / "investment_report.html").write_text(html, encoding="utf-8")
+
+    meta = {
+        "bt_start": str(bt_days[0].date()), "bt_end": str(bt_days[-1].date()),
+        "freq": args.freq, "top_n": args.top, "index_benchmark": str(args.index),
+        "bench_label": bench_label, "n_rebalance": len(reb_days),
+        "n_features": len(feats), "model": args.model, "horizon": HORIZON,
+        "factor_test": {
+            "sparse": {k: (round(v, 4) if isinstance(v, float) else v)
+                       for k, v in ft["sum_sparse"].items() if k != "ic_decay"},
+            "hold": {k: (round(v, 4) if isinstance(v, float) else v)
+                     for k, v in ft["sum_hold"].items() if k != "ic_decay"},
+        },
+        "summary": {r["label"]: {k: v for k, v in r.items()} for r in rows},
+        "elapsed_sec": round(time.time() - t0, 1),
+    }
+    (out_dir / "investment_meta.json").write_text(
+        json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    log.info("=" * 60)
+    log.info(" 报告完成（%.1f 分钟）: %s", (time.time() - t0) / 60, out_dir)
+    log.info("=" * 60)
+    return meta
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description="投资收益报告")
+    ap.add_argument("--real", action="store_true")
+    ap.add_argument("--top", type=int, default=50)
+    ap.add_argument("--freq", default="M", choices=["D", "W", "M"])
+    ap.add_argument("--model", default="gbdt", choices=["gbdt", "ridge"])
+    ap.add_argument("--index", default="000300.SH",
+                    help="指数基准（沪深300池→000300.SH；全A池→000001.SH）")
+    ap.add_argument("--bt-start", default=BT_START)
+    ap.add_argument("--max-weight", type=float, default=0.05)
+    ap.add_argument("--max-features", type=int, default=30)
+    ap.add_argument("--skip-rp", action="store_true")
+    ap.add_argument("--n-days", type=int, default=500)
+    ap.add_argument("--n-codes", type=int, default=50)
+    ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--out", default=str(OUT_DIR))
+    args = ap.parse_args()
+    run(args)
+
+
+if __name__ == "__main__":
+    main()
