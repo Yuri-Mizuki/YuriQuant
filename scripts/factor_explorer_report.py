@@ -243,6 +243,26 @@ def build_factor_data(lib: FactorLibrary, reg: pd.DataFrame,
                         item[f"layer_stats{tag}_{freq}"] = layer_stats_from_nav(nav)
                         item[f"layer_avg{tag}_{freq}"] = layer_avg_ret(nav)
 
+            # 首页可用性指标（增量）：分层单调相关 + 月度IC正占比 + 综合可用标记
+            nav5 = caches[(5, "M")]
+            if nav5 is not None and len(nav5) >= 6:
+                ends = [nav5.iloc[-1, i] for i in range(nav5.shape[1])]
+                try:
+                    mono = float(np.corrcoef(np.arange(len(ends)), ends)[0, 1])
+                except Exception:
+                    mono = 0.0
+            else:
+                mono = 0.0
+            icm = [v for v in item["ic_series"].values() if v is not None]
+            ic_pos = float(np.mean([1.0 if v > 0 else 0.0 for v in icm])) if icm else 0.0
+            # 综合可用：IC 显著 + |单调相关|>0.5 + 月度IC正占比>55%（正向因子）
+            sig_ok = bool(item["m_full"].get("t_nw")) and abs(item["m_full"]["t_nw"] or 0) > 2
+            mono_ok = abs(mono) > 0.5
+            pos_ok = ic_pos > 0.55
+            item["mono_corr"] = round(mono, 3)
+            item["ic_pos"] = round(ic_pos, 3)
+            item["usable"] = "可用" if (sig_ok and mono_ok and pos_ok) else "存疑"
+
         out.append(item)
     return out
 
@@ -272,6 +292,11 @@ td {{ padding:6px 9px; border-bottom:1px solid #f0f0f0; text-align:right; white-
 tr:hover {{ background:#f8f9ff; cursor:pointer; }}
 .scroll {{ max-height:520px; overflow-y:auto; border:1px solid #eee; border-radius:8px; }}
 .sig {{ color:#A32D2D; font-weight:600; }}
+.mono-pos {{ color:#185FA5; font-weight:600; }}
+.mono-neg {{ color:#0F6E56; font-weight:600; }}
+.mono-weak {{ color:#854F0B; }}
+.usable-ok {{ color:#A32D2D; font-weight:700; }}
+.usable-q {{ color:#888; }}
 .fam-badge {{ display:inline-block; padding:1px 8px; border-radius:10px; font-size:11px; color:#fff; }}
 .chart-grid {{ display:grid; grid-template-columns:1fr 1fr; gap:14px; }}
 .chart-grid2 {{ display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-top:14px; }}
@@ -325,7 +350,8 @@ tr:hover {{ background:#f8f9ff; cursor:pointer; }}
 <thead><tr>
 <th data-k="name">因子名</th><th data-k="family">来源</th><th data-k="ic">IC</th><th data-k="icir">ICIR</th>
 <th data-k="t_nw">NW-t</th><th data-k="ls_ret">多空收益</th><th data-k="ls_sharpe">多空Sharpe</th>
-<th data-k="lo_ret">多头收益</th><th data-k="win">IC胜率</th><th data-k="turn">换手</th><th data-k="sig">显著</th>
+<th data-k="lo_ret">多头收益</th><th data-k="mono">单调性</th><th data-k="ic_pos">IC正占比</th>
+<th data-k="usable">可用性</th><th data-k="turn">换手</th>
 </tr></thead>
 <tbody></tbody></table></div></div>
 
@@ -416,14 +442,25 @@ function render() {{
   rows.forEach(f => {{
     const m = rangeMetrics(f);
     const sig = f.m_full.sig;
+    const mono = f.mono_corr;
+    const icPos = f.ic_pos;
+    const usable = f.usable || '存疑';
+    // 单调性着色：|corr|>0.7 红/绿强单调，0.5-0.7 弱，<0.5 灰
+    const monoCls = mono !== null && mono !== undefined ? (
+      Math.abs(mono) > 0.7 ? (mono > 0 ? 'mono-pos' : 'mono-neg') :
+      Math.abs(mono) > 0.5 ? 'mono-weak' : '') : '';
+    const monoTxt = mono !== null && mono !== undefined ? (mono > 0 ? '+' : '') + mono.toFixed(2) : '—';
+    const usableCls = usable === '可用' ? 'usable-ok' : 'usable-q';
     const tr = document.createElement('tr');
     tr.innerHTML =
       `<td><b>${{f.name}}</b></td><td><span class="fam-badge" style="background:${{FAM_COLORS[f.family]}}">${{f.family}}</span></td>` +
       `<td>${{fmt(m.ic)}}</td><td>${{fmt(m.icir)}}</td><td>${{fmt(m.t_nw)}}</td>` +
       `<td>${{fmtPct(m.ls_ret)}}</td><td>${{fmt(f.m_full.ls_sharpe, 2)}}</td>` +
-      `<td>${{fmtPct(m.lo_ret)}}</td><td>${{f.m_full.win!==null? (f.m_full.win*100).toFixed(0)+'%':'—'}}</td>` +
-      `<td>${{f.m_full.turn!==null? (f.m_full.turn*100).toFixed(2)+'%':'—'}}</td>` +
-      `<td class="${{sig?'sig':''}}">${{sig?'显著':'—'}}</td>`;
+      `<td>${{fmtPct(m.lo_ret)}}</td>` +
+      `<td class="${{monoCls}}">${{monoTxt}}</td>` +
+      `<td>${{icPos!==null&&icPos!==undefined? (icPos*100).toFixed(0)+'%':'—'}}</td>` +
+      `<td class="${{usableCls}}">${{usable}}</td>` +
+      `<td>${{f.m_full.turn!==null? (f.m_full.turn*100).toFixed(2)+'%':'—'}}</td>`;
     tr.onclick = () => plotDetail(f);
     tbody.appendChild(tr);
   }});
