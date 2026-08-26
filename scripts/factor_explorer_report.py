@@ -345,7 +345,7 @@ tr:hover {{ background:#f8f9ff; cursor:pointer; }}
 </div>
 <div id="layerFinal" style="font-size:11px;color:#555;margin:6px 0 2px;"></div>
 <div class="chart-grid2">
-<div class="chart-box"><canvas id="cHeat" role="img" aria-label="月度IC热力图">IC热力图</canvas></div>
+<div class="chart-box" id="cHeatWrap"><div id="cHeat"></div></div>
 <div class="chart-box" id="cLayerTable"></div>
 </div>
 <div class="formula" id="dformula"></div>
@@ -558,9 +558,8 @@ function plotDetail(f) {{
   }});
 
   // 5) 月度 IC 热力图（年份×月份）
+  // 注意：只写 cHeat 子容器，绝不动 parent——否则会连同 cLayerTable 一起销毁
   const heatEl = document.getElementById('cHeat');
-  heatEl.style.display = 'block';
-  const parent = heatEl.parentNode;
   let heatHtml = '<div style="font-size:12px;color:#16213e;margin-bottom:4px;font-weight:500;">月度 IC 热力图</div>';
   heatHtml += '<div class="heat-grid"><div class="heat-label"></div><div class="heat-label">1月</div><div class="heat-label">2月</div><div class="heat-label">3月</div><div class="heat-label">4月</div><div class="heat-label">5月</div><div class="heat-label">6月</div><div class="heat-label">7月</div><div class="heat-label">8月</div><div class="heat-label">9月</div><div class="heat-label">10月</div><div class="heat-label">11月</div><div class="heat-label">12月</div>';
   const h = f.heat || {{}};
@@ -574,7 +573,7 @@ function plotDetail(f) {{
     }});
   }});
   heatHtml += '</div>';
-  parent.innerHTML = '<div style="position:relative;height:260px;overflow:auto;">' + heatHtml + '</div>';
+  heatEl.innerHTML = '<div style="position:relative;height:260px;overflow:auto;">' + heatHtml + '</div>';
 
   // 6) 各层绩效表（按层数取对应数据）
   const statsKey = (dLayers===10 ? 'layer_stats10_' : 'layer_stats_') + dFreq;
