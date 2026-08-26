@@ -234,11 +234,14 @@ def build_neutral_covariates(px: dict, close: pd.DataFrame, real: bool = True):
     if real:
         try:
             from data.cache import DataCache
-            from data.offline import OfflineDataSource
+            from data.offline import OfflineQuietDataSource
             from data.market_cap import build_market_cap_panel
             from data.industry import IndustryClassification
 
-            cache = DataCache(OfflineDataSource())
+            # 注意：必须用 OfflineQuietDataSource（数据源方法返回空 -> 走缓存
+            # fallback）。普通 OfflineDataSource 直接抛异常，get_equity_structure
+            # 的缓存分支在 try 之外，永远到不了 -> 市值/行业恒为 None。
+            cache = DataCache(OfflineQuietDataSource())
             codes = list(close.columns)
             es = cache.get_equity_structure(codes)
             mc_panel = build_market_cap_panel(es, close)
@@ -263,7 +266,10 @@ def neutralize_predictions(pred: pd.DataFrame, mc, ind, extra) -> pd.DataFrame:
     cols = pred.columns
     mc_a = mc.reindex(columns=cols) if mc is not None else None
     ind_a = ind.reindex(columns=cols) if ind is not None else None
-    extra_a = {k: v.reindex(columns=cols) for k, v in extra.items()}
+    # extra 里 industry/size 与 industry_panel/market_cap_panel 重复（且 industry
+    # 是字符串，直接当连续协变量 astype(float) 会崩）。剔除后只留 mom/vol/turn。
+    extra_a = {k: v.reindex(columns=cols) for k, v in extra.items()
+               if k not in ("industry", "size")}
     neu = neutralize(pred, market_cap_panel=mc_a, industry_panel=ind_a,
                      extra_covariates=extra_a)
     log.info("中性化: 有效值 %d (原始 %d)", neu.notna().sum().sum(),
