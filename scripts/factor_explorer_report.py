@@ -193,7 +193,7 @@ const MONTHS = {months};
 const FAM_COLORS = {fam_colors};
 
 // ---------- 状态 ----------
-let current = {{ sortKey: 'ic', asc: false }};
+let current = {{ sortKey: 'ic', asc: false, family: 'all', q: '', start: null, end: null }};
 const navChart = null, icChart = null;
 let chartNav = null, chartIc = null;
 
@@ -354,8 +354,12 @@ document.getElementById('preset').onchange = applyFilter;
 document.getElementById('ffamily').onchange = applyFilter;
 document.getElementById('fsearch').oninput = applyFilter;
 
-// 初始化
+// 初始化：默认展示全部时间段 + 全部来源
 current.start = MONTHS[0]; current.end = MONTHS[MONTHS.length-1];
+document.getElementById('dstart').value = current.start.slice(0,7);
+document.getElementById('dend').value = current.end.slice(0,7);
+document.getElementById('ffamily').value = 'all';
+document.getElementById('preset').value = 'all';
 render();
 </script>
 </body></html>"""
