@@ -51,8 +51,15 @@ BT_START = "2024-01-01"
 # ---------------------------------------------------------------------------
 # Walk-forward 预测
 # ---------------------------------------------------------------------------
-def walk_forward_predictions(feats, labels, reb_days, common_days, model="gbdt"):
-    """每个调仓日重训模型并预测当期截面（expanding window + embargo）。"""
+def walk_forward_predictions(feats, labels, reb_days, common_days, model="gbdt",
+                             window: int | None = None):
+    """每个调仓日重训模型并预测当期截面。
+
+    window=None -> expanding（全历史）；window=N -> 滚动最近 N 日训练。
+    滚动窗口解决训练/预测市场状态错配（熊市训练->牛市预测时模型学到过时的
+    低波偏好；实测 2024-01~2026-08 月频 top-50 五因子中性化后滚动2年
+    beta-neutral alpha 从 -8.6% 转 +5.5%，见 scripts/experiment_style_mismatch.py）。
+    """
     from model.predictor import LGBMPredictor, RidgePredictor
 
     rows = {}
@@ -61,6 +68,11 @@ def walk_forward_predictions(feats, labels, reb_days, common_days, model="gbdt")
         if len(tr) < 120:
             log.warning("跳过 %s：训练段不足", t.date())
             continue
+        if window is not None:
+            tr = tr[-window:]
+            if len(tr) < 120:
+                log.warning("跳过 %s：滚动窗口内训练段不足", t.date())
+                continue
         if model == "gbdt":
             p = LGBMPredictor(**GBDT_PARAMS)
         else:
@@ -246,8 +258,9 @@ def run(args) -> dict:
              bt_days[0].date(), bt_days[-1].date(), len(bt_days), len(reb_days))
 
     # ---- 4. Walk-forward 预测 ----
-    log.info("Walk-forward 训练预测中（每次重训 %s）...", args.model)
-    pred_reb = walk_forward_predictions(feats, labels, reb_days, common, model=args.model)
+    log.info("Walk-forward 训练预测中（每次重训 %s, window=%s）...", args.model, args.train_window)
+    pred_reb = walk_forward_predictions(feats, labels, reb_days, common, model=args.model,
+                                        window=args.train_window)
     pred_reb.to_csv(out_dir / "walk_forward_predictions.csv", encoding="utf-8-sig")
     log.info("预测完成: %d 个调仓日 x %d 股", len(pred_reb), pred_reb.shape[1])
 
@@ -329,6 +342,8 @@ def main() -> None:
     ap.add_argument("--top", type=int, default=50)
     ap.add_argument("--freq", default="M", choices=["D", "W", "M"])
     ap.add_argument("--model", default="gbdt", choices=["gbdt", "ridge"])
+    ap.add_argument("--train-window", type=int, default=None,
+                    help="滚动训练窗口（交易日数）；None=expanding 全历史")
     ap.add_argument("--max-weight", type=float, default=0.05)
     ap.add_argument("--max-features", type=int, default=30)
     ap.add_argument("--skip-rp", action="store_true", help="跳过 risk_parity（无 cvxpy 环境）")
