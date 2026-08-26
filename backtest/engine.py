@@ -148,15 +148,20 @@ class VectorBacktest:
         factor_panel: pd.DataFrame,
         returns_panel: pd.DataFrame,
         executable_mask: pd.DataFrame | None = None,
+        horizon: int = 1,
     ) -> BacktestResult:
         """执行回测。
 
         Args:
             factor_panel: DataFrame(index=date, columns=code), 因子值。
-            returns_panel: DataFrame(index=date, columns=code), 日收益率。
+            returns_panel: DataFrame(index=date, columns=code), 收益率。
                           通常 = close.pct_change()，用次日收益（信号日次日）。
             executable_mask: DataFrame(index=date, columns=code), dtype=bool，
                             True 表示当日该股票可交易。为 None 时不做过滤。
+            horizon: 信号前瞻天数。>1 时启用「horizon 对齐结算」——每次调仓
+                     赚取 factor[t] 对应的未来 horizon 段收益（= fwd[t]，即
+                     forward_returns(close, horizon)[t]），使选股信号与记账
+                     口径完全一致，二择期仅取调仓日结算。
         Returns:
             BacktestResult
         """
@@ -197,26 +202,69 @@ class VectorBacktest:
         current_weights = np.zeros(n_codes, dtype=np.float64)
         capital = self.initial_capital
 
+        # horizon 对齐结算：把每个调仓区间 [rebal_t, next_rebal_t) 的段收益
+        # 摊到区间内每个交易日（几何平均），使 (1+段收益)=prod(1+日摊收益)，
+        # 净值曲线逐日平滑且与信号前瞻口径一致。
+        fwd_starts: dict[int, int] = {}  # 调仓日 -> 下一个调仓日
+        if horizon > 1:
+            rb_list = sorted(i for i, d in enumerate(dates) if d in rebalance_days)
+            for k, t in enumerate(rb_list):
+                nxt = rb_list[k + 1] if k + 1 < len(rb_list) else n_days
+                fwd_starts[t] = nxt
+            # 守卫：horizon>1 要求每个调仓区间跨度 ≥ horizon，否则会把 horizon 段
+            # 累计收益摊到更短区间导致重复结算（h=5×日频产生 ~150% 的虚高假收益）。
+            # 见 .tmp_freq_tune —— 这是真实回测口径 bug，不是 alpha。
+            bad = [i for i, t in enumerate(rb_list)
+                   if (fwd_starts[t] - t) < horizon]
+            if bad:
+                raise ValueError(
+                    f"回测口径错误: horizon={horizon} 但存在调仓区间跨度 < horizon "
+                    f"(调仓频率过高于预测视野)，会把 {horizon} 日累计收益摊到更短区间"
+                    f"造成重复结算的虚高收益。请提高调仓频率(如 rebalance_freq=D 时 "
+                    f"用 horizon=1)，或将 rebalance_freq 调整为与 horizon 匹配的跨度。"
+                )
+
+        # 结算-调仓顺序（对齐修复 2026-08-26）：
+        #  1) 先结算：当日收益由【当前权重】（上一调仓日收盘设定）赚 rp[i]
+        #     （= close.pct_change()[i] = i-1→i 当日收益）——daily_returns[t]
+        #     与指数 pct_change[t] 日期标签严格对齐，beta/alpha 计算不失真；
+        #  2) 后调仓：调仓日收盘按当日因子换仓，新权重次日生效——weights(t)
+        #     赚 t→t+1 收益，与 IC / 分层检验的"因子 t 对齐未来收益"口径一致，
+        #     消除此前 rp[i]（当日收益含 t 日信息）造成的前视一天偏差。
         for i in range(n_days):
             cap_before = capital
 
-            # 1) 调仓: 在调仓日按【当日】因子值设权重。
-            #    信号在 close[t] 已知 → 当日建仓 → 捕获 return(t, t+1)（= returns_panel[t]），
-            #    与 IC 口径（factor[t] vs returns_panel[t]）严格对齐，无 1 日错位。
-            #    （旧实现先按旧权重赚 return[i] 再调仓，致 weights(t) 赚 returns_panel[t+1]，
-            #     对 1 日反转因子符号翻转——已于 2026-07-30 修复。）
+            # 1) 当日收益：当前权重（上一调仓日设定）赚当日收益 i-1→i。
+            #    回测首日 current_weights=0 → 首日空仓无收益（t 日信号 t+1 才可交易）。
+            if horizon > 1:
+                # 区间结算：仅在【调仓区间起点】用当日权重计算该段收益并摊派到区间内
+                gross_ret = 0.0
+                if i in fwd_starts:
+                    nxt = fwd_starts[i]
+                    span = nxt - i
+                    seg_gross = float(np.nansum(current_weights * rp_values[i]))
+                    # 几何摊派：每个交易日 (1+seg_gross)^(1/span) - 1
+                    if span > 0:
+                        daily_equiv = (1.0 + seg_gross) ** (1.0 / span) - 1.0
+                    else:
+                        daily_equiv = seg_gross
+                    gross_ret = daily_equiv
+                capital *= (1 + gross_ret)
+            else:
+                gross_ret = float(np.nansum(current_weights * rp_values[i]))
+                capital *= (1 + gross_ret)
+
+            # 2) 调仓：调仓日收盘按【当日】因子值换仓，新权重次日生效；
+            #    换手/交易成本计入当日（业界"调仓日计成本"惯例）。
             if dates[i] in rebalance_days and i < n_days - 1:
                 factor_vals = fp.iloc[i].dropna()
                 if len(factor_vals) > 0:
-                    new_weights = self.strategy.get_weights(factor_vals)
+                    new_weights = self.strategy.get_weights_at(dates[i], factor_vals)
                     new_arr = new_weights.reindex(codes).fillna(0.0).values.astype(np.float64)
-                    # 用 executable_mask 将不可执行标的权重归零并按多空组重新归一化
                     if executable_mask is not None:
                         new_arr = _apply_executable_mask(
                             new_arr, executable_mask.iloc[i].values.astype(bool)
                         )
-                    # 可选：1 倍资金约束（降杠杆）。多空各满仓 1 倍时保证金需求=2 倍，
-                    # 超过 1 倍可用资金，按比例缩放使总保证金需求 ≤ 1。
                     if self.deleverage:
                         long_exp = max(0.0, new_arr[new_arr > 0].sum())
                         short_exp = np.abs(new_arr[new_arr < 0]).sum()
@@ -226,26 +274,17 @@ class VectorBacktest:
                 else:
                     new_arr = np.zeros(n_codes, dtype=np.float64)
 
-                # 换手
                 turnover = np.abs(new_arr - current_weights).sum() / 2
                 turnover_arr[i] = turnover
 
-                # 成本
                 cost = self.costs.calc(current_weights, new_arr, turnover, capital)
                 cost_arr[i] = cost
                 capital -= cost
 
-                # 更新权重
                 current_weights = new_arr
                 weights_arr[i] = current_weights
 
-            # 2) 当日收益: 用当前权重 × 当日收益（与 IC 同口径：factor[t] 赚 return(t,t+1)）。
-            #    最后一日 returns_panel 通常为 NaN（无未来收益）→ nansum 为 0。
-            gross_ret = np.nansum(current_weights * rp_values[i])
-            capital *= (1 + gross_ret)
-
-            # 3) 空头腿成本：按日计提借券费（调仓日按新权重，当日建仓当日计费）。
-            #    同时记录每日真实敞口与保证金占用（资金效率口径，不直接进收益）。
+            # 3) 空头腿成本：按日计提借券费（基于当日收盘后的持仓）。
             long_exp = max(0.0, current_weights[current_weights > 0].sum())
             short_exp = np.abs(current_weights[current_weights < 0]).sum()
             long_arr[i] = long_exp
@@ -255,8 +294,7 @@ class VectorBacktest:
             capital -= fee
             borrow_fee_arr[i] = fee
 
-            # 4) 净日收益 = 当日资金变动（毛收益 - 交易成本 - 借券费），
-            #    与 equity_curve 严格一致：(1+daily_returns).cumprod() == equity_curve。
+            # 4) 净日收益，与 equity_curve 严格一致。
             daily_ret_arr[i] = (capital / cap_before - 1.0) if cap_before > 0 else 0.0
             equity_arr[i] = capital
 

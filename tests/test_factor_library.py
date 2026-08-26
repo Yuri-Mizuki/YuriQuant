@@ -58,11 +58,10 @@ def test_compare_ranking(tmp_path):
     lib.register("fb", fb, rb)
     df = lib.compare(metric="sharpe")
     assert len(df) == 2
-    # 列存在且已排序
+    # 列存在且按排序列（best_sharpe，compare 文档口径）降序
     assert "sharpe_ls_M" in df.columns
-    # 降序
-    vals = df["sharpe_ls_M"].tolist()
-    assert vals == sorted(vals, reverse=True)
+    assert "best_sharpe" in df.columns
+    assert df["best_sharpe"].is_monotonic_decreasing
 
 
 def test_composite_with_lineage(tmp_path):
