@@ -163,6 +163,8 @@ mock 落 `reports/models_mock`，真实落 `reports/models`。
 | **端到端选股（今日信号）** | `scripts/e2e_stock_picks.py` | 因子筛选 → GBDT 预测 → risk_parity 组合 → 选股清单 → `reports/e2e_picks/` |
 | **端到端策略回测** | `scripts/e2e_backtest.py` | walk-forward 月频回测（2024-01~2026-08 跑输全池基准，见报告）→ `reports/e2e_backtest/` |
 | **投资收益报告** | `scripts/investment_report.py` | 模型预测作因子检验（IC/IR/NW-t/分层图）+ 组合 vs 大盘指数基准（沪深300→000300.SH，全A→000001.SH）→ `reports/investment_report/` |
+| **因子库检验报告** | `scripts/factor_library_full_report.py` | 821 因子全量检验表（IC/ICIR/NW-t/分层收益/换手，可排序+搜索，top 因子分层净值图），借用公开库标注"无挖-验分离" → `reports/factor_library_report_hs300_2022_2025.html` |
+| **交互式因子检测** | `scripts/factor_explorer_report.py` | 821 因子交互报告：时间段选择 × 来源筛选 × 指标排序，详情含 5/10 层 × 月/周分层净值+多空线、IC 序列+MA、IC 衰减、月度热力图、各层绩效表 → `reports/factor_explorer_hs300_2022_2025.html` |
 | **日内研究** | `scripts/intraday_analysis.py` | 隔夜 vs 日内收益分解、成交量/波动率时段效应 → `reports/intraday_analysis_{year}.png`、`intraday_summary_{year}.csv` |
 | **自动因子挖掘** | `scripts/gp_tune_budget.py`、`run_gflownet_phase0/1.py`、`train_htai_rl_p0.py`、`gflownet_library_ingest.py` | GP 调参 / GFlowNet TB+PPO / AlphaPool RL 最小闭环 → `reports/gp_tune/`、`reports/_htai_gp/` |
 | **文本挖掘** | `scripts/fetch_textmining.py` + `scripts/textmining/` | 研报/公告抓取 → FADT/SUE-文本 样本、BERT 编码、训练评估 → `reports/textmining*/` |
