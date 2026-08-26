@@ -217,3 +217,55 @@ def build_labels(close: pd.DataFrame, horizon: int = HORIZON) -> tuple[pd.DataFr
     fwd = forward_returns(close, horizon=horizon)
     labels, _ = _build_labels(close_panel=close, horizon=horizon, mode="rank")
     return labels, fwd
+
+
+# ---------------------------------------------------------------------------
+# 风格中性化（华泰五因子：市值/行业/动量/波动/换手）
+# ---------------------------------------------------------------------------
+def build_neutral_covariates(px: dict, close: pd.DataFrame, real: bool = True):
+    """构建市值 + 行业 + mom/vol/turn 协变量面板（华泰五因子口径）。
+
+    Returns:
+        (market_cap_panel | None, industry_panel | None, extra_covariates dict)
+    """
+    from factor.preprocessing import build_style_covariates
+
+    mc_panel, ind_panel = None, None
+    if real:
+        try:
+            from data.cache import DataCache
+            from data.offline import OfflineDataSource
+            from data.market_cap import build_market_cap_panel
+            from data.industry import IndustryClassification
+
+            cache = DataCache(OfflineDataSource())
+            codes = list(close.columns)
+            es = cache.get_equity_structure(codes)
+            mc_panel = build_market_cap_panel(es, close)
+            ind_panel = IndustryClassification(cache).get_industry_panel(codes, close.index)
+            log.info("市值面板: %d 日 × %d 股 | 行业: %d 类",
+                     mc_panel.shape[0], mc_panel.shape[1],
+                     ind_panel.dropna(how="all").shape[1] if len(ind_panel) else 0)
+        except Exception as e:
+            log.warning("市值/行业加载失败，仅用价量风格: %s", e)
+    extra = build_style_covariates(px, mc_panel, ind_panel)
+    return mc_panel, ind_panel, extra
+
+
+def neutralize_predictions(pred: pd.DataFrame, mc, ind, extra) -> pd.DataFrame:
+    """预测分数五因子中性化（逐日截面回归取残差）。
+
+    协变量面板列集（全股票池）需对齐到预测面板列集（模型覆盖子集），
+    否则 neutralize 内布尔索引 index union 后 Unalignable。
+    """
+    from factor.preprocessing import neutralize
+
+    cols = pred.columns
+    mc_a = mc.reindex(columns=cols) if mc is not None else None
+    ind_a = ind.reindex(columns=cols) if ind is not None else None
+    extra_a = {k: v.reindex(columns=cols) for k, v in extra.items()}
+    neu = neutralize(pred, market_cap_panel=mc_a, industry_panel=ind_a,
+                     extra_covariates=extra_a)
+    log.info("中性化: 有效值 %d (原始 %d)", neu.notna().sum().sum(),
+             pred.notna().sum().sum())
+    return neu
