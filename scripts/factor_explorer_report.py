@@ -206,8 +206,8 @@ def build_factor_data(lib: FactorLibrary, reg: pd.DataFrame,
             "ic_decay": ic_decay_series(ic),          # IC 衰减 lag1~10
             "heat": ic_heatmap(monthly_series(ic)),   # 月度 IC 热力图
             "q5_M": None, "q10_M": None, "q5_W": None, "q10_W": None,
-            "layer_stats_M": None, "layer_avg_M": None,
-            "layer_stats_W": None, "layer_avg_W": None,
+            "layer_stats_M": None, "layer_avg_M": None, "layer_stats_W": None, "layer_avg_W": None,
+            "layer_stats10_M": None, "layer_avg10_M": None, "layer_stats10_W": None, "layer_avg10_W": None,
             "m_full": {
                 "ic": round(ic_mean, 4) if not np.isnan(ic_mean) else None,
                 "icir": round(icir, 3) if not np.isnan(icir) else None,
@@ -234,14 +234,14 @@ def build_factor_data(lib: FactorLibrary, reg: pd.DataFrame,
                     item[key] = {str(p): [round(float(x), 4) if pd.notna(x) else None
                                           for x in row.values]
                                  for p, row in nav.iterrows()}
-            nav5M = caches[(5, "M")]
-            if nav5M is not None:
-                item["layer_stats_M"] = layer_stats_from_nav(nav5M)
-                item["layer_avg_M"] = layer_avg_ret(nav5M)
-            nav5W = caches[(5, "W")]
-            if nav5W is not None:
-                item["layer_stats_W"] = layer_stats_from_nav(nav5W)
-                item["layer_avg_W"] = layer_avg_ret(nav5W)
+            # 各层绩效表 + 分层收益柱状图（5层和10层都算，前端按层数切换取对应数据）
+            for n_q in (5, 10):
+                tag = "" if n_q == 5 else str(n_q)
+                for freq in ("M", "W"):
+                    nav = caches[(n_q, freq)]
+                    if nav is not None:
+                        item[f"layer_stats{tag}_{freq}"] = layer_stats_from_nav(nav)
+                        item[f"layer_avg{tag}_{freq}"] = layer_avg_ret(nav)
 
         out.append(item)
     return out
@@ -275,7 +275,7 @@ tr:hover {{ background:#f8f9ff; cursor:pointer; }}
 .fam-badge {{ display:inline-block; padding:1px 8px; border-radius:10px; font-size:11px; color:#fff; }}
 .chart-grid {{ display:grid; grid-template-columns:1fr 1fr; gap:14px; }}
 .chart-grid2 {{ display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-top:14px; }}
-.chart-box {{ position:relative; height:260px; }}
+.chart-box {{ position:relative; height:300px; }}
 .dtabs {{ margin:10px 0 4px; display:flex; gap:6px; }}
 .dtab {{ padding:5px 14px; border:1px solid #ddd; background:#fff; border-radius:6px; font-size:12.5px; cursor:pointer; color:#555; }}
 .dtab.active {{ background:#16213e; color:#fff; border-color:#16213e; }}
@@ -338,11 +338,12 @@ tr:hover {{ background:#f8f9ff; cursor:pointer; }}
 <button class="dtab" onclick="setLayers(10)" id="tab10">10层</button>
 </div>
 <div class="chart-grid2">
-<div class="chart-box"><canvas id="cLayers" role="img" aria-label="分层净值曲线">分层净值</canvas></div>
+<div class="chart-box"><canvas id="cLayers" role="img" aria-label="分层累计收益曲线">分层净值</canvas></div>
 <div class="chart-box"><canvas id="cBar" role="img" aria-label="分层收益柱状图">分层收益</canvas></div>
 <div class="chart-box"><canvas id="cIcTs" role="img" aria-label="IC时间序列">IC序列</canvas></div>
 <div class="chart-box"><canvas id="cDecay" role="img" aria-label="IC衰减">IC衰减</canvas></div>
 </div>
+<div id="layerFinal" style="font-size:11px;color:#555;margin:6px 0 2px;"></div>
 <div class="chart-grid2">
 <div class="chart-box"><canvas id="cHeat" role="img" aria-label="月度IC热力图">IC热力图</canvas></div>
 <div class="chart-box" id="cLayerTable"></div>
@@ -479,44 +480,50 @@ function plotDetail(f) {{
   const {{ months, nav }} = layerSeries(f);
   const nQ = dLayers;
 
-  // 1) 分层净值曲线（每层一条 + 多空线 Qn-Q1）
+  // 1) 分层净值曲线：改为【累计收益 = 净值-1】，Y 轴从 0 起（差异一目了然）
   if (chartLayers) chartLayers.destroy();
   const layerColors = ['#A32D2D','#BA7517','#639922','#1D9E75','#378ADD','#534AB7','#993556','#0F6E56','#854F0B','#185FA5'];
   const ds = [];
   const base = {{}};
-  // 起点：区间前最后一个月（归一），无则取区间首月
   const first = months.length ? months[0] : null;
   for (let q=1; q<=nQ; q++) {{
     const prev = Object.entries(nav).filter(([mo]) => mo < current.start && nav[mo][q-1] != null);
     base[q] = prev.length ? prev[prev.length-1][1][q-1] : (first && nav[first][q-1] != null ? nav[first][q-1] : 1);
   }}
+  // 每层最终累计收益（标注在图例/标题旁）
+  const finalRets = [];
   for (let q=1; q<=nQ; q++) {{
-    const vals = months.map(mo => nav[mo] && nav[mo][q-1] != null ? nav[mo][q-1]/base[q] : null);
-    ds.push({{ label: 'Q'+q, data: vals, borderColor: layerColors[(q-1)%10], borderWidth: 1.2, pointRadius: 0, tension: .15 }});
+    const vals = months.map(mo => nav[mo] && nav[mo][q-1] != null ? nav[mo][q-1]/base[q] - 1 : null);
+    finalRets.push(vals.filter(v => v !== null).length ? vals.filter(v => v !== null)[vals.filter(v => v !== null).length-1] : null);
+    ds.push({{ label: 'Q'+q, data: vals.map(v => v === null ? null : v*100), borderColor: layerColors[(q-1)%10],
+      borderWidth: 1.2, pointRadius: 0, tension: .15 }});
   }}
-  // 多空线 = Qn - Q1 归一后差（独立累计：用 Qn/Q1 相对净值）
+  // 多空线 = Qn/Q1 累计收益（%）
   const lsVals = months.map(mo => {{ if (!nav[mo] || nav[mo][0]==null || nav[mo][nQ-1]==null) return null;
-    return (nav[mo][nQ-1]/base[nQ]) / (nav[mo][0]/base[1]); }});
+    return ((nav[mo][nQ-1]/base[nQ]) / (nav[mo][0]/base[1]) - 1) * 100; }});
   ds.push({{ label: 'Q'+nQ+'-Q1(多空)', data: lsVals, borderColor: '#000', borderWidth: 1.8, borderDash: [4,3], pointRadius: 0, tension: .15 }});
+  const finalTxt = finalRets.map((v, i) => 'Q'+(i+1)+'=' + (v===null?'—':(v*100).toFixed(0)+'%')).join('  ');
   chartLayers = new Chart(document.getElementById('cLayers'), {{
     type: 'line', data: {{ labels: months, datasets: ds }},
     options: {{ responsive: true, maintainAspectRatio: false,
       plugins: {{ legend: {{ position: 'top', labels: {{ boxWidth: 10, font: {{ size: 10 }} }} }},
-        title: {{ display: true, text: '分层净值（'+nQ+'层·'+(dFreq==='M'?'月频':'周频')+'，区间起点=1）', font: {{ size: 13 }} }} }},
-      scales: {{ y: {{ title: {{ display: true, text: '累计净值' }} }}, x: {{ ticks: {{ maxTicksLimit: 10, font: {{ size: 9 }} }} }} }} }}
+        title: {{ display: true, text: '分层累计收益（'+nQ+'层·'+(dFreq==='M'?'月频':'周频')+'，区间起点=0）', font: {{ size: 13 }} }} }},
+      scales: {{ y: {{ title: {{ display: true, text: '累计收益 (%)' }} }}, x: {{ ticks: {{ maxTicksLimit: 10, font: {{ size: 9 }} }} }} }} }}
   }});
+  // 最终收益标注（每层）
+  document.getElementById('layerFinal').innerHTML = '<span style="font-size:11px;color:#555;">各层最终累计收益: </span><span style="font-size:11px;color:#16213e;font-weight:500;">' + finalTxt + '</span>';
 
-  // 2) 分层平均每期收益柱状图
+  // 2) 分层平均每期收益柱状图（按层数取对应数据）
   if (chartBar) chartBar.destroy();
-  const avgKey = 'layer_avg_' + dFreq;
+  const avgKey = (dLayers===10 ? 'layer_avg10_' : 'layer_avg_') + dFreq;
   const avg = f[avgKey] || [];
   chartBar = new Chart(document.getElementById('cBar'), {{
     type: 'bar',
     data: {{ labels: avg.map((_,i) => 'Q'+(i+1)), datasets: [{{ label: '平均每期收益',
-      data: avg, backgroundColor: avg.map(v => v>=0 ? 'rgba(163,45,45,.75)' : 'rgba(59,109,17,.75)') }}]}},
+      data: avg.map(v => v===null?null:v*100), backgroundColor: avg.map(v => v>=0 ? 'rgba(163,45,45,.75)' : 'rgba(59,109,17,.75)') }}]}},
     options: {{ responsive: true, maintainAspectRatio: false,
-      plugins: {{ legend: {{ display: false }}, title: {{ display: true, text: '分层平均每期收益（'+ (dFreq==='M'?'月':'周') +'）', font: {{ size: 13 }} }} }},
-      scales: {{ y: {{ title: {{ display: true, text: '每期收益' }} }} }} }}
+      plugins: {{ legend: {{ display: false }}, title: {{ display: true, text: '分层平均每期收益（'+ (dFreq==='M'?'月':'周') +'，%）', font: {{ size: 13 }} }} }},
+      scales: {{ y: {{ title: {{ display: true, text: '每期收益 (%)' }} }} }} }}
   }});
 
   // 3) IC 时间序列 + 4周移动平均（周频数据）
@@ -527,12 +534,14 @@ function plotDetail(f) {{
   chartIcTs = new Chart(document.getElementById('cIcTs'), {{
     type: 'line',
     data: {{ labels: icW.map(([w]) => w), datasets: [
-      {{ label: 'IC(周)', data: icWv, borderColor: '#378ADD', borderWidth: 1.2, pointRadius: 0, tension: .1 }},
-      {{ label: 'IC 4周MA', data: icMa, borderColor: '#A32D2D', borderWidth: 1.8, pointRadius: 0, tension: .2 }}
+      {{ label: 'IC(周)', data: icWv, borderColor: 'rgba(55,138,221,0.35)', borderWidth: 1.0,
+        pointRadius: 0, tension: .1, order: 2 }},   // 半透明原始 IC，画在底层
+      {{ label: 'IC 4周MA', data: icMa, borderColor: '#A32D2D', borderWidth: 2.2,
+        pointRadius: 0, tension: .2, order: 1 }}     // 粗实线 MA，画在上层
     ]}},
     options: {{ responsive: true, maintainAspectRatio: false,
       plugins: {{ legend: {{ position: 'top', labels: {{ boxWidth: 10, font: {{ size: 10 }} }} }},
-        title: {{ display: true, text: 'IC 时间序列（周频 + 4周移动平均）', font: {{ size: 13 }} }} }},
+        title: {{ display: true, text: 'IC 时间序列（周频，半透明原始 + 粗线4周MA）', font: {{ size: 13 }} }} }},
       scales: {{ y: {{ title: {{ display: true, text: 'IC' }} }}, x: {{ ticks: {{ maxTicksLimit: 10, font: {{ size: 9 }} }} }} }} }}
   }});
 
@@ -567,8 +576,8 @@ function plotDetail(f) {{
   heatHtml += '</div>';
   parent.innerHTML = '<div style="position:relative;height:260px;overflow:auto;">' + heatHtml + '</div>';
 
-  // 6) 各层绩效表
-  const statsKey = 'layer_stats_' + dFreq;
+  // 6) 各层绩效表（按层数取对应数据）
+  const statsKey = (dLayers===10 ? 'layer_stats10_' : 'layer_stats_') + dFreq;
   const stats = f[statsKey] || [];
   if (stats.length) {{
     let th = '<table class="layer-tbl"><tr><th>层级</th><th>年化收益</th><th>年化波动</th><th>Sharpe</th><th>最大回撤</th></tr>';
@@ -576,7 +585,7 @@ function plotDetail(f) {{
       th += `<tr><td>Q${{i+1}}</td><td>${{s&&s.annual!=null?(s.annual*100).toFixed(1)+'%':'—'}}</td><td>${{s&&s.vol!=null?(s.vol*100).toFixed(1)+'%':'—'}}</td><td>${{s&&s.sharpe!=null?s.sharpe.toFixed(2):'—'}}</td><td>${{s&&s.dd!=null?(s.dd*100).toFixed(1)+'%':'—'}}</td></tr>`;
     }});
     th += '</table>';
-    document.getElementById('cLayerTable').innerHTML = '<div style="font-size:12px;color:#16213e;margin-bottom:4px;font-weight:500;">各层绩效（'+ (dFreq==='M'?'月频':'周频') +'）</div>' + th;
+    document.getElementById('cLayerTable').innerHTML = '<div style="font-size:12px;color:#16213e;margin-bottom:4px;font-weight:500;">各层绩效（'+ (dFreq==='M'?'月频':'周频') +'·'+dLayers+'层）</div>' + th;
   }} else {{
     document.getElementById('cLayerTable').innerHTML = '<div style="color:#999;font-size:12px;">无分层绩效数据</div>';
   }}
