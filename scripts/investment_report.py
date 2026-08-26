@@ -355,13 +355,17 @@ def run(args) -> dict:
     stats_bm = perf_stats(bench_ret, bench_label)
 
     # ---- 8. 汇总 ----
+    # benchmark stats（beta/alpha/信息比/超额）必须 update 回 stats 对象本身，
+    # 否则 summary CSV 有值但 HTML 渲染读 st.get("beta") 拿到的是原始 perf_stats
+    # （无这些键）→ 表格 α/β/信息比/超额 全部显示 "—"。
+    for st in [stats_eq, stats_rp]:
+        if st is not None and bench_ret is not None:
+            st.update(benchmark_stats(st["daily"], bench_ret))
     rows = []
     for st in [stats_eq, stats_rp, stats_bm]:
         if st is None:
             continue
         row = {k: v for k, v in st.items() if k not in ("monthly", "equity", "daily")}
-        if st is not stats_bm and bench_ret is not None:
-            row.update(benchmark_stats(st["daily"], bench_ret))
         rows.append(row)
     summary = pd.DataFrame(rows).set_index("label").T
     print("\n===== 投资收益对照（%s ~ %s, %s 调仓）=====" %
