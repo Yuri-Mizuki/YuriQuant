@@ -36,8 +36,30 @@ _real_out.txt
 # Root scratch scripts (one-off checks, memory dumps)
 /_*.py
 
-# Test temp
-tests/.test-tmp/
+# One-off experiment/migration scripts (not reusable tools)
+scripts/oneoff/
+
+# Local data caches (SDK pulls / GFlowNet checkpoints, regenerable)
+.cache_p2/
+.gflow_cache*/
+.sdk_cache*/
+.tmp_*/
+
+# Trained model artifacts (large binaries)
+/models/
+
+# Factor library data panels (regenerable from scripts)
+/hs300_2025/
+
+# Deliverable plan package (like reports/, one-off output)
+etf-rotation-plan/
+
+# IDE share packages
+.trae-html-share-packages/
+.test-tmp/
+
+# One-off scratch dirs created by ad-hoc commands
+reports/.pytest_tmp*/
 
 # OS
 Thumbs.db
