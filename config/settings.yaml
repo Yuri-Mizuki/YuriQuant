@@ -86,6 +86,11 @@ factor_library:
   # 因子持久化根目录：registry.csv + panels/*.parquet + evals/*.parquet
   root: e://data//factor_library//
 
+# --- 文本挖掘（data/textmining + scripts/textmining）---
+textmining:
+  # 本地 FinBERT 模型目录（hf-mirror 下载的 finbert-tone-chinese，非代码仓库内容）
+  bert_model_dir: e://data//models//finbert_tone_chinese
+
 # --- 生产化监控（monitoring/ 包；因子与模型预测的性能监控调度）---
 monitoring:
   window: 60                 # 近期短窗（交易日，IC 漂移 / 覆盖 / 单调性按此；灵敏提前预警）

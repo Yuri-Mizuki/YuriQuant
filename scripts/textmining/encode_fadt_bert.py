@@ -36,8 +36,19 @@ import pandas as pd
 sys.path.insert(0, r"E:\YuriQuant")
 
 OUT_DIR = Path(r"E:\YuriQuant\reports\textmining")
-# 本地模型目录（hf-mirror 下载，沙箱无法用 huggingface_hub 缓存管理）
-MODEL_DIR = r"E:\YuriQuant\models\finbert_tone_chinese"
+# 本地模型目录（hf-mirror 下载，沙箱无法用 huggingface_hub 缓存管理）；
+# 路径真源在 config/settings.yaml 的 textmining.bert_model_dir
+def _bert_model_dir() -> str:
+    try:
+        from config import Config
+        d = Config.get().get("textmining", {}).get("bert_model_dir")
+        if d:
+            return str(d).replace("//", "/")
+    except Exception:
+        pass
+    return r"E:/data/models/finbert_tone_chinese"
+
+MODEL_DIR = _bert_model_dir()
 log = logging.getLogger("encode_bert")
 
 # tokenizer 缺失时手动加载的中文 BERT 词表（bert-base-chinese 同款）——不使用，
