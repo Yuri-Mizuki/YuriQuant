@@ -46,7 +46,10 @@ def evaluate_model(
     t_nw, _se_nw, _lag = nw_tstat(ic.values) if len(ic) > 1 else (0.0, 0.0, 0)
     # p 值口径与 research/factor_analysis.standard_factor_summary 一致
     from scipy import stats as _stats
-    p_nw = 2.0 * (1.0 - _stats.t.cdf(abs(t_nw), df=max(len(ic) - 1, 1))) if len(ic) > 1 else float("nan")
+    if len(ic) > 1:
+        p_nw = 2.0 * (1.0 - _stats.t.cdf(abs(t_nw), df=max(len(ic) - 1, 1)))
+    else:
+        p_nw = float("nan")
 
     return {
         "ic_series": ic_series,
