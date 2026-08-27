@@ -68,3 +68,56 @@ def build_executable_mask(
         mask &= ~hit_down.fillna(False)
 
     return mask
+
+
+def build_directional_masks(
+    status_df: pd.DataFrame,
+    dates: pd.DatetimeIndex,
+    codes: pd.Index,
+    close_panel: pd.DataFrame | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """构建**有方向的**可交易掩码 (buyable, sellable)，用于信号级约束校验。
+
+    比 build_executable_mask 更细：涨停封板只是"买不进"（buyable=False），
+    跌停封板只是"卖不出"（sellable=False），停牌则两者都禁。这样信号层能区分
+    "想买但涨停"与"想卖但跌停"，分别标记 BLOCKED_BUY / BLOCKED_SELL。
+
+    Args:
+        status_df: get_history_stock_status 长表，列含 date, code, high_limited,
+            low_limited, is_suspended。
+        dates / codes: 交易日 / 代码索引。
+        close_panel: (date, code) 收盘价面板，判涨停/跌停封板；None 时只按停牌过滤。
+    Returns:
+        (buyable, sellable)：均为 (date, code) 布尔面板，True=允许该方向。默认全 True。
+    """
+    buyable = pd.DataFrame(True, index=dates, columns=codes)
+    sellable = pd.DataFrame(True, index=dates, columns=codes)
+
+    if status_df is None or status_df.empty:
+        return buyable, sellable
+
+    df = status_df.copy()
+    if isinstance(df.index, pd.MultiIndex):
+        df = df.reset_index()
+    df["date"] = pd.to_datetime(df["date"])
+
+    if "is_suspended" in df.columns:
+        susp = df.pivot_table(index="date", columns="code", values="is_suspended", aggfunc="max")
+        susp = susp.reindex(index=dates, columns=codes)
+        susp = susp.astype(float).fillna(0.0).astype(bool)
+        buyable &= ~susp
+        sellable &= ~susp
+
+    if close_panel is not None and {"high_limited", "low_limited"}.issubset(df.columns):
+        hi = df.pivot_table(index="date", columns="code", values="high_limited")
+        lo = df.pivot_table(index="date", columns="code", values="low_limited")
+        high_wide = hi.reindex(index=dates, columns=codes)
+        low_wide = lo.reindex(index=dates, columns=codes)
+        close_aligned = close_panel.reindex(index=dates, columns=codes)
+
+        hit_up = ((close_aligned >= high_wide) & high_wide.notna()).fillna(False)
+        hit_down = ((close_aligned <= low_wide) & low_wide.notna()).fillna(False)
+        buyable &= ~hit_up      # 涨停封板：买不进
+        sellable &= ~hit_down   # 跌停封板：卖不出
+
+    return buyable, sellable

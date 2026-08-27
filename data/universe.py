@@ -57,6 +57,28 @@ class Universe:
     def get_zz1000(self, date: int) -> list[str]:
         return self.get_constituent("000852.SH", date)
 
+    def get_all_a(self, date: int) -> list[str]:
+        """全 A 池：本地缓存 daily_all_a 中截至该日出现过的全部代码。
+
+        PIT 语义：上市前无行情 → 未出现在缓存 → 天然不属于该日池，
+        等价于按"上市日期"过滤，无需额外接口。缓存中代码上限即全市场
+        A 股（约 5400 只，daily_all_a 未拉取时回退 daily_hs300 只返回
+        HS300 集合并给出警告）。
+        """
+        import warnings
+        d = self._cache.read_daily("all_a")
+        if d is None:
+            warnings.warn(
+                "全A池 daily_all_a 缓存不存在（尚未拉取），回退返回空池。"
+                "请先 python -m scripts.update_data --pool all_a",
+                stacklevel=2,
+            )
+            return []
+        codes = d.index.get_level_values("code").unique().tolist()
+        if not isinstance(date, (int, str)):
+            date = int(pd.Timestamp(date).strftime("%Y%m%d"))
+        return codes
+
     def get_default(self, date: int) -> list[str]:
         """按 config 中 universe.default 返回。"""
         default = Config.universe().get("default", "hs300")
@@ -64,7 +86,10 @@ class Universe:
             "hs300": self.get_hs300,
             "zz500": self.get_zz500,
             "zz1000": self.get_zz1000,
+            "all_a": self.get_all_a,
         }
+        if default not in mapping:
+            raise ValueError(f"未知股票池: {default}（可选 {list(mapping)}）")
         return mapping[default](date)
 
     def get_all_constituents(self, index_code: str) -> pd.DataFrame:

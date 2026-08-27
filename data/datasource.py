@@ -278,6 +278,8 @@ class AmazingDataSource(DataSource):
         )
         frames = []
         for code, df in kline_dict.items():
+            if df is None or (hasattr(df, "empty") and df.empty):
+                continue
             # SDK 返回的 df 索引是普通位置索引，真正的交易日期在 kline_time 列里
             # （不是 index），必须显式取出来重建索引，否则整数位置索引会被
             # 误当成日期使用，下游所有 point-in-time / 日期对齐逻辑都会失效。

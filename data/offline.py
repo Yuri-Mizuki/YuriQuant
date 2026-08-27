@@ -42,3 +42,26 @@ class OfflineDataSource:
     get_code_info = get_history_stock_status = get_industry_classification = _raise
     get_equity_structure = get_dividend = get_share_holder = get_holder_num = _raise
     get_balance_sheet = get_cash_flow = get_income = _raise
+
+
+class OfflineQuietDataSource(OfflineDataSource):
+    """quiet 变体：数据源方法**返回空 DataFrame** 而非抛错。
+
+    配合 DataCache 的「fetch 空 -> 回退本地缓存」逻辑（``_refresh_wide_table``
+    的 ``return local_df`` / ``_get_financial`` 的 ``if p.exists(): cached``），
+    在 TGW 数据源不可用但本地 parquet 已完整的场景下可离线构建面板。
+    缓存确实缺失时最终返回空，由调用方显式检查（如 build_real_panel 的
+    balance.empty 保护），不会静默污染。
+    """
+    import pandas as pd  # noqa: PLC0415
+
+    def _raise(self, *a, **k):
+        return self.pd.DataFrame()
+
+    # 注意：必须重新绑定方法名——父类的 `get_xxx = _raise` 绑定的是**父类**
+    # 的 _raise 函数对象，子类覆盖 _raise 不会影响已绑定的名字。
+    get_calendar = get_code_list = get_index_constituent = _raise
+    get_daily_kline = get_minute_kline = get_adj_factor = get_backward_factor = _raise
+    get_code_info = get_history_stock_status = get_industry_classification = _raise
+    get_equity_structure = get_dividend = get_share_holder = get_holder_num = _raise
+    get_balance_sheet = get_cash_flow = get_income = _raise

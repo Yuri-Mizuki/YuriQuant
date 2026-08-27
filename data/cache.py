@@ -10,8 +10,8 @@
 存储布局（cache_root 默认 e:/data/parquet/，扁平存放，每表一个 parquet）
 ------------------------------------------------------------------------
 行情类（长表增量更新，MultiIndex (time, code)，_meta.json 记水位）
-    daily.parquet                     # 日K线 (date, code)，OHLCV+amount
-    min{period}.parquet               # 分钟K线 (kline_time, code)，如 min5；按档位分文件
+    daily_{pool}.parquet             # 日K线（按池分文件，如 daily_hs300.parquet）(date, code)
+    min{period}_{pool}.parquet       # 分钟K线 (kline_time, code)，如 min5_hs300；按档位+池分文件
     adj_factor.parquet                # 单次复权因子（宽表 date×code，全量刷新）
     backward_factor.parquet           # 累积后复权因子（宽表 date×code，全量刷新）
 状态类（长表增量更新，MultiIndex (date, code)，记水位）
@@ -22,7 +22,7 @@
     cash_flow.parquet                 # 现金流量表
 参考类（稀疏事件表，整表覆盖，无增量水位）
     calendar.parquet                  # 交易日历（合并去重）
-    index_constituent_{code}.parquet  # 指数成分（如 000300SH）
+    index_constituent_{code}.parquet  # 指数成分（如 000300_SH，点转下划线）
     industry_classification_level{N}.parquet  # 行业分类（申万，N=级别）
     equity_structure.parquet          # 股本结构变动事件
     dividend.parquet                  # 分红送转
@@ -106,25 +106,28 @@ class DataCache:
 
     # ---- 缓存模式：宽表全量刷新（index=date, columns=code）----
     def _refresh_wide_table(self, filename: str, codes: list[str], fetch_fn) -> pd.DataFrame:
-        """本地按列过滤 + 从数据源全量拉取 + 按列去重落盘。
+        """本地列全保留 + 从数据源全量拉取 + 按列去重落盘。
 
         用于 SDK 自身已维护增量缓存、调用方每次总是传整个 code_list 的场景
         （复权因子类接口），本地 parquet 只是这层再加一份离线可读的副本。
+
+        本地列**不**按本次请求的 codes 过滤：窄池请求（如每日增量更新只传
+        当期成分并集）若过滤落盘，会永久丢弃历史成员的复权因子列，下次
+        重建因子面板时这些股票的后复权价全变 NaN（幸存者偏差）。
         """
         p = self._root / filename
         local_df = pd.DataFrame()
         if p.exists():
             local_df = pd.read_parquet(p)
-            cols = [c for c in codes if c in local_df.columns]
-            local_df = local_df[cols]
 
         new_df = fetch_fn(codes)
         if not new_df.empty:
             combined = pd.concat([local_df, new_df], axis=1)
             combined = combined.loc[:, ~combined.columns.duplicated(keep="last")]
             combined.to_parquet(p, compression="snappy")
-            return combined.sort_index()
-        return local_df
+            local_df = combined
+        cols = [c for c in codes if c in local_df.columns]
+        return local_df[cols].sort_index() if cols else local_df
 
     # ---- 缓存模式：长表增量更新（(date, code) 多索引）----
     def _refresh_long_table(
@@ -220,7 +223,19 @@ class DataCache:
                 if isinstance(local_full.index, pd.MultiIndex) and not local_full.empty:
                     local_min = local_full.index.get_level_values(time_col).min()
                     local_min_int = int(pd.Timestamp(local_min).strftime("%Y%m%d"))
-                    if begin_date < local_min_int:
+                    # 请求 begin 可能是节假日（如 20250101 元旦、20190101 元旦）——
+                    # 用「请求区间首个交易日」与本地最早日期对齐比较，否则
+                    # begin(1/1) < local_min(1/2) 会误判历史缺口，无谓触发 SDK
+                    # 全量下载 + 写盘（2026-08-14 四窗口回测踩坑：PermissionError
+                    # 写 e:\data\parquet 被锁/沙箱拦截）。
+                    req_first = begin_date
+                    try:
+                        cal = self.get_calendar(begin_date, end_date)
+                        if cal:
+                            req_first = cal[0]
+                    except (AttributeError, NotImplementedError):
+                        pass
+                    if req_first < local_min_int:
                         fetch_begin = min(begin_date, last)
         # 若请求的 code 中有本地完全没有的（新上市票），从 begin_date 全量拉取，
         # 否则全局 last_date 会跳过这些票上市以来的全部历史。
@@ -288,16 +303,58 @@ class DataCache:
         return [d for d in cal if d >= begin and (end is None or d <= end)]
 
     # ---- 日K线（增量更新核心）----
+    def read_daily(self, pool: str | None = None) -> pd.DataFrame | None:
+        """直接读日K线缓存文件（不做增量拉取），池名默认取 config。
+
+        Returns:
+            缓存 DataFrame 或 None（文件不存在）。
+        """
+        pool = pool or Config.universe().get("default", "hs300")
+        p = self._root / f"daily_{pool}.parquet"
+        if not p.exists():
+            return None
+        return pd.read_parquet(p)
+
     def get_daily_kline(
         self,
         code_list: Iterable[str],
         begin_date: int,
         end_date: int,
+        pool: str | None = None,
     ) -> pd.DataFrame:
-        """获取日K线，本地缓存 + 增量补充。"""
+        """获取日K线，本地缓存 + 增量补充。
+
+        pool: 股票池（hs300/zz500/zz1000/all_a），缓存文件按池分文件
+            （daily_hs300.parquet / daily_all_a.parquet ...），互不串扰。
+            不传则取 config.universe.default（2026-08-26 池隔离扩展）。
+        """
         codes = list(code_list)
+        pool = pool or Config.universe().get("default", "hs300")
+        filename = f"daily_{pool}.parquet"
+        table = f"daily_{pool}"
         return self._refresh_long_table(
-            "daily.parquet", "daily", codes, begin_date, end_date, self._ds.get_daily_kline
+            filename, table, codes, begin_date, end_date, self._ds.get_daily_kline
+        )
+
+    # ---- 指数日K线（2026-08-24 新增：官方指数基准，如沪深300 000300.SH）----
+    def get_index_daily(
+        self,
+        index_code: str,
+        begin_date: int,
+        end_date: int,
+    ) -> pd.DataFrame:
+        """获取指数日K线，本地缓存 + 增量补充。
+
+        与个股 K 线共用上层 query_kline（SDK 支持指数代码），但缓存独立存放
+        （index_daily_{code}.parquet），避免与 daily.parquet（个股）混合。
+        返回面板 index=(date, code)，含 OHLCV+amount。
+        """
+        safe = str(index_code).replace(".", "_")
+        filename = f"index_daily_{safe}.parquet"
+        table = f"index_daily_{safe}"
+        return self._refresh_long_table(
+            filename, table, [str(index_code)],
+            begin_date, end_date, self._ds.get_daily_kline,
         )
 
     # ---- 分钟K线（日内研究，2026-08-03 新增）----
@@ -307,19 +364,21 @@ class DataCache:
         begin_date: int,
         end_date: int,
         period: int = 5,
+        pool: str | None = None,
     ) -> pd.DataFrame:
         """获取分钟K线，本地缓存 + 增量补充。
 
-        period: 分钟数 {1,3,5,10,15,30,60,120}，缓存文件按档位分开
-        （min5.parquet / min15.parquet ...），互不串扰。
+        period: 分钟数 {1,3,5,10,15,30,60,120}，缓存文件按档位+池分开
+        （min5_hs300.parquet / min5_all_a.parquet ...），互不串扰。
 
         分钟 bar 的时间列是含时分的 kline_time（跨交易日增量按天对齐），
         增量起点取 min(begin, last) 当天（last_inclusive=True）——即使某天
         只按日内时段部分拉取过，重拉 + 去重也能补全，不会永久缺半天。
         """
         codes = list(code_list)
-        filename = f"min{period}.parquet"
-        table = f"min{period}"
+        pool = pool or Config.universe().get("default", "hs300")
+        filename = f"min{period}_{pool}.parquet"
+        table = f"min{period}_{pool}"
         return self._refresh_long_table(
             filename, table, codes, begin_date, end_date,
             lambda c, b, e: self._ds.get_minute_kline(c, b, e, period=period),
@@ -356,7 +415,8 @@ class DataCache:
 
     # ---- 指数成分 ----
     def get_index_constituent(self, index_code: str) -> pd.DataFrame:
-        safe = index_code.replace(".", "")
+        # 命名统一（2026-08-26）：与 index_daily_{safe} 一致，点转下划线
+        safe = index_code.replace(".", "_")
         p = self._root / f"index_constituent_{safe}.parquet"
         if p.exists():
             return pd.read_parquet(p)
@@ -392,7 +452,7 @@ class DataCache:
         codes = list(code_list)
         df = self._ds.get_equity_structure(codes)
         if not df.empty:
-            df.to_parquet(p, compression="snappy")
+            self._merge_sparse_table(p, codes, df)
             return df
         if p.exists():
             cached = pd.read_parquet(p)
@@ -405,7 +465,7 @@ class DataCache:
         codes = list(code_list)
         df = self._ds.get_dividend(codes)
         if not df.empty:
-            df.to_parquet(p, compression="snappy")
+            self._merge_sparse_table(p, codes, df)
             return df
         if p.exists():
             cached = pd.read_parquet(p)
@@ -417,7 +477,7 @@ class DataCache:
         codes = list(code_list)
         df = self._ds.get_share_holder(codes)
         if not df.empty:
-            df.to_parquet(p, compression="snappy")
+            self._merge_sparse_table(p, codes, df)
             return df
         if p.exists():
             cached = pd.read_parquet(p)
@@ -429,7 +489,7 @@ class DataCache:
         codes = list(code_list)
         df = self._ds.get_holder_num(codes)
         if not df.empty:
-            df.to_parquet(p, compression="snappy")
+            self._merge_sparse_table(p, codes, df)
             return df
         if p.exists():
             cached = pd.read_parquet(p)
@@ -437,15 +497,31 @@ class DataCache:
         return df
 
     # ---- 财务报表（稀疏报告期表，整表覆盖 + code 过滤）----
+    def _merge_sparse_table(self, p: Path, codes: list[str], df: pd.DataFrame) -> pd.DataFrame:
+        """稀疏事件表落盘：整表覆盖请求 code 的行，但**保留未请求 code 的本地行**。
+
+        窄池请求（如每日增量更新只传当期成分并集）若直接整表覆盖，历史成员的
+        财务/股东事件会被永久清掉，下次基本面因子构建即幸存者偏差。返回合并
+        后的完整表（水位计算用），调用方返回值仍按请求 code 过滤。
+        """
+        if p.exists():
+            cached = pd.read_parquet(p)
+            if "code" in cached.columns:
+                keep = cached[~cached["code"].isin(codes)]
+                if len(keep):
+                    df = pd.concat([keep, df], ignore_index=True)
+        df.to_parquet(p, compression="snappy")
+        return df
+
     def _get_financial(self, filename: str, table_name: str,
                        codes: list[str], fetch_fn) -> pd.DataFrame:
         p = self._root / filename
         df = fetch_fn(codes)
         if not df.empty:
-            df.to_parquet(p, compression="snappy")
+            merged = self._merge_sparse_table(p, codes, df)
             self._meta.setdefault(table_name, {})["last_date"] = (
-                int(pd.Timestamp(df["ann_date"].max()).strftime("%Y%m%d"))
-                if "ann_date" in df.columns and not df["ann_date"].isna().all() else 0
+                int(pd.Timestamp(merged["ann_date"].max()).strftime("%Y%m%d"))
+                if "ann_date" in merged.columns and not merged["ann_date"].isna().all() else 0
             )
             self._save_meta()
             return df
