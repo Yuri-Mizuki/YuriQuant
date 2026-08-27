@@ -121,6 +121,30 @@ def parse_formula(
     return _parse(formula)
 
 
+def _node_key(node) -> str:
+    """子树的缓存键（公式字符串形式，含窗口）。"""
+    kind = node[0]
+    if kind == "feat":
+        return f"f:{node[1]}"
+    if kind == "const":
+        return f"c:{node[1]}"
+    spec, children, win_name = node[1], node[2], node[3]
+    arity = spec.arity
+    child_keys = [_node_key(c) for c in children]
+    win = ""
+    if win_name:
+        win = str(win_name[0])
+    return f"{spec.name}[{win}]({','.join(child_keys[:arity])})"
+
+
+def _node_depth(node) -> int:
+    """节点子树高度（叶子=1）。"""
+    kind = node[0]
+    if kind in ("feat", "const"):
+        return 1
+    return 1 + max([_node_depth(c) for c in node[2]], default=0)
+
+
 def _eval_node(node, panel: dict[str, pd.DataFrame]) -> pd.DataFrame:
     kind = node[0]
     if kind == "feat":
@@ -138,10 +162,44 @@ def _eval_node(node, panel: dict[str, pd.DataFrame]) -> pd.DataFrame:
     return spec.func(*panel_args, *win_args)
 
 
+def _eval_node_cached(node, panel: dict[str, pd.DataFrame], cache: dict) -> pd.DataFrame:
+    """带子树缓存求值（``cache``: 子公式字符串 -> 面板）。
+
+    只缓存**浅层**子树（深度 ≤ 2，即「算子 + 全叶子参数」级别的组合）——这类
+    子树在训练采样中共享率最高（如 ``ts_min_10(amount)``），深层组合共享少且
+    面板内存大（~1800×520×8B ≈ 7.5MB/个），不缓存避免内存爆炸。
+    """
+    kind = node[0]
+    if kind == "feat":
+        return panel[node[1]]
+    if kind == "const":
+        return node[1]
+    spec, children, win_name = node[1], node[2], node[3]
+    arity = spec.arity
+    cacheable = _node_depth(node) <= 2
+    key = None
+    if cacheable:
+        key = _node_key(node)
+        hit = cache.get(key)
+        if hit is not None:
+            return hit
+    panel_args = [_eval_node_cached(c, panel, cache) for c in children[:arity]]
+    win_args: list = []
+    for c in children[arity:]:
+        win_args.append(c[1] if c[0] == "const" else _eval_node_cached(c, panel, cache))
+    if not win_args and win_name:
+        win_args = list(win_name)
+    out = spec.func(*panel_args, *win_args)
+    if cacheable and key is not None:
+        cache[key] = out
+    return out
+
+
 def formula_builder(
     formula: str,
     features: Sequence[str] | None = None,
     registry: dict[str, OpSpec] | None = None,
+    node_cache: dict | None = None,
 ) -> Callable[[dict[str, pd.DataFrame]], pd.DataFrame]:
     """从公式字符串构造 ``build(panel) -> panel`` 闭包。
 
@@ -149,13 +207,17 @@ def formula_builder(
         formula: 前缀表达式（exhaustive 或 GP 风格）。
         features: 特征名集合（用于识别终端；None 时未知 token 宽容视为特征）。
         registry: 算子注册表（默认 ``factor.operators.op_registry()``）。
+        node_cache: 可选的子树级缓存 dict（跨调用共享，见 ``_eval_node_cached``）。
     Returns:
         build 函数：输入特征面板 dict，输出 date×code 因子面板。
     """
     node = parse_formula(formula, features=features, registry=registry)
 
     def build(panel: dict[str, pd.DataFrame]) -> pd.DataFrame:
-        out = _eval_node(node, panel)
+        if node_cache is not None:
+            out = _eval_node_cached(node, panel, node_cache)
+        else:
+            out = _eval_node(node, panel)
         return out if isinstance(out, pd.DataFrame) else pd.DataFrame(out)
 
     build.__name__ = f"build<{formula}>"

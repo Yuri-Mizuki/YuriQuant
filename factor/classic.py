@@ -1,9 +1,16 @@
 """
-因子库
-======
+经典日频因子类（classic factors）
+=================================
 
 常用日频因子的纯 pandas 实现，不依赖 SDK，离线可用。
 每个因子继承 Factor，实现 calc 方法。
+
+**命名区分（2026-08-17 收敛命名混淆）**：
+本模块曾名为 ``factor/library.py``，易与持久化因子库 ``research/factor_library.py``
+混淆。二者职责完全不同：
+- 本模块 ``factor/classic.py``：**因子算法类**（Momentum/Reversal/... 的 calc 实现）。
+- ``research/factor_library.py``：**持久化因子库**（FactorLibrary：注册/评估/入库/回测）。
+本模块只被 ``factor/__init__.py`` 引用，经 ``from factor import Momentum`` 等使用。
 """
 from __future__ import annotations
 

@@ -27,16 +27,20 @@ import pandas as pd
 from deap import algorithms, base, creator, gp, tools
 
 from factor.operators import (
-    CS_OPS, TS_OPS, abs_, add, cs_demean, cs_rank, cs_rank_normalize, cs_zscore,
-    cs_normalize, div, exp_, log_, max_, min_, mul, reverse, sign, sqrt_, sub,
-    ts_arg_max, ts_arg_min, ts_avedev, ts_corr, ts_decay_linear, ts_delta,
-    ts_diff, ts_ema, ts_kurt, ts_max, ts_mean, ts_median, ts_min, ts_rank,
-    ts_skew, ts_std, ts_sum, ts_wma,
+    CS_OPS, TECH_OPS, TS_OPS, abs_, add, adx, aroonosc, boll_pctb, cs_demean,
+    cs_rank, cs_rank_normalize, cs_zscore, cs_normalize, cs_scale_abs, div, exp_,
+    ht_dcphase, inv, kama, log_, max_, min_, mul, obv, rank_div, rank_sub,
+    reverse, rsi, sign, sigmoid, sqrt_, sub, ts_arg_max, ts_arg_min,
+    ts_avedev, ts_corr, ts_cov, ts_decay_linear, ts_delay, ts_delta, ts_diff,
+    ts_ema, ts_kurt, ts_max, ts_mean, ts_median, ts_min, ts_product, ts_rank,
+    ts_skew, ts_std, ts_sum, ts_wma, ts_zscore,
 )
 from research.factor_analysis import calc_ic_series, calc_ir
 
 
 # 窗口已编入算子名时使用的时序单目算子（不含需要布尔输入的 ts_count）
+# 对照华泰 gplearn 函数集：delay→ts_delay / delta→ts_delta / stddev→ts_std /
+# product→ts_product / zscore→ts_zscore / decay_linear→ts_decay_linear 均已含。
 _GP_TS_UNARY = [
     ("ts_mean", ts_mean), ("ts_sum", ts_sum), ("ts_std", ts_std),
     ("ts_max", ts_max), ("ts_min", ts_min), ("ts_arg_max", ts_arg_max),
@@ -44,18 +48,22 @@ _GP_TS_UNARY = [
     ("ts_diff", ts_diff), ("ts_avedev", ts_avedev), ("ts_skew", ts_skew),
     ("ts_kurt", ts_kurt), ("ts_ema", ts_ema), ("ts_wma", ts_wma),
     ("ts_decay_linear", ts_decay_linear), ("ts_median", ts_median),
+    ("ts_delay", ts_delay), ("ts_product", ts_product), ("ts_zscore", ts_zscore),
+    # 技术指标（2026-08-12，参考华泰报告26）：单目+窗口，窗口编名如 kama_10
+    ("kama", kama), ("rsi", rsi), ("boll_pctb", boll_pctb),
 ]
 _GP_CS_UNARY = [
     ("cs_rank", cs_rank), ("cs_zscore", cs_zscore), ("cs_demean", cs_demean),
     ("cs_normalize", cs_normalize), ("cs_rank_normalize", cs_rank_normalize),
+    ("scale", cs_scale_abs),  # 华泰 gplearn 函数集 scale(X, a=1)
 ]
 _GP_ELEM_UNARY = [
     ("abs", abs_), ("sign", sign), ("log", log_), ("sqrt", sqrt_),
-    ("reverse", reverse), ("exp", exp_),
+    ("reverse", reverse), ("exp", exp_), ("inv", inv), ("sigmoid", sigmoid),
 ]
 _GP_ELEM_BINARY = [
     ("add", add), ("sub", sub), ("mul", mul), ("div", div),
-    ("max", max_), ("min", min_),
+    ("max", max_), ("min", min_), ("rank_sub", rank_sub), ("rank_div", rank_div),
 ]
 
 # 模块级原语映射（name -> (func, arity)），由 build_primitive_set 填充
@@ -106,6 +114,26 @@ def build_primitive_set(
         curried = lambda a, b, _w=w: ts_corr(a, b, _w)
         pset.addPrimitive(curried, 2, name=full)
         prim_map[full] = (curried, 2)
+        full = f"ts_cov_{w}"   # 华泰 gplearn 函数集 covariance(X, Y, d)
+        curried = lambda a, b, _w=w: ts_cov(a, b, _w)
+        pset.addPrimitive(curried, 2, name=full)
+        prim_map[full] = (curried, 2)
+
+    # 技术指标多输入算子（2026-08-12，参考华泰报告26）：窗口编名 + 无窗口
+    for w in windows:
+        full = f"aroonosc_{w}"
+        curried = lambda a, b, _w=w: aroonosc(a, b, _w)
+        pset.addPrimitive(curried, 2, name=full)
+        prim_map[full] = (curried, 2)
+        full = f"adx_{w}"
+        curried = lambda a, b, c, _w=w: adx(a, b, c, _w)
+        pset.addPrimitive(curried, 3, name=full)
+        prim_map[full] = (curried, 3)
+    # 无窗口：ht_dcphase（单目）、obv（close, volume 双目）
+    pset.addPrimitive(ht_dcphase, 1, name="ht_dcphase")
+    prim_map["ht_dcphase"] = (ht_dcphase, 1)
+    pset.addPrimitive(obv, 2, name="obv")
+    prim_map["obv"] = (obv, 2)
 
     # 同步模块级映射，仅供未传 prim_map 的旧调用方回退使用
     global _PRIM_MAP
@@ -169,6 +197,122 @@ def _monthly_forward_returns(returns_panel: pd.DataFrame, window: int = 20) -> p
     return returns_panel.rolling(window, min_periods=1).sum().shift(-(window - 1))
 
 
+def _mutual_info_series(fp: pd.DataFrame, rets: pd.DataFrame,
+                        n_bins: int = 10) -> pd.Series:
+    """逐截面离散化互信息序列（华泰报告23 适应度指标）。
+
+    I(X;Y) = ΣΣ p(x,y)·log(p(x,y) / (p(x)p(y)))，可捕捉**任意统计依赖（非线性）**，
+    对比 RankIC/F 检验只能捕捉线性关系。
+
+    实现：每截面把因子与收益按排名等分为 ``n_bins`` 桶（rank 后分桶，
+    等分位离散化，与华泰直方图口径一致），统计联合分布算 MI。
+    因子经 zscore 等**单调变换不改变分桶**，因此 htai 环内预处理可直接复用。
+
+    **n_bins 自适应**：华泰全 A（~3000 股）用 20 桶；本项目 300 股小截面下
+    20 桶联合分布过稀（每格 <1 样本），MI 被小样本偏差严重高估并趋于饱和，
+    故默认 10 桶（每格 ~3 样本，与华泰的偏差水平接近）。
+
+    Returns:
+        MI 序列（date 索引），取全期均值作适应度。
+    """
+    valid = fp.notna() & rets.notna()
+    # 小样本保护：联合分布每格至少 ~3 个样本 → n_bins ≤ sqrt(n/3)。
+    # 300 股 → 10 桶（与华泰 3000 股 20 桶的偏差水平接近）；小面板自动降桶。
+    n_med = int(valid.sum(axis=1).median())
+    n_bins = max(2, min(int(n_bins), int(np.sqrt(n_med / 3.0))))
+    fr = fp.where(valid).rank(axis=1, pct=True)
+    rr = rets.where(valid).rank(axis=1, pct=True)
+    f_bin = (fr * n_bins).clip(0, n_bins - 1)
+    r_bin = (rr * n_bins).clip(0, n_bins - 1)
+    out = []
+    for d in fp.index:
+        m = valid.loc[d]
+        n = int(m.sum())
+        if n < 2:
+            out.append(float("nan"))
+            continue
+        fb = f_bin.loc[d, m].astype(int).values
+        rb = r_bin.loc[d, m].astype(int).values
+        H = np.zeros((n_bins, n_bins))
+        np.add.at(H, (fb, rb), 1)
+        p = H / n
+        px = p.sum(axis=1, keepdims=True)
+        py = p.sum(axis=0, keepdims=True)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            mi = float(np.nansum(p * np.log(p / (px * py) + 1e-12)))
+        out.append(mi)
+    return pd.Series(out, index=fp.index)
+
+
+def _top_excess_series(fp: pd.DataFrame, rets: pd.DataFrame,
+                       top_frac: float = 0.1) -> tuple[float, float, int]:
+    """多头超额收益适应度（华泰报告23）。
+
+    参照分层回测：同时考虑正向/负向因子，取因子 Top 与 Bottom 层组合相对
+    全池等权的超额收益，**取较大者**作为适应度（允许负向因子）。
+
+    实现：每截面按因子排序取 Top/Bottom ``top_frac`` 股票池，计算其平均
+    未来收益（``rets`` 已前移一期）相对全池等权的超额。
+
+    Returns:
+        (top_excess, bottom_excess, n_days)：前两者取 max 作适应度；
+        ``n_days`` 为有效截面天数（fitness 调用方须要求 >= min_obs，
+        防止深树/财务平滑因子在极少截面上的偶然超额被选为高分）。
+    """
+    tops: list[float] = []
+    bots: list[float] = []
+    for d in fp.index:
+        f = fp.loc[d]
+        r = rets.loc[d]
+        m = f.notna() & r.notna()
+        if int(m.sum()) < 10:
+            continue
+        fv = f[m]
+        rv = r[m]
+        n_top = max(1, int(len(fv) * top_frac))
+        idx_top = fv.sort_values(ascending=False).index[:n_top]
+        idx_bot = fv.sort_values(ascending=True).index[:n_top]
+        base = float(rv.mean())
+        tops.append(float(rv.loc[idx_top].mean()) - base)
+        bots.append(float(rv.loc[idx_bot].mean()) - base)
+    if not tops:
+        return float("nan"), float("nan"), 0
+    return float(np.mean(tops)), float(np.mean(bots)), len(tops)
+
+
+def _htai_preprocess(fp: pd.DataFrame, neutral_panels: dict | None = None,
+                     mad_n: float = 5.0) -> pd.DataFrame:
+    """华泰研报口径的**环内因子预处理**（报告21 适应度计算流程 a/b/c 三步）：
+
+    1. 中位数去极值：median ± 5×median(|X - median|)（不乘 1.4826，与研报公式一致）；
+    2. 中性化：行业 + 市值 + 20日动量/20日换手/20日波动（``neutral_panels`` 提供，
+       由 neutralize 对全部连续协变量回归取残差）；
+    3. 标准化：截面 z-score。
+
+    无 neutral_panels（如 mock）时自动跳过中性化，只做去极值 + 标准化。
+
+    Args:
+        fp: 待预处理的因子面板（date×code）。
+        neutral_panels: dict，键取 ``size``/``industry``/``mom20``/``turn20``/``vol20``，
+            由调用方（mine_factors）预先构建。
+        mad_n: 去极值倍数（华泰为 5）。
+    """
+    from factor.preprocessing import neutralize, standardize_zscore, winsorize_mad
+    out = winsorize_mad(fp, n_mad=mad_n, consistency_scale=False)
+    if neutral_panels:
+        out = neutralize(
+            out,
+            market_cap_panel=neutral_panels.get("size"),
+            industry_panel=neutral_panels.get("industry"),
+            extra_covariates={
+                k: v for k, v in neutral_panels.items()
+                if k not in ("size", "industry") and v is not None
+            },
+        )
+        out = standardize_zscore(out)
+    return out
+
+
 def _mut_window_jitter_or_uniform(individual, expr, pset, windows, prim_map,
                                   jitter_p: float = 0.7):
     """窗口 jitter 变异（P1，轻量窗口搜索，无需双类型树）。
@@ -189,7 +333,7 @@ def _mut_window_jitter_or_uniform(individual, expr, pset, windows, prim_map,
                 neigh.add(nw)
         if not neigh:
             continue
-        candidates[w] = [f"{name}_{nw}" for name, _ in _GP_TS_UNARY + [("ts_corr", None)] for nw in neigh]
+        candidates[w] = [f"{name}_{nw}" for name, _ in _GP_TS_UNARY + [("ts_corr", None), ("ts_cov", None)] for nw in neigh]
 
     if jitter_p <= 0 or not candidates:
         return gp.mutUniform(individual, expr=expr, pset=pset)
@@ -226,8 +370,10 @@ def _ic_stats(ic_series) -> tuple[float, float, int]:
 def _fitness(individual, panel, returns_fit, min_obs, parsimony, prim_map,
              returns_month_fit=None, monthly_weight: float = 0.0,
              lib_ranked: list | None = None, library_penalty: float = 0.0,
-             memo: dict | None = None, sample_step: int = 1):
-    """适应度（P0 增强，2026-08-03）：
+             memo: dict | None = None, sample_step: int = 1,
+             htai: bool = False, neutral_panels: dict | None = None,
+             fitness_mode: str = "tstat"):
+    """适应度（P0 增强，2026-08-03；华泰复现模式 2026-08-10）：
 
     = |mean rank IC| / (std IC + eps) × (日频与月频加权) - library_penalty×库相关
       - parsimony × height
@@ -236,6 +382,11 @@ def _fitness(individual, panel, returns_fit, min_obs, parsimony, prim_map,
       看 train 段 IC，防止全样本选择压力直接对着搜索过的数据过拟合。
     - **多 horizon**：``monthly_weight>0`` 时叠加月频 IC（未来 20 日累计收益），
       缓解"日频 IC 与月频回测符号反转"的 horizon 错配。
+    - **华泰复现（htai=True）**：对齐《基于遗传规划的选股因子挖掘》(2019.6)——
+      ① 环内预处理：MAD 去极值(±5×MAD)→行业/市值/20日动量/换手/波动中性化→z-score；
+      ② 预测目标只用 20 交易日收益（月频 IC）；③ ``fitness_mode="rankic_mean"``
+      时适应度 = 全期平均 RankIC（研报图表12 的"适应度"即 RankIC 均值，不除 std）；
+      ``fitness_mode="tstat"`` 时仍为 |mean|/std（更强的统计口径，可选）。
     - **与因子库去相关**：``library_penalty>0`` 时按与库内因子 rank 面板的最大
       截面相关均值扣分，防止重复发明库内已有因子。
     - **子树缓存**：``memo`` 跨个体共享（run 级），eval_tree 跳过重复子树。
@@ -248,11 +399,18 @@ def _fitness(individual, panel, returns_fit, min_obs, parsimony, prim_map,
         return (0.0,)
     if fp is None or not hasattr(fp, "shape"):
         return (0.0,)
+    if htai:
+        try:
+            fp = _htai_preprocess(fp, neutral_panels=neutral_panels)
+        except Exception:
+            return (0.0,)
     if sample_step > 1:
         fp = fp.iloc[::sample_step]
         rfit = returns_fit.iloc[::sample_step]
+        rmonth = returns_month_fit.iloc[::sample_step] if returns_month_fit is not None else None
     else:
         rfit = returns_fit
+        rmonth = returns_month_fit
     try:
         with np.errstate(all="ignore"):
             import warnings
@@ -261,6 +419,59 @@ def _fitness(individual, panel, returns_fit, min_obs, parsimony, prim_map,
                 ic_d = calc_ic_series(fp, rfit, method="spearman")
     except Exception:
         return (0.0,)
+
+    # ---- 华泰复现：预测目标 = 20 交易日收益（只按月频 IC）----
+    if htai:
+        if rmonth is None:
+            return (0.0,)
+        # ---- 报告23 改进1：互信息适应度（挖非线性因子）----
+        if fitness_mode == "mutual_info":
+            try:
+                mi = _mutual_info_series(fp, rmonth).dropna()
+            except Exception:
+                return (0.0,)
+            if len(mi) < min_obs or not np.isfinite(mi.mean()):
+                return (0.0,)
+            score = float(mi.mean())          # 华泰：全期平均互信息（无符号，非线性）
+            score = min(score, 50.0) - parsimony * individual.height
+            return (float(score),)
+        # ---- 报告23 改进1：多头超额收益适应度 ----
+        if fitness_mode == "top_excess":
+            try:
+                t_ex, b_ex, n_days = _top_excess_series(fp, rmonth, top_frac=0.1)
+            except Exception:
+                return (0.0,)
+            # min_obs 门槛：防止深树/财务平滑因子在极少截面上的偶然超额被当高分
+            if n_days < min_obs or not np.isfinite(t_ex) or not np.isfinite(b_ex):
+                return (0.0,)
+            score = max(t_ex, b_ex)           # 华泰：Top/Bottom 层年化超额取较大者
+            score = min(score, 50.0) - parsimony * individual.height
+            return (float(score),)
+        # ---- 报告21 口径：平均 RankIC / |t| ----
+        try:
+            with np.errstate(all="ignore"):
+                ic_m = calc_ic_series(fp, rmonth, method="spearman")
+        except Exception:
+            return (0.0,)
+        m_m, s_m, n_m = _ic_stats(ic_m)
+        if n_m < min_obs or not np.isfinite(m_m) or not np.isfinite(s_m) or s_m < 1e-8:
+            return (0.0,)
+        if fitness_mode == "rankic_mean":
+            score = float(m_m)          # 华泰：全期平均 RankIC（允许为负，符号由树自身进化）
+        else:
+            score = abs(m_m) / (s_m + 1e-9)
+        if library_penalty > 0 and lib_ranked:
+            try:
+                fpr = fp.rank(axis=1)
+                corrs = [float(fpr.corrwith(lib, axis=1).mean()) for lib in lib_ranked if lib is not None]
+                if corrs:
+                    score -= library_penalty * max(corrs)
+            except Exception:
+                pass
+        score = min(score, 50.0)
+        score -= parsimony * individual.height
+        return (float(score),)
+
     m_d, s_d, n_d = _ic_stats(ic_d)
     if n_d < min_obs or not np.isfinite(m_d) or not np.isfinite(s_d) or s_d < 1e-8:
         return (0.0,)
@@ -308,7 +519,8 @@ _GP_CTX: dict = {}
 
 def _init_gp_worker(panel, returns_fit, returns_month_fit, lib_ranked,
                     features, windows, min_obs, parsimony, monthly_weight,
-                    library_penalty, memo, sample_step):
+                    library_penalty, memo, sample_step, htai=False,
+                    neutral_panels=None, fitness_mode="tstat"):
     """每个 worker 进程初始化：重建 prim_map（模块级纯函数，可 pickle）+
     创建 DEAP creator 类（individual 反序列化依赖）+ 持有面板。"""
     _ensure_creator()
@@ -323,6 +535,9 @@ def _init_gp_worker(panel, returns_fit, returns_month_fit, lib_ranked,
     _GP_CTX["library_penalty"] = library_penalty
     _GP_CTX["memo"] = memo
     _GP_CTX["sample_step"] = sample_step
+    _GP_CTX["htai"] = htai
+    _GP_CTX["neutral_panels"] = neutral_panels
+    _GP_CTX["fitness_mode"] = fitness_mode
 
 
 def _gp_eval_worker(ind):
@@ -332,7 +547,9 @@ def _gp_eval_worker(ind):
                     monthly_weight=_GP_CTX["monthly_weight"],
                     lib_ranked=_GP_CTX["lib_ranked"],
                     library_penalty=_GP_CTX["library_penalty"],
-                    memo=_GP_CTX["memo"], sample_step=_GP_CTX["sample_step"])
+                    memo=_GP_CTX["memo"], sample_step=_GP_CTX["sample_step"],
+                    htai=_GP_CTX["htai"], neutral_panels=_GP_CTX["neutral_panels"],
+                    fitness_mode=_GP_CTX["fitness_mode"])
 
 
 def _seg_ic_stats(fp, seg) -> tuple[float, float]:
@@ -372,9 +589,14 @@ def _dedup_hof_by_correlation(df: pd.DataFrame, panel, feats, threshold: float =
         except Exception:
             keep.append(row["formula"])   # 无法重建（异常公式）宽容保留
             continue
+        # 全 NaN 面板（如 sqrt(reverse(close))）：无法比较相关性，宽容保留
+        if fpr.notna().sum().sum() == 0:
+            keep.append(row["formula"])
+            continue
         if reps:
             corrs = [float(fpr.corrwith(r, axis=1).mean()) for r in reps]
-            if corrs and max(c for c in corrs if c == c) > threshold:
+            corrs = [c for c in corrs if c == c]
+            if corrs and max(corrs) > threshold:
                 continue
         reps.append(fpr)
         keep.append(row["formula"])
@@ -416,6 +638,9 @@ def run_gp_mining(
     sample_step: int = 1,
     seed: int = 0,
     verbose: bool = True,
+    htai: bool = False,
+    neutral_panels: dict | None = None,
+    fitness_mode: str = "tstat",
 ) -> tuple[pd.DataFrame, object]:
     """运行遗传规划因子挖掘。
 
@@ -429,12 +654,22 @@ def run_gp_mining(
     - ``window_jitter``：窗口 jitter 变异（P1），把树中 ts_X_w 原语随机替换为
       邻近窗口，让窗口参与搜索而无需双类型树。
 
+    **华泰复现模式（htai=True，2026-08-10）**：对齐《基于遗传规划的选股因子挖掘》
+    (2019.6) —— 环内 MAD 去极值(±5×MAD)→行业/市值/20日动量/换手/波动中性化→
+    z-score（``neutral_panels`` 提供协变量面板）；预测目标 = 20 交易日收益
+    （月频 IC，忽略日频）；``fitness_mode="rankic_mean"`` 时适应度 = 全期平均
+    RankIC（研报口径），``"tstat"`` 时保持 |mean|/std。函数集已按研报扩充
+    （inv/delay/ts_cov/ts_product/ts_zscore/scale/sigmoid/rank_sub/rank_div）。
+    建议参数（研报）：population=1000, generations=3, min_depth=1, max_depth=4,
+    tournament=20, train_frac=1.0（研报21 全样本；要报告23 的 CV 口径则传 0.8）。
+
     **早停（2026-08-03）**：连续 ``patience`` 代 hof best 无提升即提前终止，
     ``hof.generations_run`` 记录实际代数。
 
     Returns:
         (results_df, hall_of_fame)：results_df 列：
-        formula/ic_mean(全样本)/ic_train/ic_oos/ic_std/ir/t_stat/t_oos/n/height。
+        formula/ic_mean(htai 时为月频预处理后 IC，否则全样本日频)/ic_train/ic_oos/
+        ic_std/ir/t_stat/t_oos/n/height。
     """
     feats = list(features) if features else list(panel.keys())
     pset, prim_map = build_primitive_set(feats, windows)
@@ -446,7 +681,7 @@ def run_gp_mining(
     n_train = min(n_train, n_total)
     returns_fit = returns_panel.iloc[:n_train]
     returns_oos = returns_panel.iloc[n_train:]
-    returns_month_fit = _monthly_forward_returns(returns_fit) if monthly_weight > 0 else None
+    returns_month_fit = _monthly_forward_returns(returns_fit) if (monthly_weight > 0 or htai) else None
     lib_ranked: list | None = None
     if library_penalty > 0 and library_panels:
         lib_ranked = []
@@ -470,7 +705,8 @@ def run_gp_mining(
             initializer=_init_gp_worker,
             initargs=(panel, returns_fit, returns_month_fit, lib_ranked, feats,
                       list(windows), min_obs, parsimony, monthly_weight,
-                      library_penalty, memo, sample_step))
+                      library_penalty, memo, sample_step, htai, neutral_panels,
+                      fitness_mode))
         toolbox.register("map", _ex.map)
         toolbox.register("evaluate", _gp_eval_worker)
     else:
@@ -478,7 +714,8 @@ def run_gp_mining(
                          min_obs=min_obs, parsimony=parsimony, prim_map=prim_map,
                          returns_month_fit=returns_month_fit, monthly_weight=monthly_weight,
                          lib_ranked=lib_ranked, library_penalty=library_penalty,
-                         memo=memo, sample_step=sample_step)
+                         memo=memo, sample_step=sample_step, htai=htai,
+                         neutral_panels=neutral_panels, fitness_mode=fitness_mode)
     toolbox.register("select", tools.selTournament, tournsize=tournament)
     toolbox.register("mate", gp.cxOnePoint)
     toolbox.register("expr_mut", gp.genFull, min_=0, max_=2)
@@ -539,18 +776,27 @@ def run_gp_mining(
             _ex.shutdown()
 
     # 汇总 HallOfFame（全样本 IC + train/OOS 分段报告）
+    # htai 口径：IC 目标 = 未来 20 日收益，且因子先做环内预处理（与适应度同口径）
+    if htai:
+        returns_summary = _monthly_forward_returns(returns_panel)
+        returns_oos_seg = (_monthly_forward_returns(returns_oos)
+                           if train_frac is not None and 0.0 < train_frac < 1.0 else None)
+    else:
+        returns_summary = returns_panel
+        returns_oos_seg = returns_oos
     rows = []
     for ind in hof:
         try:
             fp = eval_tree(ind, panel, prim_map)
-            ic = calc_ic_series(fp, returns_panel, method="spearman").dropna()
+            fp_s = _htai_preprocess(fp, neutral_panels=neutral_panels) if htai else fp
+            ic = calc_ic_series(fp_s, returns_summary, method="spearman").dropna()
             n = len(ic)
             m, s = float(ic.mean()), float(ic.std())
             ir = calc_ir(ic)
             t = m / (s / np.sqrt(n)) if s > 0 else 0.0
-            ic_train, t_train = _seg_ic_stats(fp, returns_fit)
-            ic_oos, t_oos = _seg_ic_stats(fp, returns_oos)
-            rows.append({
+            ic_train, t_train = _seg_ic_stats(fp_s, returns_month_fit if htai else returns_fit)
+            ic_oos, t_oos = _seg_ic_stats(fp_s, returns_oos_seg)
+            row = {
                 "formula": str(ind),
                 "ic_mean": m,
                 "ic_train": ic_train,
@@ -562,7 +808,22 @@ def run_gp_mining(
                 "t_oos": t_oos,
                 "n": n,
                 "height": ind.height,
-            })
+            }
+            # 报告23 指标（htai 口径）：互信息 / 多头超额（Top、Bottom 层）
+            if htai:
+                try:
+                    mi = _mutual_info_series(fp_s, returns_summary).dropna()
+                    row["mi_mean"] = float(mi.mean()) if len(mi) else float("nan")
+                except Exception:
+                    row["mi_mean"] = float("nan")
+                try:
+                    t_ex, b_ex, _ = _top_excess_series(fp_s, returns_summary, top_frac=0.1)
+                    row["top_excess"] = t_ex
+                    row["bot_excess"] = b_ex
+                except Exception:
+                    row["top_excess"] = float("nan")
+                    row["bot_excess"] = float("nan")
+            rows.append(row)
         except Exception:
             rows.append({"formula": str(ind), "ic_mean": 0.0, "ic_train": float("nan"),
                          "ic_oos": float("nan"), "ic_std": 0.0, "ir": 0.0,
@@ -572,7 +833,14 @@ def run_gp_mining(
     if not df.empty:
         # P0-④（2026-08-04）：排序与去重都基于 **train 段** t（t_train），
         # 全样本 t_stat 仅作报告——旧实现按全样本 |t| 排序，把 OOS 信息混入选择。
-        sort_col = "t_train" if train_frac is not None and 0.0 < train_frac < 1.0 else "t_stat"
+        if train_frac is not None and 0.0 < train_frac < 1.0:
+            sort_col = "t_train"
+        elif htai and fitness_mode == "mutual_info" and "mi_mean" in df:
+            sort_col = "mi_mean"        # MI 模式的优化目标是互信息
+        elif htai and fitness_mode == "top_excess" and "top_excess" in df:
+            sort_col = "top_excess"     # 多头超额模式的优化目标是 Top/Bottom 超额
+        else:
+            sort_col = "t_stat"
         df = df.reindex(df[sort_col].abs().sort_values(ascending=False).index).reset_index(drop=True)
         df = _dedup_hof_by_correlation(df, panel, feats, threshold=dedup_corr,
                                        returns_fit=returns_fit if train_frac < 1.0 else None)
@@ -908,3 +1176,74 @@ def run_gp_nsga2(
     if not df.empty:
         df = df.reindex(df["f1"].sort_values(ascending=False).index).reset_index(drop=True)
     return df, hof
+
+
+# ===========================================================================
+# 报告23 改进方向2：非线性因子的使用方法（线性化）
+# ===========================================================================
+def cubic_residual_transform(fp: pd.DataFrame) -> pd.DataFrame:
+    """三次方回归残差法（华泰报告23，参考 BARRA NLS，Menchero 2010）。
+
+    用 F³ 对 F **过原点回归取残差**：残差峰值位于 F 的中间部分、两端较低
+    （中间凸），与互信息高分因子的"中间层收益高、两端低"模式契合。
+    只利用因子自身信息（不含收益），实现简单但转换效果较差。
+
+    逐截面独立处理，无未来函数。
+    """
+    out = pd.DataFrame(np.nan, index=fp.index, columns=fp.columns)
+    for d in fp.index:
+        f = fp.loc[d]
+        m = f.notna()
+        n = int(m.sum())
+        if n < 3:
+            continue
+        x = f[m].astype(float).values
+        beta, *_ = np.linalg.lstsq(x.reshape(-1, 1), x ** 3, rcond=None)
+        resid = x ** 3 - x.reshape(-1, 1) @ beta
+        out.loc[d, m] = resid
+    return out
+
+
+def polynomial_transform(fp: pd.DataFrame, returns_panel: pd.DataFrame,
+                         fit_window: int = 250, refit: int = 20,
+                         degree: int = 3, window: int = 20) -> pd.DataFrame:
+    """多项式拟合法（华泰报告23）：r = a·F³ + b·F² + c·F + d，把非线性因子线性化。
+
+    华泰原口径：用 T+1 期收益对 T 期因子回归（滚动回归，历史 500 天样本、
+    每 20 个交易日重拟合一次），拟合参数用于转换未来 20 个交易日的因子。
+    本项目：目标改用未来 ``window`` 日累计收益（月频 horizon，与挖掘口径一致）；
+    ``fit_window`` 因样本量可调（华泰 500 天，单年数据需缩小）。
+
+    Args:
+        fp: 待转换因子面板（date×code）。
+        returns_panel: 日频次日收益面板（已前移一期）。
+        fit_window: 每次拟合使用的历史交易日数。
+        refit: 每多少个交易日重拟合一次。
+        degree: 多项式最高阶（华泰取 3）。
+        window: 预测目标 horizon（华泰 20 交易日）。
+    Returns:
+        线性化后的因子面板（拟合值），无未来函数（只用历史样本拟合）。
+    """
+    r_forward = _monthly_forward_returns(returns_panel, window=window)
+    idx = fp.index
+    n = len(idx)
+    out = pd.DataFrame(np.nan, index=idx, columns=fp.columns)
+    fit_pts = list(range(fit_window, n, refit))
+    if not fit_pts:
+        return out
+    for t in fit_pts:
+        lo = t - fit_window
+        F = fp.iloc[lo:t].values.ravel()
+        R = r_forward.iloc[lo:t].values.ravel()
+        valid = np.isfinite(F) & np.isfinite(R)
+        if int(valid.sum()) < degree + 2:
+            continue
+        Fv, Rv = F[valid], R[valid]
+        X = np.column_stack([Fv ** 3, Fv ** 2, Fv, np.ones_like(Fv)])
+        beta, *_ = np.linalg.lstsq(X, Rv, rcond=None)
+        t_end = min(t + refit, n)
+        Fnv = fp.iloc[t:t_end].values.ravel()
+        Xn = np.column_stack([Fnv ** 3, Fnv ** 2, Fnv, np.ones_like(Fnv)])
+        pred = (Xn @ beta).reshape(t_end - t, fp.shape[1])
+        out.iloc[t:t_end] = pred
+    return out

@@ -142,6 +142,92 @@ def _make_target(returns_panel: pd.DataFrame, idx, cols, target_mode: str = "raw
     return sub.values.ravel()
 
 
+def _time_folds(date_arr: np.ndarray, n_splits: int, embargo_days: int = 0):
+    """按【交易日边界】切分时序折，返回 list[(train_mask, test_mask)]。
+
+    Args:
+        date_arr: 每个有效观测对应的日期（升序，对应 obs 第一级并已按 valid 过滤）。
+        n_splits: 折数（>1）。embargo_days: 训练段末尾剔除与测试段相邻的天数。
+    Returns:
+        list[(bool array, bool array)]，与 date_arr 等长；每折 train 的日期
+        严格早于 test 的日期（无未来函数）。
+
+    关键改进（2026-08-17）：旧实现按【有效行数】``np.linspace`` 切分，fold 边界
+    可能落在某交易日中间，导致同一天部分股票被 train、部分被 test——跨日信息
+    渗入当日截面，略微破坏时序语义。这里改为按【日期边界】切分，每个 fold 的
+    train/test 都覆盖完整交易日（不把某一天劈开），purge 也按天精确剔除。
+    """
+    unique_days = pd.unique(date_arr)  # 升序（行序 = 日期优先）
+    n_days = len(unique_days)
+    if n_days < 2:
+        return []
+    edges = np.linspace(0, n_days, n_splits + 1).astype(int)
+    folds = []
+    for s in range(1, n_splits):
+        d0 = max(0, int(edges[s]))
+        d1 = min(n_days, int(edges[s + 1]))
+        if d1 <= d0:
+            continue
+        test_days = unique_days[d0:d1]
+        train_mask = np.isin(date_arr, unique_days[:d0])
+        test_mask = np.isin(date_arr, test_days)
+        if embargo_days > 0:
+            purge_days = unique_days[max(0, d0 - embargo_days):d0]
+            train_mask &= ~np.isin(date_arr, purge_days)
+        folds.append((train_mask, test_mask))
+    return folds
+
+
+def _inner_split_by_day(
+    date_arr: np.ndarray, train_mask: np.ndarray, frac: float = 0.8, min_va_days: int = 1,
+):
+    """在训练段内按日期边界再切出验证段（嵌套 CV 的折内 split）。
+
+    取 train 段前 frac 比例的交易日作内层训练，其余（>= min_va_days 天）作验证段。
+    同样按【日期边界】切分，避免把某一天劈开。
+    Returns:
+        (tr_mask, va_mask)：与 date_arr 等长的 bool 数组。
+    """
+    tr_days = pd.unique(date_arr[train_mask])
+    n = len(tr_days)
+    split = int(n * frac)
+    split = min(max(split, 0), max(0, n - min_va_days))
+    tr_days_s = tr_days[:split]
+    va_days = tr_days[split:]
+    return (
+        train_mask & np.isin(date_arr, tr_days_s),
+        train_mask & np.isin(date_arr, va_days),
+    )
+
+
+def rebuild_train_weights(
+    components: list[CompositeInput],
+    returns_panel: pd.DataFrame,
+    train_dates,
+) -> list[CompositeInput]:
+    """用【训练段】重算各因子 IC/IR，作为 ``ic_weighted`` / ``orthogonal`` 的权重与符号。
+
+    返回的 components 面板保持全样本（用于对全区间合成），但 ``ic``/``ir`` 只用
+    ``train_dates`` 内的收益重算 → 训练段信息定权重，测试段复合值无未来函数。
+
+    关键修复（2026-08-17）：旧实现把挖掘/因子库存储的**全样本 IC** 直接当作
+    合成权重，等价于用未来收益决定权重（look-ahead）。语义与 ``walk_forward.py``
+    用 valid 段 IC 定权重一致。本函数由 ``synthesize_library.py`` / ``synthesize_factors.py``
+    共享，避免两处重复实现。
+    """
+    rts_tr = returns_panel.loc[train_dates]
+    out: list[CompositeInput] = []
+    for c in components:
+        panel_tr = c.panel.loc[train_dates].reindex(columns=rts_tr.columns)
+        ic = calc_ic_series(panel_tr, rts_tr).dropna()
+        if len(ic) < 5:
+            out.append(CompositeInput(name=c.name, panel=c.panel, ic=0.0, ir=0.0))
+            continue
+        out.append(CompositeInput(name=c.name, panel=c.panel,
+                                  ic=float(ic.mean()), ir=calc_ir(ic)))
+    return out
+
+
 # ===========================================================================
 # 1) IC 加权组合
 # ===========================================================================
@@ -208,9 +294,11 @@ def synthesize_pca(
 
     每个成分按与未来收益的相关性翻转符号，最后等权（或按成分方差）合成。
 
-    **无未来函数（2026-08-03 修复）**：符号方向只在时间序列前 ``sign_calib_frac``
-    段（默认 60%）内与收益的相关性决定，再用到全样本。旧实现用全样本收益定符号，
-    等价于把未来信息回灌到合成因子，属轻微 look-ahead。校准段建议至少 20 个交易日。
+    **无未来函数（2026-08-17 修复）**：主成分方向（特征向量）与符号方向都只在
+    时间序列前 ``sign_calib_frac`` 段（默认 60%，训练段）内估计，再投影到全样本。
+    旧实现的主成分方向是在**全样本**上 SVD 求得的（隐式使用了全区间协方差结构，
+    属 look-ahead），仅符号用了前段校准；现改为方向与符号均只用前段。校准段建议
+    至少 20 个交易日（成分方向对训练段长度敏感，段越短方差越大）。
     """
     if not components:
         raise ValueError("components 为空")
@@ -224,18 +312,21 @@ def synthesize_pca(
     Xc = np.nan_to_num(X, nan=0.0)
     Xc = Xc - Xc.mean(axis=0, keepdims=True)
 
-    # SVD 取主成分方向
-    U, S, Vt = np.linalg.svd(Xc, full_matrices=False)
-    comp_dirs = Vt[:n_comp].T            # (n_factors, n_comp)
-    scores = Xc @ comp_dirs              # (n_obs, n_comp)
+    # 训练段边界（前 sign_calib_frac 段）：完整网格行序 = 日期优先，每天 len(cols) 行
+    n_cal = max(10, int(len(idx) * sign_calib_frac))
+    n_cal = min(n_cal, len(idx))
+    cal_rows = n_cal * len(cols)
+
+    # 主成分方向：只用训练段 SVD（避免用全样本协方差结构 = 未来信息）
+    Xc_cal = Xc[:cal_rows]
+    U_cal, S_cal, Vt_cal = np.linalg.svd(Xc_cal, full_matrices=False)
+    comp_dirs = Vt_cal[:n_comp].T            # (n_factors, n_comp)
+    scores = Xc @ comp_dirs                  # (n_obs, n_comp)
 
     # 每个成分按与收益相关性翻转符号 —— 只用前 sign_calib_frac 段（训练段）定方向
     if returns_panel is not None:
         y = returns_panel.reindex(index=idx, columns=cols).values.ravel()
         y = np.nan_to_num(y, nan=0.0)
-        n_cal = max(10, int(len(idx) * sign_calib_frac))
-        n_cal = min(n_cal, len(idx))
-        cal_rows = n_cal * len(cols)
         for k in range(n_comp):
             a = scores[:cal_rows, k]
             b = y[:cal_rows]
@@ -245,8 +336,8 @@ def synthesize_pca(
                 if not np.isnan(r) and r < 0:
                     scores[:, k] = -scores[:, k]
 
-    # 多成分：按解释方差（S 的平方占比）加权合成
-    var_w = (S[:n_comp] ** 2)
+    # 多成分：按解释方差（训练段 S 的平方占比）加权合成
+    var_w = (S_cal[:n_comp] ** 2)
     var_w = var_w / var_w.sum() if var_w.sum() > 0 else np.ones(n_comp) / n_comp
     composite_long = scores @ var_w
 
@@ -348,13 +439,12 @@ def synthesize_stacking(
     Xv = X[valid]
     yv = y[valid]
     # obs 由 MultiIndex.from_product([idx, cols]) 生成，行序已是「日期优先」递增，
-    # 因此可直接按行序做 expanding-window 时间序列交叉验证（无未来函数）。
+    # 因此可取出每行对应日期后按【交易日边界】做 expanding-window 时序 CV。
+    date_arr = obs.get_level_values(0)[valid].to_numpy()
+
     n = len(yv)
     pred = np.full(n, np.nan)
-    edges = np.linspace(0, n, n_splits + 1).astype(int)
-    for s in range(1, n_splits):
-        train_mask = np.arange(n) < edges[s]
-        test_mask = (np.arange(n) >= edges[s]) & (np.arange(n) < edges[s + 1])
+    for train_mask, test_mask in _time_folds(date_arr, n_splits):
         if train_mask.sum() < max(10, Xv.shape[1] + 5) or test_mask.sum() == 0:
             continue
         Xtr, ytr = Xv[train_mask], yv[train_mask]
@@ -418,22 +508,15 @@ def synthesize_stacking_gbdt(
 
     valid = ~np.isnan(X).any(axis=1) & ~np.isnan(y)
     Xv, yv = X[valid], y[valid]
+    date_arr = obs.get_level_values(0)[valid].to_numpy()
     n = len(yv)
-    embargo_rows = embargo_days * len(cols)   # obs 行序=日期优先，每天 N 股
 
     pred = np.full(n, np.nan)
-    edges = np.linspace(0, n, n_splits + 1).astype(int)
-    for s in range(1, n_splits):
-        test_start, test_end = edges[s], edges[s + 1]
-        train_mask = np.arange(n) < test_start
-        if embargo_rows > 0:
-            # purged：剔除与测试段相邻（标签时间重叠）的训练样本
-            purge_from = max(0, test_start - embargo_rows)
-            train_mask[purge_from:test_start] = False
-        if train_mask.sum() < max(50, Xv.shape[1] * 5) or test_end - test_start == 0:
+    for train_mask, test_mask in _time_folds(date_arr, n_splits, embargo_days=embargo_days):
+        if train_mask.sum() < max(50, Xv.shape[1] * 5) or test_mask.sum() == 0:
             continue
         Xtr, ytr = Xv[train_mask], yv[train_mask]
-        Xte = Xv[test_start:test_end]
+        Xte = Xv[test_mask]
         # 列标准化（训练段统计量）
         mu = np.nanmean(Xtr, axis=0)
         sd = np.nanstd(Xtr, axis=0)
@@ -447,7 +530,7 @@ def synthesize_stacking_gbdt(
             n_jobs=n_jobs, random_state=seed, verbose=-1,
         )
         model.fit(Xtr_s, ytr)
-        pred[test_start:test_end] = model.predict(Xte_s)
+        pred[test_mask] = model.predict(Xte_s)
 
     composite_long = np.full(len(y), np.nan)
     composite_long[valid] = pred
@@ -513,27 +596,24 @@ def synthesize_stacking_gbdt_tuned(
 
     valid = ~np.isnan(X).any(axis=1) & ~np.isnan(y)
     Xv, yv = X[valid], y[valid]
+    date_arr = obs.get_level_values(0)[valid].to_numpy()
     n = len(yv)
     n_codes = len(cols)
-    embargo_rows = embargo_days * n_codes
 
     pred = np.full(n, np.nan)
-    edges = np.linspace(0, n, n_splits + 1).astype(int)
-    for s in range(1, n_splits):
-        test_start, test_end = edges[s], edges[s + 1]
-        train_mask = np.arange(n) < test_start
-        if embargo_rows > 0:
-            purge_from = max(0, test_start - embargo_rows)
-            train_mask[purge_from:test_start] = False
+    for train_mask, test_mask in _time_folds(date_arr, n_splits, embargo_days=embargo_days):
         train_idx = np.where(train_mask)[0]
-        if len(train_idx) < max(200, Xv.shape[1] * 10) or test_end - test_start == 0:
+        if len(train_idx) < max(200, Xv.shape[1] * 10) or test_mask.sum() == 0:
             continue
         # ---- 折内切分：训练段末尾 20% 作验证段（最新历史，最接近测试分布）----
-        split_at = int(len(train_idx) * 0.8)
-        inner_tr, inner_va = train_idx[:split_at], train_idx[split_at:]
+        inner_tr_mask, inner_va_mask = _inner_split_by_day(date_arr, train_mask, frac=0.8)
+        inner_tr = np.where(inner_tr_mask)[0]
+        inner_va = np.where(inner_va_mask)[0]
         Xtr_all, ytr_all = Xv[train_idx], yv[train_idx]
         Xtr, ytr = Xv[inner_tr], yv[inner_tr]
         Xva, yva = Xv[inner_va], yv[inner_va]
+        if len(inner_tr) < 10 or len(inner_va) < 1:
+            continue
 
         def objective(trial):
             params = {
@@ -555,7 +635,7 @@ def synthesize_stacking_gbdt_tuned(
         best = study.best_params
         model = LGBMRegressor(**best, n_jobs=n_jobs, random_state=seed, verbose=-1)
         model.fit(Xtr_all, ytr_all)
-        pred[test_start:test_end] = model.predict(Xv[test_start:test_end])
+        pred[test_mask] = model.predict(Xv[test_mask])
 
     composite_long = np.full(len(y), np.nan)
     composite_long[valid] = pred
@@ -607,24 +687,17 @@ def synthesize_stacking_lambdarank(
 
     valid = ~np.isnan(X).any(axis=1) & ~np.isnan(y)
     Xv, yv = X[valid], y[valid]
-    obs_dates = obs.get_level_values(0)[valid]   # 每行对应的日期（valid 后）
+    date_arr = obs.get_level_values(0)[valid].to_numpy()   # 每行对应的日期（valid 后）
     n = len(yv)
-    embargo_rows = embargo_days * len(cols)
 
     pred = np.full(n, np.nan)
-    edges = np.linspace(0, n, n_splits + 1).astype(int)
-    for s in range(1, n_splits):
-        test_start, test_end = edges[s], edges[s + 1]
-        train_mask = np.arange(n) < test_start
-        if embargo_rows > 0:
-            purge_from = max(0, test_start - embargo_rows)
-            train_mask[purge_from:test_start] = False
+    for train_mask, test_mask in _time_folds(date_arr, n_splits, embargo_days=embargo_days):
         tr_rows = np.where(train_mask)[0]
-        if len(tr_rows) < max(200, Xv.shape[1] * 10) or test_end - test_start == 0:
+        if len(tr_rows) < max(200, Xv.shape[1] * 10) or test_mask.sum() == 0:
             continue
         # 训练段 query group：按日重算（行序=日期升序，value_counts().sort_index() 对齐）
-        tr_dates = obs_dates[tr_rows]
-        groups = tr_dates.value_counts().sort_index().values
+        tr_dates = date_arr[train_mask]
+        groups = pd.Series(tr_dates).value_counts().sort_index().values
         model = LGBMRanker(
             n_estimators=n_estimators, learning_rate=learning_rate,
             num_leaves=num_leaves, max_depth=max_depth,
@@ -633,7 +706,7 @@ def synthesize_stacking_lambdarank(
             n_jobs=n_jobs, random_state=seed, verbose=-1,
         )
         model.fit(Xv[tr_rows], yv[tr_rows], group=groups)
-        pred[test_start:test_end] = model.predict(Xv[test_start:test_end])
+        pred[test_mask] = model.predict(Xv[test_mask])
 
     composite_long = np.full(len(y), np.nan)
     composite_long[valid] = pred

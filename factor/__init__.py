@@ -1,6 +1,6 @@
 """因子层入口。"""
 from factor.base import Factor, FactorEngine
-from factor.library import (
+from factor.classic import (
     ALL_FACTORS,
     Amplitude,
     Momentum,
