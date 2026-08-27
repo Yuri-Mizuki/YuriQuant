@@ -13,6 +13,7 @@ import pandas as pd
 import pytest
 
 from config import Config
+from conftest import MockDataSource
 from data.cache import DataCache
 from data.universe import Universe
 
@@ -287,3 +288,153 @@ def test_narrow_calendar_query_does_not_truncate(tmp_path: Path, mock_ds):
     # 窄区间再查一次
     cache.get_calendar(20240101, 20240131)
     assert len(pd.read_parquet(p)) == full_len
+
+
+# ===========================================================================
+# PIT 事件表刷新策略（2026-08-27）：指数成分/行业分类按 refreshed_on 水位回源
+# ===========================================================================
+
+class _CountingConstituentDS(MockDataSource):
+    """统计成分接口调用次数，可编程返回"新增成员"，用于验证刷新策略。"""
+
+    def __init__(self):
+        super().__init__()
+        self.constituent_calls = 0
+        self.extra_codes: list[str] = []
+
+    def get_index_constituent(self, index_code: str) -> pd.DataFrame:
+        self.constituent_calls += 1
+        df = super().get_index_constituent(index_code)
+        for code in self.extra_codes:
+            df = pd.concat([df, pd.DataFrame([{
+                "con_code": code, "in_date": "2024-06-03",
+                "out_date": pd.NaT, "INDEX_NAME": "沪深300",
+            }])], ignore_index=True)
+        return df
+
+
+def _mark_refreshed(cache: DataCache, table: str, days_ago: int) -> None:
+    """把表的 refreshed_on 水位拨回到 days_ago 天前。"""
+    import datetime as dt
+    cache._set_refreshed_on(
+        table, (dt.date.today() - dt.timedelta(days=days_ago)).isoformat())
+
+
+def test_constituent_cache_fresh_no_refetch(tmp_path: Path, mock_ds):
+    """水位新鲜（<7 天）时直接读缓存，不访问数据源。"""
+    ds = _CountingConstituentDS()
+    cache = DataCache(ds, cache_root=tmp_path)
+    cache.get_index_constituent("000300.SH")
+    assert ds.constituent_calls == 1
+    _mark_refreshed(cache, "index_constituent_000300_SH", days_ago=1)
+    cache.get_index_constituent("000300.SH")
+    assert ds.constituent_calls == 1, "水位新鲜不应回源"
+
+
+def test_constituent_cache_stale_refetches_and_merges(tmp_path: Path, mock_ds):
+    """过期（>=7 天）回源：新成员并入本地表，旧事件保留。"""
+    ds = _CountingConstituentDS()
+    cache = DataCache(ds, cache_root=tmp_path)
+    first = cache.get_index_constituent("000300.SH")
+    n_first = len(first)
+    _mark_refreshed(cache, "index_constituent_000300_SH", days_ago=10)
+
+    # 数据源出现新纳入成员
+    ds.extra_codes = ["600999.SH"]
+    merged = cache.get_index_constituent("000300.SH")
+
+    assert ds.constituent_calls == 2
+    assert len(merged) == n_first + 1
+    assert (merged["con_code"] == "600999.SH").sum() == 1
+    # 本地表已合并落盘：再次强制过期重拉也仍含两代事件（只增不删）
+    ds.extra_codes = []
+    _mark_refreshed(cache, "index_constituent_000300_SH", days_ago=10)
+    again = cache.get_index_constituent("000300.SH")
+    assert (again["con_code"] == "600999.SH").sum() == 1
+
+
+def test_constituent_refetch_failure_falls_back_to_local(tmp_path: Path, mock_ds):
+    """回源抛错（无凭证/离线）时回退本地缓存而非清空。"""
+
+    class _BrokenAfterFirst(_CountingConstituentDS):
+        def get_index_constituent(self, index_code: str) -> pd.DataFrame:
+            if self.constituent_calls >= 1:
+                raise ConnectionError("SDK 离线")
+            return super().get_index_constituent(index_code)
+
+    ds = _BrokenAfterFirst()
+    cache = DataCache(ds, cache_root=tmp_path)
+    cache.get_index_constituent("000300.SH")
+    _mark_refreshed(cache, "index_constituent_000300_SH", days_ago=30)
+    fallback = cache.get_index_constituent("000300.SH")
+    assert len(fallback) > 0, "回源失败必须回退本地旧表"
+
+
+def test_constituent_empty_fetch_keeps_local(tmp_path: Path, mock_ds):
+    """回源成功但返回空表时保留本地缓存（网络抖动不应清掉历史）。"""
+
+    class _EmptyLater(_CountingConstituentDS):
+        def get_index_constituent(self, index_code: str) -> pd.DataFrame:
+            if self.constituent_calls >= 1:
+                return pd.DataFrame()
+            return super().get_index_constituent(index_code)
+
+    ds = _EmptyLater()
+    cache = DataCache(ds, cache_root=tmp_path)
+    cache.get_index_constituent("000300.SH")
+    _mark_refreshed(cache, "index_constituent_000300_SH", days_ago=10)
+    kept = cache.get_index_constituent("000300.SH")
+    assert len(kept) > 0
+
+
+def test_constituent_missing_source_raises_when_no_local(tmp_path: Path):
+    """本地无缓存且回源失败：应抛错而非静默返回空池（防误判为空成分）。"""
+
+    class _AlwaysBroken(_CountingConstituentDS):
+        def get_index_constituent(self, index_code: str) -> pd.DataFrame:
+            raise ConnectionError("SDK 离线")
+
+    cache = DataCache(_AlwaysBroken(), cache_root=tmp_path)
+    with pytest.raises(ConnectionError):
+        cache.get_index_constituent("000300.SH")
+
+
+def test_industry_classification_same_refresh_policy(tmp_path: Path, mock_ds):
+    """行业分类走同一刷新通道：fresh 不回源、过期回源合并不丢旧行业。"""
+    calls = {"n": 0}
+
+    class _CountingIndustry(MockDataSource):
+        def get_industry_classification(self, level: int = 1) -> pd.DataFrame:
+            calls["n"] += 1
+            return pd.DataFrame({
+                "code": ["600000.SH"],
+                "industry_code": [f"L{level}_BANK"],
+                "industry_name": ["银行"],
+                "level": [level],
+                "in_date": ["2023-01-01"],
+                "out_date": [pd.NaT],
+            })
+
+    ds = _CountingIndustry()
+    cache = DataCache(ds, cache_root=tmp_path)
+    first = cache.get_industry_classification(1)
+    _mark_refreshed(cache, "industry_classification_level1", days_ago=1)
+    cache.get_industry_classification(1)
+    assert calls["n"] == 1, "水位新鲜不应回源"
+
+    # 过期 + 数据源多了一个行业 → 合并两行
+    class _Multi(_CountingIndustry):
+        def get_industry_classification(self, level: int = 1) -> pd.DataFrame:
+            df = super().get_industry_classification(level)
+            extra = pd.DataFrame([{
+                "code": "600001.SH", "industry_code": f"L{level}_REIT",
+                "industry_name": "房地产", "level": level,
+                "in_date": "2024-07-01", "out_date": pd.NaT,
+            }])
+            return pd.concat([df, extra], ignore_index=True)
+
+    cache2 = DataCache(_Multi(), cache_root=tmp_path)
+    cache2.get_industry_classification(1)
+    _mark_refreshed(cache2, "industry_classification_level1", days_ago=10)
+    merged = cache2.get_industry_classification(1)
+    assert len(merged) == 2

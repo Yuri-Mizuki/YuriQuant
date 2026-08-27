@@ -41,7 +41,9 @@
 """
 from __future__ import annotations
 
+import datetime as dt
 import json
+import logging
 from pathlib import Path
 from typing import Iterable
 
@@ -49,6 +51,8 @@ import pandas as pd
 
 from config import Config
 from data.datasource import DataSource
+
+log = logging.getLogger("data.cache")
 
 
 class DataCache:
@@ -82,6 +86,32 @@ class DataCache:
     def _set_last_date(self, table: str, d: int) -> None:
         self._meta.setdefault(table, {})["last_date"] = d
         self._save_meta()
+
+    def _get_refreshed_on(self, table: str) -> str:
+        """表最近一次从数据源刷新的日期（YYYY-MM-DD）；无记录返回空串。"""
+        return str(self._meta.get(table, {}).get("refreshed_on", ""))
+
+    def _set_refreshed_on(self, table: str, day: str | None = None) -> None:
+        self._meta.setdefault(table, {})["refreshed_on"] = (
+            day or dt.date.today().isoformat()
+        )
+        self._save_meta()
+
+    def _refresh_stale(self, table: str, max_age_days: int) -> bool:
+        """判断整表覆盖型 PIT 表是否超过刷新间隔、需要回源。
+
+        以 ``refreshed_on``（本地墙钟日期）为水位：成分/行业这类事件表没有
+        自带的时间戳可比对，只能用"上次拉取距今多久"近似——超过 max_age_days
+        或从未记录过刷新时间即视为过期。离线/无数据源环境下由调用方捕获异常。
+        """
+        last = self._get_refreshed_on(table)
+        if not last:
+            return True
+        try:
+            age = (dt.date.today() - dt.date.fromisoformat(last)).days
+        except ValueError:
+            return True
+        return age >= max_age_days
 
     # ---- 数据指纹（P1，2026-08-03：实验结果绑定数据版本）----
     def get_fingerprint(self) -> str:
@@ -414,16 +444,29 @@ class DataCache:
         )
 
     # ---- 指数成分 ----
+    # 成分是 PIT 事件表（in_date/out_date 全量历史），但**新纳入的成员/新指数
+    # 只有回源才能拿到**——文件存在就直接读会让"本地首次拉取后成分集被冻结"。
+    # 刷新策略：meta 记 refreshed_on（墙钟日期），超过 REFRESH_DAYS 回源整表
+    # 合并去重（保留旧事件 + 追加新事件），离线数据源拉取失败时静默回退缓存。
+    INDEX_CONSTITUENT_REFRESH_DAYS = 7
+
     def get_index_constituent(self, index_code: str) -> pd.DataFrame:
-        # 命名统一（2026-08-26）：与 index_daily_{safe} 一致，点转下划线
         safe = index_code.replace(".", "_")
-        p = self._root / f"index_constituent_{safe}.parquet"
-        if p.exists():
-            return pd.read_parquet(p)
-        df = self._ds.get_index_constituent(index_code)
-        if not df.empty:
-            df.to_parquet(p, compression="snappy")
-        return df
+        table = f"index_constituent_{safe}"
+        return self._refresh_pit_event_table(
+            f"{table}.parquet", table,
+            fetch_fn=lambda: self._ds.get_index_constituent(index_code),
+            merge_fn=self._merge_membership_events,
+            max_age_days=self.INDEX_CONSTITUENT_REFRESH_DAYS,
+        )
+
+    @staticmethod
+    def _merge_membership_events(cached: pd.DataFrame, new: pd.DataFrame) -> pd.DataFrame:
+        """成员关系事件表合并：按全部列去重（新旧重叠期的事件一致时仅保留一份）。"""
+        if cached is None or cached.empty:
+            return new
+        combined = pd.concat([cached, new], ignore_index=True)
+        return combined.drop_duplicates().reset_index(drop=True)
 
     # ---- 证券信息 ----
     def get_code_info(self, security_type: str = "EXTRA_STOCK_A") -> pd.DataFrame:
@@ -434,15 +477,58 @@ class DataCache:
             df.to_parquet(p, compression="snappy")
         return df
 
-    # ---- 行业分类 ----
+    # ---- 行业分类（PIT 事件表，刷新策略同指数成分）----
     def get_industry_classification(self, level: int = 1) -> pd.DataFrame:
-        """行业分类表体量小，整表覆盖缓存（同 get_index_constituent）。"""
-        p = self._root / f"industry_classification_level{level}.parquet"
-        if p.exists():
+        table = f"industry_classification_level{level}"
+        return self._refresh_pit_event_table(
+            f"{table}.parquet", table,
+            fetch_fn=lambda: self._ds.get_industry_classification(level),
+            merge_fn=self._merge_membership_events,
+            max_age_days=self.INDEX_CONSTITUENT_REFRESH_DAYS,
+        )
+
+    def _refresh_pit_event_table(
+        self,
+        filename: str,
+        table: str,
+        fetch_fn,
+        merge_fn,
+        max_age_days: int,
+    ) -> pd.DataFrame:
+        """PIT 事件表通用读取：过期回源合并，失败/离线回退本地。
+
+        - 本地无文件：必须回源（拿不到就返回空表，调用方按空处理）；
+        - 本地有且未过期（refreshed_on 距今 < max_age_days）：直接读缓存，
+          不访问数据源（离线研究可用）；
+        - 本地有但过期：尝试回源；成功则与旧表**合并去重**落盘（事件表只增
+          不删——旧行是历史真相，删了会造成 PIT 缺口），失败（无 SDK 凭证 /
+          离线桩 / 网络故障）则回退本地旧表并打日志。
+        """
+        p = self._root / filename
+        has_local = p.exists()
+        need_fetch = (not has_local) or self._refresh_stale(table, max_age_days)
+        if not need_fetch:
             return pd.read_parquet(p)
-        df = self._ds.get_industry_classification(level)
-        if not df.empty:
-            df.to_parquet(p, compression="snappy")
+
+        try:
+            df = fetch_fn()
+        except Exception as e:  # noqa: BLE001
+            if not has_local:
+                raise
+            log.warning("刷新 %s 失败（%s），回退本地缓存（%s）",
+                        table, type(e).__name__, self._get_refreshed_on(table))
+            return pd.read_parquet(p)
+
+        if df.empty:
+            if has_local:
+                log.warning("%s 回源返回空表，保留本地缓存", table)
+                return pd.read_parquet(p)
+            return df
+
+        if has_local:
+            df = merge_fn(pd.read_parquet(p), df)
+        df.to_parquet(p, compression="snappy")
+        self._set_refreshed_on(table)
         return df
 
     # ---- 股本结构 ----
