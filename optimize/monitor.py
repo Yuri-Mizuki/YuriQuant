@@ -5,7 +5,8 @@
 的滚动 IC / 衰减 / 自相关能力：
 
 - rolling_ic：滚动窗口 IC（窗口太小噪音大，建议 ≥ 40 交易日）
-- monitor_report：全期 vs 近期对比（IC 均值漂移、IR、衰减、自相关、近 1/3 段斜率）
+- monitor_ic_series：对现成 IC 序列做全期 vs 近期漂移对比（因子库复用）
+- monitor_report：面板级监控报告（IC 漂移、IR、衰减、自相关）
 
 TODO（待建）：
 - 拥挤度监控（因子截面相关性、同族因子拥挤）
@@ -21,7 +22,15 @@ import pandas as pd
 from research.factor_analysis import calc_ic_decay, calc_ic_series, calc_ir, factor_autocorr
 from research.robust_stats import nw_tstat
 
-__all__ = ["rolling_ic", "monitor_report"]
+__all__ = ["rolling_ic", "monitor_ic_series", "monitor_report"]
+
+
+def _stats(s: pd.Series) -> dict[str, float]:
+    t_nw, _se_nw, _lag = nw_tstat(s.values) if len(s) > 1 else (0.0, 0.0, 0)
+    from scipy import stats as _stats
+    p_nw = 2.0 * (1.0 - _stats.t.cdf(abs(t_nw), df=max(len(s) - 1, 1))) if len(s) > 1 else float("nan")
+    return {"mean": float(s.mean()), "ir": float(calc_ir(s)),
+            "t_nw": float(t_nw), "p_nw": float(p_nw)}
 
 
 def rolling_ic(
@@ -41,13 +50,46 @@ def rolling_ic(
     return ic.rolling(window, min_periods=max(10, window // 2)).mean()
 
 
+def monitor_ic_series(
+    ic_series: pd.Series,
+    window: int = 60,
+) -> dict[str, Any]:
+    """对现成 IC 序列做漂移监控（因子库生命周期监控复用，无需重算面板）。
+
+    对比「全期」与「最近 window 交易日」两段：
+    ic_mean_full / ic_mean_recent / ic_drift / ic_ir_full / ic_ir_recent /
+    ic_t_nw_full / ic_p_nw_full / ic_t_nw_recent / ic_p_nw_recent /
+    n_days / recent_n_days / status（recent 均值 < 全期一半 → warning）。
+    """
+    ic = ic_series.dropna()
+    if len(ic) < 2:
+        return {"ic_mean_full": float("nan"), "ic_mean_recent": float("nan"),
+                "ic_drift": float("nan"), "ic_ir_full": float("nan"),
+                "ic_ir_recent": float("nan"), "ic_t_nw_full": float("nan"),
+                "ic_p_nw_full": float("nan"), "ic_t_nw_recent": float("nan"),
+                "ic_p_nw_recent": float("nan"), "n_days": 0, "recent_n_days": 0,
+                "status": "unknown"}
+    recent = ic.tail(window) if len(ic) > window else ic
+    full = _stats(ic)
+    rec = _stats(recent)
+    return {
+        "ic_mean_full": full["mean"], "ic_mean_recent": rec["mean"],
+        "ic_drift": rec["mean"] - full["mean"],
+        "ic_ir_full": full["ir"], "ic_ir_recent": rec["ir"],
+        "ic_t_nw_full": full["t_nw"], "ic_p_nw_full": full["p_nw"],
+        "ic_t_nw_recent": rec["t_nw"], "ic_p_nw_recent": rec["p_nw"],
+        "n_days": int(len(ic)), "recent_n_days": int(len(recent)),
+        "status": "normal" if rec["mean"] >= 0.5 * full["mean"] else "warning",
+    }
+
+
 def monitor_report(
     factor_panel: pd.DataFrame,
     returns_panel: pd.DataFrame,
     window: int = 60,
     max_lag: int = 10,
 ) -> dict[str, Any]:
-    """因子/模型漂移监控报告。
+    """因子/模型漂移监控报告（面板级，需重算 IC）。
 
     对比「全期」与「最近 window 交易日」两段的 IC 特征，量化漂移：
 
@@ -60,27 +102,8 @@ def monitor_report(
     - n_days / recent_n_days：样本量
     """
     ic = calc_ic_series(factor_panel, returns_panel).dropna()
-    recent = ic.tail(window) if len(ic) > window else ic
-
-    def _stats(s: pd.Series) -> dict[str, float]:
-        t_nw, _se_nw, _lag = nw_tstat(s.values) if len(s) > 1 else (0.0, 0.0, 0)
-        from scipy import stats as _stats
-        p_nw = 2.0 * (1.0 - _stats.t.cdf(abs(t_nw), df=max(len(s) - 1, 1))) if len(s) > 1 else float("nan")
-        return {"mean": float(s.mean()), "ir": float(calc_ir(s)),
-                "t_nw": float(t_nw), "p_nw": float(p_nw)}
-
-    full = _stats(ic)
-    rec = _stats(recent)
+    base = monitor_ic_series(ic, window=window)
     decay = calc_ic_decay(factor_panel, returns_panel, max_lag=max_lag)
-
-    return {
-        "ic_mean_full": full["mean"], "ic_mean_recent": rec["mean"],
-        "ic_drift": rec["mean"] - full["mean"],
-        "ic_ir_full": full["ir"], "ic_ir_recent": rec["ir"],
-        "ic_t_nw_full": full["t_nw"], "ic_p_nw_full": full["p_nw"],
-        "ic_t_nw_recent": rec["t_nw"], "ic_p_nw_recent": rec["p_nw"],
-        "ic_decay": decay,
-        "autocorr": float(factor_autocorr(factor_panel)),
-        "n_days": int(len(ic)), "recent_n_days": int(len(recent)),
-        "status": "normal" if rec["mean"] >= 0.5 * full["mean"] else "warning",
-    }
+    base["ic_decay"] = decay
+    base["autocorr"] = float(factor_autocorr(factor_panel))
+    return base
