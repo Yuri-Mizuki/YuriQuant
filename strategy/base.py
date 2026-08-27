@@ -36,4 +36,8 @@ class Strategy(ABC):
         """
         ...
 
+    def get_weights_at(self, date: pd.Timestamp, factor_values: pd.Series) -> pd.Series:
+        """带调仓日的权重计算（默认退化为 get_weights；需要日期的策略可覆写）。"""
+        return self.get_weights(factor_values)
+
 

@@ -29,7 +29,10 @@ import pandas as pd
 
 __all__ = ["Experiments", "default_experiments_path"]
 
-DEFAULT_PATH = Path("reports") / "experiments.csv"
+# 默认实验日志锚定到项目根：任何工作目录下（含 Windows 计划任务，CWD=System32）
+# 都稳定写入 e:\YuriQuant\reports\experiments.csv，避免随 CWD 漂移。
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_PATH = _PROJECT_ROOT / "reports" / "experiments.csv"
 
 _COLUMNS = [
     "run_id", "timestamp", "kind", "command", "params",

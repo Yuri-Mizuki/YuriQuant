@@ -18,6 +18,8 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
+from factor.preprocessing import neutralize, build_style_covariates
+
 
 def calc_ic_series(
     factor_panel: pd.DataFrame,
@@ -222,3 +224,88 @@ def factor_summary(
         "ic_series": ic,
         "layer_nav": layers,
     }
+
+
+# ===========================================================================
+# 中性化 IC（风格剥离后的纯 Alpha IC）
+# ===========================================================================
+def calc_neutral_ic_series(
+    factor_panel: pd.DataFrame,
+    returns_panel: pd.DataFrame,
+    style_covariates: dict[str, pd.DataFrame] | None = None,
+    panel: dict[str, pd.DataFrame] | None = None,
+    market_cap_panel: pd.DataFrame | None = None,
+    industry_panel: pd.DataFrame | None = None,
+    method: str = "spearman",
+) -> pd.Series:
+    """计算中性化 IC：先对因子做风格中性化取残差，再算 Rank IC。
+
+    中性化流程（逐日截面）::
+
+        因子_raw = β₀ + β₁·Size + β₂·Industry + β₃·Mom + β₄·Vol + β₅·Turn + ε
+        IC_neutral = Spearman(ε, 未来收益)
+
+    风格因子来源（优先级递减）：
+    1. ``style_covariates``：调用方直接传入的协变量 dict（最灵活）
+    2. ``panel`` + ``market_cap_panel`` + ``industry_panel``：从原始面板自动构建
+       （调用 build_style_covariates，华泰五因子口径）
+    3. 两者都没有：退化为 raw IC（不中性化，等于 calc_ic_series）
+
+    Args:
+        factor_panel: DataFrame(date, code), 因子值。
+        returns_panel: DataFrame(date, code), 未来一期收益。
+        style_covariates: 风格协变量面板 dict，key 为 ``size``/``industry``/``mom``/
+            ``vol``/``turn``（或任意子集）。优先使用。
+        panel: 原始 OHLCV 面板 dict（含 close/volume 等），用于自动构建协变量。
+        market_cap_panel: 市值面板（date×code）。
+        industry_panel: 行业面板（date×code，值=行业名）。
+        method: IC 计算方法，默认 'spearman'（Rank IC）。
+
+    Returns:
+        Series(index=date), 每日中性化 IC。name='ic_neutral'。
+    """
+    # 确定协变量来源
+    covariates = style_covariates
+    if covariates is None:
+        if panel is not None:
+            covariates = build_style_covariates(
+                panel,
+                market_cap_panel=market_cap_panel,
+                industry_panel=industry_panel,
+            )
+        elif market_cap_panel is not None or industry_panel is not None:
+            # 没有完整 panel 但有市值/行业面板——只做 2 因子中性化
+            covariates = {}
+            if market_cap_panel is not None:
+                covariates["size"] = market_cap_panel
+            if industry_panel is not None:
+                covariates["industry"] = industry_panel
+
+    if not covariates:
+        # 无协变量——退化为 raw IC
+        ic = calc_ic_series(factor_panel, returns_panel, method=method)
+        ic.name = "ic_neutral"
+        return ic
+
+    # 从 covariates 中拆分出 industry（特殊处理：行业面板是分类变量，走 industry_panel 参数）
+    industry_cov = covariates.get("industry")
+    size_cov = covariates.get("size")
+
+    # 其余连续协变量（mom/vol/turn 等）
+    extra_cov: dict[str, pd.DataFrame] = {}
+    for k, v in covariates.items():
+        if k not in ("industry", "size"):
+            extra_cov[k] = v
+
+    # 逐日截面回归取残差
+    residual_panel = neutralize(
+        factor_panel,
+        market_cap_panel=size_cov,
+        industry_panel=industry_cov,
+        extra_covariates=extra_cov if extra_cov else None,
+    )
+
+    # 对残差算 IC
+    ic = calc_ic_series(residual_panel, returns_panel, method=method)
+    ic.name = "ic_neutral"
+    return ic
