@@ -78,6 +78,27 @@ class TransactionCosts:
         return commission + stamp + slip
 
 
+class EtfCosts(TransactionCosts):
+    """ETF 场内交易成本：免印花税、佣金按场内基金口径（更低且最低档 0.1 元）、滑点同股票。
+
+    与股票档（含印花税千 1）不同：ETF 买卖免印花税，且佣金费率与最低门槛更低。
+    用于 ETF 轮动回测（VectorBacktest 要求成本对象实现 ``calc`` 接口）。
+    """
+
+    def __init__(
+        self,
+        commission_rate: float = 0.0005,
+        commission_min: float = 0.1,
+        slippage_bp: float = 5.0,
+    ):
+        super().__init__(
+            commission_rate=commission_rate,
+            commission_min=commission_min,
+            stamp_duty=0.0,  # ETF 免印花税
+            slippage_bp=slippage_bp,
+        )
+
+
 @dataclass
 class ShortCostModel:
     """空头腿成本模型：借券费率（按日计提）+ 融券保证金占用（资金效率报告）。

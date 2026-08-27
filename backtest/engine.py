@@ -149,6 +149,7 @@ class VectorBacktest:
         returns_panel: pd.DataFrame,
         executable_mask: pd.DataFrame | None = None,
         horizon: int = 1,
+        rebalance_days: set | None = None,
     ) -> BacktestResult:
         """执行回测。
 
@@ -162,6 +163,9 @@ class VectorBacktest:
                      赚取 factor[t] 对应的未来 horizon 段收益（= fwd[t]，即
                      forward_returns(close, horizon)[t]），使选股信号与记账
                      口径完全一致，二择期仅取调仓日结算。
+            rebalance_days: 可选自定义调仓日集合(真实交易日)。传入时覆盖
+                     rebalance_freq 生成的固定日历调仓日（用于自适应/事件
+                     驱动调仓，如择时触发）。为 None 时维持 rebalance_freq。
         Returns:
             BacktestResult
         """
@@ -182,8 +186,9 @@ class VectorBacktest:
                 index=common_dates, columns=common_codes
             ).fillna(True)
 
-        # 调仓日
-        rebalance_days = self._get_rebalance_days(dates)
+        # 调仓日：可用自定义调仓日覆盖固定频率（自适应/事件驱动调仓）
+        rebalance_days = rebalance_days if rebalance_days is not None \
+            else self._get_rebalance_days(dates)
 
         # 用 numpy 数组存储结果，避免 pandas 链式赋值问题
         rp_values = rp.values  # (n_days, n_codes)
