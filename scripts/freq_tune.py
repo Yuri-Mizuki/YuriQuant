@@ -53,7 +53,11 @@ def main():
     for hz in HORIZONS:
         # 每个 horizon 训练一次 gbdt（标签前瞻不同）
         pred, panel, fwd_all = build_model_panel("gbdt", hz, test_days)
-        fwd = fwd_all.loc[test_days]
+        # 回测收益口径（engine 约定）：h=1 用未 shift 的 pct_change()
+        if hz == 1:
+            fwd = panel["close"].pct_change(fill_method=None).reindex(test_days)
+        else:
+            fwd = fwd_all.loc[test_days]
         pred = pred.loc[test_days].reindex(columns=fwd.columns)
         cov = build_style_covariates_panel(panel)
         sig = neutralize_panel(pred, cov)

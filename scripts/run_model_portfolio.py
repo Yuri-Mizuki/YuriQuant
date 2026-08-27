@@ -137,7 +137,10 @@ def build_model_panel(model: str, horizon: int, test_days: pd.DatetimeIndex):
     params = DEFAULT_MODEL_PARAMS.get(model, {})
     pred = rolling_oos(PREDICTORS[model], sel, labels, test_days, all_days,
                        n_folds=12, embargo_days=embargo, min_train_days=120, **params)
-    fwd = close.pct_change(horizon, fill_method=None).shift(-horizon)
+    # 回测收益口径（engine 约定）：h=1 传未 shift 的 pct_change()（第 i 行 =
+    # i-1→i 单日收益，与指数基准日标签对齐）；h>1 传 forward 段累计面板。
+    fwd = close.pct_change(fill_method=None) if horizon == 1 \
+        else close.pct_change(horizon, fill_method=None).shift(-horizon)
     return pred, panel, fwd
 
 

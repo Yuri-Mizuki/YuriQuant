@@ -266,7 +266,10 @@ class FactorLibrary:
         for cfg in CANONICAL_CONFIGS:
             bt = VectorBacktest(cfg.strategy(k=cfg.k), rebalance_freq=cfg.freq,
                                 short_costs=short_costs, deleverage=deleverage)
-            res = bt.run(panel, returns_panel)
+            # 库内收益口径为 shift(-1)（第 i 行 = i→i+1 收益，调仓日 t 权重赚
+            # rp[t]=t→t+1，无前视）；canonical 回测只算绝对指标、不对齐指数
+            # 算 beta/IR，故显式声明关闭引擎的 shift 指纹守卫。
+            res = bt.run(panel, returns_panel, check_convention=False)
             dret = res.daily_returns
             eval_cols[f"dret_{cfg.key}"] = dret
             eval_cols[f"equity_{cfg.key}"] = res.equity_curve

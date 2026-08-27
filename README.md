@@ -218,6 +218,17 @@ mock 落 `reports/models_mock`，真实落 `reports/models`。
   赚 rp[t]（t-1→t 信号日当天收益）是**前视一天**，A 股日内反转效应下产生系统性
   方向偏差（模型反向 top50 曾虚高 +56.5%）；修复后权重(t)↔收益(t→t+1)，与 IC/
   分层口径统一，且 daily_returns 日期标签与指数对齐（beta 由 -0.03 修正为 0.56）。
+- **回测引擎三项修复 + 口径守卫**（`backtest/engine.py`，2026-08-27）：
+  ① **h>1 区间结算修复**——此前 horizon>1 只在调仓日乘一次 (1+seg)^(1/span)、
+  区间中间日收益记 0，长持有净值被系统性压缩（每日+2% 股票 h=5 月频仅得 ~0%）；
+  现改为区间内逐日几何均摊复利，回归测试固化数值对账。**此前 freq_tune /
+  multiyear_oos 的所有 h>1 结论为伪结果，需重跑**（真实复测：2025 段 gbdt 中性化
+  Top20% 月频 h=5 超额 −20.0%、Sharpe 1.16 vs h=1 超额 +3.07%/Sharpe 1.60，
+  h=1 仍显著占优但差幅可信）。② **avg_turnover 修复**——按调仓事件平均
+  （turnover_series 仅调仓日有值），weights_history 改为每日记录真实持仓；
+  此前 diff 口径被非调仓日零行稀释 ~7 倍。③ **收益面板口径守卫**——h=1 传入
+  shift(-h) 前视面板直接报错；run_model_portfolio/freq_tune/multiyear_oos
+  同步修正（h=1 传未 shift 的 pct_change()，与基准指数标签严格对齐）。
   诊断脚本 `scripts/diagnose_factor_vs_model.py`：单因子 vs 模型同口径对比——
   **range20/alpha191_159/vol60 等负 IC 单因子月频 top50 超额 +20%~+36%，实为
   高波动/高 beta 风格在 2024-2026 上行期的暴露，非预测力**；模型 IC=0.067 最高
@@ -235,21 +246,20 @@ mock 落 `reports/models_mock`，真实落 `reports/models`。
   `strategy/examples.py: TopFracLongOnly`，入口 `scripts/run_model_portfolio.py`，
   输出 `reports/model_portfolio/`）：把「模型信号 → 风格中性化 → Top20% 重仓多头」
   固化为可复用正式入口，配置只此一处真源。默认 horizon=1 / gbdt / frac=0.20 /
-  月度调仓，2025 test 段成本后超额沪深300 **+4.85%**（Sharpe 1.70，MaxDD −11.3%，
-  成本前 +8.70%）。关键规律：只支持 h=1（h=5 组合超额 −24.9% 难变现）、Top20%
+  月度调仓，2025 test 段成本后超额沪深300 **+3.07%**（Sharpe 1.60，MaxDD −11.3%；
+  引擎口径修复后复测值）。关键规律：只支持 h=1（h=5 组合难变现）、Top20%
   是 alpha 密度甜点、中性化是信号变现的关键（raw IC 高但跑输风格）。
 - **修复 LGBRankerPredictor**（`model/predictor.py`）：`fit()` 曾硬编码
   `N_BINS=30`+`objective=lambdarank`、绕过构造参数导致负 IC(−0.055)；改为使用
   实例参数、默认 `labels_bins=2`（截面中位数二分）+`rank_xendcg` 后样本内 IC
   由负转正至 +0.207（434/484 天为正），现有调用方无需改动。
 - **调仓频率精修**（`scripts/freq_tune.py` → `reports/freq_tune/freq_tune.csv`）：
-  h=1 时 M 月度最优（超额 +4.85%）；频率越高换手越严重侵蚀 alpha，W 超额
-  −8.9%、D 超额 −39.9%；h=5 只有月度跨度（≥17 天）合法，跨度过短会被回测引擎
-  守卫拦截（防收益虚增）。
+  h=1 时 M 月度最优；频率越高换手越严重侵蚀 alpha。**注意：本实验的 h>1 组
+  在回测引擎 BUG（2026-08-27 修复，见下）下运行，h5 结论不可信，需重跑**。
 - **多年度 OOS 稳健性**（`scripts/multiyear_oos.py` → `reports/multiyear/`）：
   gbdt/ridge/ranker × h1/h5 × D/W/M 在 2023/2024/2025 分年 walk-forward
-  （特征在定型期 fixed，防前视选择）。结论：**h1×M 是唯一三年一致稳健的解**，
-  gbdt 在熊/牛/强牛期均跑赢沪深300；h5 仅熊市好、牛市惨败（IC 高 ≠ 收益）。
+  （特征在定型期 fixed，防前视选择）。原结论"h1×M 是唯一三年一致稳健的解"
+  基于含 bug 的 h>1 结算口径，修复后需重新验证。
   注：多年度结果需在真实数据下运行该脚本重新生成（`reports/multiyear/` 尚空）。
 
 ## 安装

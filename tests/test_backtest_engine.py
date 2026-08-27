@@ -225,3 +225,130 @@ def test_short_costs_disabled_matches_old_behavior():
     res = bt.run(fp, rp)
     assert (res.borrow_fee_series == 0).all()
     assert res.metrics().get("borrow_fee_total", 0.0) == 0.0
+
+
+# ===========================================================================
+# 回归测试（2026-08-27 引擎修复）：h>1 区间结算 / avg_turnover / 口径守卫
+# ===========================================================================
+
+class _BuyAndHoldA(Strategy):
+    """恒定满仓 A（用于对账的确定性策略）。"""
+
+    name = "hold_a"
+
+    def get_weights(self, factor_values: pd.Series) -> pd.Series:
+        return pd.Series(1.0, index=["A"])
+
+
+def _zero_costs():
+    from backtest.costs import TransactionCosts
+    return TransactionCosts(commission_rate=0, commission_min=0,
+                            stamp_duty=0, slippage_bp=0)
+
+
+def test_h1_accounting_matches_manual_compound():
+    """h=1 主路径：无成本下净值必须精确等于手工逐日复利。"""
+    dates = pd.bdate_range("2024-01-01", periods=10)
+    rp = pd.DataFrame({"A": [0.01] * 10}, index=dates)
+    fp = pd.DataFrame({"A": [1.0] * 10}, index=dates)
+    bt = VectorBacktest(_BuyAndHoldA(), rebalance_freq="M",
+                        costs=_zero_costs(),
+                        short_costs=ShortCostModel(borrow_rate=0))
+    res = bt.run(fp, rp, horizon=1)
+    # 首日建仓，自次日起赚 9 天
+    expected = 1.01 ** 9 - 1
+    assert res.equity_curve.iloc[-1] - 1 == pytest.approx(expected)
+
+
+def test_hGreaterThan1_settles_every_day_not_only_rebalance_day():
+    """BUG-1 回归：h>1 时区间内每个交易日都必须有均摊复利收益。
+
+    修复前只在调仓日乘一次 (1+seg)^(1/span)，区间中间日收益为 0，
+    长持有期净值被压缩成近似持平。
+    """
+    dates = pd.bdate_range("2024-01-01", periods=15)
+    rp = pd.DataFrame({"A": [0.02] * 15}, index=dates)
+    fwd5 = (1 + rp).rolling(5).apply(np.prod, raw=True).shift(-5) - 1
+    fp = pd.DataFrame({"A": [1.0] * 15}, index=dates)
+    rb = set(dates[::5])  # 每 5 天调仓，跨度恰为 horizon
+    bt = VectorBacktest(_BuyAndHoldA(), rebalance_freq="M",
+                        costs=_zero_costs(),
+                        short_costs=ShortCostModel(borrow_rate=0))
+    res = bt.run(fp, fwd5, horizon=5, rebalance_days=rb)
+
+    # 完整区间（前两段）内每日收益都应等于段收益的几何日均摊 ≈ 每日 2%
+    active_days = res.daily_returns.iloc[:10]
+    assert (active_days.abs() > 1e-9).all(), "h>1 区间中间日不应出现零收益"
+    daily_equiv = (1.02 ** 5) ** (1 / 5) - 1
+    assert active_days.iloc[0] == pytest.approx(daily_equiv, abs=1e-9)
+
+    # 全程复利精确等于手工：3 个完整结算段 × (1+seg)^...；尾段因 forward
+    # 值缺失（数据截断）不产生收益——前 10 天 = 2 个完整段的逐日摊派
+    expected = ((1.02 ** 5) ** (10 / 5))  # 两段每段 5 日、每日均摊后复合
+    assert res.equity_curve.iloc[9] == pytest.approx(expected, rel=1e-9)
+
+
+def test_avg_turnover_uses_rebalance_events_not_weight_diff():
+    """BUG-2 回归：avg_turnover 必须按调仓事件平均，不被非调仓日稀释。
+
+    月频 2 个月：建仓（0.5）+ 第二月调仓换手 0 → 平均 0.25。
+    修复前 weights_history 只有调仓行有值，diff 口径被 43 行零稀释。
+    """
+    dates = pd.bdate_range("2024-01-01", "2024-02-28")
+    rp = pd.DataFrame({"A": [0.01] * len(dates)}, index=dates)
+    fp = pd.DataFrame({"A": [1.0] * len(dates)}, index=dates)
+    bt = VectorBacktest(_BuyAndHoldA(), rebalance_freq="M",
+                        costs=_zero_costs(),
+                        short_costs=ShortCostModel(borrow_rate=0))
+    res = bt.run(fp, rp, horizon=1)
+    m = res.metrics()
+    assert m["avg_turnover"] == pytest.approx(0.25)
+
+
+def test_weights_history_records_daily_positions():
+    """weights_history 现在每日记录真实持仓（非调仓日不再是假 0）。"""
+    dates = pd.bdate_range("2024-01-01", periods=6)
+    rp = pd.DataFrame({"A": [0.01] * 6}, index=dates)
+    fp = pd.DataFrame({"A": [1.0] * 6}, index=dates)
+    bt = VectorBacktest(_BuyAndHoldA(), rebalance_freq="M",
+                        costs=_zero_costs(),
+                        short_costs=ShortCostModel(borrow_rate=0))
+    res = bt.run(fp, rp, horizon=1)
+    # day0 收盘建仓起每天都应持有 A
+    assert (res.weights_history["A"] == 1.0).all()
+
+
+def test_h1_shifted_panel_is_rejected():
+    """BUG-3 回归：h=1 传 shift(-1) 前视面板必须报错。"""
+    dates = pd.bdate_range("2024-01-01", periods=30)
+    rp = pd.DataFrame({"A": [0.01] * 30}, index=dates)
+    fp = pd.DataFrame({"A": [1.0] * 30}, index=dates)
+    bt = VectorBacktest(_BuyAndHoldA(), rebalance_freq="M",
+                        costs=_zero_costs(),
+                        short_costs=ShortCostModel(borrow_rate=0))
+    with pytest.raises(ValueError, match="错位一天"):
+        bt.run(fp, rp.shift(-1), horizon=1)
+
+
+def test_h1_plain_panel_passes_guard():
+    """未 shift 的正常 pct_change 面板不应被口径守卫误伤。"""
+    dates = pd.bdate_range("2024-01-01", periods=30)
+    rp = pd.DataFrame({"A": [0.01] * 30}, index=dates)
+    fp = pd.DataFrame({"A": [1.0] * 30}, index=dates)
+    bt = VectorBacktest(_BuyAndHoldA(), rebalance_freq="M",
+                        costs=_zero_costs(),
+                        short_costs=ShortCostModel(borrow_rate=0))
+    bt.run(fp, rp, horizon=1)  # 不抛错即通过
+
+
+def test_hGreater1_horizon_shorter_than_interval_still_raises():
+    """既有守卫保持：h>1 且调仓区间跨度 < horizon 必须拦截重复结算。"""
+    dates = pd.bdate_range("2024-01-01", periods=10)
+    rp = pd.DataFrame({"A": [0.02] * 10}, index=dates)
+    fwd5 = (1 + rp).rolling(5).apply(np.prod, raw=True).shift(-5) - 1
+    fp = pd.DataFrame({"A": [1.0] * 10}, index=dates)
+    bt = VectorBacktest(_BuyAndHoldA(), rebalance_freq="D",
+                        costs=_zero_costs(),
+                        short_costs=ShortCostModel(borrow_rate=0))
+    with pytest.raises(ValueError, match="跨度"):
+        bt.run(fp, fwd5, horizon=5)  # D 频跨度 1 < 5

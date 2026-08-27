@@ -40,7 +40,8 @@ def _mock_results():
     results, summaries = {}, {}
     for name, f in fps.items():
         res = VectorBacktest(TopKLongShort(k=5), "W",
-                             short_costs=ShortCostModel(borrow_rate=0.08)).run(f, ret)
+                             short_costs=ShortCostModel(borrow_rate=0.08)).run(
+            f, ret, check_convention=False)  # 库内 shift(-1) 贴标签口径
         results[name] = res
         summaries[name] = factor_summary(f, ret)
     return results, summaries

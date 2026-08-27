@@ -74,7 +74,12 @@ def run_year(year, model, horizon, features, close, all_days):
     params = MODEL_PARAMS.get(model, {})
     pred = rolling_oos(PREDICTORS[model], features, labels, test_days, all_days,
                        n_folds=N_FOLDS, embargo_days=embargo, min_train_days=120, **params)
-    fwd = close.pct_change(horizon, fill_method=None).shift(-horizon).loc[test_days]
+    # 回测收益口径（engine 约定）：h=1 传未 shift 的 pct_change()（与指数基准
+    # 日标签对齐）；h>1 传 forward 段累计面板。
+    if horizon == 1:
+        fwd = close.pct_change(fill_method=None).loc[test_days]
+    else:
+        fwd = close.pct_change(horizon, fill_method=None).shift(-horizon).loc[test_days]
     return pred.loc[test_days], fwd, test_days
 
 

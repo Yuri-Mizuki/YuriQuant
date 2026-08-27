@@ -83,6 +83,10 @@ class BacktestResult:
             benchmark_returns,
             self.weights_history,
         )
+        # avg_turnover 用引擎逐次调仓记录（含换手为 0 的调仓事件），修正
+        # weights_history diff 口径被非调仓日稀释的问题
+        rb_turnover = self.turnover_series.dropna()
+        m["avg_turnover"] = float(rb_turnover.mean()) if len(rb_turnover) else 0.0
         if len(self.borrow_fee_series) > 0:
             exposure = None
             if len(self.long_exposure_series) > 0 and len(self.margin_usage_series) > 0:
@@ -150,25 +154,58 @@ class VectorBacktest:
         executable_mask: pd.DataFrame | None = None,
         horizon: int = 1,
         rebalance_days: set | None = None,
+        check_convention: bool = True,
     ) -> BacktestResult:
         """执行回测。
 
         Args:
             factor_panel: DataFrame(index=date, columns=code), 因子值。
             returns_panel: DataFrame(index=date, columns=code), 收益率。
-                          通常 = close.pct_change()，用次日收益（信号日次日）。
+                          两种合法口径（结算顺序自动适配）：
+                          - **未 shift**（推荐）：第 i 行是 i-1→i 的单日收益
+                            （``close.pct_change()``）——先结算后调仓，
+                            daily_returns 与指数 pct_change 标签严格对齐，
+                            beta/alpha 不失真；
+                          - **shift(-1) 前视收益贴标签**（因子库 canonical 口径）：
+                            第 i 行是 i→i+1 收益——调仓日 t 权重赚 rp[t]=t→t+1，
+                            同样无前视，但 daily_returns 标签比指数偏移一天，
+                            与指数基准对齐算 IR/beta 时会有一天错位。用此口径须传
+                            ``check_convention=False`` 显式确认，且不要与基准对齐
+                            算相对指标。
             executable_mask: DataFrame(index=date, columns=code), dtype=bool，
                             True 表示当日该股票可交易。为 None 时不做过滤。
-            horizon: 信号前瞻天数。>1 时启用「horizon 对齐结算」——每次调仓
-                     赚取 factor[t] 对应的未来 horizon 段收益（= fwd[t]，即
-                     forward_returns(close, horizon)[t]），使选股信号与记账
-                     口径完全一致，二择期仅取调仓日结算。
+            horizon: 信号前瞻天数。>1 时启用「horizon 对齐结算」——收益面板必须传
+                     forward 段累计（``close.pct_change(h).shift(-h)``，第 i 行 =
+                     i→i+h），每次调仓赚取 factor[t] 对应的段收益，区间内按几何
+                     平均逐日摊派复利。
             rebalance_days: 可选自定义调仓日集合(真实交易日)。传入时覆盖
                      rebalance_freq 生成的固定日历调仓日（用于自适应/事件
                      驱动调仓，如择时触发）。为 None 时维持 rebalance_freq。
+            check_convention: h=1 时校验面板是否为 shift(-h) 指纹（末行全 NaN、
+                     首行有值），是则报错防止一天错位。因子库等内部明确使用
+                     shift 口径且不对齐基准算指标的场景可显式关掉。
         Returns:
             BacktestResult
+
+        Raises:
+            ValueError: h=1、check_convention=True 且收益面板疑似被 shift(-h)
+                        前视（与引擎对齐口径错位一天）。
         """
+        # ---- 口径守卫（BUG-3 修复）：h=1 默认禁止 shift 前视面板 ----
+        if horizon == 1 and check_convention and not returns_panel.empty:
+            first_row_nonnull = returns_panel.iloc[0].notna()
+            last_row_nonnull = returns_panel.iloc[-1].notna()
+            # shift(-h) 指纹：最后一行几乎全 NaN + 首行几乎全有值；
+            # 未 shift 面板相反（首行 pct_change 为 NaN）。两者皆非则放行
+            # （如已裁剪过边界的面板，无法判定，不做武断拦截）。
+            if last_row_nonnull.mean() < 0.05 and first_row_nonnull.mean() > 0.95:
+                raise ValueError(
+                    "returns_panel 疑似为 shift(-h) 后的收益面板（末行全 NaN、"
+                    "首行有值），与本引擎的对齐口径（第 i 行=i-1→i 收益）错位一天"
+                    "——beta/alpha/信息比对基准时会失真。请改传 close.pct_change() "
+                    "原始面板；若确要使用 shift 贴标签口径（因子库 canonical 风格），"
+                    "传 check_convention=False 显式声明，且勿与指数基准对齐算指标。"
+                )
         # 对齐日期和代码
         common_dates = factor_panel.index.intersection(returns_panel.index)
         common_codes = factor_panel.columns.intersection(returns_panel.columns)
@@ -195,7 +232,9 @@ class VectorBacktest:
         fp_values = fp.values
 
         daily_ret_arr = np.zeros(n_days, dtype=np.float64)
-        turnover_arr = np.zeros(n_days, dtype=np.float64)
+        # 换手率仅调仓日有值（NaN 其余天）：avg_turnover 按"每次调仓"平均，
+        # 不会被非调仓日的零稀释，也不会漏掉换手为 0 的调仓事件
+        turnover_arr = np.full(n_days, np.nan, dtype=np.float64)
         cost_arr = np.zeros(n_days, dtype=np.float64)
         borrow_fee_arr = np.zeros(n_days, dtype=np.float64)
         margin_arr = np.zeros(n_days, dtype=np.float64)
@@ -207,20 +246,18 @@ class VectorBacktest:
         current_weights = np.zeros(n_codes, dtype=np.float64)
         capital = self.initial_capital
 
-        # horizon 对齐结算：把每个调仓区间 [rebal_t, next_rebal_t) 的段收益
-        # 摊到区间内每个交易日（几何平均），使 (1+段收益)=prod(1+日摊收益)，
-        # 净值曲线逐日平滑且与信号前瞻口径一致。
-        fwd_starts: dict[int, int] = {}  # 调仓日 -> 下一个调仓日
+        # horizon 对齐结算（h>1）：
+        # 每个调仓区间 [rb, next_rb) 在区间首日按【当日因子决定的新权重】计算
+        # 段收益 seg = Σ w·fwd_h[rb]，再按几何平均摊到区间内**每个**交易日复利，
+        # 使 prod_{d∈区间}(1+日均摊) == 1+seg —— 净值逐日平滑且口径与信号前瞻一致。
+        # 守卫：区间跨度必须 ≥ horizon（重叠窗口重复结算是虚高假收益，见回归测试）。
+        fwd_starts: dict[int, int] = {}  # 调仓日行号 -> 下一个调仓日行号（不含时=末尾）
         if horizon > 1:
             rb_list = sorted(i for i, d in enumerate(dates) if d in rebalance_days)
             for k, t in enumerate(rb_list):
                 nxt = rb_list[k + 1] if k + 1 < len(rb_list) else n_days
                 fwd_starts[t] = nxt
-            # 守卫：horizon>1 要求每个调仓区间跨度 ≥ horizon，否则会把 horizon 段
-            # 累计收益摊到更短区间导致重复结算（h=5×日频产生 ~150% 的虚高假收益）。
-            # 见 .tmp_freq_tune —— 这是真实回测口径 bug，不是 alpha。
-            bad = [i for i, t in enumerate(rb_list)
-                   if (fwd_starts[t] - t) < horizon]
+            bad = [t for t in rb_list if (fwd_starts[t] - t) < horizon]
             if bad:
                 raise ValueError(
                     f"回测口径错误: horizon={horizon} 但存在调仓区间跨度 < horizon "
@@ -229,38 +266,25 @@ class VectorBacktest:
                     f"用 horizon=1)，或将 rebalance_freq 调整为与 horizon 匹配的跨度。"
                 )
 
-        # 结算-调仓顺序（对齐修复 2026-08-26）：
-        #  1) 先结算：当日收益由【当前权重】（上一调仓日收盘设定）赚 rp[i]
-        #     （= close.pct_change()[i] = i-1→i 当日收益）——daily_returns[t]
-        #     与指数 pct_change[t] 日期标签严格对齐，beta/alpha 计算不失真；
-        #  2) 后调仓：调仓日收盘按当日因子换仓，新权重次日生效——weights(t)
-        #     赚 t→t+1 收益，与 IC / 分层检验的"因子 t 对齐未来收益"口径一致，
-        #     消除此前 rp[i]（当日收益含 t 日信息）造成的前视一天偏差。
+        # 结算-调仓顺序：
+        # h=1（收益面板按惯例传未 shift 的 close.pct_change()，第 i 行是 i-1→i 收益）：
+        #   先结算后调仓——当日收益由上一调仓日设定的权重赚取，daily_returns[t]
+        #   与指数 pct_change[t] 标签严格对齐，beta/alpha 不失真；调仓日收盘换仓，
+        #   新权重次日生效。
+        # h>1（收益面板传 forward_returns(close,h)，第 i 行是 i→i+h 段累计）：
+        #   区间首日先用当日因子换仓定权（成本计入当日），随后整个区间按段收益的
+        #   几何日均摊复利。
+        active_interval_end = -1   # 当前 h>1 区间的排他终点行号
+        interval_daily_equiv = 0.0
         for i in range(n_days):
             cap_before = capital
 
-            # 1) 当日收益：当前权重（上一调仓日设定）赚当日收益 i-1→i。
-            #    回测首日 current_weights=0 → 首日空仓无收益（t 日信号 t+1 才可交易）。
-            if horizon > 1:
-                # 区间结算：仅在【调仓区间起点】用当日权重计算该段收益并摊派到区间内
-                gross_ret = 0.0
-                if i in fwd_starts:
-                    nxt = fwd_starts[i]
-                    span = nxt - i
-                    seg_gross = float(np.nansum(current_weights * rp_values[i]))
-                    # 几何摊派：每个交易日 (1+seg_gross)^(1/span) - 1
-                    if span > 0:
-                        daily_equiv = (1.0 + seg_gross) ** (1.0 / span) - 1.0
-                    else:
-                        daily_equiv = seg_gross
-                    gross_ret = daily_equiv
-                capital *= (1 + gross_ret)
-            else:
+            # 1a) h=1 结算：当前权重赚当日收益。
+            if horizon == 1:
                 gross_ret = float(np.nansum(current_weights * rp_values[i]))
                 capital *= (1 + gross_ret)
 
-            # 2) 调仓：调仓日收盘按【当日】因子值换仓，新权重次日生效；
-            #    换手/交易成本计入当日（业界"调仓日计成本"惯例）。
+            # 1b) 调仓（h=1 在结算之后；h>1 在区间结算之前，保证段收益用新权重）
             if dates[i] in rebalance_days and i < n_days - 1:
                 factor_vals = fp.iloc[i].dropna()
                 if len(factor_vals) > 0:
@@ -287,11 +311,27 @@ class VectorBacktest:
                 capital -= cost
 
                 current_weights = new_arr
-                weights_arr[i] = current_weights
 
-            # 3) 空头腿成本：按日计提借券费（基于当日收盘后的持仓）。
+            # 1c) h>1 区间结算：首日以新权重预计算整段均摊收益，区间内逐日复利
+            if horizon > 1:
+                if i in fwd_starts:
+                    span = fwd_starts[i] - i
+                    seg_gross = float(np.nansum(current_weights * rp_values[i]))
+                    interval_daily_equiv = (
+                        (1.0 + seg_gross) ** (1.0 / span) - 1.0 if span > 0 else seg_gross
+                    )
+                    active_interval_end = fwd_starts[i]
+                    capital *= (1 + interval_daily_equiv)
+                elif i < active_interval_end:
+                    capital *= (1 + interval_daily_equiv)
+
+            # 2) 记录持仓权重（每日都记，非仅调仓日——下游 metrics/监控依赖真实持仓；
+            #    此前只记调仓日、其余天为 0 行，导致 avg_turnover 等指标失真）
+            weights_arr[i] = current_weights
+
+            # 3) 空头腿成本：按日计提借券费（基于当日持仓）。
             long_exp = max(0.0, current_weights[current_weights > 0].sum())
-            short_exp = np.abs(current_weights[current_weights < 0]).sum()
+            short_exp = np.abs(current_weights[current_weights < 0].sum())
             long_arr[i] = long_exp
             short_arr[i] = short_exp
             margin_arr[i] = self.short_costs.margin_usage(long_exp, short_exp)
