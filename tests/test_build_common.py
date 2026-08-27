@@ -95,9 +95,9 @@ def test_register_panels_skips_empty_and_registers():
 
 def test_register_panels_names_subset():
     idx = pd.date_range("2023-01-02", periods=5, freq="B")
-    codes = ["A"]
-    panels = {"a": pd.DataFrame(1.0, index=idx, columns=codes),
-              "b": pd.DataFrame(1.0, index=idx, columns=codes)}
+    codes = ["A", "B"]  # 单列截面 std 恒为 0，会被"恒定值因子"守卫跳过
+    panels = {"a": pd.DataFrame(np.random.rand(5, 2), index=idx, columns=codes),
+              "b": pd.DataFrame(np.random.rand(5, 2), index=idx, columns=codes)}
     defs = {"a": "fa", "b": "fb"}
     registered = []
     class FakeLib:
@@ -112,13 +112,14 @@ def test_register_panels_names_subset():
 
 def test_register_panels_on_fail_callback():
     idx = pd.date_range("2023-01-02", periods=5, freq="B")
-    panels = {"a": pd.DataFrame(1.0, index=idx, columns=["A"])}
+    codes = ["A", "B"]
+    panels = {"a": pd.DataFrame(np.random.rand(5, 2), index=idx, columns=codes)}
     defs = {"a": "fa"}
     calls = []
     class FakeLib:
         def register(self, **kw):
             raise RuntimeError("boom")
-    returns = pd.DataFrame(0.01, index=idx, columns=["A"])
+    returns = pd.DataFrame(0.01, index=idx, columns=codes)
     rows = register_panels(FakeLib(), panels, defs, returns, "t",
                            on_fail=lambda n, e: calls.append((n, str(e))))
     assert len(rows) == 0

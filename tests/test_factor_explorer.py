@@ -125,13 +125,17 @@ def test_html_generation_smoke(tmp_path):
 
 
 def test_main_mock_smoke(tmp_path):
-    """CLI mock 冒烟：生成完整 HTML 文件。"""
+    """CLI mock 冒烟：对小数据集生成完整 HTML 文件。
+
+    注意必须显式传 --dataset mock：默认数据集 hs300_2022_2025 有 821 个因子，
+    全量分层回测要跑约 20 分钟，不适合单测。
+    """
     import subprocess, sys
     out = tmp_path / "explorer.html"
     r = subprocess.run(
         [sys.executable, str(Path(__file__).resolve().parents[1] / "scripts" / "factor_explorer_report.py"),
-         "--out", str(out)],
-        capture_output=True, text=True, timeout=60)
-    # mock 模式无真实数据源，生成失败也接受——但必须报错信息明确
+         "--dataset", "mock", "--out", str(out)],
+        capture_output=True, text=True, timeout=300)
+    # mock 库/缓存缺失时生成失败也接受——但必须报错信息明确
     if r.returncode != 0:
         assert "因子库" in r.stderr or "Error" in r.stderr or "Traceback" in r.stderr
