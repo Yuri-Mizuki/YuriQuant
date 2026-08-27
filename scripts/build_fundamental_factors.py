@@ -65,15 +65,13 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from config import Config
-from data.cache import DataCache
 from data.cache_helpers import load_daily, load_financial_tables
-from data.datasource import create_datasource
 from data.financials import build_pit_panel
-from data.offline import OfflineDataSource
-from data.universe import Universe
-from factor.preprocessing import standardize_zscore
 from research.factor_library import FactorLibrary
+from scripts._build_common import (
+    add_build_args, make_data_context, print_no_save, record_experiment_safe,
+    register_panels, returns_from_daily,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -653,33 +651,10 @@ def build_factor_panels(daily, cal, income, balance, cashflow,
 
 def main():
     parser = argparse.ArgumentParser(description="基本面因子（价值/质量/成长/规模）构建入库")
-    parser.add_argument("--mock", action="store_true")
-    parser.add_argument("--offline", action="store_true")
-    parser.add_argument("--index", default="000300.SH")
-    parser.add_argument("--begin", type=int, default=None)
-    parser.add_argument("--end", type=int, default=None)
-    parser.add_argument("--dataset", default=None)
-    parser.add_argument("--no-save", action="store_true")
+    add_build_args(parser)
     args = parser.parse_args()
 
-    if args.mock:
-        import tempfile
-        from tests.conftest import MockDataSource
-        ds = MockDataSource()
-        begin, end = args.begin or 20230103, args.end or 20241231
-        cache = DataCache(ds, cache_root=tempfile.mkdtemp(prefix="mock_cache_"))
-        dataset = args.dataset or "mock"
-    elif args.offline:
-        ds = OfflineDataSource()
-        begin, end = args.begin or 20250101, args.end or 20251231
-        cache = DataCache(ds)
-        dataset = args.dataset or "hs300_2025"
-    else:
-        ds = create_datasource()
-        begin, end = args.begin or 20250101, args.end or 20251231
-        cache = DataCache(ds)
-        dataset = args.dataset or "hs300_2025"
-    uni = Universe(cache)
+    cache, uni, begin, end, dataset = make_data_context(args)
 
     codes, cal, daily, income, balance, cashflow, equity, dividend, share_holder, holder_num = load_data(
         cache, uni, args.index, begin, end)
@@ -692,53 +667,27 @@ def main():
                                  dividend, share_holder, holder_num)
 
     if args.no_save:
-        for name in list(FACTOR_DEFS):
-            p = panels.get(name)
-            if p is None:
-                log.info("  %-18s 缺失", name)
-                continue
-            log.info("  %-18s 面板 %d 日 × %d 股 | 非空率 %.0f%%",
-                     name, p.shape[0], p.shape[1], 100 * p.notna().mean().mean())
-        log.info("未入库（--no-save）。完成")
+        print_no_save(list(FACTOR_DEFS), panels)
         return
 
     lib = FactorLibrary(dataset=dataset)
-    # 次日收益面板（与挖掘/库 IC 口径一致）
-    d = daily.reset_index()
-    close_w = d.pivot(index="date", columns="code", values="close").sort_index()
-    returns_panel = close_w.pct_change().shift(-1)
+    returns_panel = returns_from_daily(daily)
 
     log.info("入库到数据集: %s", dataset)
-    for name in list(FACTOR_DEFS):
-        p = panels.get(name)
-        if p is None or p.notna().sum().sum() == 0:
-            log.warning("跳过 %s（无有效数据）", name)
-            continue
-        std = standardize_zscore(p)
-        row = lib.register(
-            name=name,
-            panel=std,
-            returns_panel=returns_panel,
-            kind="raw",
-            formula=FACTOR_DEFS[name],
-            source=f"fundamental:build_fundamental_factors:{begin}-{end}",
-        )
-        log.info("  已入库 %s（IC=%.4f, t_nw=%.2f, best_sharpe=%.3f@%s）",
-                 name, row["ic_mean"], row["t_stat_nw"], row["best_sharpe"], row["best_config"])
+    register_panels(
+        lib, panels, FACTOR_DEFS, returns_panel,
+        source=f"fundamental:build_fundamental_factors:{begin}-{end}",
+    )
 
-    try:
-        from research.experiments import record_experiment
-        record_experiment(
-            kind="fundamental_factors",
-            command=" ".join(sys.argv),
-            params={"index": args.index, "begin": begin, "end": end, "dataset": dataset},
-            data_fingerprint=cache.get_fingerprint(),
-            result_path=str(lib.root),
-            metrics={"n_factors": len([n for n in FACTOR_DEFS if n in panels])},
-            note="基本面因子入库",
-        )
-    except Exception as e:
-        log.warning("实验记录写入失败: %s", e)
+    record_experiment_safe(
+        kind="fundamental_factors",
+        command=" ".join(sys.argv),
+        params={"index": args.index, "begin": begin, "end": end, "dataset": dataset},
+        fingerprint=cache.get_fingerprint(),
+        result_path=str(lib.root),
+        metrics={"n_factors": len([n for n in FACTOR_DEFS if n in panels])},
+        note="基本面因子入库",
+    )
 
     log.info("完成。数据集 %s 现有 %d 个因子", dataset, len(lib.list_all()))
 

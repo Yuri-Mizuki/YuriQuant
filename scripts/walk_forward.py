@@ -49,6 +49,7 @@ def load_full_panels(begin: int = 20220101, end: int = 20251231):
     from data.cache import DataCache
     from data.offline import OfflineDataSource
     from data.universe import Universe
+    from data.cache_helpers import _pit_universe_codes, _apply_membership_mask
     cache = DataCache(OfflineDataSource())
     uni = Universe(cache)
     # 日历直接读缓存文件（避免依赖 meta 状态）
@@ -57,14 +58,18 @@ def load_full_panels(begin: int = 20220101, end: int = 20251231):
     cal = [c for c in cal if begin <= c <= end]
     if not cal:
         raise RuntimeError("日历为空")
-    codes = uni.get_constituent("000300.SH", end)
+    # PIT 口径（2026-08-13 统一）：历史在册并集池，非在册期间由 mask 剔除
+    codes = _pit_universe_codes(uni, "000300.SH", begin, end)
 
     # 纯离线读 parquet（不走 _refresh_long_table 的增量判断/回源）
     def _read_daily(b, e):
-        df = pd.read_parquet(CACHE_ROOT / "daily.parquet").reset_index()
+        df = pd.read_parquet(CACHE_ROOT / "daily_hs300.parquet").reset_index()
         df["date"] = df["date"].dt.normalize()
         df = df[(df["date"] >= pd.Timestamp(str(b))) & (df["date"] <= pd.Timestamp(str(e)))]
         df = df[df["code"].isin(codes)]
+        df = _apply_membership_mask(
+            df.set_index(["date", "code"]), uni, "000300.SH"
+        ).reset_index()
         return df
 
     d = _read_daily(begin, end)
@@ -96,11 +101,11 @@ def load_full_panels(begin: int = 20220101, end: int = 20251231):
     bfw = pd.read_parquet(CACHE_ROOT / "backward_factor.parquet")
     bfw = bfw.reindex(index=cw.index).reindex(columns=cw.columns).ffill()
     caw, haw, law, oaw = cw * bfw, hw * bfw, lw * bfw, ow * bfw
-    from scripts.build_technical_factors import _calc_indicators
+    from factor.technical import calc_indicators
     for code in codes:
         if code not in caw.columns or caw[code].dropna().empty:
             continue
-        res = _calc_indicators(caw[code], haw[code], law[code], oaw[code], vw[code])
+        res = calc_indicators(caw[code], haw[code], law[code], oaw[code], vw[code])
         for k, s in res.items():
             panels.setdefault(k, pd.DataFrame(index=cw.index, columns=cw.columns))
             panels[k][code] = s
@@ -112,14 +117,14 @@ def load_full_panels(begin: int = 20220101, end: int = 20251231):
     # 日内（2022-2025 分钟线；未覆盖则跳过）
     try:
         from scripts.build_intraday_factors import build_features, _minute_frame
-        mk = pd.read_parquet(CACHE_ROOT / "min5.parquet")
+        mk = pd.read_parquet(CACHE_ROOT / "min5_hs300.parquet")
         if not mk.empty:
             kt = mk.index.get_level_values("kline_time")
             mk = mk[(kt >= pd.Timestamp(str(begin))) & (kt <= pd.Timestamp(str(end)) + pd.Timedelta(days=1))]
             if not mk.empty:
                 status = pd.read_parquet(CACHE_ROOT / "history_stock_status.parquet")
                 mf = _minute_frame(mk, status)
-                dd = pd.read_parquet(CACHE_ROOT / "daily.parquet")   # (date, code) MultiIndex
+                dd = pd.read_parquet(CACHE_ROOT / "daily_hs300.parquet")   # (date, code) MultiIndex
                 dd = dd[dd.index.get_level_values("code").isin(codes)]
                 dt0 = dd.index.get_level_values("date")
                 dd = dd[(dt0 >= pd.Timestamp(str(begin))) & (dt0 <= pd.Timestamp(str(end)))]
@@ -164,6 +169,22 @@ def main():
                         help="方案A：train/valid 合并为 2022-2024 一段（挖掘+筛选都在内），test 2025 验证")
     parser.add_argument("--k", type=int, default=50, help="回测 TopK")
     parser.add_argument("--freq", default="M", choices=["D", "W", "M"])
+    # ---- GP 分支（--mode gp / both）----
+    parser.add_argument("--gp-pop", type=int, default=200, help="GP 种群规模")
+    parser.add_argument("--gp-gen", type=int, default=10, help="GP 迭代代数")
+    parser.add_argument("--gp-min-depth", type=int, default=2)
+    parser.add_argument("--gp-max-depth", type=int, default=5)
+    parser.add_argument("--gp-tournament", type=int, default=5)
+    parser.add_argument("--gp-train-frac", type=float, default=0.8,
+                        help="GP 内部样本外切分（train 段内再留 20% 防进化过拟合）")
+    parser.add_argument("--gp-monthly-weight", type=float, default=0.5, help="月频 IC 融合权重")
+    parser.add_argument("--gp-fitness", default="tstat",
+                        choices=["tstat", "rankic_mean", "mutual_info", "top_excess"])
+    parser.add_argument("--gp-jobs", type=int, default=1, help="GP 种群并行进程数")
+    parser.add_argument("--gp-seed", type=int, default=0)
+    parser.add_argument("--gp-htai", action="store_true",
+                        help="GP 华泰复现口径（环内 MAD+五因子中性化+月频目标；中性化面板 offline 构建）")
+    parser.add_argument("--gp-verbose", action="store_true")
     args = parser.parse_args()
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -190,8 +211,7 @@ def main():
                  len(train_dates), train_dates[0].date(), train_dates[-1].date(),
                  len(valid_dates), len(test_dates))
 
-    # ---- Step 1: train 段挖掘 ----
-    from factor.mining import Candidate, dedup_by_formula, evaluate_candidates, generate_candidates
+    # ---- Step 1: train 段挖掘（PIT 并集池面板，见 load_full_panels）----
     from factor.preprocessing import standardize_zscore
 
     features = ["close", "open", "high", "low", "volume", "amount"]
@@ -206,19 +226,53 @@ def main():
 
     train_returns = returns_panel.loc[train_dates]
     train_panel = {k: p.loc[train_dates] for k, p in panels.items()}
-    log.info("train 段挖掘: %d 特征, windows=%s, depth=%d", len(features), windows, args.depth)
+    log.info("train 段挖掘: %d 特征, windows=%s", len(features), windows)
 
-    cands = dedup_by_formula(generate_candidates(features=features, windows=windows,
-                                                  depth=args.depth))
-    if len(cands) > 1000:
-        log.info("候选 %d 个，截取前 1000 个控制评估时间", len(cands))
-        cands = cands[:1000]
-    log.info("候选公式 %d 个（并行评估 n_jobs=4, detail_n=0 提速）", len(cands))
-    result = evaluate_candidates(cands, train_panel, train_returns,
-                                 fdr_q=args.fdr_q, detail_n=0, robust=True,
-                                 n_jobs=4)
+    result = None
+    if args.mode in ("gp", "both"):
+        from factor.genetic_mining import run_gp_mining
+        gp_kwargs = dict(population=args.gp_pop, generations=args.gp_gen,
+                         min_depth=args.gp_min_depth, max_depth=args.gp_max_depth,
+                         tournament=args.gp_tournament, train_frac=args.gp_train_frac,
+                         monthly_weight=args.gp_monthly_weight, fitness_mode=args.gp_fitness,
+                         n_jobs=args.gp_jobs, seed=args.gp_seed, verbose=args.gp_verbose)
+        if args.gp_htai:
+            from scripts.mine_factors import _build_htai_neutral_panels
+            neutral = _build_htai_neutral_panels(train_panel, real=False)
+            gp_kwargs.update(htai=True, neutral_panels=neutral if neutral else None)
+            log.info("GP htai 口径：中性化协变量=%s", list(neutral.keys()))
+        log.info("GP train 段挖掘: pop=%d gen=%d seed=%d fitness=%s", args.gp_pop,
+                 args.gp_gen, args.gp_seed, args.gp_fitness)
+        gp_df, _ = run_gp_mining(train_panel, train_returns, features=features,
+                                 windows=windows, **gp_kwargs)
+        if gp_df is None or gp_df.empty:
+            log.error("GP 未挖出有效因子")
+            sys.exit(1)
+        gp_res = gp_df.rename(columns={"formula": "name"})
+        gp_res["significant"] = gp_res["t_stat"].abs() >= 2.0
+        result = gp_res[["name", "ic_mean", "ic_std", "ir", "t_stat", "significant"]].copy()
+        result["n"] = gp_res["n"].astype(int)
+        log.info("GP hof 因子 %d 个（|t|>=2: %d）", len(gp_res),
+                 int((gp_res["t_stat"].abs() >= 2.0).sum()))
+
+    if args.mode in ("exhaustive", "both"):
+        from factor.mining import dedup_by_formula, evaluate_candidates, generate_candidates
+        cands = dedup_by_formula(generate_candidates(features=features, windows=windows,
+                                                      depth=args.depth))
+        if len(cands) > 1000:
+            log.info("候选 %d 个，截取前 1000 个控制评估时间", len(cands))
+            cands = cands[:1000]
+        log.info("候选公式 %d 个（并行评估 n_jobs=4, detail_n=0 提速）", len(cands))
+        res_ex = evaluate_candidates(cands, train_panel, train_returns,
+                                     fdr_q=args.fdr_q, detail_n=0, robust=True,
+                                     n_jobs=4)
+        res_ex = res_ex[["name", "ic_mean", "ic_std", "ir", "t_stat", "significant"]]
+        if args.mode == "both":
+            result = pd.concat([result, res_ex], ignore_index=True).drop_duplicates("name")
+        else:
+            result = res_ex
+        log.info("train 显著(FDR): %d 个", int(result["significant"].sum()))
     result.to_csv(OUT_DIR / "candidates_train.csv", index=False)
-    log.info("train 显著(FDR): %d 个", int(result["significant"].sum()))
 
     # ---- Step 2: valid 段筛选 + 合成权重 ----
     # 方案A（merge）：valid= train 段，直接用 train 评估结果筛选（同一段内挖+选）

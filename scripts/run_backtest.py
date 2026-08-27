@@ -210,9 +210,14 @@ def main():
         from data.universe import Universe
         from data.industry import IndustryClassification
         from data.market_cap import build_market_cap_panel
+        from data.cache_helpers import _pit_universe_codes, _apply_membership_mask
         uni = Universe(cache)
-        codes = uni.get_hs300(end)
+        # PIT 口径（2026-08-13 统一）：历史在册成分并集池 + 按日成分归属，
+        # 消除「当前成分回看」的幸存者偏差。
+        codes = _pit_universe_codes(uni, cfg["universe"]["index_code"], begin, end)
+        log.info("PIT 并集池: %d 只（%s~%s 期间在册）", len(codes), begin, end)
         kline = cache.get_daily_kline(codes, begin, end)
+        kline = _apply_membership_mask(kline, uni, cfg["universe"]["index_code"])
         close_raw = kline["close"].unstack("code")
         high = kline["high"].unstack("code")
         low = kline["low"].unstack("code")
@@ -266,17 +271,12 @@ def main():
                     log.warning("本地无行业分类数据，行业中性化将被跳过（请先跑 update_data）")
                     industry_panel = None
 
-        # 可执行性掩码：涨跌停/停牌 AND 动态(point-in-time)成分股归属
+        # 可执行性掩码：涨跌停/停牌（成分归属已由 _apply_membership_mask 处理）
         log.info("拉取历史涨跌停/停牌状态 ...")
         status = cache.get_history_stock_status(codes, begin, end)
-        tradability_mask = build_executable_mask(
+        executable_mask = build_executable_mask(
             status, close.index, close.columns, close_panel=close
         )
-        membership_mask = uni.get_membership_mask(cfg["universe"]["index_code"], close.index)
-        membership_mask = membership_mask.reindex(
-            index=close.index, columns=close.columns
-        ).fillna(False)
-        executable_mask = tradability_mask & membership_mask
         log.info(
             "可执行性掩码: 平均每日可交易 %.1f / %d 只",
             executable_mask.sum(axis=1).mean(), len(close.columns),

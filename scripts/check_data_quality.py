@@ -188,8 +188,9 @@ def main():
         log.error("交易日历为空")
         return 1
     target = args.end or cal[-1]
-    codes = uni.get_constituent(index_code, target)
-    log.info("检查 %s：%d 只成分股，%d 个交易日，数据指纹 %s",
+    from data.cache_helpers import _pit_universe_codes
+    codes = _pit_universe_codes(uni, index_code, args.begin or cfg["fetch"]["begin_date"], target)
+    log.info("检查 %s：%d 只历史在册成分（并集池），%d 个交易日，数据指纹 %s",
              index_code, len(codes), len(cal), cache.get_fingerprint())
 
     problems: list[tuple[str, str, str]] = []   # (级别, 检查项, 说明)

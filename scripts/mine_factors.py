@@ -64,51 +64,72 @@ def gen_mock_panel_with_signal(n_days: int = 400, n_codes: int = 50, seed: int =
 # 真实面板（从缓存 + 财务 PIT 构建）
 # ---------------------------------------------------------------------------
 def build_real_panel(cfg: dict, begin: int, end: int) -> tuple[dict[str, pd.DataFrame], pd.DataFrame]:
-    from data.cache import DataCache
-    from data.datasource import create_datasource
-    from data.financials import build_pit_panel
-    from data.universe import Universe
+    """统一真实面板构建。
 
-    ds = create_datasource()
-    cache = DataCache(ds)
-    uni = Universe(cache)
-    index_code = cfg["universe"]["index_code"]
-    cal = cache.get_calendar(begin, end)
-    target_date = end if end else cal[-1]
-    codes = uni.get_constituent(index_code, target_date)
-    log.info("成分股数量: %d", len(codes))
+    2026-08-17 重构：收敛到 ``data.cache_helpers.build_panel``（与 run_gflownet_phase1
+    的 build_real_panel 共享同一实现），消除两套 PIT 并集池 / 复权 / 财务 PIT 并行逻辑。
+    返回 ``(panel, returns_panel)``，口径不变。
+    """
+    from data.cache_helpers import build_panel as _build_panel
 
-    kline = cache.get_daily_kline(codes, begin, target_date)
-    close = kline["close"].unstack("code")
-    high = kline["high"].unstack("code")
-    low = kline["low"].unstack("code")
-    open_ = kline["open"].unstack("code")
-    volume = kline["volume"].unstack("code")
-    amount = kline["amount"].unstack("code")
+    log.info("构建真实面板 %s~%s ...", begin, end)
+    return _build_panel(cfg, begin, end)
 
-    # 后复权
-    adjust = cfg.get("universe", {}).get("adjust", "backward")
-    if adjust == "backward":
-        backward = cache.get_backward_factor(codes).reindex(index=close.index, columns=close.columns).ffill()
-        close, high, low, open_ = close * backward, high * backward, low * backward, open_ * backward
 
-    panel = {"close": close, "open": open_, "high": high, "low": low, "volume": volume, "amount": amount}
+def _build_htai_neutral_panels(panel: dict[str, pd.DataFrame],
+                               real: bool = False) -> dict[str, pd.DataFrame]:
+    """构建华泰五因子中性化协变量面板。
 
-    # 财务字段 PIT 展开（公告日对齐，无未来函数）
-    log.info("构建财务 PIT 面板 ...")
-    income = cache.get_income(codes)
-    if not income.empty:
-        for field in ("OPERA_REV", "NET_PRO_INCL_MIN_INT_INC", "BASIC_EPS"):
-            if field in income.columns:
-                panel[field] = build_pit_panel(income, cal, field).reindex(close.index)
-    balance = cache.get_balance_sheet(codes)
-    if not balance.empty:
-        for field in ("TOTAL_ASSETS", "TOT_SHARE_EQUITY_EXCL_MIN_INT"):
-            if field in balance.columns:
-                panel[field] = build_pit_panel(balance, cal, field).reindex(close.index)
+    对应研报报告21 适应度计算的「行业、市值、过去20日收益率、过去20日平均换手率、
+    过去20日波动率」五个中性化因子：
 
-    returns_panel = close.pct_change().shift(-1)
-    return panel, returns_panel
+        size:   市值 = TOT_SHARE(PIT) × 后复权 close
+        industry: 申万一级行业映射（date×code，值=行业名）
+        mom20:  过去 20 日收益率 = close.pct_change(20)
+        vol20:  过去 20 日波动率 = 日收益的 20 日滚动 std
+        turn20: 过去 20 日平均换手率 = (volume / TOT_SHARE) 的 20 日滚动均值
+
+    ``real=False``（mock）时跳过需要 SDK 的行业/市值/换手部分，只返回 mom20/vol20；
+    任一协变量构建失败时自动从返回 dict 剔除（neutralize 只回归可用的部分）。
+    """
+    out: dict[str, pd.DataFrame] = {}
+    close = panel["close"]
+    try:
+        out["mom20"] = close.pct_change(20)
+        out["vol20"] = close.pct_change().rolling(20).std()
+    except Exception:
+        pass
+    if not real:
+        return out
+    try:
+        from data.cache import DataCache
+        from data.datasource import create_datasource
+        from data.financials import build_pit_panel
+        ds = create_datasource()
+        cache = DataCache(ds)
+        codes = list(close.columns)
+        dates = close.index
+        cal = cache.get_calendar(int(dates.min().strftime("%Y%m%d")),
+                                 int(dates.max().strftime("%Y%m%d")))
+        ind = cache.get_industry_classification(level=1)
+        if not ind.empty:
+            ind["in_date"] = pd.to_datetime(ind["in_date"], errors="coerce")
+            ind["out_date"] = pd.to_datetime(ind["out_date"], errors="coerce")
+            rows = {}
+            for d in dates:
+                m = ind[(ind["in_date"] <= d) & (ind["out_date"].fillna(pd.Timestamp.max) >= d)]
+                rows[d] = {r["code"]: r["industry_name"]
+                           for _, r in m.iterrows() if r["code"] in codes}
+            out["industry"] = pd.DataFrame(rows).T.reindex(index=dates, columns=codes)
+        balance = cache.get_balance_sheet(codes)
+        if not balance.empty and "TOT_SHARE" in balance.columns:
+            ts = build_pit_panel(balance, cal, "TOT_SHARE").reindex(index=dates, columns=codes)
+            out["size"] = ts * close
+            turn = panel["volume"] / ts
+            out["turn20"] = turn.rolling(20).mean()
+    except Exception as exc:
+        log.warning("华泰中性化协变量面板构建不完整（缺失项自动跳过）: %s", exc)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -263,6 +284,10 @@ def main():
     parser.add_argument("--depth", type=int, default=2, choices=[1, 2], help="候选生成深度")
     parser.add_argument("--method", default="spearman", choices=["spearman", "pearson"])
     parser.add_argument("--fdr-q", type=float, default=0.05, help="BH-FDR 显著性水平")
+    parser.add_argument("--three-period", action="store_true",
+                        help="三段式纪律：train 段算 IC 排序 → valid 段重新算 IC 验证 → "
+                             "只保留 valid 段显著的因子（防泄漏，与 GP/ML 同纪律）。"
+                             "默认日期 train 22-23 / valid 24 / test 25（真实数据时生效）")
     parser.add_argument("--top", type=int, default=20, help="打印前 N 个因子")
     parser.add_argument("--detail-n", type=int, default=50,
                         help="计算 IC衰减/自相关(turnover代理)的 top-N 因子数（默认50）")
@@ -271,13 +296,25 @@ def main():
     parser.add_argument("--out", default=None, help="结果 CSV 输出路径")
     # 遗传规划
     parser.add_argument("--gp", action="store_true", help="改用遗传规划挖掘（替代 exhaustive 枚举）")
-    parser.add_argument("--pop", type=int, default=200, help="GP 种群规模")
-    parser.add_argument("--gen", type=int, default=20, help="GP 迭代代数")
-    parser.add_argument("--max-depth", type=int, default=5, help="GP 最大树深")
+    parser.add_argument("--gp-htai", action="store_true",
+                        help="GP 华泰复现模式：环内 MAD去极值→五因子中性化→zscore + 月频20日目标 + "
+                             "平均RankIC适应度（函数集/参数对齐研报21/23；pop/gen/depth/tournament 默认按研报）")
+    parser.add_argument("--gp-fitness", default="tstat",
+                        choices=["tstat", "rankic_mean", "mutual_info", "top_excess"],
+                        help="GP 适应度口径：tstat=按 |mean IC|/std（默认）；rankic_mean=华泰研报21 的 "
+                             "全期平均 RankIC；mutual_info=华泰研报23 的互信息（挖非线性因子）；"
+                             "top_excess=华泰研报23 的多头超额收益（Top/Bottom 层年化超额较大者）。"
+                             "后三种仅 htai 模式生效")
+    parser.add_argument("--pop", type=int, default=None, help="GP 种群规模（默认：htai=1000，否则200）")
+    parser.add_argument("--gen", type=int, default=None, help="GP 迭代代数（默认：htai=3，否则20）")
+    parser.add_argument("--max-depth", type=int, default=None, help="GP 最大树深（默认：htai=4，否则5）")
+    parser.add_argument("--min-depth", type=int, default=None, help="GP 最小树深（默认：htai=1，否则2）")
+    parser.add_argument("--gp-tournament", type=int, default=None,
+                        help="GP 锦标赛选择规模（默认：htai=20，否则5）")
     parser.add_argument("--patience", type=int, default=6,
                         help="GP 早停：连续 N 代 hof best 无提升即提前终止（0=关闭）")
-    parser.add_argument("--train-frac", type=float, default=0.7,
-                        help="GP 进化只用前 train_frac 时间段的 IC（样本外验证，默认0.7）")
+    parser.add_argument("--train-frac", type=float, default=None,
+                        help="GP 进化只用前 train_frac 时间段的 IC（样本外验证；默认：htai=1.0 全样本，否则0.7）")
     parser.add_argument("--monthly-weight", type=float, default=0.5,
                         help="GP 月频 IC 权重（多 horizon 融合，默认0.5；0=关闭）")
     parser.add_argument("--gp-penalty", type=float, default=0.0,
@@ -324,6 +361,44 @@ def main():
 
     if args.use_library:
         panel = _merge_library_features(panel, dataset=lib_dataset)
+
+    # ---- 华泰复现模式：特征补全 + 参数按研报解析 + 中性化协变量面板 ----
+    neutral_panels = None
+    if args.gp_htai:
+        if "returns" not in panel and "close" in panel:
+            panel["returns"] = panel["close"].pct_change()   # 研报 RETURNS
+        if "vwap" not in panel and "amount" in panel and "volume" in panel:
+            panel["vwap"] = panel["amount"] / panel["volume"]  # 研报 VWAP（量加权均价）
+        if args.pop is None:
+            args.pop = 1000
+        if args.gen is None:
+            args.gen = 3
+        if args.min_depth is None:
+            args.min_depth = 1
+        if args.max_depth is None:
+            args.max_depth = 4
+        if args.gp_tournament is None:
+            args.gp_tournament = 20
+        if args.train_frac is None:
+            args.train_frac = 1.0     # 研报21 全样本；报告23 CV 口径可显式 --train-frac 0.8
+        neutral_panels = _build_htai_neutral_panels(panel, real=args.real)
+        log.info("华泰复现模式：特征补 returns/vwap，中性化协变量=%s，参数 pop=%d gen=%d depth=(%d,%d) tourn=%d train_frac=%.2f",
+                 list(neutral_panels.keys()), args.pop, args.gen, args.min_depth,
+                 args.max_depth, args.gp_tournament, args.train_frac)
+    else:
+        if args.pop is None:
+            args.pop = 200
+        if args.gen is None:
+            args.gen = 20
+        if args.min_depth is None:
+            args.min_depth = 2
+        if args.max_depth is None:
+            args.max_depth = 5
+        if args.gp_tournament is None:
+            args.gp_tournament = 5
+        if args.train_frac is None:
+            args.train_frac = 0.7
+
     if args.gp and args.gp_preprocess:
         log.info("GP 特征预处理（截面 zscore + 行业市值中性化）...")
         panel = _gp_preprocess_features(panel)
@@ -340,6 +415,8 @@ def main():
                      args.gp_penalty, len(lib_panels) if lib_panels else 0)
 
         if args.gp_nsga2:
+            if args.gp_htai:
+                log.warning("--gp-nsga2 暂不支持 htai 口径（华泰复现为单目标平均RankIC），忽略 htai 选项")
             from factor.genetic_mining import run_gp_nsga2
             log.info("GP(NSGA-II 多目标)：pop=%d gen=%d max_depth=%d train_frac=%.2f monthly=%.2f",
                      args.pop, args.gen, args.max_depth, args.train_frac, args.monthly_weight)
@@ -352,19 +429,23 @@ def main():
             show_cols = ["formula", "ic_mean", "t_stat", "f1", "f2", "front"]
         else:
             from factor.genetic_mining import run_gp_mining
-            log.info("遗传规划挖掘：pop=%d gen=%d max_depth=%d patience=%d train_frac=%.2f "
-                     "monthly=%.2f penalty=%.2f jitter=%s dedup=%.2f windows=%s",
-                     args.pop, args.gen, args.max_depth, args.patience, args.train_frac,
+            log.info("遗传规划挖掘：pop=%d gen=%d depth=(%d,%d) tourn=%d patience=%d train_frac=%.2f "
+                     "monthly=%.2f penalty=%.2f jitter=%s dedup=%.2f windows=%s htai=%s fitness=%s",
+                     args.pop, args.gen, args.min_depth, args.max_depth, args.gp_tournament,
+                     args.patience, args.train_frac,
                      args.monthly_weight, args.gp_penalty, not args.no_window_jitter,
-                     args.gp_dedup_corr, windows)
+                     args.gp_dedup_corr, windows, args.gp_htai, args.gp_fitness)
             result, hof = run_gp_mining(
                 panel, returns_panel, features=features, windows=windows,
-                population=args.pop, generations=args.gen, max_depth=args.max_depth,
+                population=args.pop, generations=args.gen, min_depth=args.min_depth,
+                max_depth=args.max_depth, tournament=args.gp_tournament,
                 patience=args.patience, train_frac=args.train_frac,
                 monthly_weight=args.monthly_weight, library_panels=lib_panels,
                 library_penalty=args.gp_penalty, window_jitter=not args.no_window_jitter,
                 dedup_corr=args.gp_dedup_corr, n_jobs=args.gp_jobs,
                 sample_step=args.gp_sample_step, verbose=True,
+                htai=args.gp_htai, neutral_panels=neutral_panels,
+                fitness_mode=args.gp_fitness,
             )
             show_cols = ["formula", "ic_mean", "ic_train", "ic_oos", "t_stat", "t_oos", "height", "n"]
 
@@ -395,11 +476,53 @@ def main():
         import os
         n_jobs = args.jobs if args.jobs > 0 else (os.cpu_count() or 1)
         log.info("候选评估并行进程数: %d", n_jobs if n_jobs > 1 else 1)
-        result = evaluate_candidates(
-            cands, panel, returns_panel,
-            method=args.method, fdr_q=args.fdr_q, verbose=True,
-            detail_n=args.detail_n, n_jobs=n_jobs,
-        )
+
+        if args.three_period and args.real:
+            # 三段式纪律：train 段评估 → valid 段验证 → 只保留 valid 显著的
+            from factor.cv import split_three_periods
+            tr_days, va_days, te_days = split_three_periods(returns_panel.index)
+            log.info("三段式：train %d 日 / valid %d 日 / test %d 日",
+                     len(tr_days), len(va_days), len(te_days))
+            train_panel = {k: v.loc[tr_days] for k, v in panel.items()}
+            train_returns = returns_panel.loc[tr_days]
+            valid_panel = {k: v.loc[va_days] for k, v in panel.items()}
+            valid_returns = returns_panel.loc[va_days]
+
+            # 1. train 段全量评估 + 排序
+            log.info("train 段评估候选因子 ...")
+            result_train = evaluate_candidates(
+                cands, train_panel, train_returns,
+                method=args.method, fdr_q=args.fdr_q, verbose=True,
+                detail_n=args.detail_n, n_jobs=n_jobs,
+            )
+            if len(result_train) == 0:
+                log.warning("train 段无有效因子")
+                result = result_train
+            else:
+                # 取 train 段 top 2*top（宽进严出）到 valid 段重新评估
+                n_valid = min(args.top * 3, len(result_train))
+                top_names = result_train.head(n_valid)["name"].tolist()
+                cands_valid = [c for c in cands if c.name in set(top_names)]
+                log.info("valid 段重新评估 %d 个候选 ...", len(cands_valid))
+                result = evaluate_candidates(
+                    cands_valid, valid_panel, valid_returns,
+                    method=args.method, fdr_q=args.fdr_q, verbose=True,
+                    detail_n=args.detail_n, n_jobs=n_jobs,
+                )
+                # 标注 valid 段是否显著
+                if len(result):
+                    result["ic_train"] = result_train.set_index("name")["ic_mean"] \
+                        .reindex(result["name"]).values
+                    result["t_train"] = result_train.set_index("name")["t_stat"] \
+                        .reindex(result["name"]).values
+                    n_sig = int(result["significant"].sum()) if "significant" in result else 0
+                    log.info("三段式完成：valid 段显著因子 %d/%d", n_sig, len(result))
+        else:
+            result = evaluate_candidates(
+                cands, panel, returns_panel,
+                method=args.method, fdr_q=args.fdr_q, verbose=True,
+                detail_n=args.detail_n, n_jobs=n_jobs,
+            )
         log.info("有效评估因子数: %d，显著因子数(FDR q=%.2f): %d",
                  len(result), args.fdr_q, int(result["significant"].sum()) if len(result) else 0)
 
@@ -408,6 +531,9 @@ def main():
             cols = ["name", "ir", "ic_mean", "ic_std", "ic_win_rate",
                     "ic_decay5", "ic_decay10", "autocorr",
                     "t_stat", "p_value", "significant", "n"]
+            if args.three_period and args.real and "ic_train" in result.columns:
+                cols = ["name", "ic_train", "ic_mean", "t_train", "t_stat",
+                        "ir", "ic_win_rate", "significant", "n"]
             print("\n===== Top {} 候选因子（按 |IR| 排序，Alphalens 式标准摘要）=====".format(args.top))
             with pd.option_context("display.max_rows", None, "display.width", 200,
                                    "display.float_format", lambda v: f"{v:.4f}"):
@@ -449,8 +575,12 @@ def main():
             kind="gp" if args.gp else "mining",
             command=" ".join(sys.argv),
             params={"real": args.real, "windows": list(windows), "depth": args.depth,
-                    "gp": args.gp, "pop": args.pop, "gen": args.gen,
-                    "max_depth": args.max_depth, "train_frac": getattr(args, "train_frac", None),
+                    "gp": args.gp, "gp_htai": getattr(args, "gp_htai", False),
+                    "gp_fitness": getattr(args, "gp_fitness", None),
+                    "pop": args.pop, "gen": args.gen,
+                    "max_depth": args.max_depth, "min_depth": getattr(args, "min_depth", None),
+                    "gp_tournament": getattr(args, "gp_tournament", None),
+                    "train_frac": getattr(args, "train_frac", None),
                     "monthly_weight": getattr(args, "monthly_weight", None),
                     "gp_penalty": getattr(args, "gp_penalty", 0.0),
                     "gp_nsga2": getattr(args, "gp_nsga2", False),

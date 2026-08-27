@@ -46,7 +46,7 @@ def load_daily_data(begin: int = 20220101) -> tuple[dict, dict]:
     from research.factor_library import FactorLibrary
 
     cache = DataCache(OfflineDataSource())
-    d = pd.read_parquet(cache.root / "daily.parquet")
+    d = pd.read_parquet(cache.root / "daily_hs300.parquet")
 
     # 股票池 = significant 因子面板列并集（排除 model:*）
     lib_feats = load_library_factors(exclude_model=True)

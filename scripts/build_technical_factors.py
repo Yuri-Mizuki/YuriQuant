@@ -39,15 +39,14 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from config import Config
-from data.cache import DataCache
 from data.cache_helpers import load_backward_factor, load_daily
-from data.datasource import create_datasource
-from data.offline import OfflineDataSource
-from data.universe import Universe
-from factor.preprocessing import standardize_zscore
+from factor.technical import calc_indicators
 from factor.technical_indicators import TechnicalIndicators as _TI
 from research.factor_library import FactorLibrary
+from scripts._build_common import (
+    add_build_args, make_data_context, print_no_save, record_experiment_safe,
+    register_panels, returns_from_daily,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -124,132 +123,6 @@ def _sma_sum(x: pd.DataFrame, n: int) -> pd.DataFrame:
 
 
 # ===========================================================================
-# 逐股时序计算（输入 Series，返回 Series）
-# ===========================================================================
-
-
-def _calc_sar(close, high, low, n=4, step=0.02, max_af=0.2) -> pd.Series:
-    """Wilder 抛物线 SAR（逐股迭代）。
-
-    初始方向：前 n 日收盘净涨跌；多头 SAR 起点=前 n 日最低价，空头=最高价。
-    AF 从 step 起，每创新极值 +step，上限 max_af；翻转时 AF 重置。
-    返回值与 close 同索引的 SAR 序列（前 n 日 NaN）。
-    """
-    c, h, l = close.to_numpy(float), high.to_numpy(float), low.to_numpy(float)
-    sar = np.full(len(c), np.nan)
-    if len(c) <= n or not np.isfinite(h[:n]).any() or not np.isfinite(l[:n]).any():
-        return pd.Series(sar, index=close.index)
-    # 初始方向：前 n 日净涨跌
-    bull = c[n - 1] >= c[0]
-    if bull:
-        ep = float(np.nanmax(h[:n]))
-        sar_val = float(np.nanmin(l[:n]))
-    else:
-        ep = float(np.nanmin(l[:n]))
-        sar_val = float(np.nanmax(h[:n]))
-    af = step
-    for i in range(n, len(c)):
-        sar_val = sar_val + af * (ep - sar_val)
-        if bull:
-            # SAR 不高于前两日最低价（避免突进）
-            lb = min(l[i - 1], l[i - 2]) if i >= 2 else l[i - 1]
-            sar_val = min(sar_val, lb)
-            if h[i] > ep:
-                ep = h[i]
-                af = min(af + step, max_af)
-            if l[i] < sar_val:
-                bull = False
-                sar_val = ep
-                ep = l[i]
-                af = step
-        else:
-            hb = max(h[i - 1], h[i - 2]) if i >= 2 else h[i - 1]
-            sar_val = max(sar_val, hb)
-            if l[i] < ep:
-                ep = l[i]
-                af = min(af + step, max_af)
-            if h[i] > sar_val:
-                bull = True
-                sar_val = ep
-                ep = h[i]
-                af = step
-        sar[i] = sar_val
-    return pd.Series(sar, index=close.index)
-
-
-def _calc_indicators(close, high, low, open_, volume) -> dict[str, pd.Series]:
-    """单只股票的 9 个指标序列（全部只用 t 及以前数据）。"""
-    out: dict[str, pd.Series] = {}
-    ref_c = close.shift(1)
-
-    # MACD 柱
-    dif = close.ewm(span=12, adjust=False, min_periods=12).mean() - close.ewm(
-        span=26, adjust=False, min_periods=26).mean()
-    dea = dif.ewm(span=9, adjust=False, min_periods=9).mean()
-    out["macd_hist"] = 2 * (dif - dea)
-
-    # RSI(12)
-    diff = close - ref_c
-    pos = diff.clip(lower=0.0)
-    up = pos.ewm(alpha=1 / 12, adjust=False, min_periods=12).mean()
-    dn = diff.abs().ewm(alpha=1 / 12, adjust=False, min_periods=12).mean()
-    out["rsi_12"] = (up / dn.replace(0.0, np.nan) * 100).clip(0, 100)
-
-    # KDJ-J
-    llv = low.rolling(9, min_periods=9).min()
-    hhv = high.rolling(9, min_periods=9).max()
-    rsv = (close - llv) / (hhv - llv).replace(0.0, np.nan) * 100
-    k = rsv.ewm(alpha=1 / 3, adjust=False, min_periods=9).mean()
-    d = k.ewm(alpha=1 / 3, adjust=False, min_periods=9).mean()
-    out["kdj_j"] = 3 * k - 2 * d
-
-    # TRIX(12,9)
-    mtr = close.ewm(span=12, adjust=False, min_periods=12).mean()
-    mtr = mtr.ewm(span=12, adjust=False, min_periods=12).mean()
-    mtr = mtr.ewm(span=12, adjust=False, min_periods=12).mean()
-    out["trix_12"] = (mtr - mtr.shift(1)) / mtr.shift(1).replace(0.0, np.nan) * 100
-
-    # OBV 乖离
-    direction = np.sign(close - ref_c).fillna(0.0)
-    obv = (direction * volume).cumsum()
-    obv[obv.index[0]] = volume.iloc[0] if len(volume) else np.nan
-    obv_ma = obv.rolling(30, min_periods=10).mean()
-    out["obv_dev"] = obv / obv_ma.replace(0.0, np.nan) - 1.0
-
-    # WAD 乖离
-    mida = close - pd.concat([low, ref_c], axis=1).min(axis=1)
-    midb = (close - pd.concat([ref_c, high], axis=1).max(axis=1)).where(close < ref_c, 0.0)
-    wad_unit = mida.where(close > ref_c, midb)
-    wad = wad_unit.cumsum()
-    wad_ma = wad.rolling(30, min_periods=10).mean()
-    out["wad_dev"] = wad / wad_ma.replace(0.0, np.nan) - 1.0
-
-    # ASI(26,10)
-    aa = (high - ref_c).abs()
-    bb = (low - ref_c).abs()
-    cc = (high - low.shift(1)).abs()
-    dd = (ref_c - open_.shift(1)).abs()
-    r_a = aa + bb / 2 + dd / 4
-    r_b = bb + aa / 2 + dd / 4
-    r_c = cc + dd / 4
-    r = r_a.where((aa > bb) & (aa > cc), r_b.where((bb > cc) & (bb > aa), r_c))
-    x = close - ref_c + (close - open_) / 2 + ref_c - open_.shift(1)
-    si = 16 * x / r.replace(0.0, np.nan) * pd.concat([aa, bb], axis=1).max(axis=1)
-    out["asi_26"] = si.rolling(26, min_periods=10).sum()
-
-    # CHO
-    mid = (volume * (2 * close - high - low) / (high + low).replace(0.0, np.nan)).cumsum()
-    out["cho"] = (mid.rolling(10, min_periods=10).mean()
-                  - mid.rolling(20, min_periods=10).mean()) / 100
-
-    # SAR 偏离
-    sar = _calc_sar(close, high, low)
-    out["sar_dev"] = (close - sar) / close.replace(0.0, np.nan)
-
-    return out
-
-
-# ===========================================================================
 # 主流程
 # ===========================================================================
 
@@ -284,7 +157,7 @@ def build_factor_panels(daily, bf) -> dict[str, pd.DataFrame]:
     panels: dict[str, pd.DataFrame] = {name: pd.DataFrame(index=c.index, columns=c.columns)
                                        for name in FACTOR_DEFS}
     for code in codes:
-        res = _calc_indicators(c[code], h[code], l[code], o[code], v[code])
+        res = calc_indicators(c[code], h[code], l[code], o[code], v[code])
         for name, s in res.items():
             panels[name][code] = s
     return panels
@@ -326,36 +199,13 @@ def calc_extra_panels(daily, codes) -> dict[str, pd.DataFrame]:
 
 def main():
     parser = argparse.ArgumentParser(description="技术面迭代/累积类指标构建入库")
-    parser.add_argument("--mock", action="store_true")
-    parser.add_argument("--offline", action="store_true")
-    parser.add_argument("--index", default="000300.SH")
-    parser.add_argument("--begin", type=int, default=None)
-    parser.add_argument("--end", type=int, default=None)
-    parser.add_argument("--dataset", default=None)
-    parser.add_argument("--no-save", action="store_true")
+    add_build_args(parser)
     parser.add_argument("--only-extra", action="store_true",
                         help="只注册新增星耀指标（EXTRA_TECH 20 个），跳过已有 9 个"
                              "（已有因子内容正确时刷新无意义，且可避开个别文件被外部锁定的情况）")
     args = parser.parse_args()
 
-    if args.mock:
-        import tempfile
-        from tests.conftest import MockDataSource
-        ds = MockDataSource()
-        begin, end = args.begin or 20230103, args.end or 20241231
-        cache = DataCache(ds, cache_root=tempfile.mkdtemp(prefix="mock_cache_"))
-        dataset = args.dataset or "mock"
-    elif args.offline:
-        ds = OfflineDataSource()
-        begin, end = args.begin or 20250101, args.end or 20251231
-        cache = DataCache(ds)
-        dataset = args.dataset or "hs300_2025"
-    else:
-        ds = create_datasource()
-        begin, end = args.begin or 20250101, args.end or 20251231
-        cache = DataCache(ds)
-        dataset = args.dataset or "hs300_2025"
-    uni = Universe(cache)
+    cache, uni, begin, end, dataset = make_data_context(args)
 
     codes, cal, daily, bf = load_data(cache, uni, args.index, begin, end)
     if daily.empty:
@@ -370,61 +220,35 @@ def main():
     panels.update(extra)
 
     if args.no_save:
-        for name in all_defs:
-            p = panels.get(name)
-            if p is None:
-                log.info("  %-18s 缺失", name)
-                continue
-            log.info("  %-18s 面板 %d 日 × %d 股 | 非空率 %.0f%%",
-                     name, p.shape[0], p.shape[1], 100 * p.notna().mean().mean())
-        log.info("未入库（--no-save）。完成")
+        print_no_save(all_defs, panels)
         return
 
     lib = FactorLibrary(dataset=dataset)
-    d = daily.reset_index()
-    close_w = d.pivot(index="date", columns="code", values="close").sort_index()
-    returns_panel = close_w.pct_change().shift(-1)
+    returns_panel = returns_from_daily(daily)
 
     log.info("入库到数据集: %s", dataset)
     register_names = list(EXTRA_TECH) if args.only_extra else list(all_defs)
     log.info("本次注册 %d 个因子（%s）", len(register_names),
              "仅新增星耀指标" if args.only_extra else "全部技术面")
-    failed: list[tuple[str, str]] = []
-    for name in register_names:
-        p = panels.get(name)
-        if p is None or p.notna().sum().sum() == 0:
-            log.warning("跳过 %s（无有效数据）", name)
-            continue
-        std = standardize_zscore(p)
-        try:
-            row = lib.register(
-                name=name,
-                panel=std,
-                returns_panel=returns_panel,
-                kind="raw",
-                formula=all_defs[name],
-                source=f"technical:build_technical_factors:{begin}-{end}",
-            )
-        except Exception as e:
-            failed.append((name, str(e)[:120]))
-            log.warning("注册失败 %s: %s（继续其余因子）", name, e)
-            continue
-        log.info("  已入库 %s（IC=%.4f, t_nw=%.2f, best_sharpe=%.3f@%s）",
-                 name, row["ic_mean"], row["t_stat_nw"], row["best_sharpe"], row["best_config"])
 
-    try:
-        from research.experiments import record_experiment
-        record_experiment(
-            kind="technical_factors",
-            command=" ".join(sys.argv),
-            params={"index": args.index, "begin": begin, "end": end, "dataset": dataset},
-            data_fingerprint=cache.get_fingerprint(),
-            result_path=str(lib.root),
-            metrics={"n_factors": len(all_defs)},
-            note="技术面指标入库（含星耀 TechnicalIndicators 扩展）",
-        )
-    except Exception as e:
-        log.warning("实验记录写入失败: %s", e)
+    failed: list[tuple[str, str]] = []
+    def _on_fail(name, e):
+        failed.append((name, str(e)[:120]))
+    register_panels(
+        lib, panels, all_defs, returns_panel,
+        source=f"technical:build_technical_factors:{begin}-{end}",
+        names=register_names, on_fail=_on_fail,
+    )
+
+    record_experiment_safe(
+        kind="technical_factors",
+        command=" ".join(sys.argv),
+        params={"index": args.index, "begin": begin, "end": end, "dataset": dataset},
+        fingerprint=cache.get_fingerprint(),
+        result_path=str(lib.root),
+        metrics={"n_factors": len(all_defs)},
+        note="技术面指标入库（含星耀 TechnicalIndicators 扩展）",
+    )
 
     if failed:
         log.warning("有 %d 个因子注册失败（环境文件锁，可稍后重跑补齐）: %s",

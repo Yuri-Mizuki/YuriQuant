@@ -3,8 +3,10 @@
 ================
 
 用法:
-    python -m scripts.update_data              # 更新沪深300日K线
-    python -m scripts.update_data --index 000905.SH  # 更新中证500
+    python -m scripts.update_data              # 更新默认池（config.universe.default）日K线
+    python -m scripts.update_data --pool zz1000  # 更新中证1000（按池分文件 daily_zz1000.parquet）
+    python -m scripts.update_data --pool all_a   # 更新全A池（daily_all_a.parquet）
+    python -m scripts.update_data --index 000905.SH  # 指定指数（pool 由映射推导）
     python -m scripts.update_data --begin 20230101   # 指定起始日
     python -m scripts.update_data --minute 5         # 拉取 5 分钟K线
     python -m scripts.update_data --minute 1,5,15    # 拉取多档分钟K线
@@ -13,6 +15,8 @@
 说明:
     - 增量更新：只拉本地缺失的日期段。
     - 首次运行会从 config.fetch.begin_date 开始全量拉取。
+    - 缓存按池分文件：daily_{pool}.parquet / min{period}_{pool}.parquet，
+      多池并存互不干扰（2026-08-26 池隔离扩展）。
     - 分钟K线默认按 config.minute.periods 拉取（默认 [5]），可用 --minute/--no-minute 覆盖。
     - 无 SDK 凭证时自动回退到 CSV 数据源（离线开发模式）。
 """
@@ -47,6 +51,39 @@ def _parse_minute_arg(raw: str | None) -> list[int] | None:
     return [validate_minute_period(int(p)) for p in parts]
 
 
+# 股票池 -> 指数代码 / 池名（2026-08-26 池隔离扩展）
+_POOL_INDEX = {"hs300": "000300.SH", "zz500": "000905.SH", "zz1000": "000852.SH"}
+_VALID_POOLS = (*_POOL_INDEX.keys(), "all_a")
+
+
+def check_pool_consistency(cache: DataCache, index_code: str, pool: str) -> None:
+    """拉取前校验：meta 中 daily/min5 的 pool 口径与本次拉取是否一致。
+
+    2026-08-26 后缓存按池分文件（daily_{pool}.parquet）；本校验确认
+    目标池文件与本次拉取池一致，防止历史教训重演（daily 曾混入 2179 只
+    ZZ1000 + 指数 000905.SH）。不匹配时给出显式告警。
+    """
+    import json
+    meta_path = cache.root / "_meta.json"
+    if not meta_path.exists():
+        return
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    except Exception:
+        return
+
+    for base in ("daily", "min5"):
+        table = f"{base}_{pool}"
+        info = meta.get(table, {})
+        cur_pool = info.get("pool", "")
+        if cur_pool and cur_pool != pool:
+            log.warning(
+                "[池一致性] %s 已有数据且 meta.pool=%s，本次拉取 pool=%s——"
+                "文件名不一致，可能产生重复/混合数据",
+                table, cur_pool, pool,
+            )
+
+
 def main():
     parser = argparse.ArgumentParser(description="YuriQuant 数据更新")
     parser.add_argument("--index", default=None, help="指数代码，默认取 config.universe.index_code")
@@ -54,6 +91,8 @@ def main():
     parser.add_argument("--end", type=int, default=None, help="结束日期 YYYYMMDD，默认至今")
     parser.add_argument("--minute", default=None, help="拉取分钟K线档位，逗号分隔，如 5 或 1,5,15")
     parser.add_argument("--no-minute", action="store_true", help="跳过分钟K线拉取")
+    parser.add_argument("--pool", default=None,
+                        help=f"股票池: {' | '.join(_VALID_POOLS)}（默认取 config.universe.default）")
     args = parser.parse_args()
 
     # 1. 加载配置
@@ -66,26 +105,38 @@ def main():
     ds = create_datasource()
     cache = DataCache(ds)
 
-    # 3. 确定股票池
-    index_code = args.index or cfg["universe"]["index_code"]
+    # 3. 确定股票池（--pool 优先，其次 config；指数代码按池映射，--index 覆盖）
+    pool = args.pool or cfg["universe"].get("default", "hs300")
+    if pool not in _VALID_POOLS:
+        raise SystemExit(f"未知股票池: {pool}（可选 {' | '.join(_VALID_POOLS)}）")
+    index_code = args.index or _POOL_INDEX.get(pool) or cfg["universe"]["index_code"]
     uni = Universe(cache)
+    check_pool_consistency(cache, index_code, pool)
+    log.info("股票池: %s (index=%s)", pool, index_code)
 
     log.info("获取 %s 成分股 ...", index_code)
-    # 用 end 日期获取当时的成分股；end 为 None 时用最新日历
+    # PIT 口径（2026-08-13 统一）：拉取 begin~end 区间【历史在册成分并集】，
+    # 而非 end 时点成分——否则历史期被调出/退市的股票永远缺数据（幸存者偏差）。
     cal = cache.get_calendar(begin, end)
     if not cal:
         log.warning("交易日历为空，请检查数据源配置。")
         return
     target_date = end if end else cal[-1]
-    codes = uni.get_constituent(index_code, target_date)
-    log.info("成分股数量: %d", len(codes))
+    if pool == "all_a":
+        # 全 A：直接取缓存中全部代码（上市即入池，无需指数成分表）
+        codes = uni.get_all_a(target_date)
+        log.info("全A池代码: %d 只", len(codes))
+    else:
+        from data.cache_helpers import _pit_universe_codes
+        codes = _pit_universe_codes(uni, index_code, begin, target_date)
+        log.info("历史成分并集池: %d 只（%s~%s 期间在册，含调出/退市）", len(codes), begin, target_date)
 
-    # 4. 增量拉取日K线
+    # 4. 增量拉取日K线（按池落盘 daily_{pool}.parquet）
     log.info("增量拉取日K线: %s -> %s", begin, target_date)
-    kline = cache.get_daily_kline(codes, begin, target_date)
+    kline = cache.get_daily_kline(codes, begin, target_date, pool=pool)
     log.info("日K线行数: %d, 代码数: %d", len(kline), kline.index.get_level_values("code").nunique())
 
-    # 4.5 增量拉取分钟K线（日内研究）
+    # 4.5 增量拉取分钟K线（日内研究，按池落盘 min{period}_{pool}.parquet）
     minute_periods = []
     if args.minute:
         minute_periods = _parse_minute_arg(args.minute)
@@ -94,7 +145,7 @@ def main():
     minute_rows: dict[str, int] = {}
     for period in minute_periods:
         log.info("增量拉取 %d 分钟K线: %s -> %s", period, begin, target_date)
-        mk = cache.get_minute_kline(codes, begin, target_date, period=period)
+        mk = cache.get_minute_kline(codes, begin, target_date, period=period, pool=pool)
         n_codes = mk.index.get_level_values("code").nunique() if len(mk) else 0
         minute_rows[f"min{period}_rows"] = len(mk)
         log.info("%d 分钟K线行数: %d, 代码数: %d", period, len(mk), n_codes)
@@ -158,7 +209,7 @@ def main():
         record_experiment(
             kind="data_update",
             command=" ".join(sys.argv),
-            params={"index": index_code, "begin": begin, "end": target_date,
+            params={"index": index_code, "pool": pool, "begin": begin, "end": target_date,
                     "n_codes": len(codes), "minute_periods": minute_periods},
             data_fingerprint=fingerprint,
             result_path=str(cache.root),

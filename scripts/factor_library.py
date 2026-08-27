@@ -5,18 +5,22 @@
 管理持久化的因子库：列出、统一对比、查看某时间段回测、导出 Excel 对比报告、删除、迭代特征。
 
 子命令:
-    list                      列出所有因子（--kind raw|composite）
+    list                      列出所有因子（--kind raw|composite --family --maturity）
     compare                   统一指标排名（默认按 IR；--metric ic_mean/sharpe/annual_return/max_drawdown/calmar/avg_turnover --config ls_M --top N）
-    view NAME                 查看某因子全期或指定时间段回测（--start --end --config）
+    view NAME                 查看某因子全期或指定时间段回测（--start --end --config --regime 分市场状态）
+    set-tag NAME              补打/更新标签（--family --frequency --maturity --note）
+    monitor                   生命周期监控：全期 vs 近期 IC 漂移，warning 因子排前
     report                    导出 Excel 对比报告（--names a,b,c 或 --all --config --out）
     features                  列出可作为下一轮挖掘特征（迭代）的因子
     delete NAME               删除一个因子（带确认）
 
 示例:
     python scripts/factor_library.py datasets
-    python scripts/factor_library.py list --dataset hs300_2025
+    python scripts/factor_library.py list --dataset hs300_2025 --family 反转
+    python scripts/factor_library.py set-tag "ts_delta(amount,20)" --family 反转 --frequency 日频 --dataset hs300_2025
+    python scripts/factor_library.py monitor --dataset hs300_2025 --window 60
     python scripts/factor_library.py compare --dataset hs300_2025 --metric sharpe --top 15
-    python scripts/factor_library.py view "ts_delta(amount,20)" --dataset hs300_2025 --start 20250101 --end 20250601
+    python scripts/factor_library.py view "ts_delta(amount,20)" --dataset hs300_2025 --start 20250101 --end 20250601 --regime
     python scripts/factor_library.py report --dataset hs300_2025 --all --config ls_M --out reports/lib_report.xlsx
 """
 from __future__ import annotations
@@ -39,11 +43,12 @@ def _print_df(df: pd.DataFrame, cols=None, max_rows=40):
 
 def cmd_list(args):
     lib = _lib()
-    df = lib.list_all(kind=args.kind)
+    df = lib.list_all(kind=args.kind, family=args.family, maturity=args.maturity)
     if df.empty:
         print("因子库为空。先运行 `python scripts/mine_factors.py --save-library` 或合成 --save-library。")
         return
-    cols = ["name", "kind", "ic_mean", "t_stat", "significant", "best_sharpe", "best_config", "created_at"]
+    cols = ["name", "kind", "family", "maturity", "ic_mean", "t_stat", "significant",
+            "best_sharpe", "best_config", "created_at"]
     _print_df(df, [c for c in cols if c in df.columns])
 
 
@@ -77,6 +82,20 @@ def cmd_view(args):
     print(f"IC均值={info['ic_mean']:.4f}  IC_IR={info['ic_ir']:.3f}  IC胜率={info['ic_win_rate']:.2%}")
     print(f"年化={m['annual_return']:.2%}  夏普={m['sharpe']:.3f}  索提诺={m['sortino']:.3f}")
     print(f"最大回撤={m['max_drawdown']:.2%}  卡玛={m['calmar']:.3f}  胜率={m['win_rate']:.2%}")
+    if args.regime:
+        try:
+            mr = None
+            if getattr(args, "market_returns", None):
+                mc = pd.read_csv(args.market_returns)
+                mr = pd.Series(mc.iloc[:, 1].values, index=pd.to_datetime(mc.iloc[:, 0]))
+            regs = lib.regime_analysis(args.name, market_returns=mr)
+            print("\n----- 分市场状态检验（八维检验之一）-----")
+            print(f"{'市场状态':<10}{'IC均值':>10}{'IR':>8}{'IC胜率':>10}{'天数':>6}{'市场年化':>12}")
+            for label, v in regs.items():
+                print(f"{label:<10}{v['ic_mean']:>10.4f}{v['ir']:>8.2f}{v['win_rate']:>10.2%}"
+                      f"{v['n_days']:>6}{v['market_ann']:>12.1%}")
+        except (KeyError, ValueError, RuntimeError) as e:
+            print(f"分市场检验跳过: {e}")
     if args.csv:
         out = Path(args.csv)
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -147,6 +166,33 @@ def cmd_features(args):
         print(f"  - {name}")
 
 
+def cmd_set_tag(args):
+    lib = _lib()
+    if not lib.has(args.name):
+        print(f"因子不存在: {args.name}")
+        return
+    ok = lib.set_tag(args.name, family=args.family, frequency=args.frequency,
+                     maturity=args.maturity, note=args.note)
+    print(f"已更新标签: {args.name}" if ok else "更新失败")
+    r = lib.list_all()
+    hit = r[r["name"] == args.name].iloc[0]
+    print(f"  family={hit.get('family', '')}  frequency={hit.get('frequency', '')}"
+          f"  maturity={hit.get('maturity', '')}  note={hit.get('note', '')}")
+
+
+def cmd_monitor(args):
+    lib = _lib()
+    df = lib.monitor(window=args.window)
+    if df.empty:
+        print("库内暂无因子可监控（或 IC 样本不足 20 日）。")
+        return
+    cols = ["name", "family", "maturity", "ic_mean_full", "ic_mean_recent",
+            "ic_drift", "ic_ir_recent", "ic_t_nw_recent", "n_days", "status"]
+    _print_df(df, cols)
+    n_warn = int((df["status"] == "warning").sum())
+    print(f"\nwarning 因子 {n_warn}/{len(df)} —— 近期 IC 均值已跌破全期一半，建议评估是否衰减/降权（退役=set-tag --maturity retired，保留不删）")
+
+
 def cmd_delete(args):
     lib = _lib()
     if not lib.has(args.name):
@@ -195,6 +241,8 @@ def main():
 
     p = sub.add_parser("list", parents=[common], help="列出因子")
     p.add_argument("--kind", choices=["raw", "composite"], default=None)
+    p.add_argument("--family", default=None, help="按因子家族过滤（如 反转/动量/波动率）")
+    p.add_argument("--maturity", default=None, help="按成熟度过滤（experimental/oos_verified/active/retired）")
     p.set_defaults(func=cmd_list)
 
     p = sub.add_parser("compare", parents=[common], help="统一指标排名")
@@ -211,8 +259,22 @@ def main():
     p.add_argument("--start", default=None, help="YYYYMMDD 或 YYYY-MM-DD")
     p.add_argument("--end", default=None)
     p.add_argument("--config", default="ls_M")
+    p.add_argument("--regime", action="store_true", help="附加分市场状态检验（牛/熊/震荡三段 IC）")
+    p.add_argument("--market-returns", default=None, help="可选：市场日收益 CSV（date,ret）；缺省从日线缓存读等权市场")
     p.add_argument("--csv", default=None)
     p.set_defaults(func=cmd_view)
+
+    p = sub.add_parser("set-tag", parents=[common], help="补打/更新因子标签（家族/频率/成熟度/备注）")
+    p.add_argument("name")
+    p.add_argument("--family", default=None, help="因子家族：动量/反转/波动率/价值/质量/成长/情绪/流动性/拥挤度/技术/非线性组合/其他")
+    p.add_argument("--frequency", default=None, help="信号频率：日内/日频/周频/月频/季频")
+    p.add_argument("--maturity", default=None, help="成熟度：experimental/oos_verified/active/retired")
+    p.add_argument("--note", default=None, help="备注（设计动机/差异化贡献）")
+    p.set_defaults(func=cmd_set_tag)
+
+    p = sub.add_parser("monitor", parents=[common], help="生命周期监控：全期 vs 近期 IC 漂移")
+    p.add_argument("--window", type=int, default=60, help="近期窗口交易日数（默认 60）")
+    p.set_defaults(func=cmd_monitor)
 
     p = sub.add_parser("report", parents=[common], help="导出 Excel + HTML 对比报告")
     p.add_argument("--names", default=None, help="逗号分隔；不填则全部")

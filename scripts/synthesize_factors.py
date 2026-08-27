@@ -26,6 +26,7 @@ import pandas as pd
 from factor.preprocessing import standardize_zscore
 from factor.synthesis import (
     CompositeInput, build_components, composite_stats,
+    rebuild_train_weights,
     synthesize_ic_weighted, synthesize_orthogonal, synthesize_pca, synthesize_stacking,
 )
 from research.factor_library import FactorLibrary
@@ -132,6 +133,10 @@ def main():
     parser.add_argument("--strategy", default="topk_ls", choices=["topk_ls", "topk_lo", "quantile_ls"])
     parser.add_argument("--k", type=int, default=30)
     parser.add_argument("--freq", default="M", choices=["D", "W", "M"])
+    parser.add_argument("--train-frac", type=float, default=0.7,
+                        help="前段比例用作训练段，其 IC 决定 ic_weighted/orthogonal 的"
+                             "权重与符号；后段（1-train_frac）为测试段，仅用于外推评估"
+                             "（防未来函数，2026-08-17）")
     parser.add_argument("--save-panels", action="store_true", help="额外保存每个合成方式的复合因子面板(parquet)")
     parser.add_argument("--save-library", action="store_true", help="把各合成方式的复合因子入库（参与下一轮迭代）")
     parser.add_argument("--library-dataset", default=None,
@@ -172,6 +177,24 @@ def main():
         log.info("使用 Mock 数据（注入 AR(1) 动量信号）...")
         panel = gen_mock_panel_with_signal()
         returns_panel = panel["close"].pct_change().shift(-1)
+
+    # 1.5) 训练/测试段切分（2026-08-17 防未来函数）：
+    #      训练段只用于【挖掘选因子 + 决定合成权重/符号】，测试段仅用于外推评估，
+    #      绝不参与任何因子选择 / 权重估计。切分须在挖掘之前完成。
+    all_dates = returns_panel.index
+    train_frac = min(max(args.train_frac, 0.1), 0.9)
+    n_train = max(1, int(len(all_dates) * train_frac))
+    train_dates = all_dates[:n_train]
+    test_dates = all_dates[n_train:]
+    if len(test_dates) < 20:
+        log.error("测试段交易日过少（%d < 20），请调大 --train-frac 或扩大区间", len(test_dates))
+        return
+    log.info("切分: 训练段 %d 日(%s~%s) / 测试段 %d 日(%s~%s)",
+             len(train_dates), train_dates[0], train_dates[-1],
+             len(test_dates), test_dates[0], test_dates[-1])
+    returns_train = returns_panel.loc[train_dates]
+    returns_test = returns_panel.loc[test_dates]
+
     features = list(panel.keys())
     log.info("特征: %s", features)
 
@@ -192,7 +215,15 @@ def main():
             result = pd.read_csv(args.from_csv)
             log.info("读取挖掘结果: %s (%d 行)", args.from_csv, len(result))
         else:
-            result = _run_mining(panel, returns_panel, features, windows, args.depth,
+            # 关键（2026-08-17）：挖掘/选因子只在【训练段】进行，避免"用未来收益
+            # 挑选参与合成的因子"这一层 look-ahead。选出因子后用全样本面板重建，
+            # 测试段复合值仅由训练段选定的因子产生 → 无未来函数。
+            # panel 可能是单 DataFrame（真实）或 dict{因子名: DataFrame}（mock），需兼容。
+            panel_tr = {k: v.loc[train_dates] for k, v in panel.items()} \
+                if isinstance(panel, dict) else panel.loc[train_dates]
+            rts_tr = returns_panel.loc[train_dates]
+            log.info("挖掘在训练段进行（%d 日）...", len(train_dates))
+            result = _run_mining(panel_tr, rts_tr, features, windows, args.depth,
                                  args.ic_method, args.fdr_q)
 
         if result.empty:
@@ -200,9 +231,9 @@ def main():
             return
 
         topk = _select_topk(result, args.topk)
-        log.info("参与合成的因子数: %d", len(topk))
+        log.info("参与合成的因子数: %d（训练段选出）", len(topk))
         components = build_components(topk, panel, features=features, windows=windows, depth=args.depth)
-        log.info("成功重建因子面板: %d / %d", len(components), len(topk))
+        log.info("成功重建因子面板(全样本): %d / %d", len(components), len(topk))
 
     if not components:
         log.error("因子面板构建失败，终止。")
@@ -214,30 +245,37 @@ def main():
         print(topk[["name", "ic_mean", "ir", "t_stat", "significant"]].to_string(index=False))
 
     # 4) 合成 + 评估 + 回测对比
+    # 切分已在步骤 1.5 完成（train_dates/test_dates/returns_train/returns_test）。
     method_list = METHODS if args.method == "all" else [args.method]
     rows = []
     panels_out = {}
 
-    # 基线：最佳单因子（top1 组件）
-    best = components[0]
-    best_stats = composite_stats(best.panel, returns_panel, args.ic_method)
-    best_bt = _backtest_metrics(best.panel, returns_panel, args.strategy, args.k, args.freq)
+    # 权重/符号来源：ic_weighted / orthogonal 只用训练段 IC，杜绝全样本 look-ahead
+    train_components = rebuild_train_weights(components, returns_panel, train_dates)
+
+    # 基线：最佳单因子（测试段外推）
+    best = train_components[0]
+    best_stats = composite_stats(best.panel.loc[test_dates], returns_test, args.ic_method)
+    best_bt = _backtest_metrics(best.panel.loc[test_dates], returns_test, args.strategy, args.k, args.freq)
     rows.append({"method": "best_single(" + best.name + ")", **best_stats, **best_bt})
 
     for m in method_list:
         log.info("合成方式: %s", m)
+        # 仅 ic_weighted / orthogonal 的权重由训练段 IC 决定（train_components）；
+        # pca / stacking 系列内部已是时序防泄漏，传全样本面板即可。
         if m == "ic_weighted":
-            comp = synthesize_ic_weighted(components, weight_by="ic_abs", returns_panel=returns_panel)
+            comp = synthesize_ic_weighted(train_components, weight_by="ic_abs")
         elif m == "pca":
             comp = synthesize_pca(components, n_components=min(3, len(components)), returns_panel=returns_panel)
         elif m == "orthogonal":
-            comp = synthesize_orthogonal(components, weight_by="ic_abs")
+            comp = synthesize_orthogonal(train_components, weight_by="ic_abs")
         elif m == "stacking":
             comp = synthesize_stacking(components, returns_panel, n_splits=5)
         else:
             continue
-        st = composite_stats(comp, returns_panel, args.ic_method)
-        bt = _backtest_metrics(comp, returns_panel, args.strategy, args.k, args.freq)
+        comp_test = comp.loc[test_dates].reindex(columns=returns_test.columns)
+        st = composite_stats(comp_test, returns_test, args.ic_method)
+        bt = _backtest_metrics(comp_test, returns_test, args.strategy, args.k, args.freq)
         rows.append({"method": m, **st, **bt})
         panels_out[m] = comp
 
@@ -309,12 +347,14 @@ def main():
         for m, comp in panels_out.items():
             lib.register(
                 f"composite_{m}",
-                comp, returns_panel, kind="composite",
-                formula=f"{m}({','.join(parents)})",
+                comp, returns_train, kind="composite",
+                formula=f"{m}({','.join(parents)}; train_frac={train_frac})",
                 parents=parents,
                 source=f"synthesis:{m}",
             )
-        log.info("复合因子入库完成（%d 个），可用 `python scripts/mine_factors.py --use-library` 参与下一轮", len(panels_out))
+        log.info("复合因子入库完成（%d 个，库内 IC 基于训练段），"
+                 "可用 `python scripts/mine_factors.py --use-library` 参与下一轮",
+                 len(panels_out))
 
 
 if __name__ == "__main__":

@@ -50,16 +50,27 @@ def _load_daily(cache, codes, begin, end):
 
 def build_panels(begin: int, end: int) -> tuple[dict[str, pd.DataFrame], pd.DataFrame]:
     from data.universe import Universe
+    from data.cache_helpers import _pit_universe_codes, _apply_membership_mask
     cache = DataCache(OfflineDataSource())
     uni = Universe(cache)
     cal = cache.get_calendar(begin, end)
     if not cal:
         raise RuntimeError(f"日历为空 {begin}-{end}")
-    codes = uni.get_constituent("000300.SH", end)
+    # PIT 口径（2026-08-13 统一）：历史在册并集池
+    codes = _pit_universe_codes(uni, "000300.SH", begin, end)
 
     # 技术面 warmup：从 begin-400 天起拉日线算指标，截取研究区间
     warm_begin = int((pd.Timestamp(str(begin)) - pd.Timedelta(days=WARMUP_DAYS)).strftime("%Y%m%d"))
-    calw, dailyw, ow, hw, lw, cw, vw = _load_daily(cache, codes, warm_begin, end)
+    _, dailyw, _, _, _, _, _ = _load_daily(cache, codes, warm_begin, end)
+    # warmup 区间也应用 PIT mask（非在册期间行情剔除）
+    dailyw = _apply_membership_mask(dailyw, uni, "000300.SH")
+    dw = dailyw.reset_index()
+    dw["date"] = dw["date"].dt.normalize()
+    ow = dw.pivot(index="date", columns="code", values="open").sort_index()
+    hw = dw.pivot(index="date", columns="code", values="high").sort_index()
+    lw = dw.pivot(index="date", columns="code", values="low").sort_index()
+    cw = dw.pivot(index="date", columns="code", values="close").sort_index()
+    vw = dw.pivot(index="date", columns="code", values="volume").sort_index()
     bf = pd.read_parquet(CACHE_ROOT / "backward_factor.parquet")
     bf = bf.reindex(index=cw.index).reindex(columns=cw.columns).ffill()
     oa, ha, la, ca = ow * bf, hw * bf, lw * bf, cw * bf
@@ -69,11 +80,11 @@ def build_panels(begin: int, end: int) -> tuple[dict[str, pd.DataFrame], pd.Data
 
     # ---- 技术面（warmup 后截取研究区间）----
     try:
-        from scripts.build_technical_factors import _calc_indicators
+        from factor.technical import calc_indicators
         for code in codes:
             if code not in ca.columns or ca[code].dropna().empty:
                 continue
-            res = _calc_indicators(ca[code], ha[code], la[code], oa[code], vw[code])
+            res = calc_indicators(ca[code], ha[code], la[code], oa[code], vw[code])
             for k, s in res.items():
                 if k in COMPONENTS:
                     panels.setdefault(k, pd.DataFrame(index=cw.index, columns=cw.columns))
