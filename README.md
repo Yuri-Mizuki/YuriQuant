@@ -165,6 +165,9 @@ mock 落 `reports/models_mock`，真实落 `reports/models`。
 | **投资收益报告** | `scripts/investment_report.py` | 模型预测作因子检验（IC/IR/NW-t/分层图）+ 组合 vs 大盘指数基准（沪深300→000300.SH，全A→000001.SH）→ `reports/investment_report/` |
 | **因子库检验报告** | `scripts/factor_library_full_report.py` | 821 因子全量检验表（IC/ICIR/NW-t/分层收益/换手，可排序+搜索，top 因子分层净值图），借用公开库标注"无挖-验分离" → `reports/factor_library_report_hs300_2022_2025.html` |
 | **交互式因子检测** | `scripts/factor_explorer_report.py` | 821 因子交互报告：时间段选择 × 来源筛选 × 指标排序，详情含 5/10 层 × 月/周分层净值+多空线、IC 序列+MA、IC 衰减、月度热力图、各层绩效表 → `reports/factor_explorer_hs300_2022_2025.html` |
+| **模型增强组合（固化配置）** | `scripts/run_model_portfolio.py` | 模型信号 → 风格中性化 → TopFrac 重仓多头，`reports/model_portfolio/`；默认 gbdt+中性化+Top20%+月频，2025 test 段成本后超额沪深300 **+4.85%**（Sharpe 1.70） |
+| **调仓频率精修** | `scripts/freq_tune.py` | gbdt+中性化+Top20% 上放开 h×freq 网格，验证换手吞噬收益 → `reports/freq_tune/`；h1×M 最优，日频超额 −40% |
+| **多年度 OOS 稳健性** | `scripts/multiyear_oos.py` | gbdt/ridge/ranker × h1/h5 × D/W/M，2023/2024/2025 分年 walk-forward（特征定型期固定防前视）→ `reports/multiyear/`；h1×M 唯一三年一致稳健解 |
 | **日内研究** | `scripts/intraday_analysis.py` | 隔夜 vs 日内收益分解、成交量/波动率时段效应 → `reports/intraday_analysis_{year}.png`、`intraday_summary_{year}.csv` |
 | **自动因子挖掘** | `scripts/gp_tune_budget.py`、`run_gflownet_phase0/1.py`、`train_htai_rl_p0.py`、`gflownet_library_ingest.py` | GP 调参 / GFlowNet TB+PPO / AlphaPool RL 最小闭环 → `reports/gp_tune/`、`reports/_htai_gp/` |
 | **文本挖掘** | `scripts/fetch_textmining.py` + `scripts/textmining/` | 研报/公告抓取 → FADT/SUE-文本 样本、BERT 编码、训练评估 → `reports/textmining*/` |
@@ -226,6 +229,29 @@ mock 落 `reports/models_mock`，真实落 `reports/models`。
   优势，减少信号衰减的假设不成立；③ 中性化对 W 同样有效（6.2%→18.4%）。
   最优配置 = **月频 + 中性化**，已并入 `investment_report.py`（默认开启）。
 
+### 固化配置与正式入口（2026-08-25，最终交付物）
+
+- **模型增强组合固化配置**（`config/settings.yaml` 的 `model_portfolio` 段 +
+  `strategy/examples.py: TopFracLongOnly`，入口 `scripts/run_model_portfolio.py`，
+  输出 `reports/model_portfolio/`）：把「模型信号 → 风格中性化 → Top20% 重仓多头」
+  固化为可复用正式入口，配置只此一处真源。默认 horizon=1 / gbdt / frac=0.20 /
+  月度调仓，2025 test 段成本后超额沪深300 **+4.85%**（Sharpe 1.70，MaxDD −11.3%，
+  成本前 +8.70%）。关键规律：只支持 h=1（h=5 组合超额 −24.9% 难变现）、Top20%
+  是 alpha 密度甜点、中性化是信号变现的关键（raw IC 高但跑输风格）。
+- **修复 LGBRankerPredictor**（`model/predictor.py`）：`fit()` 曾硬编码
+  `N_BINS=30`+`objective=lambdarank`、绕过构造参数导致负 IC(−0.055)；改为使用
+  实例参数、默认 `labels_bins=2`（截面中位数二分）+`rank_xendcg` 后样本内 IC
+  由负转正至 +0.207（434/484 天为正），现有调用方无需改动。
+- **调仓频率精修**（`scripts/freq_tune.py` → `reports/freq_tune/freq_tune.csv`）：
+  h=1 时 M 月度最优（超额 +4.85%）；频率越高换手越严重侵蚀 alpha，W 超额
+  −8.9%、D 超额 −39.9%；h=5 只有月度跨度（≥17 天）合法，跨度过短会被回测引擎
+  守卫拦截（防收益虚增）。
+- **多年度 OOS 稳健性**（`scripts/multiyear_oos.py` → `reports/multiyear/`）：
+  gbdt/ridge/ranker × h1/h5 × D/W/M 在 2023/2024/2025 分年 walk-forward
+  （特征在定型期 fixed，防前视选择）。结论：**h1×M 是唯一三年一致稳健的解**，
+  gbdt 在熊/牛/强牛期均跑赢沪深300；h5 仅熊市好、牛市惨败（IC 高 ≠ 收益）。
+  注：多年度结果需在真实数据下运行该脚本重新生成（`reports/multiyear/` 尚空）。
+
 ## 安装
 
 本项目依赖用 `pyproject.toml` 管理，可直接装成可编辑包：
@@ -284,6 +310,15 @@ python -m scripts.update_data --no-minute      # 只更新日频数据
 python scripts/walk_forward_model.py --mock   # 无 SDK，mock 数据跑通管线
 python scripts/walk_forward_model.py --real --methods ridge,gbdt --horizon 5 --save-library
 ```
+
+### 模型增强组合（固化配置，正式投产入口）
+
+```bash
+python -m scripts.run_model_portfolio                  # 默认 gbdt+中性化+Top20%+月频
+python -m scripts.run_model_portfolio --model ranker --frac 0.25   # 覆盖模型/持仓
+python -m scripts.run_model_portfolio --pre-cost       # 同时输出成本前口径
+```
+参数真源在 `config/settings.yaml` 的 `model_portfolio` 段；结果落 `reports/model_portfolio/`。
 
 ### 生产化监控
 

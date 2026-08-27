@@ -6,10 +6,10 @@ import pandas as pd
 import pytest
 
 from factor.operators import (
-    ELEMENT_OPS, TS_OPS, CS_OPS, all_operators, op_registry,
+    ELEMENT_OPS, TS_OPS, CS_OPS, TECH_OPS, all_operators, op_registry,
     abs_, sign, log_, div, add, ts_mean, ts_ref, ts_delta, ts_arg_max,
     ts_corr, ts_slope, ts_ema, cs_rank, cs_zscore, cs_normalize, cs_scale,
-    cs_rank_normalize, cs_demean, DEFAULT_WINDOWS,
+    cs_rank_normalize, cs_demean, cs_winsorize, DEFAULT_WINDOWS,
 )
 
 
@@ -30,7 +30,7 @@ def panel2(panel):
 # ---- 形状保持 ----
 def test_registry_complete():
     ops = all_operators()
-    assert len(ops) == len(ELEMENT_OPS) + len(TS_OPS) + len(CS_OPS)
+    assert len(ops) == len(ELEMENT_OPS) + len(TS_OPS) + len(CS_OPS) + len(TECH_OPS)
     reg = op_registry()
     assert "ts_mean" in reg and "cs_rank" in reg and "div" in reg
     # 名称唯一
@@ -127,3 +127,18 @@ def test_cs_rank_in_unit_interval(panel):
 # ---- 窗口默认值 ----
 def test_default_windows_sane():
     assert DEFAULT_WINDOWS == (5, 10, 20, 60)
+
+
+# ---- 2026-08-17 收敛：operators 复用 preprocessing，结果须严格等价 ----
+def test_cs_zscore_equals_standardize_zscore(panel):
+    from factor.preprocessing import standardize_zscore
+    a = cs_zscore(panel)
+    b = standardize_zscore(panel)
+    pd.testing.assert_frame_equal(a, b, check_dtype=False)
+
+
+def test_cs_winsorize_equals_winsorize_mad(panel):
+    from factor.preprocessing import winsorize_mad
+    a = cs_winsorize(panel)
+    b = winsorize_mad(panel, n_mad=5.0, consistency_scale=False)
+    pd.testing.assert_frame_equal(a, b)

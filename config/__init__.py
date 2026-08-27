@@ -1,4 +1,5 @@
 """配置加载：读取 settings.yaml，支持环境变量占位符替换。"""
+
 from __future__ import annotations
 
 import os
@@ -23,9 +24,11 @@ _ENV_PATTERN = re.compile(r"\$\{([A-Z_]+)(?::([^}]*))?\}")
 def _expand_env(value: Any) -> Any:
     """递归替换 ${VAR:default} 占位符为环境变量值。"""
     if isinstance(value, str):
+
         def _repl(m: re.Match) -> str:
             var, default = m.group(1), m.group(2) or ""
             return os.environ.get(var, default)
+
         return _ENV_PATTERN.sub(_repl, value)
     if isinstance(value, dict):
         return {k: _expand_env(v) for k, v in value.items()}
@@ -44,6 +47,7 @@ def load_config(path: Path | str | None = None) -> dict:
 
 class Config:
     """单例式配置访问器。"""
+
     _data: dict | None = None
 
     @classmethod
@@ -72,3 +76,33 @@ class Config:
     @classmethod
     def fetch(cls) -> dict:
         return cls.get()["fetch"]
+
+    @classmethod
+    def discipline(cls) -> dict:
+        """L2 段落契约：冻结日历（train/valid/test 边界单一真源）。
+
+        Returns:
+            {"begin", "train_end", "valid_end"}（8 位整型日期）；
+            test 段 = valid_end 之后，只允许最终验证与上线后监控。
+        """
+        d = cls.get().get("discipline") or {}
+        return {
+            "begin": int(d.get("begin", 20220101)),
+            "train_end": int(d.get("train_end", 20231231)),
+            "valid_end": int(d.get("valid_end", 20241231)),
+        }
+
+    @classmethod
+    def monitoring(cls) -> dict:
+        """生产化监控阈值（monitoring/ 包单一真源，缺省值与 settings.yaml 一致）。"""
+        m = cls.get().get("monitoring") or {}
+        return {
+            "window": int(m.get("window", 60)),
+            "window_long": int(m.get("window_long", 252)),
+            "max_stale_days": int(m.get("max_stale_days", 7)),
+            "min_coverage": float(m.get("min_coverage", 0.5)),
+            "warn_ic_retention": float(m.get("warn_ic_retention", 0.5)),
+            "min_monotonicity": float(m.get("min_monotonicity", 0.5)),
+            "min_t_nw_recent": float(m.get("min_t_nw_recent", 1.0)),
+            "ledger_root": str(m.get("ledger_root", "reports/monitoring")),
+        }

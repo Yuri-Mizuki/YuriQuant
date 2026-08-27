@@ -4,7 +4,7 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from research.experiments import Experiments
+from research.experiments import Experiments, default_experiments_path
 
 
 @pytest.fixture
@@ -55,3 +55,11 @@ def test_load_empty(tmp_path):
     exp = Experiments(tmp_path / "nope.csv")
     assert exp.list().empty
     assert exp.latest() is None
+
+
+def test_default_path_anchored_to_project_root():
+    """默认实验日志锚定项目根（绝对路径），保证计划任务等任意 CWD 下稳定写入。"""
+    p = default_experiments_path()
+    assert p.is_absolute()
+    assert p.name == "experiments.csv"
+    assert "YuriQuant" in str(p)          # 落在项目根 reports/ 下，而非随 CWD 漂移

@@ -72,10 +72,30 @@ preprocessing:
   # 行业分类级别（申万一级=1）
   industry_level: 1
 
+# --- 训练纪律（L2 段落契约：冻结日历单一真源） ---
+discipline:
+  # 所有搜索/训练类算法（穷举/GP/GFlowNet/RL/stacking/predictor）允许消费的数据硬上限。
+  # test 段（valid_end 之后）只允许两件事：walk_forward 型最终验证、上线后监控；
+  # 绝不参与挖掘/筛选/调参/入库决策。对齐 scripts/walk_forward.py 三段式纪律。
+  begin: 20220101        # 定型期起点
+  train_end: 20231231    # train 段结束（挖掘/粗筛）
+  valid_end: 20241231    # valid 段结束（筛选/定权重）；之后为冻结 test 段
+
 # --- 因子库（Factor Library / Factor Zoo）---
 factor_library:
   # 因子持久化根目录：registry.csv + panels/*.parquet + evals/*.parquet
   root: e://data//factor_library//
+
+# --- 生产化监控（monitoring/ 包；因子与模型预测的性能监控调度）---
+monitoring:
+  window: 60                 # 近期短窗（交易日，IC 漂移 / 覆盖 / 单调性按此；灵敏提前预警）
+  window_long: 252           # 近期长窗（交易日 ≈ 12 个月，稳健确认，抗噪音）
+  max_stale_days: 7          # 数据新鲜度告警：面板落后数据源超过 N 个交易日 → warning
+  min_coverage: 0.5          # 近期窗口截面覆盖率下限
+  warn_ic_retention: 0.5     # 近期 IC < 期望（全期或上线基线）的 50% → warning；翻负 → critical
+  min_monotonicity: 0.5      # 分位单调性下限（模型因子：结构恶化先于 IC 归零，作退出预警；0.8 对未筛选的原始因子库过严）
+  min_t_nw_recent: 1.0       # 模型因子近期 Newey-West t 下限（显著性丢失 → warning）
+  ledger_root: reports/monitoring   # 快照 / 告警账本与 HTML 报告输出目录
 
 # --- 回测默认参数（后续阶段用） ---
 backtest:
@@ -89,3 +109,23 @@ backtest:
   # 空头腿成本（修正空头腿乐观偏差：多空策略借券费按日计提、保证金占用报告）
   short_borrow_rate: 0.08    # 年化借券费率（A股融券常见 8%~10%；0=关闭）
   short_margin_ratio: 1.0    # 融券保证金比例（监管最低 100% = 1.0）
+
+# --- 模型增强组合默认配置（gbdt 精修固化，2026-08-25）---
+# 组合形式：模型信号 -> 风格中性化(市值+行业+mom/vol/turn) -> TopFrac 重仓多头。
+# 由 gbdt horizon×持仓 网格精修得出（reports/gbdt_tune）：
+#   horizon=1, frac=0.20 于 2025 test 段成本后超额沪深300 +4.85%、Sharpe 1.70。
+# 关键规律：
+#   - horizon 必须 = 1（h=5 组合超额难变现，成本后 -24.9%）
+#   - Top20% 附近是 alpha 密度最集中区间，0.20 为风险/收益甜点
+#   - 中性化是 alpha 变现的关键（raw 信号 IC 高但跑输风格；neut 后 IC 略降、收益大增）
+model_portfolio:
+  horizon: 1                # 预测视野（h=1 最优，h=5 崩坏）
+  strategy: topfrac_lo      # TopFrac 重仓多头
+  frac: 0.20                # 持仓比例（Top20%）
+  rebalance_freq: M         # 月度调仓
+  model: gbdt               # 信号模型（gbdt 最优；ridge/ranker 备选）
+  neutralize: true          # 信号先做风格中性化再进组合
+  cost_slippage_bp: 10      # 精修采用的回测滑点假设（含成本口径）
+  cost_commission: 0.0003   # 双边佣金
+  cost_stamp: 0.001         # 印花税（卖出）
+  test_note: "test 2025 段，成本后 net 超额 +4.85% @frac=0.20,h=1"

@@ -95,8 +95,8 @@ def test_cache_minute_power_idempotent(mock_ds, tmp_path):
     df2 = cache.get_minute_kline(codes, 20230103, 20230203, period=5)
     assert len(df2) == len(df1)
     assert not df2.index.duplicated().any()
-    assert (tmp_path / "min5.parquet").exists()
-    on_disk = pd.read_parquet(tmp_path / "min5.parquet")
+    assert (tmp_path / "min5_hs300.parquet").exists()
+    on_disk = pd.read_parquet(tmp_path / "min5_hs300.parquet")
     assert len(on_disk) == len(df1)
 
 
@@ -110,7 +110,7 @@ def test_cache_minute_narrow_query_keeps_history(mock_ds, tmp_path):
     days = {d.date() for d in narrow.index.get_level_values("kline_time").unique()}
     assert 0 < len(days) <= 22
     # 缓存文件仍保留全量
-    on_disk = pd.read_parquet(tmp_path / "min5.parquet")
+    on_disk = pd.read_parquet(tmp_path / "min5_hs300.parquet")
     assert len(on_disk) == len(full)
 
 
@@ -135,7 +135,7 @@ def test_cache_minute_incremental_extension(mock_ds, tmp_path):
     df1 = cache.get_minute_kline(codes, 20230103, 20230131, period=5)
     df2 = cache.get_minute_kline(codes, 20230103, 20230228, period=5)
     assert len(df2) > len(df1)
-    assert len(df2) == len(pd.read_parquet(tmp_path / "min5.parquet"))
+    assert len(df2) == len(pd.read_parquet(tmp_path / "min5_hs300.parquet"))
     jan = df2[df2.index.get_level_values("kline_time") < "2023-02-01"]
     assert len(jan) == len(df1)
 
@@ -171,8 +171,8 @@ def test_cache_minute_multiple_periods_isolated(mock_ds, tmp_path):
     codes = mock_ds.MOCK_CODES[:5]
     df5 = cache.get_minute_kline(codes, 20230103, 20230106, period=5)
     df15 = cache.get_minute_kline(codes, 20230103, 20230106, period=15)
-    assert (tmp_path / "min5.parquet").exists()
-    assert (tmp_path / "min15.parquet").exists()
+    assert (tmp_path / "min5_hs300.parquet").exists()
+    assert (tmp_path / "min15_hs300.parquet").exists()
     assert len(df5) == 4 * 48 * 5
     assert len(df15) == 4 * 16 * 5
 

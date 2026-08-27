@@ -235,3 +235,194 @@ def test_gp_sample_step_runs(signal_panel):
                           population=15, generations=2, max_depth=3, seed=8, verbose=False,
                           sample_step=3)
     assert len(df) > 0
+
+
+# ---------------------------------------------------------------------------
+# 华泰研报复现模式（htai，2026-08-10）
+# ---------------------------------------------------------------------------
+def _htai_neutral_panels(panel):
+    """从 mock 面板构造中性化协变量（size/industry/mom20/vol20/turn20）。"""
+    rng = np.random.default_rng(0)
+    close = panel["close"]
+    codes = close.columns
+    n = len(close)
+    out = {
+        "mom20": close.pct_change(20),
+        "vol20": close.pct_change().rolling(20).std(),
+        "turn20": close.rolling(20).mean() * 1e-3,
+        "size": close * 1e8,
+    }
+    ind = pd.DataFrame(
+        np.tile(np.array(["Bank"] * 10 + ["Tech"] * 10), (n, 1)),
+        index=close.index, columns=codes,
+    )
+    out["industry"] = ind
+    return out
+
+
+def test_htai_preprocess_pipeline(signal_panel):
+    """华泰环内预处理：MAD(±5×MAD) → 五因子中性化 → zscore，形状保持。"""
+    from factor.genetic_mining import _htai_preprocess
+
+    panel, _ = signal_panel
+    fp = panel["close"] * 1000 + 5.0  # 引入量纲与水平
+    # 无协变量：只做 MAD + 标准化（mock 下限）
+    out1 = _htai_preprocess(fp, neutral_panels=None)
+    assert out1.shape == fp.shape
+    assert np.isfinite(out1).sum().sum() > 0
+    # 有协变量：中性化路径
+    out2 = _htai_preprocess(fp, neutral_panels=_htai_neutral_panels(panel))
+    assert out2.shape == fp.shape
+    assert np.isfinite(out2).sum().sum() > 0
+
+
+def test_htai_rankic_mean_fitness_runs(signal_panel):
+    """华泰复现（htai=True, fitness_mode=rankic_mean）：月频20日目标 + 平均RankIC 跑通。"""
+    pytest.importorskip("deap")
+    from factor.genetic_mining import run_gp_mining
+
+    panel, rets = signal_panel
+    df, _ = run_gp_mining(panel, rets, features=["close", "volume"], windows=(5, 10),
+                          population=20, generations=3, max_depth=3, seed=9, verbose=False,
+                          htai=True, neutral_panels=_htai_neutral_panels(panel),
+                          fitness_mode="rankic_mean", train_frac=1.0)
+    assert len(df) > 0
+    assert {"formula", "ic_mean", "ic_train", "ic_oos"}.issubset(df.columns)
+    assert df["ic_mean"].notna().sum() >= len(df) // 2
+    # ic_train 应与 ic_mean 一致（train_frac=1.0 全样本）
+    assert np.allclose(df["ic_mean"], df["ic_train"], equal_nan=True)
+
+
+def test_htai_tstat_fitness_runs(signal_panel):
+    """华泰复现 + tstat 适应度（|mean|/std）跑通。"""
+    pytest.importorskip("deap")
+    from factor.genetic_mining import run_gp_mining
+
+    panel, rets = signal_panel
+    df, _ = run_gp_mining(panel, rets, features=["close", "volume"], windows=(5, 10),
+                          population=20, generations=2, max_depth=3, seed=10, verbose=False,
+                          htai=True, neutral_panels=None, fitness_mode="tstat")
+    assert len(df) > 0
+    assert df["t_stat"].notna().all()
+
+
+def test_new_primitives_registered_and_eval(signal_panel):
+    """华泰函数集扩充：inv/delay/ts_cov/ts_product/ts_zscore/scale/sigmoid/rank_sub/rank_div
+    进入 GP 原语集且可求值。"""
+    pytest.importorskip("deap")
+    from deap import gp as deap_gp
+    from factor.genetic_mining import build_primitive_set, eval_tree
+
+    panel, _ = signal_panel
+    pset, prim_map = build_primitive_set(["close", "volume"], (5, 10))
+    for name in ["ts_zscore_5", "ts_delay_5", "ts_product_5", "ts_cov_5",
+                 "inv", "sigmoid", "scale", "rank_sub", "rank_div"]:
+        assert name in prim_map, f"原语 {name} 未注册"
+    cases = ["ts_zscore_5(close)", "inv(close)", "sigmoid(close)", "scale(close)",
+             "rank_sub(close, volume)", "rank_div(close, volume)", "ts_cov_5(close, volume)"]
+    for f in cases:
+        tree = deap_gp.PrimitiveTree.from_string(f, pset)
+        out = eval_tree(tree, panel, prim_map)
+        assert out is not None and out.shape == panel["close"].shape, f"求值失败: {f}"
+
+
+def test_winsorize_mad_htai_scale(signal_panel):
+    """华泰口径去极值：consistency_scale=False 时不乘 1.4826。"""
+    from factor.preprocessing import winsorize_mad
+
+    panel, _ = signal_panel
+    x = panel["close"]
+    a = winsorize_mad(x, n_mad=5.0, consistency_scale=True)   # 5×1.4826×MAD（更宽）
+    b = winsorize_mad(x, n_mad=5.0, consistency_scale=False)  # 5×MAD（更窄）
+    # 不乘常数 → 截断更严 → 改动更多
+    assert (b != x).sum().sum() >= (a != x).sum().sum()
+    assert np.isfinite(b).all().all()
+
+
+# ---------------------------------------------------------------------------
+# 报告23：互信息 / 多头超额适应度 / 非线性因子线性化（2026-08-10）
+# ---------------------------------------------------------------------------
+def test_mutual_info_series_ranges(signal_panel):
+    """互信息序列：独立时≈0、强相关时>0，且序列长度与面板一致。"""
+    from factor.genetic_mining import _mutual_info_series, _monthly_forward_returns
+
+    # 用小面板扩大股数（20 股太稀，MI 小样本偏差大）
+    rng = np.random.default_rng(0)
+    n_days, n_codes = 150, 80
+    idx = pd.date_range("2023-01-01", periods=n_days, freq="B")
+    codes = [f"{600000 + i:06d}.SH" for i in range(n_codes)]
+    rets_mat = rng.normal(0.02, 0.02, (n_days, n_codes))
+    close = pd.DataFrame(np.exp(np.cumsum(rets_mat, axis=0)), idx, codes)
+    rets = close.pct_change().shift(-1)
+    rm = _monthly_forward_returns(rets)
+    # 强相关：因子=未来收益的 rank
+    fp = rets.rank(axis=1, pct=True)
+    mi_strong = _mutual_info_series(fp, rm).dropna()
+    # 独立：随机面板
+    fp_noise = pd.DataFrame(rng.normal(size=close.shape), index=idx, columns=codes)
+    mi_noise = _mutual_info_series(fp_noise, rm).dropna()
+    assert mi_strong.mean() > mi_noise.mean(), "强相关因子的 MI 应高于噪声因子"
+    assert mi_noise.mean() < 0.3, "独立变量 MI 应接近 0（小样本保护后偏差应小）"
+    assert 0 < mi_strong.mean() < 2.0
+
+
+def test_top_excess_series_direction(signal_panel):
+    """多头超额：正向因子 top_excess>0，负向因子 bot_excess>0，取 max 无偏。"""
+    from factor.genetic_mining import _top_excess_series, _monthly_forward_returns
+
+    panel, rets = signal_panel
+    rm = _monthly_forward_returns(rets)
+    fp = panel["close"].pct_change().shift(-1)   # 与未来收益正相关（mock AR(1)）
+    t_pos, b_pos, nd_pos = _top_excess_series(fp, rm, top_frac=0.1)
+    t_neg, b_neg, nd_neg = _top_excess_series(-fp, rm, top_frac=0.1)
+    assert nd_pos > 10 and nd_neg > 10
+    assert t_pos > 0 and b_neg > 0, "正/负向因子应各有一侧超额为正"
+    assert abs(t_pos - b_neg) < 1e-6, "符号翻转后 Top/Bottom 应互换"
+
+
+def test_mutual_info_fitness_runs(signal_panel):
+    """fitness_mode='mutual_info'（报告23 适应度）跑通。"""
+    pytest.importorskip("deap")
+    from factor.genetic_mining import run_gp_mining
+
+    panel, rets = signal_panel
+    df, _ = run_gp_mining(panel, rets, features=["close", "volume"], windows=(5, 10),
+                          population=20, generations=2, max_depth=3, seed=11, verbose=False,
+                          htai=True, fitness_mode="mutual_info", train_frac=1.0)
+    assert len(df) > 0
+    assert {"mi_mean", "top_excess"}.issubset(df.columns)
+    assert df["mi_mean"].notna().sum() >= len(df) // 2
+
+
+def test_top_excess_fitness_runs(signal_panel):
+    """fitness_mode='top_excess'（报告23 适应度）跑通。"""
+    pytest.importorskip("deap")
+    from factor.genetic_mining import run_gp_mining
+
+    panel, rets = signal_panel
+    df, _ = run_gp_mining(panel, rets, features=["close", "volume"], windows=(5, 10),
+                          population=20, generations=2, max_depth=3, seed=12, verbose=False,
+                          htai=True, fitness_mode="top_excess", train_frac=1.0)
+    assert len(df) > 0
+    assert df["top_excess"].notna().sum() >= len(df) // 2
+
+
+def test_cubic_and_polynomial_transform(signal_panel):
+    """三次方残差法（中间凸）与多项式拟合法（形状保持）跑通。"""
+    from factor.genetic_mining import (_monthly_forward_returns,
+                                       cubic_residual_transform,
+                                       polynomial_transform)
+    from research.factor_analysis import calc_ic_series
+
+    panel, rets = signal_panel
+    fp = panel["close"]
+    # 三次方残差：残差与原始因子相关性应显著降低（剥离三次分量）
+    resid = cubic_residual_transform(fp)
+    c = fp.corrwith(resid, axis=1).mean()
+    assert abs(c) < 0.95, f"残差应与原因子相关性大幅下降，实际 {c:.3f}"
+    # 多项式拟合：输出形状一致且有有效值
+    fp_poly = polynomial_transform(fp, rets, fit_window=60, refit=20)
+    assert fp_poly.shape == fp.shape
+    assert fp_poly.notna().sum().sum() > 0
+    ic_p = calc_ic_series(fp_poly, _monthly_forward_returns(rets)).dropna()
+    assert len(ic_p) > 10
