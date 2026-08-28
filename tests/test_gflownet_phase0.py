@@ -104,10 +104,11 @@ def test_env_terminates_within_max_len():
 # TB 训练
 # ---------------------------------------------------------------------------
 def test_tb_loss_decreases(mini_panel):
-    """TB loss 训练后显著下降（短训练）。"""
+    """TB loss 训练后显著下降（短训练；纯 |IC| 口径，隔离奖励塑形）。"""
     panel, rets = mini_panel
     mdp = FactorMDP(OPS, WINS, FEATS)
-    reward_fn = make_reward_fn(panel, rets, FEATS, cache=RewardCache())
+    reward_fn = make_reward_fn(panel, rets, FEATS, cache=RewardCache(),
+                               long_ir_lambda=0.0, barra_mu=0.0)
     torch.manual_seed(0)
     net = TBPolicy(mdp.n_actions)
     losses = train_tb(mdp, reward_fn, net, n_iters=120, batch_size=4,
@@ -120,7 +121,8 @@ def test_sampling_diverse(mini_panel):
     from factor.gflownet.tb import evaluate_samples
     panel, rets = mini_panel
     mdp = FactorMDP(OPS, WINS, FEATS)
-    reward_fn = make_reward_fn(panel, rets, FEATS, cache=RewardCache())
+    reward_fn = make_reward_fn(panel, rets, FEATS, cache=RewardCache(),
+                               long_ir_lambda=0.0, barra_mu=0.0)
     torch.manual_seed(1)
     net = TBPolicy(mdp.n_actions)
     train_tb(mdp, reward_fn, net, n_iters=100, batch_size=4, log_every=0)

@@ -37,7 +37,10 @@ from factor.operators import OpSpec, op_registry
 __all__ = ["formula_builder", "parse_formula"]
 
 # GP 风格算子命名：ts_mean_5 / ts_corr_20（窗口编入算子名）
-_GP_WINDOWED_RE = re.compile(r"^(ts_[a-z_]+?)_(\d+)$")
+# GP 风格窗口编名：<base>_<int>。base 不限 ts_ 前缀——2026-08 新增的技术指标
+# （kama/rsi/boll_pctb/aroonosc/adx）同样走窗口编名；误匹配由 _match_spec 里
+# 的 registry 回查（base 存在且 n_window>=1）兜底。
+_GP_WINDOWED_RE = re.compile(r"^([a-z][a-z_]*?)_(\d+)$")
 
 
 def _split_args(s: str) -> list[str]:

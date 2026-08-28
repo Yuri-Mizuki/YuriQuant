@@ -63,17 +63,148 @@ def gen_mock_panel_with_signal(n_days: int = 400, n_codes: int = 50, seed: int =
 # ---------------------------------------------------------------------------
 # 真实面板（从缓存 + 财务 PIT 构建）
 # ---------------------------------------------------------------------------
-def build_real_panel(cfg: dict, begin: int, end: int) -> tuple[dict[str, pd.DataFrame], pd.DataFrame]:
+def build_real_panel(cfg: dict, begin: int, end: int,
+                     offline: bool = False) -> tuple[dict[str, pd.DataFrame], pd.DataFrame]:
     """统一真实面板构建。
 
     2026-08-17 重构：收敛到 ``data.cache_helpers.build_panel``（与 run_gflownet_phase1
     的 build_real_panel 共享同一实现），消除两套 PIT 并集池 / 复权 / 财务 PIT 并行逻辑。
     返回 ``(panel, returns_panel)``，口径不变。
+
+    ``offline=True``：只用本地 parquet 缓存构建（不触发任何 SDK 增量刷新）。
+    财务/股东表的全市场 SDK 查询在 5400+ 只代码下会挂死（2026-08-27 两次实证），
+    缓存已就绪的复现场景应一律走离线。
     """
     from data.cache_helpers import build_panel as _build_panel
 
-    log.info("构建真实面板 %s~%s ...", begin, end)
-    return _build_panel(cfg, begin, end)
+    log.info("构建真实面板 %s~%s (offline=%s) ...", begin, end, offline)
+    return _build_panel(cfg, begin, end, offline=offline)
+
+
+# ---------------------------------------------------------------------------
+# 国君研报口径：次日 VWAP 执行链收益率
+# ---------------------------------------------------------------------------
+def _build_vwap_exec_returns(panel: dict[str, pd.DataFrame],
+                             bwd: pd.DataFrame | None = None) -> pd.DataFrame:
+    """次日 VWAP 执行链收益率（国君研报表1「调仓价格=次日VWAP」口径）。
+
+    信号 T 日收盘后计算 → T+1 日 VWAP 成交建仓 → 持有至 T+2 日 VWAP 换仓，
+    故 T 日因子配对的持仓收益 = vwap_adj[T+2] / vwap_adj[T+1] - 1。
+
+    VWAP = amount / volume 为未复权每股均价，乘以后复权因子
+    （``load_backward_factor``）与 returns/因子库口径对齐，消除除权跳空；
+    ``bwd`` 可传入预取的复权因子（多次构建复用同一份，保证口径一致）。
+    复权因子不可得时（离线/mock）退化为不调整的 VWAP 链——mock 无分红，
+    真实数据 SDK 可用时会自动带复权。
+    """
+    close = panel["close"]
+    vwap_raw = panel["amount"] / panel["volume"]
+    if bwd is None:
+        try:
+            from data.cache import DataCache
+            from data.cache_helpers import load_backward_factor
+            from data.datasource import create_datasource
+            bwd = load_backward_factor(DataCache(create_datasource()), list(close.columns))
+        except Exception as exc:
+            bwd = None
+            log.warning("后复权 VWAP 构建失败，退化用未复权 VWAP 链（mock 场景正常）: %s", exc)
+    if bwd is not None and len(bwd):
+        bwd_al = bwd.reindex(index=close.index, columns=close.columns).ffill()
+        vwap_adj = vwap_raw * bwd_al
+        log.info("VWAP 执行链收益率：已按后复权因子对齐")
+    else:
+        vwap_adj = vwap_raw
+    rets = vwap_adj.shift(-2) / vwap_adj.shift(-1) - 1.0
+    return rets.replace([np.inf, -np.inf], np.nan)
+
+
+def _build_gtja_tradable(panel_full: dict[str, pd.DataFrame]) -> pd.DataFrame | None:
+    """gtja 真实模式构建可交易性掩码（T+1 停牌/封板 + 当日 ST/停牌 剔除）。
+
+    复用 VWAP 链的后复权因子（封板判定需要未复权收盘价）。
+    状态表缺失 → 返回 None（适应度退化为不过滤，日志可见）。
+    """
+    try:
+        from data.cache import DataCache
+        from data.cache_helpers import build_tradable_mask, load_backward_factor
+        from data.datasource import create_datasource
+        close = panel_full["close"]
+        bwd = load_backward_factor(DataCache(create_datasource()), list(close.columns))
+        bwd_al = bwd.reindex(index=close.index, columns=close.columns).ffill() if len(bwd) else None
+        mask = build_tradable_mask(close, bwd=bwd_al)
+        frac = float(mask.values.mean())
+        log.info("可交易性掩码：平均可交易比例 %.2f（False=剔除 T+1 停牌/封板、当日 ST/停牌）", frac)
+        if frac > 0.999:
+            log.warning("掩码几乎全 True——状态表可能缺失，请先跑 scripts/fetch_status_batched.py")
+        return mask
+    except Exception as exc:
+        log.warning("可交易性掩码构建失败（适应度将不过滤）: %s", exc)
+        return None
+
+
+def _apply_gtja_preset(args, panel: dict[str, pd.DataFrame],
+                       real: bool) -> tuple[dict[str, pd.DataFrame], pd.DataFrame]:
+    """应用国君研报基准预设（2023 解构系列之一，表1），返回 (gp 用面板, gp 用收益面板)。
+
+    - 终端集裁剪为研报六量价字段 O/H/L/C/VWAP/V（财务字段等一律移出终端）；
+    - 收益率切换为次日 VWAP 执行链（费后夏普适应度与研报同口径）；
+    - 表1 超参：pop=500 / gen=10 / patience=5 / windows={1,5,10,20,40,60} /
+      train_frac=1.0（样本内全量挖）/ min_fitness=0.5（二次筛选·限制一）/
+      dedup_corr=0.5（限制二）/ separated_mutation=True（表1 变异概率）；
+      beam/family/crowding 不动（消融项，由用户显式叠加）。
+    只填用户未显式指定的项（None 哨兵），显式传参优先。
+    """
+    missing = [f for f in ("amount", "volume") if f not in panel]
+    if missing:
+        raise SystemExit(f"--gp-gtja 需要 {missing} 字段构建 VWAP，当前面板缺失")
+
+    # 0) 可交易性掩码（真实模式）：T+1 停牌/封板、当日 ST/停牌 剔除进适应度。
+    #    须在终端裁剪前构建（封板判定用全量 close + 复权因子）。
+    tradable = _build_gtja_tradable(panel) if real else None
+    args._gtja_tradable = tradable      # 主流程取用后传入 run_gp_mining
+
+    # 1) 收益率先于终端裁剪构建（helper 需要 amount/volume/close）
+    returns_gp = _build_vwap_exec_returns(panel)
+
+    # 2) 终端裁剪：六量价字段
+    six = {"open", "high", "low", "close", "volume", "vwap"}
+    if "vwap" not in panel:
+        panel = dict(panel)
+        panel["vwap"] = panel["amount"] / panel["volume"]
+    dropped = sorted(set(panel) - six)
+    panel = {k: panel[k] for k in six & set(panel)}
+    log.info("gtja 终端集 = %s（移出 %d 个非量价终端: %s）",
+             sorted(panel), len(dropped), dropped)
+
+    # 3) 表1 超参（仅填未显式指定的项）
+    if args.pop is None:
+        args.pop = 500
+    if args.gen is None:
+        args.gen = 10
+    if args.patience is None:
+        args.patience = 5
+    if args.train_frac is None:
+        args.train_frac = 1.0     # 研报基准样本内全量挖；内部 CV 口径可显式传 0.8
+    if args.gp_tournament is None:
+        args.gp_tournament = 5
+    if args.gp_min_fitness == 0.0:
+        args.gp_min_fitness = 0.5     # 二次筛选·限制一：扣费后夏普>0.5 才入池
+    if args.gp_dedup_corr is None:
+        args.gp_dedup_corr = 0.5      # 二次筛选·限制二：与池内因子相关 ≤50%
+    # separated_mutation 对应表1 变异概率（子树0.2/结点0.2/提升0.05），预设强制开启；
+    # beam/family/crowding 是研报消融项，保持用户显式设定
+    args.gp_separated_mutation = True
+    if args.gp_fitness not in (None, "sharpe"):
+        log.warning("gtja 预设基准 fitness 为 sharpe，当前显式指定 %s（保留你的选择）",
+                    args.gp_fitness)
+    elif args.gp_fitness is None:
+        args.gp_fitness = "sharpe"
+    log.info("gtja 预设参数：pop=%d gen=%d patience=%d train_frac=%.2f tourn=%d "
+             "min_fitness=%.2f dedup=%.2f fitness=%s separated_mut=%s",
+             args.pop, args.gen, args.patience, args.train_frac,
+             args.gp_tournament, args.gp_min_fitness, args.gp_dedup_corr,
+             args.gp_fitness, args.gp_separated_mutation)
+    return panel, returns_gp
 
 
 def _build_htai_neutral_panels(panel: dict[str, pd.DataFrame],
@@ -280,7 +411,15 @@ def main():
     parser.add_argument("--real", action="store_true", help="使用真实数据（默认 mock）")
     parser.add_argument("--begin", type=int, default=None)
     parser.add_argument("--end", type=int, default=None)
-    parser.add_argument("--windows", default="5,10,20,60", help="窗口候选，逗号分隔")
+    parser.add_argument("--universe", default=None,
+                        choices=["hs300", "zz500", "zz1000", "all_a"],
+                        help="覆盖 config.universe.default 股票池（国君研报复现用 all_a；"
+                             "不改全局配置，仅影响本次运行）")
+    parser.add_argument("--offline", action="store_true",
+                        help="只用本地 parquet 缓存构建面板，不触发 SDK 增量刷新"
+                             "（缓存已拉取后的复现场景推荐；全市场财务表 SDK 查询会挂死）")
+    parser.add_argument("--windows", default=None,
+                        help="窗口候选，逗号分隔（默认：gp-gtja 模式 1,5,10,20,40,60，否则 5,10,20,60）")
     parser.add_argument("--depth", type=int, default=2, choices=[1, 2], help="候选生成深度")
     parser.add_argument("--method", default="spearman", choices=["spearman", "pearson"])
     parser.add_argument("--fdr-q", type=float, default=0.05, help="BH-FDR 显著性水平")
@@ -299,38 +438,63 @@ def main():
     parser.add_argument("--gp-htai", action="store_true",
                         help="GP 华泰复现模式：环内 MAD去极值→五因子中性化→zscore + 月频20日目标 + "
                              "平均RankIC适应度（函数集/参数对齐研报21/23；pop/gen/depth/tournament 默认按研报）")
-    parser.add_argument("--gp-fitness", default="tstat",
-                        choices=["tstat", "rankic_mean", "mutual_info", "top_excess"],
+    parser.add_argument("--gp-gtja", action="store_true",
+                        help="GP 国君研报复现模式（2023 解构系列之一，基准=表1）：终端裁剪为研报六量价字段 "
+                             "(O/H/L/C/VWAP/V) + 收益率改用次日 VWAP 执行链（后复权，费用口径双边千三）；"
+                             "默认 pop=500/gen=10/patience=5/fitness=sharpe/train_frac=1.0/"
+                             "min_fitness=0.5(费后夏普入池门槛)/dedup_corr=0.5/separated_mutation。"
+                             "束搜索/家庭竞争/排挤为研报消融项，不随预设开启，按需显式加参")
+    parser.add_argument("--gp-fitness", default=None,
+                        choices=["tstat", "rankic_mean", "mutual_info", "top_excess",
+                                 "sharpe", "annual_return", "ret_minus_dd"],
                         help="GP 适应度口径：tstat=按 |mean IC|/std（默认）；rankic_mean=华泰研报21 的 "
                              "全期平均 RankIC；mutual_info=华泰研报23 的互信息（挖非线性因子）；"
-                             "top_excess=华泰研报23 的多头超额收益（Top/Bottom 层年化超额较大者）。"
-                             "后三种仅 htai 模式生效")
+                             "top_excess=华泰研报23 的多头超额收益。"
+                             "sharpe/annual_return/ret_minus_dd=国君研报(2023)的费后多空净值型适应度："
+                             "年化夏普（研报基准，双边千三费用内嵌）/ 年化收益 / 收益-最大回撤。"
+                             "前四种仅 htai 模式生效；gtja 模式默认 sharpe")
     parser.add_argument("--pop", type=int, default=None, help="GP 种群规模（默认：htai=1000，否则200）")
     parser.add_argument("--gen", type=int, default=None, help="GP 迭代代数（默认：htai=3，否则20）")
     parser.add_argument("--max-depth", type=int, default=None, help="GP 最大树深（默认：htai=4，否则5）")
     parser.add_argument("--min-depth", type=int, default=None, help="GP 最小树深（默认：htai=1，否则2）")
     parser.add_argument("--gp-tournament", type=int, default=None,
                         help="GP 锦标赛选择规模（默认：htai=20，否则5）")
-    parser.add_argument("--patience", type=int, default=6,
-                        help="GP 早停：连续 N 代 hof best 无提升即提前终止（0=关闭）")
+    parser.add_argument("--patience", type=int, default=None,
+                        help="GP 早停：连续 N 代 hof best 无提升即提前终止（0=关闭；默认：gtja=5，否则 6）")
     parser.add_argument("--train-frac", type=float, default=None,
-                        help="GP 进化只用前 train_frac 时间段的 IC（样本外验证；默认：htai=1.0 全样本，否则0.7）")
+                        help="GP 进化只用前 train_frac 时间段的 IC（样本外验证；默认：htai/gtja=1.0 全样本，否则0.7）")
     parser.add_argument("--monthly-weight", type=float, default=0.5,
                         help="GP 月频 IC 权重（多 horizon 融合，默认0.5；0=关闭）")
     parser.add_argument("--gp-penalty", type=float, default=0.0,
                         help="GP 与因子库去相关惩罚系数（>0 自动加载因子库面板）")
     parser.add_argument("--no-window-jitter", action="store_true",
                         help="关闭 GP 窗口 jitter 变异（默认开启）")
-    parser.add_argument("--gp-dedup-corr", type=float, default=0.9,
-                        help="GP hof 去相关聚类阈值（0=关闭，默认0.9）")
+    parser.add_argument("--gp-dedup-corr", type=float, default=None,
+                        help="GP hof 去相关聚类阈值（0=关闭；默认：gtja=0.5（研报二次筛选·限制二），否则 0.9）")
     parser.add_argument("--gp-nsga2", action="store_true",
                         help="GP 用 NSGA-II 多目标（IC 强度 vs 换手稳定性）")
     parser.add_argument("--gp-refine", action="store_true",
                         help="GP 后做 memetic 局部搜索（hof 公式近邻批量检验）")
     parser.add_argument("--gp-neighbors", type=int, default=10, help="memetic 每公式近邻数")
     parser.add_argument("--gp-jobs", type=int, default=1, help="GP 种群并行评估进程数（默认1=串行）")
+    parser.add_argument("--seed", type=int, default=0, help="GP 随机种子（研报多轮挖掘=多种子取并集）")
     parser.add_argument("--gp-sample-step", type=int, default=1,
                         help="GP 进化期 IC 时间子采样步长（粗筛加速；1=全样本精算）")
+    # 国君研报（2023 解构系列之一）对齐参数
+    parser.add_argument("--gp-beam-mult", type=int, default=0,
+                        help="束搜索初始化：初始种群 = population×N 后按适应度截断（0=关闭；研报消融最佳组合成员）")
+    parser.add_argument("--gp-family-competition", action="store_true",
+                        help="家庭竞争：子代适应度超越父代则父代从选择池剔除（防单一父代过度繁衍）")
+    parser.add_argument("--gp-crowding", default=None, choices=[None, "supplant", "sharing"],
+                        help="种内相似度调整：supplant=排挤（相似>阈值者低适应减半，研报结论优于 sharing）"
+                             " / sharing=共享适应度（按相似度和归一化）。默认关闭")
+    parser.add_argument("--gp-crowd-corr-thr", type=float, default=0.8,
+                        help="排挤算法的相似度判定阈值（默认 0.8）")
+    parser.add_argument("--gp-min-fitness", type=float, default=0.0,
+                        help="hof 准入门槛：fitness>=该值才进精英池（研报二次筛选·限制一，"
+                             "如费后夏普>0.5 时传 0.5；0=关闭）")
+    parser.add_argument("--gp-separated-mutation", action="store_true",
+                        help="四类变异概率分离：子树0.2/结点0.2/提升0.05（研报基准），剩余走窗口jitter")
     parser.add_argument("--gp-preprocess", action="store_true",
                         help="GP 特征预处理：截面 zscore + 行业市值中性化（P0-③，消除价格/成交额风格主导）")
     # 因子库集成
@@ -341,14 +505,19 @@ def main():
     parser.add_argument("--lib-top", type=int, default=20, help="--save-library 入库的因子数")
     args = parser.parse_args()
 
-    windows = tuple(int(x) for x in args.windows.split(",") if x.strip())
+    # windows 哨兵化：gtja 预设用研报时序参数集 {1,5,10,20,40,60}，否则沿用项目默认
+    win_str = args.windows or ("1,5,10,20,40,60" if args.gp_gtja else "5,10,20,60")
+    windows = tuple(int(x) for x in win_str.split(",") if x.strip())
 
     if args.real:
         from config import Config
         cfg = Config.get()
+        if args.universe:
+            cfg["universe"]["default"] = args.universe
+            log.info("股票池覆盖: %s（仅本次运行）", args.universe)
         begin = args.begin or cfg["fetch"]["begin_date"]
         end = args.end or cfg.get("end_date")
-        panel, returns_panel = build_real_panel(cfg, begin, end)
+        panel, returns_panel = build_real_panel(cfg, begin, end, offline=args.offline)
     else:
         log.info("使用 Mock 数据（注入 AR(1) 动量信号）...")
         panel = gen_mock_panel_with_signal()
@@ -361,6 +530,16 @@ def main():
 
     if args.use_library:
         panel = _merge_library_features(panel, dataset=lib_dataset)
+
+    # ---- 国君复现模式：六量价终端 + 次日VWAP执行链收益 + 表1 超参 ----
+    returns_gp = returns_panel
+    tradable_gp = None
+    if args.gp_gtja:
+        if args.begin is None or args.end is None:
+            raise SystemExit("--gp-gtja 复现需显式指定 --begin/--end（如 20220101/20221231），"
+                             "避免默认区间偏离研报样本")
+        panel, returns_gp = _apply_gtja_preset(args, panel, real=args.real)
+        tradable_gp = getattr(args, "_gtja_tradable", None)
 
     # ---- 华泰复现模式：特征补全 + 参数按研报解析 + 中性化协变量面板 ----
     neutral_panels = None
@@ -398,6 +577,13 @@ def main():
             args.gp_tournament = 5
         if args.train_frac is None:
             args.train_frac = 0.7
+    # 通用哨兵兜底（三种模式共用）
+    if args.patience is None:
+        args.patience = 6
+    if args.gp_fitness is None:
+        args.gp_fitness = "tstat"
+    if args.gp_dedup_corr is None:
+        args.gp_dedup_corr = 0.9
 
     if args.gp and args.gp_preprocess:
         log.info("GP 特征预处理（截面 zscore + 行业市值中性化）...")
@@ -436,7 +622,7 @@ def main():
                      args.monthly_weight, args.gp_penalty, not args.no_window_jitter,
                      args.gp_dedup_corr, windows, args.gp_htai, args.gp_fitness)
             result, hof = run_gp_mining(
-                panel, returns_panel, features=features, windows=windows,
+                panel, returns_gp, features=features, windows=windows,
                 population=args.pop, generations=args.gen, min_depth=args.min_depth,
                 max_depth=args.max_depth, tournament=args.gp_tournament,
                 patience=args.patience, train_frac=args.train_frac,
@@ -446,8 +632,18 @@ def main():
                 sample_step=args.gp_sample_step, verbose=True,
                 htai=args.gp_htai, neutral_panels=neutral_panels,
                 fitness_mode=args.gp_fitness,
+                beam_mult=args.gp_beam_mult,
+                family_competition=args.gp_family_competition,
+                crowding=args.gp_crowding,
+                crowd_corr_thr=args.gp_crowd_corr_thr,
+                min_fitness=args.gp_min_fitness,
+                separated_mutation=args.gp_separated_mutation,
+                seed=args.seed,
+                tradable=tradable_gp,
             )
             show_cols = ["formula", "ic_mean", "ic_train", "ic_oos", "t_stat", "t_oos", "height", "n"]
+            if args.gp_fitness in ("sharpe", "annual_return", "ret_minus_dd"):
+                show_cols = ["formula", "fitness"] + show_cols[1:]
 
         log.info("GP 完成，实际代数: %d（早停 patience=%d），结果数: %d",
                  getattr(hof, "generations_run", args.gen), args.patience, len(result))
@@ -456,7 +652,7 @@ def main():
             from factor.genetic_mining import refine_gp_neighbors
             log.info("memetic 局部搜索：每公式近邻 %d 个，并行 %d 进程（train 段择优）",
                      args.gp_neighbors, args.jobs)
-            result = refine_gp_neighbors(result, panel, returns_panel,
+            result = refine_gp_neighbors(result, panel, returns_gp,
                                          n_per=args.gp_neighbors, n_jobs=args.jobs,
                                          min_obs=20, train_frac=args.train_frac,
                                          verbose=True)
@@ -464,7 +660,9 @@ def main():
 
         if len(result):
             top = result.head(args.top)
-            print("\n===== GP Top {} 因子（按 |t| 排序）=====".format(args.top))
+            sort_note = ("按 fitness（费后表现）" if args.gp_fitness in
+                         ("sharpe", "annual_return", "ret_minus_dd") else "按 |t|")
+            print(f"\n===== GP Top {args.top} 因子（{sort_note}排序）=====")
             with pd.option_context("display.max_rows", None, "display.width", 220,
                                    "display.float_format", lambda v: f"{v:.4f}"):
                 print(top[show_cols].to_string(index=False))
@@ -585,6 +783,10 @@ def main():
                     "gp_penalty": getattr(args, "gp_penalty", 0.0),
                     "gp_nsga2": getattr(args, "gp_nsga2", False),
                     "gp_refine": getattr(args, "gp_refine", False),
+                    "gp_beam_mult": getattr(args, "gp_beam_mult", 0),
+                    "gp_family_competition": getattr(args, "gp_family_competition", False),
+                    "gp_crowding": getattr(args, "gp_crowding", None),
+                    "gp_min_fitness": getattr(args, "gp_min_fitness", 0.0),
                     "jobs": args.jobs},
             data_fingerprint=fingerprint,
             result_path=str(args.out or (default_out if len(result) else "")),

@@ -46,7 +46,9 @@ calendar:
 # --- 数据拉取默认范围 ---
 fetch:
   # 默认起始日期（8位整型，SDK 约定）
-  begin_date: 20260101
+  # 对齐 discipline.begin=20220101：挖因子/模型类算法允许消费的数据下限。
+  # 短于该值会导致三段切分退化，禁止再改回更晚的日期而不同步修 discipline。
+  begin_date: 20220101
   # end_date 留空表示"至今"，由代码动态取 calendar[-1]
   end_date: null
 

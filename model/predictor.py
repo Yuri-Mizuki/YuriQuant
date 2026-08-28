@@ -12,9 +12,9 @@
 - ``TabICLPredictor``：TabICL 表格基础模型（in-context learning，零显式
   训练；context 截最近 ``max_context_samples`` 样本，预测时分块 forward）
 
-``fit_predict_oos``：一次性 expanding-window 时序 CV（按交易日边界切折 +
-embargo purge，复用 ``factor.synthesis._time_folds``——stacking 防泄漏纪律
-的直接继承），产出全区间 OOS 预测面板（首段训练区无预测，为 NaN）。
+``fit_predict_oos``：一次性 OOS 面板（按交易日边界切折 + embargo purge，
+复用统一切分调度器 ``factor.cv.make_folds``——stacking 防泄漏纪律的直接继承，支持切换
+切分方法（``cv_method``），产出全区间 OOS 预测面板（首段训练区无预测，为 NaN）。
 
 滚动再训练（walk-forward 上线）不需要本函数：调用方按窗口切片后直接
 循环 fit/predict 即可（见 scripts/walk_forward_model.py）。
@@ -27,7 +27,7 @@ import numpy as np
 import pandas as pd
 
 from factor.preprocessing import standardize_zscore
-from factor.synthesis import _time_folds
+from factor.cv import make_folds
 
 __all__ = [
     "BasePredictor", "RidgePredictor", "LGBMPredictor", "LGBRankerPredictor",
@@ -346,7 +346,7 @@ PREDICTORS: dict[str, type[BasePredictor]] = {
 
 
 # ---------------------------------------------------------------------------
-# 一次性 OOS 面板（expanding CV，纪律继承自 stacking）
+# 一次性 OOS 面板（统一 CV 调度，纪律继承自 stacking）
 # ---------------------------------------------------------------------------
 def fit_predict_oos(
     predictor_cls: type[BasePredictor],
@@ -355,30 +355,36 @@ def fit_predict_oos(
     n_splits: int = 5,
     embargo_days: int = 5,
     min_train_days: int = 120,
+    cv_method: str = "forward",
     **predictor_params: Any,
 ) -> pd.DataFrame:
-    """expanding-window 时序 CV，拼接各折测试段预测为 OOS 面板。
+    """一次性 OOS 预测面板，切分方式由 ``cv_method`` 统一切换。
 
-    折切分复用 ``factor.synthesis._time_folds``（按交易日边界 + embargo purge，
-    与 stacking 同一防泄漏纪律）。embargo_days 应 >= 标签 horizon
+    折切分复用 ``factor.cv.make_folds``（按交易日边界 + embargo purge，
+    与 stacking 同一防泄漏纪律）。``embargo_days`` 应 >= 标签 horizon
     （LabelBuilder 返回值），否则训练段尾部标签前视进测试段。
+
+    Args:
+        cv_method: 切分方法，见 ``make_folds``。默认 ``forward``（expanding
+            前推，生产唯一合法方法）；研究评估可切 ``purged``/``blocked``
+            做横向对比。
 
     Returns:
         date×code 面板：各折测试段为 OOS 预测（已截面标准化），
         首个训练段为 NaN（该段无预测）。
     """
     idx, cols = _grid(features, labels)
-    # 日级折：把每个交易日当一行喂给 _time_folds（与 stacking 的行级切分同一算法）
-    folds = _time_folds(idx.to_numpy(), n_splits, embargo_days=embargo_days)
+    folds = make_folds(idx, method=cv_method, n_splits=n_splits,
+                       embargo_days=embargo_days)
     if not folds:
         raise ValueError(
             f"日期数不足以切 {n_splits} 折（共 {len(idx)} 日）")
 
     out = pd.DataFrame(np.nan, index=idx, columns=cols)
     n_done = 0
-    for train_mask, test_mask in folds:
-        tr_days = idx[train_mask]
-        te_days = idx[test_mask]
+    for fold in folds:
+        tr_days = fold.train_days
+        te_days = fold.test_days
         if len(tr_days) < min_train_days or len(te_days) == 0:
             continue
         p = predictor_cls(**predictor_params)

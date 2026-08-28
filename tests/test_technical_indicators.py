@@ -107,6 +107,27 @@ def test_ht_dcphase_range():
     assert (valid.abs() <= 180).all()
 
 
+def test_ht_dcphase_causal():
+    """因果性（2026-08-28 前视偏差修复）：改变 t 之后的序列不得影响 t 的相位。
+
+    旧实现用 scipy.signal.hilbert 作用在整段序列上（全局卷积，非因果），
+    在 GP 挖掘中构成"时间机器"——样本内外都能偷看未来刷出虚假夏普。
+    """
+    rng = np.random.default_rng(0)
+    t = np.arange(200)
+    s = pd.DataFrame({"a": np.sin(2 * np.pi * t / 20) + rng.normal(0, 0.01, 200)},
+                     index=pd.date_range("2023-01-01", periods=200, freq="B"))
+    h1 = ht_dcphase(s)
+    s2 = s.copy()
+    s2.iloc[150:] = 0.0                      # 只改未来段
+    h2 = ht_dcphase(s2)
+    both = h1.dropna().index.intersection(h2.dropna().index)
+    common = [d for d in both if d <= s.index[140]]   # 只比较被修改点之前的相位
+    assert len(common) > 50
+    assert np.allclose(h1.loc[common, "a"], h2.loc[common, "a"]), \
+        "ht_dcphase 在 t 日的取值依赖了 t 之后的数据（前视偏差）"
+
+
 def test_gp_primitive_registration():
     """7 个指标都注册进 GP 原语集，且 eval_tree 可求值。"""
     feats = ["close", "high", "low", "volume"]

@@ -40,6 +40,10 @@ __all__ = [
     "split_three_periods",
     "purged_kfold",
     "cpcv",
+    "forward_folds",
+    "forward_roll_folds",
+    "blocked_folds",
+    "make_folds",
 ]
 
 
@@ -230,6 +234,187 @@ def cpcv(
             test_days=test_days,
         ))
     return paths
+
+
+# ---------------------------------------------------------------------------
+# 4. 传统 forward-chaining expanding 切分（生产主循环/研究 OOS 默认）
+# ---------------------------------------------------------------------------
+def forward_folds(
+    index: pd.DatetimeIndex,
+    n_splits: int = 5,
+    embargo_days: int = 5,
+) -> list[Fold]:
+    """时序 expanding 前推，测试折只在末尾，训练为前缀+embargo 隔离。
+
+    等价于 ``factor.synthesis._time_folds`` 语义，但返回统一 ``list[Fold]``，
+    便于跟 ``purged_kfold`` 等做横向对比。关键改进继承自原实现：
+    - 按**交易日边界**切分，绝不把同一天劈开
+    - 训练段尾部剔除与测试段相邻的 ``embargo_days`` 天，防标签前视
+
+    Args:
+        index: 全量交易日索引（升序）。
+        n_splits: 折数（>1）。
+        embargo_days: 训练段末尾剔除与测试段相邻的天数。
+
+    Returns:
+        ``list[Fold]``，长度 ``n_splits-1``。每折训练集严格早于测试集。
+    """
+    days = pd.DatetimeIndex(sorted(index.unique()))
+    n_days = len(days)
+    if n_days < n_splits:
+        raise ValueError(f"日期数 {n_days} < n_splits {n_splits}")
+
+    edges = np.linspace(0, n_days, n_splits + 1).astype(int)
+    folds: list[Fold] = []
+    for s in range(1, n_splits):
+        d0 = max(0, int(edges[s]))
+        d1 = min(n_days, int(edges[s + 1]))
+        if d1 <= d0:
+            continue
+        test_days = pd.DatetimeIndex(days[d0:d1])
+        # 训练集 = [0, d0)，去掉最后 embargo_days 天
+        train_end = max(0, d0 - embargo_days)
+        if train_end <= 0:
+            continue  # 训练集为空
+        train_days = pd.DatetimeIndex(days[:train_end])
+        folds.append(Fold(train_days, test_days))
+    return folds
+
+
+# ---------------------------------------------------------------------------
+# 5. 生产专用前推滚动切分（test 等分 + 全历史前缀训练）
+# ---------------------------------------------------------------------------
+def forward_roll_folds(
+    all_days: pd.DatetimeIndex,
+    test_days: pd.DatetimeIndex,
+    n_folds: int,
+    embargo_days: int = 5,
+) -> list[Fold]:
+    """生产主循环用的前推滚动切分：test 段等分 n_folds 折，训练=折前全部历史。
+
+    与 ``forward_folds`` 的区别：
+    - ``forward_folds`` 对整个 index 等分并 expanding 前缀训练（研究 OOS 用）。
+    - ``forward_roll_folds`` 只对 ``test_days`` 等分，训练恒取 ``all_days`` 中
+      严格早于测试折起点的全部历史（expanding，随折滚动），且覆盖全部
+      ``test_days``（不丢弃首段）。这正是 walk-forward 上线（rolling_oos）的形态。
+
+    语义保证：训练严格早于测试（无未来函数）；训练尾部剔除 embargo 隔离带。
+
+    Args:
+        all_days: 全量交易日（升序，含 dev + test）。
+        test_days: 上线期（测试）交易日（升序，all_days 的子集）。
+        n_folds: 测试段等分折数（>=1）。
+        embargo_days: 训练段尾部剔除与测试折相邻的天数。
+
+    Returns:
+        ``list[Fold]``，长度 <= n_folds（min_train 不足时调用方自行跳过）。
+    """
+    all_days = pd.DatetimeIndex(sorted(pd.Index(all_days).unique()))
+    test_days = pd.DatetimeIndex(sorted(pd.Index(test_days).unique()))
+    if len(test_days) < n_folds:
+        raise ValueError(f"test 段日期数 {len(test_days)} < n_folds {n_folds}")
+
+    edges = np.linspace(0, len(test_days), n_folds + 1).astype(int)
+    folds: list[Fold] = []
+    for s in range(n_folds):
+        d0 = int(edges[s])
+        d1 = int(edges[s + 1])
+        if d1 <= d0:
+            continue
+        te = pd.DatetimeIndex(test_days[d0:d1])
+        cut = te[0]
+        tr = all_days[all_days < cut]
+        if embargo_days > 0:
+            tr = tr[:-embargo_days]
+        folds.append(Fold(tr, te))
+    return folds
+
+
+# ---------------------------------------------------------------------------
+# 5. Blocked 固定窗口交叉验证（滚动基准对照）
+# ---------------------------------------------------------------------------
+def blocked_folds(
+    index: pd.DatetimeIndex,
+    n_splits: int = 5,
+    embargo_days: int = 5,
+) -> list[Fold]:
+    """Blocked 固定窗口时序切分：把全历史切 n_splits 块，每折一个块当测试。
+
+    训练 = 所有块 *除去* 当前块 + 每个相邻块前后的 embargo。这是 purged_kfold
+    的特例（每个块恰好是一个测试组，所以等价于 `purged_kfold` 当 n_splits=n_groups。
+
+    与 purged 的区别：purged 允许测试在中间、训练取两侧，blocked 每个测试块独立，
+    训练是全部其他块拼接。用于基准对照。
+
+    Args:
+        index: 全量交易日索引（升序）。
+        n_splits: 折数（>=2）。
+        embargo_days: 测试块边界处剔除的训练天数。
+
+    Returns:
+        ``list[Fold]``，长度 ``n_splits``。
+    """
+    days = pd.DatetimeIndex(sorted(index.unique()))
+    n = len(days)
+    if n < n_splits:
+        raise ValueError(f"日期数 {n} < n_splits {n_splits}")
+
+    edges = np.linspace(0, n, n_splits + 1).astype(int)
+    folds: list[Fold] = []
+    for s in range(n_splits):
+        d0 = max(0, int(edges[s]))
+        d1 = min(n, int(edges[s + 1]))
+        if d1 <= d0:
+            continue
+        test_days = pd.DatetimeIndex(days[d0:d1])
+        # 训练集 = 全部日期 - 测试块 - 该块前后 embargo 带
+        purge_start = max(0, d0 - embargo_days)
+        purge_end = min(n, d1 + embargo_days)
+        purge_set = set(days[purge_start:purge_end])
+        train_days = pd.DatetimeIndex([d for d in days if d not in purge_set])
+        folds.append(Fold(train_days, test_days))
+    return folds
+
+
+# ---------------------------------------------------------------------------
+# 统一切分调度器 —— 按参数切换方法，返回统一 list[Fold]
+# ---------------------------------------------------------------------------
+def make_folds(
+    index: pd.DatetimeIndex,
+    method: str = "forward",
+    n_splits: int = 5,
+    embargo_days: int = 5,
+) -> list[Fold]:
+    """统一时序交叉验证切分接口，支持横向切换方法对比。
+
+    Methods:
+        ``forward``: expanding 前推，测试折只在末尾 → **生产唯一合法方法**。
+        ``purged``: 测试折可居中，训练取两侧，purge+embargo → 研究选参/评估。
+        ``blocked``: 固定块，每块一次测试 → 基准对照。
+
+    语义保证：
+    - 所有方法：严格按交易日边界切分，绝不把同一天劈开。
+    - 所有方法：训练集严格剔除测试集 + 边界 embargo 隔离带，无未来泄漏。
+
+    Args:
+        index: 全量交易日索引（升序）。
+        method: 切分方法 {'forward', 'purged', 'blocked'}。
+        n_splits: 折数。
+        embargo_days: 测试段边界处剔除的训练天数（≥标签 horizon）。
+
+    Returns:
+        ``list[Fold]``，每个元素为 (train_days, test_days)。
+    """
+    method = method.lower().strip()
+    if method == "forward":
+        return forward_folds(index, n_splits, embargo_days)
+    elif method == "purged":
+        return purged_kfold(index, n_splits, embargo_days)
+    elif method == "blocked":
+        return blocked_folds(index, n_splits, embargo_days)
+    else:
+        raise ValueError(
+            f"unknown method {method!r}, expected: forward/purged/blocked")
 
 
 # ---------------------------------------------------------------------------

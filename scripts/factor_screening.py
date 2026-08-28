@@ -194,6 +194,7 @@ def run_screening(
         return {"pps_passed": [], "dpp_selected": [], "rre_passed": []}
 
     names = pps_passed["name"].tolist()
+    dpp_names = list(names)                  # DPP 关闭/退化时 = PPS 通过集
 
     # Step 2: DPP 多样性选择
     dpp_result = None
@@ -201,6 +202,7 @@ def run_screening(
         k = dpp_k if dpp_k is not None else int(np.ceil(dpp_ratio * len(names)))
         names, dpp_result = dpp_filter(lib, names, k=k, quality_col="ic_mean",
                                        sigma=sigma)
+        dpp_names = list(names)
 
     # Step 3: RRE 秩稳定性过滤
     scores = None
@@ -214,10 +216,12 @@ def run_screening(
     # 输出
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     out_path = OUTPUT_DIR / "selected_factors.csv"
-    out_df = reg[reg["name"].isin(names)].copy()
-    # 添加筛选维度得分
+    out_df = reg[reg["name"].isin(pps_passed["name"])].copy()
+    # 各筛选维度标签：与同名字段一一对应，避免下游按 rre_passed 混用
     out_df["pps_passed"] = True
-    out_df["dpp_selected"] = out_df["name"].isin(names) if not no_dpp else True
+    out_df["dpp_selected"] = out_df["name"].isin(dpp_names)
+    out_df["rre_passed"] = out_df["name"].isin(names)
+    out_df["final_selected"] = out_df["rre_passed"]
     out_df = out_df.sort_values("ic_mean", key=lambda s: s.abs(), ascending=False)
     out_df.to_csv(out_path, index=False, encoding="utf-8-sig")
     log.info("筛选完成: %d 个因子 → %s", len(names), out_path)
@@ -229,7 +233,7 @@ def run_screening(
 
     return {
         "pps_passed": pps_passed["name"].tolist(),
-        "dpp_selected": names if not no_dpp else pps_passed["name"].tolist(),
+        "dpp_selected": dpp_names,
         "rre_passed": names,
         "scores": scores,
         "output_path": str(out_path),

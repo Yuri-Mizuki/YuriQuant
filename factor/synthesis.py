@@ -26,6 +26,7 @@ import pandas as pd
 from scipy import stats
 
 from factor.preprocessing import standardize_zscore
+from factor.cv import forward_folds
 from research.factor_analysis import calc_ic_series, calc_ir
 
 
@@ -142,40 +143,29 @@ def _make_target(returns_panel: pd.DataFrame, idx, cols, target_mode: str = "raw
     return sub.values.ravel()
 
 
-def _time_folds(date_arr: np.ndarray, n_splits: int, embargo_days: int = 0):
-    """按【交易日边界】切分时序折，返回 list[(train_mask, test_mask)]。
+def _time_fold_masks(date_arr: np.ndarray, n_splits: int, embargo_days: int = 0):
+    """行级 mask 版 expanding 前推切分（统一走 ``factor.cv.forward_folds``）。
+
+    供 stacking 系列合成函数使用：输入每行观测对应的日期数组（升序，
+    ``date_arr`` 与长矩阵行一一对应），返回 list[(bool array, bool array)]，
+    语义与旧的本地 ``_time_folds`` 完全一致（按交易日边界切折 + embargo purge），
+    但切分实现已收敛到统一 CV 调度器 ``forward_folds``，避免两套切分并存。
 
     Args:
         date_arr: 每个有效观测对应的日期（升序，对应 obs 第一级并已按 valid 过滤）。
-        n_splits: 折数（>1）。embargo_days: 训练段末尾剔除与测试段相邻的天数。
+        n_splits: 折数（>1）。
+        embargo_days: 训练段末尾剔除与测试段相邻的天数。
     Returns:
         list[(bool array, bool array)]，与 date_arr 等长；每折 train 的日期
         严格早于 test 的日期（无未来函数）。
-
-    关键改进（2026-08-17）：旧实现按【有效行数】``np.linspace`` 切分，fold 边界
-    可能落在某交易日中间，导致同一天部分股票被 train、部分被 test——跨日信息
-    渗入当日截面，略微破坏时序语义。这里改为按【日期边界】切分，每个 fold 的
-    train/test 都覆盖完整交易日（不把某一天劈开），purge 也按天精确剔除。
     """
-    unique_days = pd.unique(date_arr)  # 升序（行序 = 日期优先）
-    n_days = len(unique_days)
-    if n_days < 2:
-        return []
-    edges = np.linspace(0, n_days, n_splits + 1).astype(int)
-    folds = []
-    for s in range(1, n_splits):
-        d0 = max(0, int(edges[s]))
-        d1 = min(n_days, int(edges[s + 1]))
-        if d1 <= d0:
-            continue
-        test_days = unique_days[d0:d1]
-        train_mask = np.isin(date_arr, unique_days[:d0])
-        test_mask = np.isin(date_arr, test_days)
-        if embargo_days > 0:
-            purge_days = unique_days[max(0, d0 - embargo_days):d0]
-            train_mask &= ~np.isin(date_arr, purge_days)
-        folds.append((train_mask, test_mask))
-    return folds
+    folds = forward_folds(pd.DatetimeIndex(date_arr), n_splits, embargo_days)
+    out = []
+    for f in folds:
+        train_mask = np.isin(date_arr, f.train_days)
+        test_mask = np.isin(date_arr, f.test_days)
+        out.append((train_mask, test_mask))
+    return out
 
 
 def _inner_split_by_day(
@@ -444,7 +434,7 @@ def synthesize_stacking(
 
     n = len(yv)
     pred = np.full(n, np.nan)
-    for train_mask, test_mask in _time_folds(date_arr, n_splits):
+    for train_mask, test_mask in _time_fold_masks(date_arr, n_splits, embargo_days=0):
         if train_mask.sum() < max(10, Xv.shape[1] + 5) or test_mask.sum() == 0:
             continue
         Xtr, ytr = Xv[train_mask], yv[train_mask]
@@ -512,7 +502,7 @@ def synthesize_stacking_gbdt(
     n = len(yv)
 
     pred = np.full(n, np.nan)
-    for train_mask, test_mask in _time_folds(date_arr, n_splits, embargo_days=embargo_days):
+    for train_mask, test_mask in _time_fold_masks(date_arr, n_splits, embargo_days=embargo_days):
         if train_mask.sum() < max(50, Xv.shape[1] * 5) or test_mask.sum() == 0:
             continue
         Xtr, ytr = Xv[train_mask], yv[train_mask]
@@ -601,7 +591,7 @@ def synthesize_stacking_gbdt_tuned(
     n_codes = len(cols)
 
     pred = np.full(n, np.nan)
-    for train_mask, test_mask in _time_folds(date_arr, n_splits, embargo_days=embargo_days):
+    for train_mask, test_mask in _time_fold_masks(date_arr, n_splits, embargo_days=embargo_days):
         train_idx = np.where(train_mask)[0]
         if len(train_idx) < max(200, Xv.shape[1] * 10) or test_mask.sum() == 0:
             continue
@@ -691,7 +681,7 @@ def synthesize_stacking_lambdarank(
     n = len(yv)
 
     pred = np.full(n, np.nan)
-    for train_mask, test_mask in _time_folds(date_arr, n_splits, embargo_days=embargo_days):
+    for train_mask, test_mask in _time_fold_masks(date_arr, n_splits, embargo_days=embargo_days):
         tr_rows = np.where(train_mask)[0]
         if len(tr_rows) < max(200, Xv.shape[1] * 10) or test_mask.sum() == 0:
             continue

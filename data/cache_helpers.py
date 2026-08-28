@@ -140,6 +140,69 @@ def load_backward_factor(cache, codes) -> pd.DataFrame:
     return cache.get_backward_factor(codes)
 
 
+def build_tradable_mask(close_adj: pd.DataFrame,
+                        bwd: pd.DataFrame | None = None,
+                        cache_root: str | None = None) -> pd.DataFrame:
+    """构建**可交易性掩码**（bool 宽表，True=该日信号可进入组合）。
+
+    信号 T 日收盘产生、T+1 日 VWAP 成交（国君研报执行链口径）。剔除规则
+    （对齐华泰单因子测试口径 + 涨跌停一字板可成交性）：
+
+    - T+1 日**停牌**（is_suspended）：无法成交 → 剔除；
+    - T+1 日**收盘封涨停/封跌停**（raw_close ≥ high_limited / ≤ low_limited）：
+      VWAP 处买不进/平不掉 → 剔除（用收盘封板而非盘中触板，保守适中）;
+    - is_st / is_suspended 在 T 日或 T+1 日任一为真：ST 与停牌是持续状态，
+      成交日（T+1）处于该状态即不可交易。
+
+    封板判定需要**未复权收盘价**与状态表中的原始涨跌停价比较：
+    ``raw_close = close_adj / bwd``（bwd=累积后复权因子，None 时退化为
+    close_adj 本身——仅当面板未复权或无除权差异时可用，真实复权数据必须传）。
+
+    状态表缺失的 (date, code) 视为可交易（保守补 True）；返回前 reindex 到
+    ``close_adj`` 的行列。状态表不存在时返回全 True 掩码（调用方日志可见）。
+    """
+    root = cache_root or "e:/data/parquet"
+    p = Path(root) / "history_stock_status.parquet"
+    idx, cols = close_adj.index, close_adj.columns
+    if not p.exists():
+        return pd.DataFrame(True, index=idx, columns=cols)
+
+    st = pd.read_parquet(p)
+    st = st[st.index.get_level_values("code").isin(cols)]
+    if st.empty:
+        return pd.DataFrame(True, index=idx, columns=cols)
+
+    def _wide(col: str) -> pd.DataFrame:
+        if col not in st.columns:
+            return pd.DataFrame(False, index=idx, columns=cols)
+        return st[col].unstack("code").reindex(index=idx, columns=cols)
+
+    susp = _wide("is_suspended").fillna(False)
+    is_st = _wide("is_st").fillna(False)
+    hi_lim = _wide("high_limited")
+    lo_lim = _wide("low_limited")
+
+    # T+1 状态（封板/停牌用次日信号对齐：T 日信号 → T+1 成交）
+    susp_next = susp.shift(-1).fillna(False)
+    hi_next = hi_lim.shift(-1)
+    lo_next = lo_lim.shift(-1)
+
+    if bwd is not None and len(bwd):
+        bwd_al = bwd.reindex(index=idx, columns=cols).ffill()
+        raw_next = (close_adj / bwd_al).shift(-1)
+    else:
+        raw_next = close_adj.shift(-1)
+
+    tol = 1e-6
+    sealed_up = (raw_next >= hi_next * (1 - tol)) & hi_next.notna()
+    sealed_dn = (raw_next <= lo_next * (1 + tol)) & lo_next.notna()
+
+    st_next = is_st.shift(-1).fillna(False)
+    bad = susp_next | sealed_up | sealed_dn | st_next | susp | is_st
+    mask = ~bad
+    return mask.fillna(True).astype(bool)
+
+
 # 财务/股东事件表清单（文件名 == cache 接口名）
 _FINANCIAL_TABLES = (
     "income", "balance_sheet", "cash_flow", "equity_structure",
@@ -244,6 +307,9 @@ def build_panel(
     from data.universe import Universe
 
     index_code = cfg["universe"]["index_code"]
+    # 股票池从本函数的 cfg 读取并显式传给 load_daily——load_daily 内部回退
+    # 读全局 Config，曾导致 --universe/all_a 覆盖静默失效（2026-08-28 修复）。
+    pool = cfg["universe"].get("default", "hs300")
 
     # 1) 数据源 + 缓存 + 股票池（含离线桩 / SDK 缓存路径）
     if cache is None:
@@ -265,9 +331,9 @@ def build_panel(
     target_date = end if end else cal[-1]
     # load_daily 内部已应用 membership mask，非在册行情为 NaN，无需重复处理。
     if retry:
-        codes, cal, daily = _with_retry(load_daily, cache, uni, index_code, begin, end)
+        codes, cal, daily = _with_retry(load_daily, cache, uni, index_code, begin, end, pool=pool)
     else:
-        codes, cal, daily = load_daily(cache, uni, index_code, begin, end)
+        codes, cal, daily = load_daily(cache, uni, index_code, begin, end, pool=pool)
 
     # 3) 宽表 + 后复权（mask 已体现在长表，unstack 后非在册自然为 NaN）
     close = daily["close"].unstack("code")

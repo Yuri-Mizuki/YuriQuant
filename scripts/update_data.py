@@ -123,8 +123,12 @@ def main():
         return
     target_date = end if end else cal[-1]
     if pool == "all_a":
-        # 全 A：直接取缓存中全部代码（上市即入池，无需指数成分表）
+        # 全 A：优先用本地缓存的全 A 日线清单（增量维护）；首次拉取时
+        # daily_all_a.parquet 尚不存在 → 回退数据源安全主档取全 A 代码
         codes = uni.get_all_a(target_date)
+        if not codes:
+            log.info("本地无 daily_all_a 缓存，从数据源 get_code_list 获取全A清单 ...")
+            codes = ds.get_code_list("EXTRA_STOCK_A")
         log.info("全A池代码: %d 只", len(codes))
     else:
         from data.cache_helpers import _pit_universe_codes
@@ -134,6 +138,8 @@ def main():
     # 4. 增量拉取日K线（按池落盘 daily_{pool}.parquet）
     log.info("增量拉取日K线: %s -> %s", begin, target_date)
     kline = cache.get_daily_kline(codes, begin, target_date, pool=pool)
+    if len(kline) == 0:
+        raise SystemExit("日K线拉取为空（代码清单或数据源可能不可用），中止后续步骤")
     log.info("日K线行数: %d, 代码数: %d", len(kline), kline.index.get_level_values("code").nunique())
 
     # 4.5 增量拉取分钟K线（日内研究，按池落盘 min{period}_{pool}.parquet）
@@ -157,10 +163,13 @@ def main():
     backward = cache.get_backward_factor(codes)
     log.info("后复权因子行数: %d, 列数: %d", len(backward), backward.shape[1])
 
-    # 6. 历史涨跌停/停牌/ST 状态
+    # 6. 历史涨跌停/停牌/ST 状态（非关键：失败仅降级过滤能力，不阻断后续）
     log.info("拉取历史涨跌停/停牌状态: %s -> %s", begin, target_date)
-    status = cache.get_history_stock_status(codes, begin, target_date)
-    log.info("历史状态行数: %d", len(status))
+    try:
+        status = cache.get_history_stock_status(codes, begin, target_date)
+        log.info("历史状态行数: %d", len(status))
+    except Exception as exc:
+        log.warning("历史状态拉取失败（保留旧缓存，不影响核心行情数据）: %s", exc)
 
     # 7. 行业分类（因子行业中性化用）
     industry_level = int(cfg.get("preprocessing", {}).get("industry_level", 1))

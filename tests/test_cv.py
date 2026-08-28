@@ -11,7 +11,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from factor.cv import split_three_periods, purged_kfold, cpcv, CPCVPath, Fold
+from factor.cv import (split_three_periods, purged_kfold, cpcv, CPCVPath,
+                       Fold, forward_folds, forward_roll_folds,
+                       blocked_folds, make_folds)
 
 
 # ---------------------------------------------------------------------------
@@ -161,3 +163,112 @@ class TestCPCV:
             assert len(p.test_groups) == 2
             assert len(p.train_days) > 0
             assert len(p.test_days) > 0
+
+
+# ---------------------------------------------------------------------------
+# 4. 统一切分调度器 make_folds
+# ---------------------------------------------------------------------------
+class TestMakeFolds:
+    def test_forward_is_expanding_and_no_future(self, dates):
+        """forward：测试折只在末尾，训练严格早于测试，且训练段长度递增。"""
+        folds = make_folds(dates, method="forward", n_splits=5, embargo_days=5)
+        assert len(folds) == 4  # n_splits-1：首段只当训练
+        lens = []
+        for f in folds:
+            assert f.train_days.max() < f.test_days.min()
+            assert len(set(f.train_days) & set(f.test_days)) == 0
+            lens.append(len(f.train_days))
+        assert lens == sorted(lens), "expanding 训练段应收敛递增"
+
+    def test_forward_matches_forward_folds(self, dates):
+        a = make_folds(dates, "forward", 5, 5)
+        b = forward_folds(dates, 5, 5)
+        assert len(a) == len(b)
+        for f, g in zip(a, b):
+            assert f.train_days.equals(g.train_days)
+            assert f.test_days.equals(g.test_days)
+
+    def test_forward_embargo_purges_adjacent_days(self, dates):
+        """forward 的 embargo：训练段末尾剔除与测试段相邻的天。"""
+        folds = make_folds(dates, "forward", n_splits=5, embargo_days=3)
+        for f in folds:
+            te_start_idx = dates.get_loc(f.test_days[0])
+            if te_start_idx >= 3:
+                for d in dates[te_start_idx - 3:te_start_idx]:
+                    assert d not in set(f.train_days), \
+                        f"embargo day {d} should not be in train"
+
+    def test_purged_matches_purged_kfold(self, dates):
+        a = make_folds(dates, "purged", 5, 3)
+        b = purged_kfold(dates, n_splits=5, embargo_days=3)
+        assert len(a) == len(b)
+        for f, g in zip(a, b):
+            assert f.train_days.equals(g.train_days)
+            assert f.test_days.equals(g.test_days)
+
+    def test_blocked_covers_all_and_no_leak(self, dates):
+        """blocked：训练 = 全部 - 测试块 - embargo，测试块覆盖全部日期。"""
+        folds = make_folds(dates, "blocked", n_splits=5, embargo_days=3)
+        assert len(folds) == 5
+        all_test = set()
+        for f in folds:
+            assert len(set(f.train_days) & set(f.test_days)) == 0
+            all_test.update(f.test_days)
+        assert all_test == set(dates), "测试块并集应为全历史"
+
+    def test_invalid_method(self, dates):
+        with pytest.raises(ValueError):
+            make_folds(dates, "kfold", 5, 5)
+
+    def test_all_methods_return_fold(self, dates):
+        for m in ("forward", "purged", "blocked"):
+            folds = make_folds(dates, m, n_splits=4, embargo_days=2)
+            assert all(isinstance(f, Fold) for f in folds)
+
+
+# ---------------------------------------------------------------------------
+# 5. 生产专用前推滚动切分 forward_roll_folds
+# ---------------------------------------------------------------------------
+class TestForwardRollFolds:
+    def test_covers_all_test_days(self, dates):
+        """test 段等分后应覆盖全部 test_days（不丢首段）。"""
+        all_days = dates
+        test_days = dates[800:]  # 400 日
+        folds = forward_roll_folds(all_days, test_days, n_folds=4, embargo_days=5)
+        assert len(folds) == 4
+        all_test = set()
+        for f in folds:
+            all_test.update(f.test_days)
+        assert all_test == set(test_days), "test 等分应覆盖全部 test_days"
+
+    def test_train_strictly_before_test(self, dates):
+        all_days = dates
+        test_days = dates[800:]
+        folds = forward_roll_folds(all_days, test_days, n_folds=4, embargo_days=5)
+        for f in folds:
+            assert len(f.train_days) == 0 or f.train_days.max() < f.test_days[0]
+            assert len(set(f.train_days) & set(f.test_days)) == 0
+
+    def test_expanding_train_grows(self, dates):
+        all_days = dates
+        test_days = dates[800:]
+        folds = forward_roll_folds(all_days, test_days, n_folds=4, embargo_days=5)
+        lens = [len(f.train_days) for f in folds]
+        assert lens == sorted(lens), "滚动训练段应收敛递增"
+
+    def test_embargo_removes_adjacent_days(self, dates):
+        all_days = dates
+        test_days = dates[800:]
+        embargo = 3
+        folds = forward_roll_folds(all_days, test_days, n_folds=4,
+                                   embargo_days=embargo)
+        for f in folds:
+            cut_idx = all_days.get_loc(f.test_days[0])
+            if cut_idx >= embargo:
+                for d in all_days[cut_idx - embargo:cut_idx]:
+                    assert d not in set(f.train_days), \
+                        f"embargo day {d} should not be in train"
+
+    def test_too_few_test_days_raises(self, dates):
+        with pytest.raises(ValueError):
+            forward_roll_folds(dates, dates[:5], n_folds=6, embargo_days=0)

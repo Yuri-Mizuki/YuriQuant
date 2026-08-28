@@ -69,7 +69,9 @@ def exp_(x: pd.DataFrame) -> pd.DataFrame:
 
 
 def sqrt_(x: pd.DataFrame) -> pd.DataFrame:
-    return np.sqrt(x.where(x >= 0))
+    """保号平方根：sign(x)·√|x|（国君研报口径——负数域返回有效值而非 NaN，
+    避免 GP 深树中一个负输入让整棵树失效，同时保持符号信息）。"""
+    return np.sign(x) * np.sqrt(x.abs())
 
 
 def power(x: pd.DataFrame, n: float) -> pd.DataFrame:
@@ -129,6 +131,32 @@ def less(a: pd.DataFrame, b: pd.DataFrame) -> pd.DataFrame:
 def signed_power(x: pd.DataFrame, p: float) -> pd.DataFrame:
     """保号幂：sign(x)·|x|^p（研报 signed_power2/3 的通用形式）。"""
     return np.sign(x) * x.abs().pow(p)
+
+
+def if_then_else(x1: pd.DataFrame, x2: pd.DataFrame, x3: pd.DataFrame) -> pd.DataFrame:
+    """三元条件选择：x1 非 0 取 x2 否则取 x3（国君研报条件选择类算子）。
+
+    刻画"门限/状态切换"逻辑；NaN 条件按 False 处理（与 greater/less 同口径）。
+    """
+    cond = (x1.fillna(0) != 0).values
+    return pd.DataFrame(np.where(cond, x2.values, x3.values),
+                        index=x1.index, columns=x1.columns)
+
+
+def if_cond_then_else(x1: pd.DataFrame, x2: pd.DataFrame,
+                      x3: pd.DataFrame, x4: pd.DataFrame) -> pd.DataFrame:
+    """四元条件选择：若 x1 < x2 取 x3 否则取 x4（国君研报条件选择类算子）。"""
+    cond = (x1 < x2).fillna(False).values
+    return pd.DataFrame(np.where(cond, x3.values, x4.values),
+                        index=x1.index, columns=x1.columns)
+
+
+def clear_by_cond(x1: pd.DataFrame, x2: pd.DataFrame, x3: pd.DataFrame) -> pd.DataFrame:
+    """条件清零：若 x1 < x2 置 0 否则取 x3（国君研报条件选择类算子），
+    语义上是带方向记忆的"信号门控"。"""
+    cond = (x1 < x2).fillna(False).values
+    return pd.DataFrame(np.where(cond, 0.0, x3.values),
+                        index=x1.index, columns=x1.columns)
 
 
 def signed_power2(x: pd.DataFrame) -> pd.DataFrame:
@@ -483,17 +511,29 @@ def aroonosc(high: pd.DataFrame, low: pd.DataFrame, n: int) -> pd.DataFrame:
 
 
 def ht_dcphase(x: pd.DataFrame) -> pd.DataFrame:
-    """希尔伯特变换瞬时相位（近似 TA-Lib HT_DCPHASE，无窗口）。
+    """希尔伯特变换瞬时相位（TA-Lib HT_DCPHASE 的因果近似，[-180°, 180°]）。
 
-    用解析信号瞬时相位近似主导循环相位：phase = angle(hilbert(X))，[-180°, 180°]。
+    **因果性（2026-08-28 修复）**：早期实现把 ``scipy.signal.hilbert`` 作用在
+    整段序列上——希尔伯特变换是全局卷积，t 日相位会用到 t 之后的数据，构成
+    前视偏差（全A 实证：样本内/外费后夏普均 ~20 的"时间机器"）。现改为
+    64 日因果滑窗：out[t] 只依赖 s[t-63..t]，与 TA-Lib 的 63 bar lookback 对齐。
+
     表达价格处于周期的哪个位置（华泰报告26 用它在铁矿石/热轧卷板挖出信号）。
     依赖 scipy（项目已有）。
     """
     from scipy.signal import hilbert
-    out = x.copy().astype(float)
+
+    W = 64
+    out = pd.DataFrame(np.nan, index=x.index, columns=x.columns)
     for col in x.columns:
         s = x[col].ffill().fillna(0.0).values
-        out[col] = np.angle(hilbert(s), deg=True)
+        if len(s) < W:
+            continue
+        sw = np.lib.stride_tricks.sliding_window_view(s, W)   # (T-W+1, W)
+        ph = np.angle(hilbert(sw, axis=1)[:, -1], deg=True)
+        arr = np.full(len(s), np.nan)
+        arr[W - 1:] = ph
+        out[col] = arr
     return out
 
 
@@ -604,6 +644,10 @@ ELEMENT_OPS: list[OpSpec] = [
     OpSpec("min", min_, 2, kind="element"),
     OpSpec("greater", greater, 2, kind="element"),  # 研报图表6 二元逻辑
     OpSpec("less", less, 2, kind="element"),        # 研报图表6 二元逻辑
+    # 国君研报（2023 解构系列之一）条件选择类：三元/四元门控算子
+    OpSpec("if_then_else", if_then_else, 3, kind="element"),
+    OpSpec("clear_by_cond", clear_by_cond, 3, kind="element"),
+    OpSpec("if_cond_then_else", if_cond_then_else, 4, kind="element"),
 ]
 
 # 时序算子：arity=1 或 2，n_window=1

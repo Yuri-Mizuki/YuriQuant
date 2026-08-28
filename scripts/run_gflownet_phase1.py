@@ -87,7 +87,13 @@ def main():
     ap.add_argument("--horizon", type=int, default=10, help="调仓周期（研报=10 日）")
     ap.add_argument("--select-cor", type=float, default=0.4,
                     help="入选因子与已入选因子 spearman 相关上限（研报=0.4）")
+    ap.add_argument("--min-autocorr", type=float, default=0.0,
+                    help="RRE 秩稳定性门槛（截面排名自相关下限，0=关闭）")
     ap.add_argument("--no-mc", action="store_true", help="关闭市值中性化奖励")
+    ap.add_argument("--long-ir-lambda", type=float, default=0.5,
+                    help="多头 IR 奖励强度 λ（研报之二十四；0=关闭）")
+    ap.add_argument("--no-barra", action="store_true",
+                    help="关闭 Barra 风格时序相关惩罚")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--init-logz", type=float, default=0.0,
                     help="logZ 经验初始化（≈log(ΣR)，真实数据建议 9~11，加速收敛）")
@@ -120,15 +126,23 @@ def main():
     print(f"训练段: {train_close.index[0].date()} ~ {train_close.index[-1].date()} "
           f"({len(train_close)} 日) | 测试段: {len(close) - len(train_close)} 日")
 
-    # ---- 奖励（市值中性化 + 10 日调仓） ----
+    # ---- 奖励（市值中性化 + 10 日调仓 + 研报之二十四奖励塑形） ----
     cache = RewardCache()
     node_cache: dict = {}                    # 子树级求值缓存（训练提速）
     mc_arg = None if args.no_mc else train_mc
     reward_fn = make_reward_fn(train_panel, None, FEATURES, cache=cache,
                                market_cap=mc_arg, horizon=args.horizon,
-                               node_cache=node_cache)
-    print(f"奖励口径: {'市值中性化' if mc_arg is not None else '未中性化'} + "
-          f"{args.horizon}日调仓")
+                               node_cache=node_cache,
+                               long_ir_lambda=args.long_ir_lambda,
+                               barra_mu=0.0 if args.no_barra else 0.5)
+    shape_bits = [f"{args.horizon}日调仓"]
+    if mc_arg is not None:
+        shape_bits.append("市值中性化")
+    if args.long_ir_lambda > 0:
+        shape_bits.append(f"多头IR(λ={args.long_ir_lambda})")
+    if not args.no_barra:
+        shape_bits.append("Barra惩罚")
+    print("奖励口径: " + " + ".join(shape_bits))
 
     # ---- 均匀基线（训练段同口径） ----
     base = sample_uniform(mdp, reward_fn, 60, seed=args.seed)
@@ -143,7 +157,9 @@ def main():
         rets = build_horizon_returns(train_close, args.horizon)
         reward_pool = RewardPool(train_panel, market_cap=mc_arg, returns=rets,
                                  returns_rank=rets.rank(axis=1),
-                                 features=FEATURES, n_jobs=args.jobs)
+                                 features=FEATURES, n_jobs=args.jobs,
+                                 long_ir_lambda=args.long_ir_lambda,
+                                 barra_mu=0.0 if args.no_barra else 0.5)
         print(f"并行 reward 池: {args.jobs} 进程")
 
     # ---- TB 训练 ----
@@ -163,9 +179,11 @@ def main():
     print(f"TB R 均值={np.mean(sr):.4f} 中位数={np.median(sr):.4f} "
           f"top1={sr[0]:.4f} (基线 均值={np.mean(base_r):.4f})")
 
-    print(f"\n=== spearman<{args.select_cor} 低相关筛选 ===")
+    print(f"\n=== spearman<{args.select_cor} 低相关筛选"
+          f"{' + RRE≥' + str(args.min_autocorr) if args.min_autocorr > 0 else ''} ===")
     selected = select_low_corr(samples, train_panel, FEATURES,
-                               threshold=args.select_cor, progress=True)
+                               threshold=args.select_cor, progress=True,
+                               min_autocorr=args.min_autocorr)
     print(f"入选因子: {len(selected)} / {len(samples)}")
     for f, r in selected[:8]:
         print(f"  {f}   R={r:.4f}")

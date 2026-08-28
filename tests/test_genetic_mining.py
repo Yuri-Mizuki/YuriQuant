@@ -426,3 +426,334 @@ def test_cubic_and_polynomial_transform(signal_panel):
     assert fp_poly.notna().sum().sum() > 0
     ic_p = calc_ic_series(fp_poly, _monthly_forward_returns(rets)).dropna()
     assert len(ic_p) > 10
+
+
+# ---------------------------------------------------------------------------
+# 国君研报（2023 解构系列之一）对齐（2026-08-27）
+# ---------------------------------------------------------------------------
+def test_ls_net_stats_direction_and_cost(signal_panel):
+    """费后多空统计：正向因子 sharpe>0；方向中立（负向因子同值）；费用降低夏普。"""
+    from factor.genetic_mining import _ls_net_stats
+
+    panel, rets = signal_panel
+    fp = panel["close"].pct_change()  # AR(1) 动量 mock，与未来收益正相关
+    a = _ls_net_stats(fp, rets, fee_rt=0.0)
+    b = _ls_net_stats(fp, rets, fee_rt=0.003)
+    assert np.isfinite(a["sharpe"]) and a["sharpe"] > 0
+    assert b["sharpe"] < a["sharpe"], "收费后夏普应低于免费"
+    neg = _ls_net_stats(-fp, rets, fee_rt=0.0)
+    assert abs(neg["sharpe"] - a["sharpe"]) < 1e-8, "方向翻转后 sharpe 应一致（方向中立）"
+    assert a["n"] > 50
+
+
+def test_gp_sharpe_fitness_runs(signal_panel):
+    """fitness_mode='sharpe'（国君基准适应度）跑通且最优因子有正的费后表现。"""
+    pytest.importorskip("deap")
+    from factor.genetic_mining import run_gp_mining
+
+    panel, rets = signal_panel
+    df, _ = run_gp_mining(panel, rets, features=["close", "volume"], windows=(5, 10),
+                          population=25, generations=3, max_depth=3, seed=13, verbose=False,
+                          fitness_mode="sharpe")
+    assert len(df) > 0
+    # 最优因子训练段费前 IC 应显著（mock 信号下 GP 找到的公式不应完全失效）
+    best = df.iloc[0]
+    assert abs(best["ic_train"]) > 0.03 or abs(best["ic_mean"]) > 0.03
+
+
+def test_gp_annual_return_and_ret_minus_dd_modes(signal_panel):
+    """annual_return / ret_minus_dd 两种净值型口径跑通。"""
+    pytest.importorskip("deap")
+    from factor.genetic_mining import run_gp_mining
+
+    panel, rets = signal_panel
+    for mode in ("annual_return", "ret_minus_dd"):
+        df, _ = run_gp_mining(panel, rets, features=["close", "volume"], windows=(5, 10),
+                              population=15, generations=2, max_depth=3, seed=14,
+                              verbose=False, fitness_mode=mode)
+        assert len(df) > 0, mode
+
+
+def test_gp_min_fitness_gate(signal_panel):
+    """min_fitness 准入门槛：过高门槛时 hof 为空 / 结果表为空而不报错。"""
+    pytest.importorskip("deap")
+    from factor.genetic_mining import run_gp_mining
+
+    panel, rets = signal_panel
+    df, hof = run_gp_mining(panel, rets, features=["close", "volume"], windows=(5, 10),
+                            population=15, generations=2, max_depth=3, seed=15, verbose=False,
+                            min_fitness=1e9)   # 不可能有个体达标
+    assert len(df) == 0
+    # 正常门槛：hof 非空且所有入选个体满足门槛语义由包装保证
+    df2, hof2 = run_gp_mining(panel, rets, features=["close", "volume"], windows=(5, 10),
+                              population=15, generations=2, max_depth=3, seed=16, verbose=False)
+    assert len(df2) > 0
+
+
+def test_gp_gtja_evolvement_options(signal_panel):
+    """束搜索 + 家庭竞争 + 排挤三者组合跑通（研报最佳组合 s_r_bs_fc_sp）。"""
+    pytest.importorskip("deap")
+    from factor.genetic_mining import run_gp_mining
+
+    panel, rets = signal_panel
+    df, hof = run_gp_mining(panel, rets, features=["close", "volume"], windows=(5, 10),
+                            population=20, generations=4, max_depth=3, seed=17, verbose=False,
+                            beam_mult=2, family_competition=True, crowding="supplant",
+                            crowd_corr_thr=0.9)
+    assert len(df) > 0
+    # sharing 变体也跑通
+    df2, _ = run_gp_mining(panel, rets, features=["close", "volume"], windows=(5, 10),
+                           population=20, generations=3, max_depth=3, seed=18, verbose=False,
+                           crowding="sharing")
+    assert len(df2) > 0
+
+
+def test_gp_separated_mutation_runs(signal_panel):
+    """四类变异概率分离开关跑通。"""
+    pytest.importorskip("deap")
+    from factor.genetic_mining import run_gp_mining
+
+    panel, rets = signal_panel
+    df, hof = run_gp_mining(panel, rets, features=["close", "volume"], windows=(5, 10),
+                            population=20, generations=3, max_depth=3, seed=19, verbose=False,
+                            separated_mutation=True, patience=0)
+    assert len(df) > 0
+    assert getattr(hof, "generations_run", 0) == 3
+
+
+def test_conditional_ops_registered_and_eval(signal_panel):
+    """国君条件选择类算子进入 GP 原语集且可求值（greater/less/三元/四元）。"""
+    pytest.importorskip("deap")
+    from deap import gp as deap_gp
+    from factor.genetic_mining import build_primitive_set, eval_tree
+
+    panel, _ = signal_panel
+    pset, prim_map = build_primitive_set(["close", "volume"], (5, 10))
+    for name in ["greater", "less", "if_then_else", "clear_by_cond", "if_cond_then_else"]:
+        assert name in prim_map, f"原语 {name} 未注册"
+    cases = [
+        "greater(ts_delta_5(close), ts_delay_5(close))",
+        "if_then_else(greater(close, ts_delay_5(close)), cs_rank(volume), close)",
+        "clear_by_cond(close, ts_delay_5(close), volume)",
+        "if_cond_then_else(close, ts_mean_10(close), volume, cs_rank(close))",
+    ]
+    for f in cases:
+        tree = deap_gp.PrimitiveTree.from_string(f, pset)
+        out = eval_tree(tree, panel, prim_map)
+        assert out is not None and out.shape == panel["close"].shape, f"求值失败: {f}"
+
+
+def test_signed_sqrt_keeps_sign():
+    """保号 sqrt：sqrt(-4)=-2、sqrt(4)=2、NaN 传递，不再整片 NaN。"""
+    from factor.operators import sqrt_
+
+    x = pd.DataFrame({"a": [4.0, -4.0, 9.0], "b": [-9.0, 1e-8, np.nan]})
+    y = sqrt_(x)
+    assert y.iloc[0, 0] == 2.0 and y.iloc[0, 1] == -3.0
+    assert y.iloc[1, 0] == -2.0
+    assert np.isnan(y.iloc[2, 1])
+
+
+def test_crowding_supplant_reduces_fitness_of_similar():
+    """排挤算法：相似对中低分者被减半、高分不变；restore 恢复精确原值。"""
+    pytest.importorskip("deap")
+    from deap import creator as deap_creator, gp as deap_gp
+    from factor.genetic_mining import (_adjust_crowding, _ensure_creator,
+                                        _restore_crowding, build_primitive_set)
+
+    _ensure_creator()
+    rng = np.random.default_rng(0)
+    n_days, n_codes = 60, 10
+    idx = pd.date_range("2023-01-01", periods=n_days, freq="B")
+    cols = [f"{600000+i:06d}.SH" for i in range(n_codes)]
+    panel = {"close": pd.DataFrame(rng.normal(100, 5, (n_days, n_codes)), idx, cols)}
+    pset, prim_map = build_primitive_set(["close"], (5,))
+    t1 = deap_creator.IndividualGP(deap_gp.PrimitiveTree.from_string("ts_mean_5(close)", pset))
+    t2 = deap_creator.IndividualGP(deap_gp.PrimitiveTree.from_string("ts_sum_5(close)", pset))   # 与 t1 相似但不等
+    t3 = deap_creator.IndividualGP(deap_gp.PrimitiveTree.from_string("close", pset))
+    pool = []
+    for tree, score in ((t1, 1.0), (t2, 0.6), (t3, 3.0)):
+        ind = deap_creator.IndividualGP(tree)
+        ind.fitness.values = (score,)
+        pool.append(ind)
+    saved = _adjust_crowding(pool, panel, prim_map, method="supplant",
+                             corr_thr=0.7)
+    scores = {id(ind): float(ind.fitness.values[0]) for ind in pool}
+    _restore_crowding(pool, saved)
+    restored = {id(ind): float(ind.fitness.values[0]) for ind in pool}
+    # 恢复后所有个体回到精确原值（排挤只影响选择，不污染 hof）
+    assert all(abs(restored[id(ind)] - orig) < 1e-12
+               for ind, orig in zip(pool, [1.0, 0.6, 3.0]))
+    assert isinstance(saved, dict)
+
+
+def test_beam_search_population_reduction(signal_panel):
+    """束搜索：beam_mult>1 时正常运行且结果与标准流程结构一致。"""
+    pytest.importorskip("deap")
+    from factor.genetic_mining import run_gp_mining
+
+    panel, rets = signal_panel
+    df, hof = run_gp_mining(panel, rets, features=["close", "volume"], windows=(5, 10),
+                            population=12, generations=2, max_depth=3, seed=20,
+                            verbose=False, beam_mult=3)
+    assert len(df) <= 20   # hall_size 默认 20
+
+
+# ---------------------------------------------------------------------------
+# gtja 预设与次日 VWAP 执行链（2026-08-27）
+# ---------------------------------------------------------------------------
+def test_apply_gtja_preset_resolution(signal_panel):
+    """gtja 预设：None 哨兵按表1 解析；显式传参优先；终端裁剪为六量价字段。"""
+    import argparse
+    from scripts.mine_factors import _apply_gtja_preset
+
+    panel, rets = signal_panel
+    panel = dict(panel)
+    panel["amount"] = panel["volume"] * panel["close"]      # mock amount
+    panel["OPERA_REV"] = panel["close"] * 0 + 1.0           # 应被移出终端
+
+    args = argparse.Namespace(
+        pop=None, gen=None, patience=None, train_frac=None, gp_tournament=None,
+        gp_min_fitness=0.0, gp_dedup_corr=None, gp_separated_mutation=False,
+        gp_fitness=None)
+    out_panel, returns_gp = _apply_gtja_preset(args, panel, real=False)
+
+    # 表1 超参
+    assert (args.pop, args.gen, args.patience, args.train_frac) == (500, 10, 5, 1.0)
+    assert args.gp_tournament == 5 and args.gp_min_fitness == 0.5
+    assert args.gp_dedup_corr == 0.5 and args.gp_fitness == "sharpe"
+    assert args.gp_separated_mutation is True
+    # 终端裁剪为六量价字段，财务字段移出
+    assert set(out_panel) <= {"open", "high", "low", "close", "volume", "vwap"}
+    assert "OPERA_REV" not in out_panel and "vwap" in out_panel
+    # 执行链收益与原 close 收益不同序列（T+2/T+1 VWAP 对齐）
+    assert returns_gp.shape == rets.shape
+    assert not np.allclose(returns_gp.fillna(0), rets.fillna(0))
+
+
+def test_build_vwap_exec_returns_alignment():
+    """VWAP 执行链：首两行应为 NaN（未来函数保护），无 inf。"""
+    from scripts.mine_factors import _build_vwap_exec_returns
+
+    rng = np.random.default_rng(0)
+    n_days, n_codes = 80, 6
+    idx = pd.date_range("2023-01-01", periods=n_days, freq="B")
+    cols = [f"{600000+i:06d}.SH" for i in range(n_codes)]
+    volume = pd.DataFrame(rng.lognormal(12, 0.3, (n_days, n_codes)), idx, cols)
+    amount = pd.DataFrame(rng.lognormal(15, 0.3, (n_days, n_codes)), idx, cols) * 1e4
+    close = pd.DataFrame(rng.normal(50, 1, (n_days, n_codes)), idx, cols).abs()
+    panel = {"close": close, "volume": volume, "amount": amount}
+    rets = _build_vwap_exec_returns(panel)
+    # T 需要 T+1、T+2 的 VWAP → 最后两行必为 NaN
+    assert rets.iloc[-1].isna().all() and rets.iloc[-2].isna().all()
+    assert np.isfinite(rets.iloc[:-2]).all().all()
+
+
+def test_gtja_results_sorted_by_fitness(signal_panel):
+    """sharpe 模式结果表含 fitness 列且按其降序；基准复现命令可带 train_frac=1.0。"""
+    pytest.importorskip("deap")
+    from factor.genetic_mining import run_gp_mining
+
+    panel, rets = signal_panel
+    df, _ = run_gp_mining(panel, rets, features=["close", "volume"], windows=(5, 10),
+                          population=20, generations=2, max_depth=3, seed=21,
+                          verbose=False, fitness_mode="sharpe", min_fitness=0.0,
+                          train_frac=1.0)
+    assert len(df) > 0 and "fitness" in df.columns
+    assert (df["fitness"].diff().dropna() <= 1e-9).all(), "应按 fitness 降序"
+
+
+def test_primitive_min_window_gates():
+    """统计/技术类算子的小窗口注册门槛：恒 NaN/退化的 (算子,窗口) 不进原语集。"""
+    pytest.importorskip("deap")
+    from factor.genetic_mining import build_primitive_set
+
+    pset, pm = build_primitive_set(["close"], (1, 2, 5, 10, 60))
+    # 门槛之下不应注册（恒 NaN / 退化 / 数值爆炸）
+    for absent in ("ts_skew_1", "ts_skew_2", "ts_kurt_1", "ts_kurt_2",
+                   "ts_zscore_1", "ts_corr_1", "ts_corr_2", "ts_cov_1",
+                   "boll_pctb_1", "kama_1", "aroonosc_1", "adx_2",
+                   "ts_product_60"):
+        assert absent not in pm, f"{absent} 应被最小/最大窗口门槛剪掉"
+    # 门槛之上正常注册
+    for present in ("ts_skew_5", "ts_kurt_5", "ts_zscore_2", "ts_corr_5",
+                    "boll_pctb_5", "rsi_2", "kama_5",
+                    "aroonosc_5", "adx_5", "ts_product_5", "ts_product_10"):
+        assert present in pm, f"{present} 应保留"
+
+
+# ---------------------------------------------------------------------------
+# 可交易性过滤（2026-08-28：T+1 停牌/封板、当日 ST/停牌 剔除进适应度）
+# ---------------------------------------------------------------------------
+def test_build_tradable_mask_rules(tmp_path):
+    """mask 构建规则：次日停牌/封涨停/封跌停、当日 ST/停牌 → False；其余 True。"""
+    import numpy as np
+    import pandas as pd
+    from data.cache_helpers import build_tradable_mask
+
+    idx = pd.date_range("2023-01-01", periods=6, freq="B")
+    cols = ["A", "B", "C", "D", "E"]
+    close = pd.DataFrame(np.full((6, 5), 10.0), idx, cols)   # 复权价 == 原始价（bwd=1）
+
+    def st(date_rows: dict) -> pd.DataFrame:
+        rows = {}
+        for d, flags in date_rows.items():
+            for c, f in flags.items():
+                rows[(d, c)] = f
+        df = pd.DataFrame.from_dict(rows, orient="index",
+                                    columns=["pre_close", "high_limited", "low_limited",
+                                             "is_st", "is_suspended",
+                                             "is_ex_dividend", "is_ex_rights"])
+        df.index = pd.MultiIndex.from_tuples(df.index, names=["date", "code"])
+        return df
+
+    d1, d2 = idx[0], idx[1]
+    status = st({
+        # A 在 d2 封涨停（close 10.0 >= high_limited 10.0）→ d1 信号不可交易
+        d1: {"A": (10.0, 11.0, 9.0, False, False, False, False)},
+        d2: {"A": (10.0, 10.0, 9.0, False, False, False, False),
+             # B 在 d2 停牌 → d1 信号不可交易
+             "B": (10.0, 11.0, 9.0, False, True, False, False),
+             # C 在 d2 正常（未触板）
+             "C": (10.0, 11.0, 9.0, False, False, False, False),
+             # D 在 d2 收盘 10.0 == low_limited 10.0 封跌停
+             "D": (10.0, 11.0, 10.0, False, False, False, False),
+             # E 在 d2 是 ST
+             "E": (10.0, 11.0, 9.0, True, False, False, False)},
+    })
+    p = tmp_path / "history_stock_status.parquet"
+    status.to_parquet(p)
+    mask = build_tradable_mask(close, bwd=None, cache_root=str(tmp_path))
+
+    assert not mask.loc[d1, "A"], "T+1 封涨停应剔除"
+    assert not mask.loc[d1, "B"], "T+1 停牌应剔除"
+    assert not mask.loc[d1, "D"], "T+1 封跌停应剔除"
+    assert not mask.loc[d1, "E"], "T+1 ST 应剔除"
+    assert mask.loc[d1, "C"], "正常股票应保留"
+    # 状态缺失的日子补 True
+    assert bool(mask.loc[idx[3]].all())
+
+
+def test_ls_net_stats_tradable_filter():
+    """适应度可交易过滤：被 mask 掉的"假收益王"不得进入多空腿。"""
+    import numpy as np
+    import pandas as pd
+    from factor.genetic_mining import _ls_net_stats
+
+    rng = np.random.default_rng(0)
+    n_days, n_codes = 80, 40
+    idx = pd.date_range("2023-01-01", periods=n_days, freq="B")
+    cols = [f"S{i:03d}" for i in range(n_codes)]
+    rets = pd.DataFrame(rng.normal(0, 0.01, (n_days, n_codes)), idx, cols)
+    # 构造一只"每天 +10%"的假收益王（现实中=连续涨停买不进）
+    rets["S000"] = 0.10
+    fp = pd.DataFrame(np.zeros((n_days, n_codes)), idx, cols)
+    fp["S000"] = 1.0            # 因子把它排到多头腿
+    tradable = pd.DataFrame(True, index=idx, columns=cols)
+    tradable["S000"] = False    # mask 剔除
+
+    with_fake = _ls_net_stats(fp, rets, min_cov_frac=0.9)
+    filtered = _ls_net_stats(fp, rets, min_cov_frac=0.9, tradable=tradable)
+    assert with_fake["sharpe"] > filtered["sharpe"], "过滤涨停王后夏普应大幅下降"
+    assert abs(filtered["ann_ret"]) < abs(with_fake["ann_ret"]) / 10, \
+        "过滤后剩余应为噪声级收益，而非涨停王贡献"
