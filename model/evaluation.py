@@ -17,8 +17,8 @@ from typing import Any
 
 import pandas as pd
 
-from research.factor_analysis import calc_ic_decay, calc_ic_series, calc_ir, quantile_backtest
-from research.robust_stats import nw_tstat
+from stats.ic import calc_ic_decay, calc_ic_series, calc_ir, quantile_backtest
+from stats.robust_stats import nw_tstat
 
 __all__ = ["evaluate_model"]
 

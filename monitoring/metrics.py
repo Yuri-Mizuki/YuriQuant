@@ -19,8 +19,9 @@ import numpy as np
 import pandas as pd
 from scipy import stats as sps
 
-from optimize.monitor import monitor_ic_series
-from research.factor_analysis import quantile_backtest, calc_neutral_ic_series
+from research.factor_analysis import calc_neutral_ic_series
+from stats.ic import quantile_backtest
+from stats.monitor import monitor_ic_series
 
 MODEL_PREFIX = "model:"
 _MODEL_ID_RE = re.compile(r"model_id=(\d+)")

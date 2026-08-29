@@ -20,6 +20,8 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
+from backtest.metrics import PERIODS_PER_YEAR
+
 
 class TransactionCosts:
     """交易成本计算。"""
@@ -116,7 +118,7 @@ class ShortCostModel:
 
     borrow_rate: float = 0.08
     margin_ratio: float = 1.0
-    days_per_year: int = 252
+    days_per_year: int = PERIODS_PER_YEAR
 
     def daily_borrow_fee(self, short_exposure: float, capital: float) -> float:
         """按日计提借券费（金额）：空头名义金额 × 年化费率 / 交易日数。

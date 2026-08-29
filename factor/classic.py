@@ -18,6 +18,7 @@ import numpy as np
 import pandas as pd
 
 from factor.base import Factor
+from stats import PERIODS_PER_YEAR
 
 
 # ===========================================================================
@@ -60,7 +61,7 @@ class Volatility(Factor):
     def calc(self, panel: dict[str, pd.DataFrame]) -> pd.DataFrame:
         close = panel["close"]
         rets = close.pct_change()
-        return rets.rolling(self.n).std() * np.sqrt(252)
+        return rets.rolling(self.n).std() * np.sqrt(PERIODS_PER_YEAR)
 
 
 class Amplitude(Factor):

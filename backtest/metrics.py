@@ -24,8 +24,15 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+# 年化交易日数（单一真源在 stats/ 包；此处 re-export 保持
+# ``from backtest.metrics import PERIODS_PER_YEAR`` 的历史路径可用）。
+# 全库所有年化口径统一引用该常量，禁止各处再写 244/252 字面量
+# （2026-08-29 收敛：e2e_backtest.perf_stats 曾用 244，与引擎 252 分裂
+# 导致两族报告差 ~3%）。
+from stats import PERIODS_PER_YEAR  # noqa: F401
 
-def annual_return(daily_returns: pd.Series, periods_per_year: int = 252) -> float:
+
+def annual_return(daily_returns: pd.Series, periods_per_year: int = PERIODS_PER_YEAR) -> float:
     """年化收益率 Annual Return。"""
     total = (1 + daily_returns).prod() - 1
     n_years = len(daily_returns) / periods_per_year
@@ -34,7 +41,7 @@ def annual_return(daily_returns: pd.Series, periods_per_year: int = 252) -> floa
     return (1 + total) ** (1 / n_years) - 1
 
 
-def annual_volatility(daily_returns: pd.Series, periods_per_year: int = 252) -> float:
+def annual_volatility(daily_returns: pd.Series, periods_per_year: int = PERIODS_PER_YEAR) -> float:
     """年化波动率 Annual Volatility。"""
     return daily_returns.std() * np.sqrt(periods_per_year)
 
@@ -46,7 +53,7 @@ def _rf_daily(rf: float, periods_per_year: int) -> float:
     return (1 + rf) ** (1 / periods_per_year) - 1
 
 
-def sharpe_ratio(daily_returns: pd.Series, rf: float = 0.0, periods_per_year: int = 252) -> float:
+def sharpe_ratio(daily_returns: pd.Series, rf: float = 0.0, periods_per_year: int = PERIODS_PER_YEAR) -> float:
     """夏普比率 Sharpe Ratio。
 
     rf 按日频复利折算为超额收益序列（(1+r)/(1+rf_daily)-1），再用几何年化口径：
@@ -60,7 +67,7 @@ def sharpe_ratio(daily_returns: pd.Series, rf: float = 0.0, periods_per_year: in
     return annual_return(excess, periods_per_year) / vol
 
 
-def sortino_ratio(daily_returns: pd.Series, rf: float = 0.0, periods_per_year: int = 252) -> float:
+def sortino_ratio(daily_returns: pd.Series, rf: float = 0.0, periods_per_year: int = PERIODS_PER_YEAR) -> float:
     """索提诺比率 Sortino Ratio: 只用下行波动。
 
     下行偏差 = 半方差 downside deviation = sqrt(mean(min(excess, 0)²))，
@@ -86,7 +93,7 @@ def max_drawdown(daily_returns: pd.Series) -> float:
     return abs(dd.min())
 
 
-def calmar_ratio(daily_returns: pd.Series, periods_per_year: int = 252) -> float:
+def calmar_ratio(daily_returns: pd.Series, periods_per_year: int = PERIODS_PER_YEAR) -> float:
     """卡玛比率 Calmar Ratio: 年化收益 / 最大回撤。"""
     mdd = max_drawdown(daily_returns)
     if mdd == 0:
@@ -97,7 +104,7 @@ def calmar_ratio(daily_returns: pd.Series, periods_per_year: int = 252) -> float
 def information_ratio(
     daily_returns: pd.Series,
     benchmark_returns: pd.Series,
-    periods_per_year: int = 252,
+    periods_per_year: int = PERIODS_PER_YEAR,
 ) -> float:
     """信息比率 Information Ratio。"""
     excess = daily_returns - benchmark_returns
@@ -137,7 +144,7 @@ def calc_short_metrics(
     initial_capital: float = 1.0,
     margin_ratio: float = 1.0,
     n_days: int = 0,
-    periods_per_year: int = 252,
+    periods_per_year: int = PERIODS_PER_YEAR,
     exposure: pd.DataFrame | None = None,
 ) -> dict:
     """空头成本与资金占用指标（配合 ShortCostModel 使用）。
@@ -216,7 +223,7 @@ def calc_all_metrics(
     daily_returns: pd.Series,
     benchmark_returns: pd.Series | None = None,
     weights_history: pd.DataFrame | None = None,
-    periods_per_year: int = 252,
+    periods_per_year: int = PERIODS_PER_YEAR,
     rf: float = 0.0,
 ) -> dict:
     """一次性计算所有指标。
@@ -225,7 +232,7 @@ def calc_all_metrics(
         daily_returns: 日收益序列。
         benchmark_returns: 基准日收益（可选，计算 IR / 超额收益）。
         weights_history: 权重历史（可选，计算平均换手率）。
-        periods_per_year: 年化周期数（默认 252 交易日）。
+        periods_per_year: 年化周期数（默认 PERIODS_PER_YEAR 交易日）。
         rf: 年化无风险利率（默认 0），用于 Sharpe / Sortino 的超额收益。
     """
     m = {

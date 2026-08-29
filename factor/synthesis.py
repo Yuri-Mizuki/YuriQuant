@@ -27,7 +27,7 @@ from scipy import stats
 
 from factor.preprocessing import standardize_zscore
 from factor.cv import forward_folds
-from research.factor_analysis import calc_ic_series, calc_ir
+from stats.ic import calc_ic_series, calc_ir
 
 
 @dataclass

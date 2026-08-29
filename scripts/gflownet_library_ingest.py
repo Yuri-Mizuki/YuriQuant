@@ -18,6 +18,7 @@ import numpy as np
 import pandas as pd
 import torch
 
+from backtest.metrics import PERIODS_PER_YEAR
 from factor.formula import formula_builder
 from factor.gflownet.env import FactorMDP
 from factor.gflownet.net import TBPolicy
@@ -72,7 +73,7 @@ def eval_ic_ir(factor: pd.DataFrame, returns: pd.DataFrame) -> tuple[float, floa
     ic = ic.dropna()
     if ic.empty:
         return 0.0, 0.0
-    return float(ic.mean()), float(ic.mean() / ic.std() * np.sqrt(252)) if ic.std() > 0 else 0.0
+    return float(ic.mean()), float(ic.mean() / ic.std() * np.sqrt(PERIODS_PER_YEAR)) if ic.std() > 0 else 0.0
 
 
 def main():
@@ -188,7 +189,7 @@ def main():
     def _eval(name: str, comp: pd.DataFrame, te: pd.DataFrame):
         ic_te = rank_ic_series(comp.loc[~train_mask], te).dropna()
         ic_te_mean = float(ic_te.mean()) if len(ic_te) else float("nan")
-        ir_te = float(ic_te.mean() / ic_te.std() * np.sqrt(252 / h)) if len(ic_te) > 2 and ic_te.std() > 0 else float("nan")
+        ir_te = float(ic_te.mean() / ic_te.std() * np.sqrt(PERIODS_PER_YEAR / h)) if len(ic_te) > 2 and ic_te.std() > 0 else float("nan")
         print(f"  {name:24s} 测试IC={ic_te_mean:+.4f}  测试IR={ir_te:+.2f}")
         return {"method": name, "horizon": h, "test_ic": ic_te_mean, "test_ir": ir_te}
 

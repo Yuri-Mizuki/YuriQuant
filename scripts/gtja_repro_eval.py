@@ -27,6 +27,8 @@ import logging
 import numpy as np
 import pandas as pd
 
+from backtest.metrics import PERIODS_PER_YEAR
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S")
 log = logging.getLogger("gtja_repro_eval")
 
@@ -73,7 +75,7 @@ def load_backward_once(codes=None):
     """取一次后复权因子：优先本地 parquet（本次已全量拉取），避免 SDK 登录抖动。"""
     from pathlib import Path
     import pandas as pd
-    p = Path("e:/data/parquet/backward_factor.parquet")
+    p = Path(str(Config.cache()["root"])) / "backward_factor.parquet"
     if p.exists():
         try:
             bwd = pd.read_parquet(p)
@@ -123,17 +125,17 @@ def ls_metrics(fp: pd.DataFrame, rets: pd.DataFrame,
     base = rv.sum(axis=1) / valid.sum(axis=1).clip(lower=1)
     ex = (rv * long_m).sum(axis=1) / nL - base
     ex = ex.dropna()
-    ex_sharpe = float(ex.mean() / ex.std() * np.sqrt(252)) if len(ex) > 2 and ex.std() > 0 else float("nan")
+    ex_sharpe = float(ex.mean() / ex.std() * np.sqrt(PERIODS_PER_YEAR)) if len(ex) > 2 and ex.std() > 0 else float("nan")
     # 年化双边换手：每日两腿换手比例之和 × 252
     churn = (~(long_m.shift(fill_value=False)) & long_m).sum(axis=1) / nL
     fr_s = fp.where(valid).rank(axis=1, pct=True)
     short_m = (fr_s <= TOP_FRAC) & valid
     nS = short_m.sum(axis=1).clip(lower=1)
     churn = churn + (~short_m.shift(fill_value=False) & short_m).sum(axis=1) / nS
-    turn_ann = float(churn.iloc[1:].mean() * 252)
+    turn_ann = float(churn.iloc[1:].mean() * PERIODS_PER_YEAR)
     return {
         "ls_ann": st["ann_ret"], "ls_dd": -st["max_dd"], "ls_sharpe": st["sharpe"],
-        "long_excess_ann": float(ex.mean() * 252) if len(ex) else float("nan"),
+        "long_excess_ann": float(ex.mean() * PERIODS_PER_YEAR) if len(ex) else float("nan"),
         "long_excess_sharpe": ex_sharpe,
         "rankic": float(ic.mean()) if len(ic) else float("nan"),
         "ic_win": float((ic > 0).mean()) if len(ic) else float("nan"),

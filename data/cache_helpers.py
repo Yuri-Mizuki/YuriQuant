@@ -8,6 +8,7 @@
 2. ``load_backward_factor``  后复权因子（离线读 parquet / 在线走 cache，双分支）
 3. ``load_financial_tables`` 财务/股东事件表（同上双分支，7 张表统一）
 4. ``returns_from_cache``    从 daily_{pool}.parquet 构造次日收益面板（因子库 IC 口径）
+5. ``load_index_returns``    指数日收益（parquet 优先 / real 回源 / 可选日历对齐）
 
 约定：offline 判定依据 cache._ds 是否为 data.offline.OfflineDataSource——
 离线时直接读本地 parquet（避免整表覆盖型接口回调数据源抛错），在线时走
@@ -18,15 +19,80 @@ _fin 离线读财务表）。
 """
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import pandas as pd
 
+from config import Config
 from data.offline import OfflineDataSource
+
+_log = logging.getLogger("cache_helpers")
 
 
 def _is_offline(cache) -> bool:
     return isinstance(getattr(cache, "_ds", None), OfflineDataSource)
+
+
+def load_index_returns(
+    index_code: str,
+    begin: int | None = None,
+    end: int | None = None,
+    real: bool = False,
+    reindex_to: pd.DatetimeIndex | None = None,
+) -> pd.Series | None:
+    """指数日收益（单一实现；2026-08-29 收敛自 investment_report / run_model_portfolio 两份平行实现）。
+
+    优先读本地缓存 ``index_daily_{code}.parquet``；缺失且 real=True 时回源拉取；
+    否则返回 None（调用方自行降级基准，如全池等权）。
+
+    Args:
+        index_code: 指数代码（如 ``000300.SH``）。
+        begin/end: 8 位日期。begin 前多留 10 个自然日窗口再 pct_change，
+            保证 begin 首日是真实收益而非 NaN。
+        real: 无缓存时是否回源拉取（需要数据源凭证）。
+        reindex_to: 精确对齐的日历（如回测 test_days；缺失日 ffill 前值收益）。
+    Returns:
+        Series(index=date, name=index_code) 日收益；不可用时 None。
+    """
+    safe = str(index_code).replace(".", "_")
+    p = Path(str(Config.cache()["root"])) / f"index_daily_{safe}.parquet"
+    if p.exists():
+        df = pd.read_parquet(p)
+    elif real:
+        from data import get_cache  # 懒导入避免与 data.__init__ 循环
+        try:
+            _log.info("拉取指数数据 %s ...", index_code)
+            df = get_cache().get_index_daily(
+                index_code, begin or 19900101, end or 99991231)
+        except Exception as e:  # noqa: BLE001 - 拉取失败降级为无基准
+            _log.warning("指数 %s 拉取失败: %s", index_code, e)
+            return None
+    else:
+        _log.warning("指数 %s 无缓存（mock 模式不可拉取）", index_code)
+        return None
+
+    if "code" in getattr(df.index, "names", ()):
+        close = df.xs(str(index_code), level="code")["close"].sort_index()
+    elif "code" in df.columns:
+        close = (df.reset_index()
+                 .pivot(index="date", columns="code", values="close")
+                 .sort_index().iloc[:, 0])
+    else:
+        close = df["close"].sort_index()
+
+    if begin is not None:
+        close = close[close.index >= pd.Timestamp(str(begin)) - pd.Timedelta(days=10)]
+    if end is not None:
+        close = close[close.index <= pd.Timestamp(str(end))]
+
+    ret = close.pct_change(fill_method=None)
+    if begin is not None:
+        ret = ret[ret.index >= pd.Timestamp(str(begin))]
+    if reindex_to is not None:
+        ret = ret.reindex(reindex_to).ffill()
+    ret.name = index_code
+    return ret
 
 
 def load_daily(cache, uni, index_code: str, begin: int, end: int | None,
@@ -161,7 +227,7 @@ def build_tradable_mask(close_adj: pd.DataFrame,
     状态表缺失的 (date, code) 视为可交易（保守补 True）；返回前 reindex 到
     ``close_adj`` 的行列。状态表不存在时返回全 True 掩码（调用方日志可见）。
     """
-    root = cache_root or "e:/data/parquet"
+    root = cache_root or str(Config.cache()["root"])
     p = Path(root) / "history_stock_status.parquet"
     idx, cols = close_adj.index, close_adj.columns
     if not p.exists():

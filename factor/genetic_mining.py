@@ -35,7 +35,8 @@ from factor.operators import (
     ts_delay, ts_delta, ts_diff, ts_ema, ts_kurt, ts_max, ts_mean, ts_median,
     ts_min, ts_product, ts_rank, ts_skew, ts_std, ts_sum, ts_wma, ts_zscore,
 )
-from research.factor_analysis import calc_ic_series, calc_ir
+from stats import PERIODS_PER_YEAR
+from stats.ic import calc_ic_series, calc_ir
 
 
 # 窗口已编入算子名时使用的时序单目算子（不含需要布尔输入的 ts_count）
@@ -306,8 +307,8 @@ def _ls_net_stats(fp: pd.DataFrame, rets: pd.DataFrame, top_frac: float = 0.1,
         ls_gross = -ls_gross
     net = ls_gross - cost
     s = float(net.std())
-    sharpe = float(net.mean() / s * np.sqrt(252)) if s > 1e-12 else float("nan")
-    ann_ret = float(net.mean() * 252)
+    sharpe = float(net.mean() / s * np.sqrt(PERIODS_PER_YEAR)) if s > 1e-12 else float("nan")
+    ann_ret = float(net.mean() * PERIODS_PER_YEAR)
     cum = (1.0 + net).cumprod()
     max_dd = float(abs((cum / cum.cummax() - 1.0).min()))
     return {"sharpe": sharpe, "ann_ret": ann_ret, "max_dd": max_dd, "n": len(net),
@@ -1467,7 +1468,7 @@ def _fitness_multi(individual, panel, returns_fit, min_obs, parsimony, prim_map,
     f1 = 日频 rank IC 强度（|t|-like，train 段，可选叠加月频权重）；
     f2 = 截面排名自相关（换手率代理，越高 = 排序越稳、交易成本越低）。
     """
-    from research.factor_analysis import factor_autocorr
+    from stats.ic import factor_autocorr
     try:
         fp = eval_tree(individual, panel, prim_map)
     except Exception:

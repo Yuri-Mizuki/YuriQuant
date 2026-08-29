@@ -39,7 +39,7 @@ import pandas as pd
 
 from backtest.engine import BacktestResult, VectorBacktest
 from backtest.costs import ShortCostModel
-from backtest.metrics import calc_all_metrics
+from backtest.metrics import PERIODS_PER_YEAR, calc_all_metrics
 from research.factor_analysis import calc_ic_series, calc_ir, calc_ic_decay, factor_autocorr
 from strategy.examples import TopKLongOnly, TopKLongShort
 
@@ -241,7 +241,7 @@ class FactorLibrary:
         t_stat = ic_mean / (ic_std / np.sqrt(n)) if ic_std > 0 else 0.0
         # Newey-West 自相关稳健显著性（IC 序列强自相关时 OLS t 会虚高；
         # significant 判定基于 NW t，2026-08-03 修复，避免累积伪显著）
-        from research.robust_stats import nw_tstat
+        from stats.robust_stats import nw_tstat
         t_stat_nw, _se_nw, _lag = nw_tstat(ic_valid) if n >= 2 else (0.0, 0.0, 0)
         ic_win_rate = float((ic_valid > 0).mean()) if n else float("nan")
         significant = bool(abs(t_stat_nw) > 2.0)
@@ -606,7 +606,7 @@ class FactorLibrary:
                 resid_vals.append(ic_d)
         if len(resid_dates) < 20:
             return float("nan"), 0.0
-        from research.robust_stats import nw_tstat
+        from stats.robust_stats import nw_tstat
         t_nw, _se, _lag = nw_tstat(pd.Series(resid_vals, index=resid_dates).values)
         return float(np.mean(resid_vals)), float(t_nw)
 
@@ -637,7 +637,7 @@ class FactorLibrary:
             DataFrame(name/maturity/ic_mean_full/ic_mean_recent/ic_drift/
                       ic_ir_recent/ic_t_nw_recent/status)，warning 排前。
         """
-        from optimize.monitor import monitor_ic_series
+        from stats.monitor import monitor_ic_series
         reg = self._load_registry()
         rows = []
         for _, r in reg.iterrows():
@@ -709,7 +709,7 @@ class FactorLibrary:
                 "ir": float(calc_ir(s)) if len(s) >= 2 else 0.0,
                 "win_rate": float((s > 0).mean()),
                 "n_days": int(len(s)),
-                "market_ann": float((1 + m.mean()) ** 252 - 1),
+                "market_ann": float((1 + m.mean()) ** PERIODS_PER_YEAR - 1),
             }
         return out
 

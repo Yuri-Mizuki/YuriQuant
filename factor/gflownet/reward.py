@@ -213,12 +213,11 @@ def rank_stability(factor_panel: pd.DataFrame, lag: int = 1) -> float:
     """截面排名自相关（换手率/RRE 筛选的核心量，Alphalens 风格）。
 
     越接近 1 = 排序越稳定（换手低、可落地）；≈0 = 每日大换血。
-    实现 research.factor_analysis.factor_autocorr 的同款 corrwith 向量化
-    （factor 包不反向依赖 research，故此处独立实现同一口径）。
+    stats 公共层建立后（2026-08-29）直接委托 ``stats.ic.factor_autocorr``
+    统一口径（lag=1 与历史实现完全一致），不再独立维护同款实现。
     """
-    ranked = factor_panel.rank(axis=1)
-    c = ranked.shift(lag).corrwith(ranked, axis=1, method="spearman").dropna()
-    return float(c.mean()) if len(c) else 0.0
+    from stats.ic import factor_autocorr
+    return factor_autocorr(factor_panel, max_lag=lag)
 
 
 def composed_factor_reward(fp: Optional[pd.DataFrame], rets: pd.DataFrame,

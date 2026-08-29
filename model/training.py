@@ -25,8 +25,8 @@ from factor.synthesis import (
     synthesize_stacking_lambdarank,
 )
 from model.registry import ModelRegistry, default_model_root
-from research.factor_analysis import calc_ic_series, calc_ir
-from research.robust_stats import nw_tstat
+from stats.ic import calc_ic_series, calc_ir
+from stats.robust_stats import nw_tstat
 
 __all__ = ["train_stacking_model", "train_predictor_model", "train_and_register"]
 

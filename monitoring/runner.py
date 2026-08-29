@@ -17,6 +17,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from backtest.metrics import PERIODS_PER_YEAR
 from config import Config
 from monitoring.alerts import attach_alerts
 from monitoring.ledger import MonitoringLedger
@@ -95,7 +96,7 @@ def run_monitoring(
         )
         m = attach_alerts(m, conf)
         snapshots.append(m)
-        ic_history[name] = ic[ic.index <= as_of_ts].tail(252)
+        ic_history[name] = ic[ic.index <= as_of_ts].tail(PERIODS_PER_YEAR)
 
     # 库级拥挤度监控：因子 IC 相关矩阵 → 同质化/分散度虚假
     if len(ic_history) >= 2:

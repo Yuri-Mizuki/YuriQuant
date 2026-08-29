@@ -14,8 +14,8 @@
 6. 基准：股票池等权日收益（日度再平衡，与策略月频调仓有口径差异）
 
 用法：
-    D:/python/Python312/python.exe scripts/e2e_backtest.py --real --top 50
-    D:/python/Python312/python.exe scripts/e2e_backtest.py --real --top 50 --freq W
+    python scripts/e2e_backtest.py --real --top 50
+    python scripts/e2e_backtest.py --real --top 50 --freq W
     python scripts/e2e_backtest.py --mock --top 20 --model ridge   # 测试/演示
 """
 from __future__ import annotations
@@ -35,6 +35,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from backtest.metrics import PERIODS_PER_YEAR  # noqa: E402
 from scripts.e2e_common import (  # noqa: E402
     HORIZON, GBDT_PARAMS, build_labels, compute_classic_features,
     drop_stale_factors, load_daily_data, load_mock_data, select_features,
@@ -176,10 +177,10 @@ def perf_stats(daily_ret: pd.Series, label: str) -> dict:
     ret = daily_ret.dropna()
     if len(ret) == 0:
         return {"label": label}
-    n_years = len(ret) / 244
+    n_years = len(ret) / PERIODS_PER_YEAR
     total = (1 + ret).prod() - 1
     annual = (1 + total) ** (1 / max(n_years, 1e-9)) - 1 if n_years > 0.3 else total
-    vol = ret.std() * (244 ** 0.5)
+    vol = ret.std() * (PERIODS_PER_YEAR ** 0.5)
     sharpe = annual / vol if vol > 0 else float("nan")
     eq = (1 + ret).cumprod()
     dd = (eq / eq.cummax() - 1).min()

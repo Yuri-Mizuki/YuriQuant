@@ -31,7 +31,7 @@ from factor.operators import (
     CS_OPS, DEFAULT_FEATURES, DEFAULT_WINDOWS, TS_OPS, cs_rank, op_registry,
     ts_corr, ts_mean,
 )
-from research.factor_analysis import calc_ic_series, calc_ir, calc_ic_decay, factor_autocorr
+from stats.ic import calc_ic_series, calc_ir, calc_ic_decay, factor_autocorr
 
 
 @contextmanager
@@ -57,7 +57,7 @@ def _init_eval_worker(panel, returns_panel, features):
 
 def _eval_candidate_worker(task: tuple) -> dict | None:
     """worker：按公式字符串重建求值器，计算 IC 摘要。返回 row dict 或 None（无效/异常）。"""
-    from research.robust_stats import nw_tstat
+    from stats.robust_stats import nw_tstat
     from factor.formula import formula_builder
 
     name, method, min_obs, robust = task
@@ -288,7 +288,7 @@ def evaluate_candidates(
         ic_decay5/ic_decay10/autocorr/t_stat/p_value/t_stat_nw/p_value_nw/
         significant。
     """
-    from research.robust_stats import nw_tstat
+    from stats.robust_stats import nw_tstat
 
     cand_map = {c.name: c for c in candidates}
     rows: list[dict] = []

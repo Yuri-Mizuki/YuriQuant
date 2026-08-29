@@ -36,7 +36,8 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
-from research.robust_stats import nw_tstat, ols_newey_west
+from backtest.metrics import PERIODS_PER_YEAR
+from stats.robust_stats import nw_tstat, ols_newey_west
 
 __all__ = ["fama_macbeth", "brinson_attribution", "alpha_beta"]
 
@@ -320,7 +321,7 @@ def alpha_beta(
     benchmark_returns: pd.Series,
     rf: float = 0.0,
     factor_returns: pd.DataFrame | None = None,
-    periods_per_year: int = 252,
+    periods_per_year: int = PERIODS_PER_YEAR,
     lag: int | None = None,
 ) -> dict:
     """α/β 分解：r_p - r_f = α + β(r_m - r_f) + Σ β_k F_k + ε。

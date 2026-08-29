@@ -19,6 +19,8 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from backtest.metrics import PERIODS_PER_YEAR
+
 __all__ = ["equal_weight_returns", "buy_hold_returns", "benchmark_returns",
            "compare_to_benchmark", "with_benchmark_metrics"]
 
@@ -52,7 +54,7 @@ def benchmark_returns(close_panel: pd.DataFrame, mode: str = "equal_weight") -> 
 def compare_to_benchmark(
     daily_returns: pd.Series,
     benchmark_returns: pd.Series,
-    periods_per_year: int = 252,
+    periods_per_year: int = PERIODS_PER_YEAR,
 ) -> dict:
     """策略 vs 基准的对照指标（日频序列已对齐）。"""
     from backtest.metrics import annual_return
@@ -79,7 +81,7 @@ def with_benchmark_metrics(
     metrics: dict,
     daily_returns: pd.Series,
     benchmark_returns: pd.Series,
-    periods_per_year: int = 252,
+    periods_per_year: int = PERIODS_PER_YEAR,
 ) -> dict:
     """把基准对照指标并入 ``calc_all_metrics`` 的指标 dict（原 dict 不修改）。"""
     out = dict(metrics)
