@@ -103,7 +103,7 @@ def main():
     parser.add_argument("--freq", default="M", choices=["D", "W", "M"])
     parser.add_argument("--list-only", action="store_true", help="只输出选股清单，不画图")
     parser.add_argument("--no-short-cost", action="store_true",
-                        help="关闭空头腿成本（借券费=0，旧口径；默认启用 8% 年化）")
+                        help="关闭空头腿成本（借券费=0，旧口径；默认启用 8%% 年化）")
     parser.add_argument("--borrow-rate", type=float, default=None, help="年化借券费率（默认读配置 0.08）")
     parser.add_argument("--margin-ratio", type=float, default=None, help="融券保证金比例（默认读配置 1.0）")
     parser.add_argument("--deleverage", action="store_true",

@@ -16,7 +16,7 @@ from factor.synthesis import (
     synthesize_ic_weighted, synthesize_orthogonal, synthesize_pca,
     synthesize_stacking, synthesize_stacking_gbdt, synthesize_stacking_gbdt_tuned,
     synthesize_stacking_lambdarank,
-    _time_folds, _inner_split_by_day,
+    _time_fold_masks, _inner_split_by_day,
 )
 
 
@@ -220,7 +220,7 @@ def test_time_folds_no_split_within_day():
     per_day = [3, 3, 2, 3, 3, 3, 2, 3, 3, 3, 3, 2, 3, 3, 3, 3, 2, 3, 3, 3]
     date_arr = np.concatenate([np.repeat(d, n) for d, n in zip(dates, per_day)])
 
-    folds = _time_folds(date_arr, n_splits=5)
+    folds = _time_fold_masks(date_arr, n_splits=5)
     assert len(folds) == 4
     for train_mask, test_mask in folds:
         tr_days = set(pd.unique(date_arr[train_mask]))
@@ -237,7 +237,7 @@ def test_time_folds_embargo_purges_adjacent_days():
     """embargo_days 应剔除训练段末尾与测试段相邻的天（标签时间重叠防泄漏）。"""
     dates = pd.date_range("2023-01-02", periods=30, freq="B")
     date_arr = np.repeat(dates, 3)  # 每天 3 股
-    folds = _time_folds(date_arr, n_splits=5, embargo_days=2)
+    folds = _time_fold_masks(date_arr, n_splits=5, embargo_days=2)
     assert len(folds) == 4
     # 每折 purge 后，训练段末尾日期到测试段起始日期的间隔 >= embargo_days 个交易日
     for train_mask, test_mask in folds:
@@ -255,7 +255,7 @@ def test_time_folds_all_obs_covered_across_folds():
     date_arr = np.concatenate([
         np.repeat(d, rng.integers(2, 6)) for d in dates
     ])
-    folds = _time_folds(date_arr, n_splits=6)
+    folds = _time_fold_masks(date_arr, n_splits=6)
     assert len(folds) == 5
     # expanding-window：首个测试折从 edges[1]（约 1/n_splits 处）才开始，
     # 因此最前面约 1/6 的观测不会进入任何测试折（属预期，不是泄漏）。

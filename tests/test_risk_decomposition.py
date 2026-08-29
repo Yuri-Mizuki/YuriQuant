@@ -33,7 +33,7 @@ def _mock_weights_and_returns(n_days: int = 150, n_codes: int = 10, seed: int = 
     # 月度调仓等权权重（仅在月末有非零值，其余日全 0 模拟 weights_history）
     w = pd.DataFrame(0.0, idx, codes)
     s = pd.Series(idx, index=idx)
-    monthly_dates = s.groupby(pd.Grouper(freq="M")).last()
+    monthly_dates = s.groupby(pd.Grouper(freq="ME")).last()
     for dt in monthly_dates:
         if dt in w.index:
             w.loc[dt] = 1.0 / n_codes
@@ -70,7 +70,7 @@ def test_equal_weight_mrc_equal():
     rets = pd.DataFrame(rng.normal(0, 0.02, (n_days, n_codes)), idx, codes)
 
     w = pd.DataFrame(0.0, idx, codes)
-    monthly_dates = pd.Series(idx, index=idx).groupby(pd.Grouper(freq="M")).last()
+    monthly_dates = pd.Series(idx, index=idx).groupby(pd.Grouper(freq="ME")).last()
     for dt in monthly_dates:
         if dt in w.index:
             w.loc[dt] = 1.0 / n_codes
@@ -203,7 +203,7 @@ def test_high_dimensional_stability():
     rets = pd.DataFrame(rng.normal(0, 0.02, (n_days, n_codes)), idx, codes)
 
     w = pd.DataFrame(0.0, idx, codes)
-    monthly_dates = pd.Series(idx, index=idx).groupby(pd.Grouper(freq="M")).last()
+    monthly_dates = pd.Series(idx, index=idx).groupby(pd.Grouper(freq="ME")).last()
     for dt in monthly_dates:
         if dt in w.index:
             w.loc[dt] = 1.0 / n_codes

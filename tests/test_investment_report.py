@@ -62,11 +62,11 @@ def test_factor_test_structure(tmp_path):
     assert (tmp_path / "layer_nav_mock.csv").exists()
 
 
-def test_layer_nav_not_exploding():
+def test_layer_nav_not_exploding(tmp_path):
     """回归：分层净值不得因 horizon 累计收益按日累乘而重叠放大（曾出现 Q1=6.56 假象）。"""
     from scripts.investment_report import factor_test
     sparse, fwd, close = _mock_pred_and_fwd()
-    out = factor_test(sparse, fwd, close, Path("."), "explode_check")
+    out = factor_test(sparse, fwd, close, tmp_path, "explode_check")
     nav = out["layer_nav"].dropna(how="all")
     # 每条分层净值终点应处于合理量级（< 3），而非重叠放大的 6+/93
     for c in nav.columns:

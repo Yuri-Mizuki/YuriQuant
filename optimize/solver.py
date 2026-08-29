@@ -608,6 +608,7 @@ def hrp_weights(
     权重和 ≈ 1。缺点：不用收益信号（纯风险结构）。
     """
     import scipy.cluster.hierarchy as sch
+    from scipy.spatial.distance import squareform
 
     n = cov.shape[0]
     std = np.sqrt(np.maximum(np.diag(cov), 0.0))
@@ -616,7 +617,7 @@ def hrp_weights(
     dist = np.sqrt(np.clip(0.5 * (1.0 - corr), 0.0, None))  # 相关距离
     dist = (dist + dist.T) / 2.0
     np.fill_diagonal(dist, 0.0)
-    link = sch.linkage(sch.distance.squareform(dist), method=linkage_method)
+    link = sch.linkage(squareform(dist), method=linkage_method)
     order = _quasi_diag(link)
     w = _hrp_recursive(cov, order)
     out = np.zeros(n)

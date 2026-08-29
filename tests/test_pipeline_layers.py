@@ -155,9 +155,9 @@ def test_optimize_constraints_limits_and_combo():
     panels, returns = _mock_panel()
     f = panels["f1"]
     codes = list(f.columns)
-    # min_weight 微仓过滤（stack 丢弃 NaN，返回 Series 断言无歧义）
+    # min_weight 微仓过滤（掩码引入 NaN，stack 后显式 dropna：pandas 3 的 stack 不再自动丢 NaN）
     w3 = optimize_weights(f, method="factor_weighted", min_weight=0.05)
-    nz = w3[w3 > 0].stack()
+    nz = w3[w3 > 0].stack().dropna()
     assert (nz >= 0.05 - 1e-9).all()
     # 行业中性 + 上限并存
     industry_map = {c: f"ind{i % 3}" for i, c in enumerate(codes)}
