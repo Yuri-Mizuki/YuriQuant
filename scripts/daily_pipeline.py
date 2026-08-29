@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import logging
 import subprocess
+import os
 import sys
 import time
 from datetime import datetime, timedelta
@@ -37,9 +38,10 @@ if str(ROOT) not in sys.path:
 
 log = logging.getLogger("daily_pipeline")
 
-# 真实数据链路必须用系统 Python（自带 AmazingData SDK 与凭证）；
-# TRAE VM 的 Python 3.10 缺 SDK，计划任务固定指向它。
-SYSTEM_PY = Path(r"D:\python\Python312\python.exe")
+# 真实数据链路需要自带 AmazingData SDK 与凭证的解释器：
+# 默认当前解释器；计划任务部署到专用机器时用环境变量 YQ_SYSTEM_PY 指定
+# （原硬编码 D:\python\Python312 换机即失效，2026-08-29 改为可配置）。
+SYSTEM_PY = Path(os.environ.get("YQ_SYSTEM_PY") or sys.executable)
 SCHEDULED_TASK = "YuriQuant DailyPipeline"
 
 DEFAULT_DATASET = "hs300_2022_2025"

@@ -16,9 +16,9 @@ GFlowNet Phase 0 最小闭环：运行入口
 - IC 非零因子占比 > 50%
 - PPO 对照 batch 内相关性显著高于 GFlowNet
 
-用法（系统 python 3.12，含 torch）：
-    cd E:/YuriQuant && D:/python/Python312/python.exe scripts/run_gflownet_phase0.py
-    D:/python/Python312/python.exe scripts/run_gflownet_phase0.py --iters 4000 --ppo-rounds 400
+用法（需安装 torch 的解释器）：
+    cd <仓库根> && python scripts/run_gflownet_phase0.py
+    python scripts/run_gflownet_phase0.py --iters 4000 --ppo-rounds 400
 """
 from __future__ import annotations
 

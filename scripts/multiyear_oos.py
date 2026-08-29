@@ -19,6 +19,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from backtest.metrics import PERIODS_PER_YEAR
 from config import Config
 
 log = logging.getLogger("multiyear")
@@ -26,13 +27,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
                     datefmt="%H:%M:%S")
 
 DATASET = "hs300_2022_2025"
-MODEL_PARAMS = {
-    "gbdt": dict(n_estimators=150, learning_rate=0.03, num_leaves=15,
-                 min_child_samples=50, seed=0),
-    "ridge": {},
-    "ranker": dict(n_estimators=200, learning_rate=0.05, num_leaves=15,
-                   min_child_samples=50, seed=0, labels_bins=2, objective="rank_xendcg"),
-}
+# 模型超参单一真源：scripts/run_model_portfolio.DEFAULT_MODEL_PARAMS
+# （2026-08-29 收编本地 MODEL_PARAMS 逐字副本）
 N_FOLDS = 4
 YEARS = [2023, 2024, 2025]
 FRACS = 0.20
@@ -42,24 +38,16 @@ OUT = Path("reports") / "multiyear"
 def build_features(close, valid_days, dev_days):
     from factor.preprocessing import standardize_zscore
     from research.factor_library import FactorLibrary
-    from research.factor_analysis import calc_ic_series
-    from model.features import build_feature_set
+    from scripts.e2e_common import select_features
 
     feats = FactorLibrary(dataset=DATASET).load_library_features()
     feats = {k: v for k, v in feats.items() if v.index[0].year <= 2022}
     feats = {k: standardize_zscore(v.reindex(close.index)) for k, v in feats.items()}
     # 质量分只用定型期 valid 段（固定，不随目标年变化 -> 无前视）
     fwd_v = close.pct_change(1, fill_method=None).shift(-1).loc[valid_days]
-    quality = {}
-    for nm, p in feats.items():
-        ic = calc_ic_series(p.loc[valid_days], fwd_v).dropna()
-        if len(ic) >= 10:
-            quality[nm] = abs(float(ic.mean()))
-    sel = build_feature_set(
-        {k: v.loc[dev_days] for k, v in feats.items()},
-        min_coverage=0.5, dedup_corr=0.7, max_features=50,
-        quality=pd.Series(quality) if quality else None)
-    return {k: feats[k] for k in sel}
+    sel, _quality = select_features(feats, fwd_v, quality_days=valid_days,
+                                    panel_days=dev_days, max_features=50)
+    return sel
 
 
 def run_year(year, model, horizon, features, close, all_days):
@@ -71,7 +59,8 @@ def run_year(year, model, horizon, features, close, all_days):
     test_days = all_days[(all_days >= pd.Timestamp(f"{year}-01-01")) &
                          (all_days <= pd.Timestamp(f"{year}-12-31"))]
     labels, embargo = build_labels(close, horizon=horizon, mode="rank")
-    params = MODEL_PARAMS.get(model, {})
+    from scripts.run_model_portfolio import DEFAULT_MODEL_PARAMS
+    params = DEFAULT_MODEL_PARAMS.get(model, {})
     pred = rolling_oos(PREDICTORS[model], features, labels, test_days, all_days,
                        n_folds=N_FOLDS, embargo_days=embargo, min_train_days=120, **params)
     # 回测收益口径（engine 约定）：h=1 传未 shift 的 pct_change()（与指数基准
@@ -86,10 +75,10 @@ def run_year(year, model, horizon, features, close, all_days):
 def main():
     from scripts.run_model_portfolio import (
         load_index_benchmark, build_style_covariates_panel, neutralize_panel,
+        default_costs,
     )
     from strategy.examples import TopFracLongOnly
     from backtest.engine import VectorBacktest
-    from backtest.costs import TransactionCosts
     from data.cache_helpers import build_panel
     from research.factor_analysis import calc_ic_series
 
@@ -108,7 +97,7 @@ def main():
              valid_days[0].date(), valid_days[-1].date())
 
     cov = build_style_covariates_panel(panel)
-    costs = TransactionCosts(commission_rate=0.0003, stamp_duty=0.001, slippage_bp=10.0)
+    costs = default_costs()
     strat = TopFracLongOnly(frac=FRACS, weight_mode="equal")
 
     rows = []
@@ -116,7 +105,7 @@ def main():
         test_days = all_days[(all_days >= pd.Timestamp(f"{year}-01-01")) &
                              (all_days <= pd.Timestamp(f"{year}-12-31"))]
         bench = load_index_benchmark(test_days).dropna()
-        bench_annual = (1 + bench).prod() ** (252 / len(bench)) - 1
+        bench_annual = (1 + bench).prod() ** (PERIODS_PER_YEAR / len(bench)) - 1
         log.info("===== 年份 %d 沪深300年化=%.2f%% (交易日 %d) =====",
                  year, bench_annual * 100, len(bench))
         for model in ["gbdt", "ridge", "ranker"]:

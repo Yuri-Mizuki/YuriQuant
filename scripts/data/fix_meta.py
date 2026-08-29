@@ -19,7 +19,9 @@ from pathlib import Path
 
 import pandas as pd
 
-ROOT = Path("e:/data/parquet")
+from config import Config  # noqa: E402  缓存根单一真源
+
+ROOT = Path(str(Config.cache()["root"]))
 
 # 每表的池口径（2026-08-26 主池=纯 HS300；按池分文件后表名带 _hs300 后缀）
 TABLE_POOL = {

@@ -35,7 +35,9 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
                     datefmt="%H:%M:%S")
 log = logging.getLogger("walk_forward")
 
-CACHE_ROOT = Path("e:/data/parquet")
+from config import Config  # noqa: E402  缓存根单一真源（原硬编码 e:/data/parquet）
+
+CACHE_ROOT = Path(str(Config.cache()["root"]))
 OUT_DIR = Path("reports") / "walk_forward"
 
 
@@ -176,7 +178,7 @@ def main():
     parser.add_argument("--gp-max-depth", type=int, default=5)
     parser.add_argument("--gp-tournament", type=int, default=5)
     parser.add_argument("--gp-train-frac", type=float, default=0.8,
-                        help="GP 内部样本外切分（train 段内再留 20% 防进化过拟合）")
+                        help="GP 内部样本外切分（train 段内再留 20%% 防进化过拟合）")
     parser.add_argument("--gp-monthly-weight", type=float, default=0.5, help="月频 IC 融合权重")
     parser.add_argument("--gp-fitness", default="tstat",
                         choices=["tstat", "rankic_mean", "mutual_info", "top_excess"])

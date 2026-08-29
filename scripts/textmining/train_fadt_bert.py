@@ -36,7 +36,8 @@ from scripts.textmining.train_sue_txt import (
     _auc_ovr, _sue0_from_model, make_labels,
 )
 
-OUT_DIR = Path(r"E:\YuriQuant\reports\textmining")
+ROOT = Path(__file__).resolve().parents[2]
+OUT_DIR = ROOT / "reports" / "textmining"
 log = logging.getLogger("fadt_bert")
 
 # 与词频版同款网格（研报 AI 63 图表29 学习率 [0.025,0.05,0.075,0.1] × depth

@@ -21,8 +21,10 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-sys.path.insert(0, r"E:\YuriQuant")
-OUT_DIR = Path(r"E:\YuriQuant\reports\textmining")
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+OUT_DIR = ROOT / "reports" / "textmining"
 
 
 def load_factor(model: str, pool: str = "hs300") -> pd.DataFrame:

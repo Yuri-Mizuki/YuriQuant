@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import logging
 import sys
 from pathlib import Path
 
@@ -34,9 +33,9 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s",
-                    datefmt="%H:%M:%S")
-log = logging.getLogger("cpcv_eval")
+from scripts.cli_common import add_real_mock_args, setup_logging  # noqa: E402
+
+log = setup_logging("cpcv_eval")
 
 OUT_DIR = Path("reports") / "cpcv_eval"
 
@@ -114,36 +113,28 @@ def _build_mock_data():
 
 def _build_real_data():
     """真实 HS300 数据：复用 ml_algorithm_compare 的数据加载。"""
+    from scripts.e2e_common import compute_classic_features
     from scripts.ml_algorithm_compare import _px_panels, BEGIN
-    from scripts.ml_synthesis_experiment import _classic_features, _eval_row  # noqa: F401
+    from scripts.ml_synthesis_experiment import _eval_row  # noqa: F401
     from model.labels import build_labels, forward_returns
 
     px = _px_panels(BEGIN, None)
-    classic = _classic_features(px)
+    classic = compute_classic_features(px)
     labels, _ = build_labels(px["close"], horizon=1, mode="rank")
     fwd = forward_returns(px["close"], horizon=1)
 
-    # 特征选择：用全段 valid 段 IC 排序选 top 12
+    # 特征选择：用全段 valid 段 IC 排序选 top 12（单一实现 e2e_common.select_features）
     va_days = labels.index[(labels.index > pd.Timestamp("2024-01-01"))
                            & (labels.index <= pd.Timestamp("2024-12-31"))]
-    q = {}
-    for nm, p in classic.items():
-        ic = calc_ic_series(p.loc[va_days], fwd.loc[va_days]).dropna()
-        if len(ic) >= 10:
-            q[nm] = abs(float(ic.mean()))
-    quality = pd.Series(q).sort_values(ascending=False)
-    from model.features import build_feature_set
-    feats = build_feature_set(
-        {k: v for k, v in classic.items()},
-        min_coverage=0.5, dedup_corr=0.7, max_features=12, quality=quality,
-    )
-    feats = {k: classic[k] for k in sorted(feats)}
+    from scripts.e2e_common import select_features
+    feats, _quality = select_features(classic, fwd, quality_days=va_days,
+                                      panel_days=fwd.index, max_features=12)
     return feats, labels, fwd
 
 
 def main():
     parser = argparse.ArgumentParser(description="CPCV 多路径评估")
-    parser.add_argument("--real", action="store_true", help="真实 HS300 数据（默认 mock）")
+    add_real_mock_args(parser, real_help="真实 HS300 数据（默认 mock）")
     parser.add_argument("--n-groups", type=int, default=6, help="CPCV 组数（默认6）")
     parser.add_argument("--k", type=int, default=2, help="每路径测试组数（默认2）")
     parser.add_argument("--embargo-days", type=int, default=5, help="embargo 天数")

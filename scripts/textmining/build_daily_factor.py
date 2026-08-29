@@ -29,13 +29,15 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-sys.path.insert(0, r"E:\YuriQuant")
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 from scripts.textmining.build_sue_txt_samples import _load_daily, _to_naive  # noqa: E402
 from scripts.textmining.evaluate_short_window import (  # noqa: E402
     _load_pred_with_factor, _load_samples_ar,
 )
 
-OUT_DIR = Path(r"E:\YuriQuant\reports\textmining")
+OUT_DIR = ROOT / "reports" / "textmining"
 
 
 def build_daily_panel(task: str, model: str, pool: str,

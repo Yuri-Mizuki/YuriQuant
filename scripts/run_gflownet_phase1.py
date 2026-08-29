@@ -10,9 +10,9 @@ GFlowNet Phase 1：真实 HS300 对齐研报
 
 数据：真实 HS300 后复权日线（2019-01 ~ 2026-07，缓存）；训练 2019-2024 / 测试 2025-2026。
 
-用法（系统 python 3.12，含 torch + AmazingData）：
-    cd E:/YuriQuant
-    D:/python/Python312/python.exe -u scripts/run_gflownet_phase1.py --iters 600 --batch 12
+用法（需安装 torch 的解释器 + AmazingData）：
+    cd <仓库根>
+    python -u scripts/run_gflownet_phase1.py --iters 600 --batch 12
 """
 from __future__ import annotations
 

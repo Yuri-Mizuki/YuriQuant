@@ -153,7 +153,7 @@ def load_real_data(
     # 股本结构直接读本地 parquet（绕开 SDK：get_equity_structure 每次全量下载
     # 写 h5/parquet，2026-08-14 实测 e:\data 间歇性写锁 PermissionError）。
     pre_cfg = cfg.get("preprocessing", {})
-    es_path = (Path(cache_root) if cache_root else Path("e:/data/parquet")) / "equity_structure.parquet"
+    es_path = (Path(cache_root) if cache_root else Path(str(Config.cache()["root"]))) / "equity_structure.parquet"
     if es_path.exists():
         equity_structure = pd.read_parquet(es_path)
     else:

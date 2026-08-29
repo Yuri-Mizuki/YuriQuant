@@ -40,7 +40,8 @@ from sklearn.feature_extraction.text import CountVectorizer
 
 from scripts.textmining.build_sue_txt_samples import _load_daily, _to_naive
 
-OUT_DIR = Path(r"E:\YuriQuant\reports\textmining")
+ROOT = Path(__file__).resolve().parents[2]
+OUT_DIR = ROOT / "reports" / "textmining"
 SAMPLE_PATH = OUT_DIR / "sue_txt_samples.parquet"
 
 # AI 51：保留词性（普通名词/专有名词/动词/副动词/动名词/形容词/副词）

@@ -28,6 +28,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from backtest.metrics import PERIODS_PER_YEAR
 from config import Config
 
 log = logging.getLogger("model_portfolio")
@@ -57,17 +58,17 @@ def _mp_cfg() -> dict:
 
 
 def load_index_benchmark(test_days: pd.DatetimeIndex) -> pd.Series:
+    """指数基准日收益（委托 data.cache_helpers.load_index_returns 单一实现）。
+
+    与 test_days 精确对齐（缺失日 ffill）；无缓存时抛错（正式入口需基准）。
+    """
+    from data.cache_helpers import load_index_returns
     code = str(Config.get()["backtest"]["benchmark"])
-    safe = code.replace(".", "_")
-    root = Path(str(Config.cache()["root"]).replace("//", "/"))
-    kline = pd.read_parquet(root / f"index_daily_{safe}.parquet")
-    if "code" in kline.index.names:
-        close = kline.xs(code, level="code")["close"]
-    else:
-        close = kline["close"]
-    close = close.reindex(test_days).ffill()
-    ret = close.pct_change(fill_method=None)
-    ret.name = code
+    begin = int(test_days[0].strftime("%Y%m%d"))
+    ret = load_index_returns(code, begin=begin, end=None, reindex_to=test_days)
+    if ret is None:
+        raise FileNotFoundError(
+            f"指数 {code} 无缓存：请先运行 update_data 拉取指数日线（mock 模式不支持基准）")
     return ret
 
 
@@ -102,8 +103,6 @@ def build_model_panel(model: str, horizon: int, test_days: pd.DatetimeIndex):
     from scripts.walk_forward_model import rolling_oos
     from factor.preprocessing import standardize_zscore
     from model.labels import build_labels
-    from research.factor_analysis import calc_ic_series
-    from model.features import build_feature_set
     from data.cache_helpers import build_panel
 
     disc = Config.discipline()
@@ -123,16 +122,9 @@ def build_model_panel(model: str, horizon: int, test_days: pd.DatetimeIndex):
 
     labels, embargo = build_labels(close, horizon=horizon, mode="rank")
     fwd_v = close.pct_change(horizon, fill_method=None).shift(-horizon).loc[valid_days]
-    quality = {}
-    for nm, p in feats.items():
-        ic = calc_ic_series(p.loc[valid_days], fwd_v).dropna()
-        if len(ic) >= 10:
-            quality[nm] = abs(float(ic.mean()))
-    feats_sel = build_feature_set(
-        {k: v.loc[dev_days] for k, v in feats.items()},
-        min_coverage=0.5, dedup_corr=0.7, max_features=50,
-        quality=pd.Series(quality) if quality else None)
-    sel = {k: feats[k] for k in feats_sel}
+    from scripts.e2e_common import select_features
+    sel, _quality = select_features(feats, fwd_v, quality_days=valid_days,
+                                    panel_days=dev_days, max_features=50)
 
     params = DEFAULT_MODEL_PARAMS.get(model, {})
     pred = rolling_oos(PREDICTORS[model], sel, labels, test_days, all_days,
@@ -148,17 +140,26 @@ def _metrics(res, bench_daily) -> dict:
     return res.metrics(benchmark_returns=bench_daily)
 
 
+def default_costs(factor_cost: bool = True):
+    """交易成本单一真源：从 config 的 model_portfolio 段构建。
+
+    factor_cost=False 置零（无成本对照）；freq_tune / multiyear_oos 等
+    消费方一律走本函数，禁止再硬编码费率字面量（防 config 改动后漂移）。
+    """
+    from backtest.costs import TransactionCosts
+    if not factor_cost:
+        return TransactionCosts(commission_rate=0.0, stamp_duty=0.0, slippage_bp=0.0)
+    cfg = _mp_cfg()
+    return TransactionCosts(commission_rate=cfg["cost_commission"],
+                            stamp_duty=cfg["cost_stamp"],
+                            slippage_bp=cfg["cost_slippage_bp"])
+
+
 def run_backtest(signal, fwd, bench_daily, frac, horizon, factor_cost: bool):
     from strategy.examples import TopFracLongOnly
     from backtest.engine import VectorBacktest
-    from backtest.costs import TransactionCosts
     cfg = _mp_cfg()
-    if factor_cost:
-        costs = TransactionCosts(commission_rate=cfg["cost_commission"],
-                                 stamp_duty=cfg["cost_stamp"],
-                                 slippage_bp=cfg["cost_slippage_bp"])
-    else:
-        costs = TransactionCosts(commission_rate=0.0, stamp_duty=0.0, slippage_bp=0.0)
+    costs = default_costs(factor_cost)
     strat = TopFracLongOnly(frac=frac, weight_mode="equal")
     bt = VectorBacktest(strategy=strat, rebalance_freq=cfg["rebalance_freq"],
                         initial_capital=1_000_000.0, costs=costs)
@@ -209,7 +210,7 @@ def main():
         close0["close"].index > pd.Timestamp(str(disc["valid_end"]))]
     test_days = test_days[test_days <= pd.Timestamp("2025-12-31")]
     bench_daily = load_index_benchmark(test_days).dropna()
-    bench_annual = (1 + bench_daily).prod() ** (252 / len(bench_daily)) - 1
+    bench_annual = (1 + bench_daily).prod() ** (PERIODS_PER_YEAR / len(bench_daily)) - 1
 
     pred, panel, fwd_all = build_model_panel(cfg["model"], cfg["horizon"], test_days)
     fwd = fwd_all.loc[test_days]

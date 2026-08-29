@@ -15,8 +15,8 @@
 3. **报告**：自包含 HTML（matplotlib 图 base64 内嵌）+ CSV
 
 用法：
-    D:/python/Python312/python.exe scripts/investment_report.py --real --top 50
-    D:/python/Python312/python.exe scripts/investment_report.py --real --top 50 --index 000001.SH
+    python scripts/investment_report.py --real --top 50
+    python scripts/investment_report.py --real --top 50 --index 000001.SH
     python scripts/investment_report.py --mock --top 20 --model ridge   # 测试
 """
 from __future__ import annotations
@@ -37,6 +37,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from backtest.metrics import PERIODS_PER_YEAR  # noqa: E402
 from scripts.e2e_common import (  # noqa: E402
     HORIZON, build_labels, compute_classic_features, drop_stale_factors,
     load_daily_data, load_mock_data, select_features,
@@ -66,41 +67,13 @@ plt.rcParams["axes.unicode_minus"] = False
 # ---------------------------------------------------------------------------
 def load_index_returns(index_code: str, begin: int, end: int,
                        real: bool = False) -> pd.Series | None:
-    """加载指数日收益（优先本地缓存，缓存缺失时真实模式拉取）。
+    """指数日收益（委托 data.cache_helpers.load_index_returns 单一实现）。
 
     Returns:
         Series(index=date, value=日收益)；不可用（mock / 无缓存且非 real）返回 None。
     """
-    from config import Config
-
-    root = Path(Config.cache()["root"])
-    safe = str(index_code).replace(".", "_")
-    p = root / f"index_daily_{safe}.parquet"
-    if p.exists():
-        df = pd.read_parquet(p)
-    elif real:
-        try:
-            from data import get_cache
-            log.info("拉取指数数据 %s ...", index_code)
-            df = get_cache().get_index_daily(index_code, begin, end)
-        except Exception as e:
-            log.warning("指数 %s 拉取失败: %s", index_code, e)
-            return None
-    else:
-        log.warning("指数 %s 无缓存（mock 模式不可拉取），基准降级全池等权", index_code)
-        return None
-
-    close = (df.reset_index()
-             .pivot(index="date", columns="code", values="close").sort_index())
-    close = close.iloc[:, 0]
-    # 多留 10 天窗口再 pct_change，保证 begin 首日有真实收益（而非 NaN 被当 0）
-    close = close[close.index >= pd.Timestamp(str(begin)) - pd.Timedelta(days=10)]
-    close = close[close.index <= pd.Timestamp(str(end))]
-    ret = close.pct_change(fill_method=None)
-    ret = ret[ret.index >= pd.Timestamp(str(begin))]
-    log.info("指数基准 %s: %s ~ %s (%d 日)",
-             index_code, ret.index[0].date(), ret.index[-1].date(), len(ret.dropna()))
-    return ret
+    from data.cache_helpers import load_index_returns as _load
+    return _load(index_code, begin=begin, end=end, real=real)
 
 
 # ---------------------------------------------------------------------------
@@ -245,8 +218,8 @@ def benchmark_stats(daily_ret: pd.Series, bench_ret: pd.Series) -> dict:
     beta = float(np.cov(df["strat"], df["bench"])[0, 1] / df["bench"].var())
     alpha_d = float(df["strat"].mean() - beta * df["bench"].mean())
     excess = df["strat"] - df["bench"]
-    ir = float(excess.mean() / excess.std() * np.sqrt(252)) if excess.std() > 0 else 0.0
-    return {"beta": round(beta, 3), "alpha_annual": round(alpha_d * 252, 4),
+    ir = float(excess.mean() / excess.std() * np.sqrt(PERIODS_PER_YEAR)) if excess.std() > 0 else 0.0
+    return {"beta": round(beta, 3), "alpha_annual": round(alpha_d * PERIODS_PER_YEAR, 4),
             "information_ratio": round(ir, 3),
             "excess_total": round(float((1 + excess).prod() - 1), 4)}
 
@@ -526,7 +499,7 @@ def main() -> None:
     ap.add_argument("--model", default="gbdt", choices=["gbdt", "ridge"])
     ap.add_argument("--train-window", type=int, default=None,
                     help="滚动训练窗口（交易日数）。None=expanding 全历史；"
-                         "500=滚动2年（实测 beta-neutral alpha -8.6%→+5.5%，"
+                         "500=滚动2年（实测 beta-neutral alpha -8.6%%→+5.5%%，"
                          "缓解训练/预测市场状态错配）")
     ap.add_argument("--index", default="000300.SH",
                     help="指数基准（沪深300池→000300.SH；全A池→000001.SH）")

@@ -39,7 +39,8 @@ from scripts.textmining.train_sue_txt import (
     tokenize_title,
 )
 
-OUT_DIR = Path(r"E:\YuriQuant\reports\textmining")
+ROOT = Path(__file__).resolve().parents[2]
+OUT_DIR = ROOT / "reports" / "textmining"
 # AI 57 基准参数
 TITLE_TOP = 200
 SUMMARY_TOP = 1000

@@ -11,17 +11,40 @@ requires-python = ">=3.10"
 license = { text = "Proprietary" }
 authors = [{ name = "mizuki" }]
 
+# 核心运行时依赖（数据层/因子层/回测/报告的最小集）。
+# pandas>=2.2：optimize/risk 与统一口径使用 "ME" 月度偏移（pandas 2.2 引入）。
+# 实测兼容矩阵（2026-08-29，测试套件全绿）：pandas 3.0.5 / numpy 2.5.2 /
+# scipy 1.18.1 / Python 3.14 —— 无需上界。
 dependencies = [
-    "pandas>=2.0",
+    "pandas>=2.2",
     "numpy>=1.24",
     "scipy>=1.10",
     "matplotlib>=3.7",
     "openpyxl>=3.1",
+    "pyarrow>=14.0",
     "pyyaml>=6.0",
     "python-dotenv>=1.0",
+    "requests>=2.28",
 ]
 
 [project.optional-dependencies]
+# 按功能域拆分的可选依赖（缺失时代码优雅降级：importorskip / try-import + 清晰报错）
+ml = [
+    "lightgbm>=4.0",
+    "scikit-learn>=1.3",
+]
+gp = [
+    "deap>=1.4",
+]
+solver = [
+    "cvxpy>=1.5",
+]
+rl = [
+    "torch>=2.0",
+    "gymnasium>=0.29",
+    "stable-baselines3>=2.2",
+    "sb3-contrib>=2.2",
+]
 dev = [
     "pytest>=8.0",
     "ruff>=0.6",
@@ -32,7 +55,12 @@ dev = [
 # 见 AmazingData开发手册.pdf 3.3），不通过标准依赖管理安装，见 README。
 
 [tool.hatch.build.targets.wheel]
-packages = ["backtest", "config", "data", "factor", "research", "scripts", "strategy"]
+# 全部核心包（2026-08-29 补齐 model/optimize/monitoring/stats，
+# 此前 wheel 会静默缺失这四个包）
+packages = [
+    "backtest", "config", "data", "factor", "model", "monitoring",
+    "optimize", "research", "scripts", "stats", "strategy",
+]
 
 [tool.ruff]
 target-version = "py310"

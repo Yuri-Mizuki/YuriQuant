@@ -14,8 +14,8 @@
 
 用法:
     python scripts/e2e_stock_picks.py --mock --top 30
-    D:/python/Python312/python.exe scripts/e2e_stock_picks.py --real --top 30
-    D:/python/Python312/python.exe scripts/e2e_stock_picks.py --real --top 50 --portfolio risk_parity
+    python scripts/e2e_stock_picks.py --real --top 30
+    python scripts/e2e_stock_picks.py --real --top 50 --portfolio risk_parity
 """
 from __future__ import annotations
 

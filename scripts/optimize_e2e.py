@@ -16,7 +16,7 @@
 取残差作为组合信号（factor.preprocessing.neutralize，华泰五因子口径）。
 
 用法：
-    D:/python/Python312/python.exe scripts/optimize_e2e.py --real --top 50
+    python scripts/optimize_e2e.py --real --top 50
 """
 from __future__ import annotations
 

@@ -23,7 +23,9 @@ import pandas as pd
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S")
 log = logging.getLogger("fetch_status")
 
-CACHE_PATH = Path("e:/data/parquet/history_stock_status.parquet")
+from config import Config  # 缓存根单一真源（原硬编码 e:/data/parquet）
+
+CACHE_PATH = Path(str(Config.cache()["root"])) / "history_stock_status.parquet"
 
 
 def _covered_codes(df: pd.DataFrame, begin: int, end: int) -> set[str]:

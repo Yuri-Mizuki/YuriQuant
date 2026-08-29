@@ -60,8 +60,8 @@ N_FOLDS = 8
 OUT_DIR = Path("reports/ml_algorithm_compare")
 
 # 复用 ml_synthesis_experiment 的口径（纯函数：经典因子 / 评价 / valid 调参）
+from scripts.e2e_common import compute_classic_features
 from scripts.ml_synthesis_experiment import (  # noqa: E402
-    _classic_features,
     _eval_row,
     _fit_predict_valid,
     _monthly_ic,
@@ -91,7 +91,6 @@ def _px_panels(begin: int, end: int | None) -> dict[str, pd.DataFrame]:
 # 主流程
 # ---------------------------------------------------------------------------
 def main(skip_tune: bool = False, do_register: bool = True) -> None:
-    from model.features import build_feature_set
     from model.labels import build_labels, forward_returns
     from model.predictor import LGBMPredictor, RidgePredictor, TabICLPredictor
     from scripts.walk_forward_model import rolling_oos
@@ -105,7 +104,7 @@ def main(skip_tune: bool = False, do_register: bool = True) -> None:
     log.info("PIT 量价面板: %d 日（%s ~ %s）× %d 股",
              len(all_days), all_days[0].date(), all_days[-1].date(),
              len(px["close"].columns))
-    classic = _classic_features(px)
+    classic = compute_classic_features(px)
     feats_all = classic
 
     # ---------------- 2. 三段切分 ----------------
@@ -122,22 +121,15 @@ def main(skip_tune: bool = False, do_register: bool = True) -> None:
     labels, _ = build_labels(px["close"], horizon=HORIZON, mode="rank")
     fwd = forward_returns(px["close"], horizon=HORIZON)
 
-    # ---------------- 4. 特征漏斗（dev 段） ----------------
-    from research.factor_analysis import calc_ic_series
-    q = {}
-    for nm, p in feats_all.items():
-        ic = calc_ic_series(p.loc[va_days], fwd.loc[va_days]).dropna()
-        if len(ic) >= 10:
-            q[nm] = abs(float(ic.mean()))
-    quality = pd.Series(q).sort_values(ascending=False)
-    log.info("valid 段特征质量分（|IC|）: %s", {k: round(v, 4) for k, v in quality.items()})
-
-    feats_dev = build_feature_set(
-        {k: v.loc[dev_days] for k, v in feats_all.items()},
-        min_coverage=0.5, dedup_corr=0.7, max_features=12, quality=quality)
-    feats = {k: feats_all[k] for k in sorted(feats_dev)}
-    log.info("特征漏斗: %d -> %d", len(feats_all), len(feats))
-    pd.Series({k: quality.get(k, np.nan) for k in feats}, name="valid_abs_ic") \
+    # ---------------- 4. 特征漏斗（dev 段；单一实现 e2e_common.select_features） ----------------
+    from scripts.e2e_common import select_features
+    feats, quality = select_features(feats_all, fwd, quality_days=va_days,
+                                     panel_days=dev_days, max_features=12)
+    if quality is not None:
+        log.info("valid 段特征质量分（|IC|）: %s",
+                 {k: round(v, 4) for k, v in quality.items()})
+    pd.Series({k: (quality.get(k, np.nan) if quality is not None else np.nan)
+               for k in feats}, name="valid_abs_ic") \
         .to_csv(OUT_DIR / "selected_features.csv")
 
     # ---------------- 5. 调参（train → valid） ----------------

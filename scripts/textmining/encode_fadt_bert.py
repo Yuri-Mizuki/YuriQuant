@@ -33,9 +33,11 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-sys.path.insert(0, r"E:\YuriQuant")
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-OUT_DIR = Path(r"E:\YuriQuant\reports\textmining")
+OUT_DIR = ROOT / "reports" / "textmining"
 # 本地模型目录（hf-mirror 下载，沙箱无法用 huggingface_hub 缓存管理）；
 # 路径真源在 config/settings.yaml 的 textmining.bert_model_dir
 def _bert_model_dir() -> str:

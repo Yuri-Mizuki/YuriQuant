@@ -11,7 +11,7 @@
 4. 相关性：模型预测与 top 单因子的截面相关（模型是否在学这些因子）
 
 用法：
-    D:/python/Python312/python.exe scripts/diagnose_factor_vs_model.py --real
+    python scripts/diagnose_factor_vs_model.py --real
 """
 from __future__ import annotations
 

@@ -47,6 +47,10 @@ logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S")
 log = logging.getLogger("ml_synthesis_experiment")
 
+# 经典量价 12 因子：单一实现在 e2e_common.compute_classic_features
+# （2026-08-29 收敛逐字副本；保留本别名兼容历史 import 与内部调用）
+from scripts.e2e_common import compute_classic_features as _classic_features  # noqa: E402
+
 DATASET = "hs300_2022_2025"
 HORIZON = 5
 EMBARGO = HORIZON
@@ -86,31 +90,6 @@ def _px_panels() -> dict[str, pd.DataFrame]:
              .reindex(index=dates, columns=codes))
         out[col] = w
     return out
-
-
-def _classic_features(px: dict[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
-    """经典量价因子（动量/反转/波动/流动性/换手结构），截面标准化。"""
-    from factor.preprocessing import standardize_zscore
-
-    close, open_ = px["close"], px["open"]
-    amount = px["amount"]
-    ret1 = close.pct_change(fill_method=None)
-    feats = {
-        "mom5": close.pct_change(5, fill_method=None),
-        "mom10": close.pct_change(10, fill_method=None),
-        "mom20": close.pct_change(20, fill_method=None),
-        "mom60": close.pct_change(60, fill_method=None),
-        "rev1": -ret1,
-        "rev5": -close.pct_change(5, fill_method=None),
-        "vol20": ret1.rolling(20).std(),
-        "vol60": ret1.rolling(60).std(),
-        "amihud20": (ret1.abs() / (amount + 1e-12)).rolling(20).mean(),
-        "turn_trend": (px["volume"].rolling(5).mean()
-                       / (px["volume"].rolling(60).mean() + 1e-12)),
-        "gap": open_ / close.shift(1) - 1,
-        "range20": (px["high"] - px["low"]).rolling(20).mean() / (close + 1e-12),
-    }
-    return {k: standardize_zscore(v) for k, v in feats.items()}
 
 
 # ---------------------------------------------------------------------------
@@ -214,7 +193,6 @@ def holdout_predict(predictor, feats, labels, tr_va_days, te_days, embargo: int)
 # 主流程
 # ---------------------------------------------------------------------------
 def _main_impl(H: int, out_dir: Path, skip_tune: bool, do_register: bool):
-    from model.features import build_feature_set
     from model.labels import build_labels, forward_returns
     from model.predictor import RidgePredictor
     from research.factor_library import FactorLibrary
@@ -253,25 +231,16 @@ def _main_impl(H: int, out_dir: Path, skip_tune: bool, do_register: bool):
     labels, _ = build_labels(px["close"], horizon=H, mode="rank")
     fwd = forward_returns(px["close"], horizon=H)
 
-    # ---------------- 4. 特征选择（只在 dev 段） ----------------
-    from research.factor_analysis import calc_ic_series
-    q = {}
-    for nm, p in feats_all.items():
-        ic = calc_ic_series(p.loc[va_days], fwd.loc[va_days]).dropna()
-        if len(ic) >= 10:
-            q[nm] = abs(float(ic.mean()))
-    quality = pd.Series(q).sort_values(ascending=False)
-    log.info("valid 段质量分 Top10: %s",
-             {k: round(v, 4) for k, v in quality.head(10).items()})
-
-    feats_dev = build_feature_set(
-        {k: v.loc[dev_days] for k, v in feats_all.items()},
-        min_coverage=0.5, dedup_corr=0.7, max_features=MAX_FEATURES, quality=quality)
-    selected = sorted(feats_dev)
-    feats = {k: feats_all[k] for k in selected}
-    log.info("特征漏斗: %d -> %d（覆盖率>=0.5, |corr|<0.7 去冗余, 上限 %d）",
-             len(feats_all), len(selected), MAX_FEATURES)
-    pd.Series({k: quality.get(k, np.nan) for k in selected}, name="valid_abs_ic") \
+    # ---------------- 4. 特征选择（只在 dev 段；单一实现 e2e_common.select_features） ----------------
+    from scripts.e2e_common import select_features
+    feats, quality = select_features(feats_all, fwd, quality_days=va_days,
+                                     panel_days=dev_days, max_features=MAX_FEATURES)
+    selected = sorted(feats)
+    if quality is not None:
+        log.info("valid 段质量分 Top10: %s",
+                 {k: round(v, 4) for k, v in quality.head(10).items()})
+    pd.Series({k: (quality.get(k, np.nan) if quality is not None else np.nan)
+               for k in selected}, name="valid_abs_ic") \
         .to_csv(out_dir / "selected_features.csv")
 
     # ---------------- 5. 调参（train → valid） ----------------

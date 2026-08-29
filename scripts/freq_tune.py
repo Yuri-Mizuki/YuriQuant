@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from backtest.metrics import PERIODS_PER_YEAR
 from config import Config
 
 log = logging.getLogger("freq_tune")
@@ -30,11 +31,10 @@ OUT = Path("reports") / "freq_tune"
 def main():
     from scripts.run_model_portfolio import (
         load_index_benchmark, build_model_panel, build_style_covariates_panel,
-        neutralize_panel, DEFAULT_MODEL_PARAMS,
+        neutralize_panel, DEFAULT_MODEL_PARAMS, default_costs,
     )
     from strategy.examples import TopFracLongOnly
     from backtest.engine import VectorBacktest
-    from backtest.costs import TransactionCosts
     from data.cache_helpers import build_panel
 
     t0 = time.time()
@@ -44,9 +44,9 @@ def main():
         close0["close"].index > pd.Timestamp(str(disc["valid_end"]))]
     test_days = test_days[test_days <= pd.Timestamp("2025-12-31")]
     bench_daily = load_index_benchmark(test_days).dropna()
-    bench_annual = (1 + bench_daily).prod() ** (252 / len(bench_daily)) - 1
+    bench_annual = (1 + bench_daily).prod() ** (PERIODS_PER_YEAR / len(bench_daily)) - 1
 
-    costs = TransactionCosts(commission_rate=0.0003, stamp_duty=0.001, slippage_bp=10.0)
+    costs = default_costs()
     strat_fixed = TopFracLongOnly(frac=0.20, weight_mode="equal")
 
     rows = []

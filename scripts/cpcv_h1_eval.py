@@ -39,7 +39,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import logging
 import sys
 from pathlib import Path
 
@@ -50,9 +49,9 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s",
-                    datefmt="%H:%M:%S")
-log = logging.getLogger("cpcv_h1_eval")
+from scripts.cli_common import add_real_mock_args, setup_logging  # noqa: E402
+
+log = setup_logging("cpcv_h1_eval")
 
 OUT_DIR = Path("reports") / "cpcv_h1"
 
@@ -130,10 +129,11 @@ def _build_mock_data(horizon: int = 1):
 
 def _build_real_data(horizon: int = 1):
     """真实 HS300 数据：复用 ml_synthesis_experiment 的数据加载 + 固定 10 特征。"""
-    from scripts.ml_synthesis_experiment import _px_panels, _classic_features, DATASET
+    from scripts.e2e_common import compute_classic_features
+    from scripts.ml_synthesis_experiment import _px_panels, DATASET
 
     px = _px_panels()
-    classic = _classic_features(px)
+    classic = compute_classic_features(px)
 
     # GP 因子从因子库加载
     from research.factor_library import FactorLibrary
@@ -228,8 +228,7 @@ def _path_significance(path_ics: np.ndarray) -> dict:
 # ===========================================================================
 def main():
     parser = argparse.ArgumentParser(description="h=1 模型 CPCV 无偏评估")
-    parser.add_argument("--mock", action="store_true", help="用 mock 数据")
-    parser.add_argument("--real", action="store_true", help="真实 HS300 数据")
+    add_real_mock_args(parser, real_help="真实 HS300 数据", mock_help="用 mock 数据")
     parser.add_argument("--horizons", type=str, default="1,5,20",
                         help="对比的 horizon 列表，逗号分隔（默认 1,5,20）")
     parser.add_argument("--n-groups", type=int, default=6, help="CPCV 组数")

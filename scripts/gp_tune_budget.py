@@ -53,7 +53,7 @@ def load_pit_core_panels(begin: int = 20220101, end: int = 20251231):
     cache = DataCache(OfflineDataSource())
     uni = Universe(cache)
     codes = _pit_universe_codes(uni, "000300.SH", begin, end)
-    df = pd.read_parquet("E:/data/parquet/daily_hs300.parquet").reset_index()
+    df = pd.read_parquet(Path(str(cache.root)) / "daily_hs300.parquet").reset_index()
     df["date"] = df["date"].dt.normalize()
     df = df[(df["date"] >= pd.Timestamp(str(begin))) & (df["date"] <= pd.Timestamp(str(end)))]
     df = df[df["code"].isin(codes)]
@@ -63,7 +63,7 @@ def load_pit_core_panels(begin: int = 20220101, end: int = 20251231):
         return df.pivot(index="date", columns="code", values=col).sort_index()
 
     panels = {k: piv(k) for k in ("close", "open", "high", "low", "volume", "amount")}
-    bf = pd.read_parquet("E:/data/parquet/backward_factor.parquet")
+    bf = pd.read_parquet(Path(str(cache.root)) / "backward_factor.parquet")
     bf = bf.reindex(index=panels["close"].index).reindex(columns=panels["close"].columns).ffill()
     for k in ("close", "open", "high", "low"):
         panels[k] = panels[k] * bf

@@ -33,7 +33,8 @@ import pandas as pd
 
 from scripts.textmining.train_sue_txt import SUEVectorizer  # noqa: E402
 
-OUT_DIR = Path(r"E:\YuriQuant\reports\textmining")
+ROOT = Path(__file__).resolve().parents[2]
+OUT_DIR = ROOT / "reports" / "textmining"
 log = logging.getLogger("word_importance")
 
 # 任务参数：sue(AI51: 词域100/500, 训练窗24月) vs fadt(AI57: 200/1000, 12月)

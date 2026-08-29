@@ -27,7 +27,6 @@
 from __future__ import annotations
 
 import argparse
-import logging
 import sys
 import time
 from pathlib import Path
@@ -40,10 +39,9 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from factor.cv import forward_roll_folds
+from scripts.cli_common import add_real_mock_args, setup_logging  # noqa: E402
 
-logging.basicConfig(level=logging.INFO,
-                    format="%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S")
-log = logging.getLogger("walk_forward_model")
+log = setup_logging("walk_forward_model")
 
 
 # ---------------------------------------------------------------------------
@@ -193,8 +191,7 @@ def _eval_row(tag: str, panel: pd.DataFrame, target: pd.DataFrame) -> dict:
 # ---------------------------------------------------------------------------
 def main():
     ap = argparse.ArgumentParser(description="模型层滚动训练（Predictor walk-forward）")
-    ap.add_argument("--mock", action="store_true", help="mock 数据（默认）")
-    ap.add_argument("--real", action="store_true", help="真实数据（SDK/缓存）")
+    add_real_mock_args(ap, real_help="真实数据（SDK/缓存）", mock_help="mock 数据（默认）")
     ap.add_argument("--begin", type=int, default=None,
                     help="真实模式起始日（默认 discipline.begin）")
     ap.add_argument("--end", type=int, default=None, help="真实模式结束日（默认至今）")
@@ -222,7 +219,6 @@ def main():
                     help="模型账本目录（默认：real→reports/models，mock→reports/models_mock）")
     args = ap.parse_args()
 
-    from model.features import build_feature_set
     from model.labels import build_labels, forward_returns
     from model.predictor import PREDICTORS
     from model.registry import ModelRegistry
@@ -277,30 +273,15 @@ def main():
     log.info("标签: horizon=%dd mode=%s embargo=%dd（隔离带=标签前视长度）",
              args.horizon, args.mode, embargo)
 
-    # ---------------- 3. 定型期特征选择（test 不参与） ----------------
-    from research.factor_analysis import calc_ic_series
-    quality = None
-    try:
-        q = {}
-        for nm, p in feats.items():
-            ic = calc_ic_series(p.loc[valid_days], fwd.loc[valid_days]).dropna()
-            if len(ic) >= 10:
-                q[nm] = abs(float(ic.mean()))
-        if q:
-            quality = pd.Series(q)
-            log.info("valid 段质量分（|IC|）: %s",
-                     {k: round(v, 4) for k, v in quality.sort_values(ascending=False).items()})
-    except Exception as exc:
-        log.warning("质量分计算失败（按独立性去冗余）: %s", exc)
-
-    feats_dev = build_feature_set(
-        {k: v.loc[dev_days] for k, v in feats.items()},
-        min_coverage=args.min_coverage, dedup_corr=args.dedup_corr,
-        max_features=args.max_features, quality=quality,
-    )
-    selected = sorted(feats_dev.keys())
-    feats_sel = {k: feats[k] for k in selected}    # 全时段面板（test 段只做预测）
-    log.info("定型期特征选择: %d -> %d -> %s", len(feats), len(feats_dev), selected)
+    # ---------------- 3. 定型期特征选择（test 不参与；单一实现） ----------------
+    from scripts.e2e_common import select_features
+    n_all = len(feats)
+    feats_sel, quality = select_features(
+        feats, fwd, quality_days=valid_days, panel_days=dev_days,
+        max_features=args.max_features, min_coverage=args.min_coverage,
+        dedup_corr=args.dedup_corr)
+    selected = sorted(feats_sel)
+    log.info("定型期特征选择: %d -> %d -> %s", n_all, len(feats_sel), selected)
 
     # ---------------- 4. 滚动训练 + 双基线 ----------------
     rows = []

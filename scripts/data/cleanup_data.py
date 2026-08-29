@@ -22,7 +22,9 @@ from pathlib import Path
 
 import pandas as pd
 
-ROOT = Path("e:/data/parquet")
+from config import Config  # noqa: E402  缓存根单一真源
+
+ROOT = Path(str(Config.cache()["root"]))
 
 
 def _is_index_code(code: str) -> bool:

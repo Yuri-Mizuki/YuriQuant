@@ -24,7 +24,9 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
                     datefmt="%H:%M:%S")
 log = logging.getLogger("backtest_two_periods")
 
-CACHE_ROOT = Path("e:/data/parquet")
+from config import Config  # noqa: E402  缓存根单一真源（原硬编码 e:/data/parquet）
+
+CACHE_ROOT = Path(str(Config.cache()["root"]))
 COMPONENTS = [
     "close30_ret", "intraday_vwap_dev", "intraday_ret", "overnight_intraday_diff",
     "intraday_rsj", "sar_dev", "intraday_rv", "intraday_range", "intraday_vol_ratio",

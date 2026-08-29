@@ -31,13 +31,15 @@ from data.cache import DataCache
 from data.datasource import create_datasource
 from data.textmining.fetch import TextMiningCache
 
+ROOT = Path(__file__).resolve().parents[2]
+
 BENCH = "000905.SH"  # 中证500
 
 
 def _load_events(cache: TextMiningCache, begin: int, end: int,
                  pool: str = "hs300") -> pd.DataFrame:
     """业绩预告事件（巨潮 category=业绩预告）。"""
-    with open(Path(rf"E:\YuriQuant\reports\{pool}_pit_union_2019.json"),
+    with open(ROOT / f"reports/{pool}_pit_union_2019.json",
               encoding="utf-8") as f:
         codes = json.load(f)
     df = cache.get_cninfo_announcements(
@@ -146,12 +148,12 @@ def _abnormal_return(events: pd.DataFrame, daily: pd.DataFrame) -> pd.DataFrame:
 
 def build_samples(begin: int = 20190101, end: int = 20261231,
                   pool: str = "hs300",
-                  out_dir: str = r"E:\YuriQuant\reports\textmining") -> pd.DataFrame:
+                  out_dir: str = str(ROOT / "reports" / "textmining")) -> pd.DataFrame:
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
 
     cache = TextMiningCache()
-    with open(Path(rf"E:\YuriQuant\reports\{pool}_pit_union_2019.json"),
+    with open(ROOT / f"reports/{pool}_pit_union_2019.json",
               encoding="utf-8") as f:
         codes = json.load(f)
 

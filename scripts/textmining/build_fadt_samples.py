@@ -40,7 +40,8 @@ from scripts.textmining.build_sue_txt_samples import (
     _to_naive,
 )
 
-OUT_DIR = Path(r"E:\YuriQuant\reports\textmining")
+ROOT = Path(__file__).resolve().parents[2]
+OUT_DIR = ROOT / "reports" / "textmining"
 BENCH = "000905.SH"  # 中证500
 
 # AI 57：调整事件文本线索（近似"本次 vs 上次预测变化"）
@@ -55,7 +56,7 @@ def load_adjustment_reports(pool: str, begin: int, end: int) -> pd.DataFrame:
 
     近似研报"剔除首盖 + 预测不变"：取明确含上调/下调字样的研报，剔除首盖。
     """
-    with open(Path(rf"E:\YuriQuant\reports\{pool}_pit_union_2019.json"),
+    with open(ROOT / f"reports/{pool}_pit_union_2019.json",
               encoding="utf-8") as f:
         codes = json.load(f)
     cache = TextMiningCache()
@@ -85,7 +86,7 @@ def load_adjustment_reports(pool: str, begin: int, end: int) -> pd.DataFrame:
 
 def build_samples(pool: str = "zz1000", begin: int = 20190101,
                   end: int = 20261231,
-                  out_dir: str = r"E:\YuriQuant\reports\textmining") -> pd.DataFrame:
+                  out_dir: str = str(ROOT / "reports" / "textmining")) -> pd.DataFrame:
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
 
