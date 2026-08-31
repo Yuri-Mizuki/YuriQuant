@@ -68,7 +68,7 @@ import pandas as pd
 from data.cache_helpers import load_daily, load_financial_tables
 from data.financials import build_pit_panel
 from research.factor_library import FactorLibrary
-from scripts._build_common import (
+from scripts.cli_common import (
     add_build_args, make_data_context, print_no_save, record_experiment_safe,
     register_panels, returns_from_daily,
 )

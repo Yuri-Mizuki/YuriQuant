@@ -31,7 +31,7 @@ def _mock_returns_like(panel, score=None, alpha=0.02):
 
 
 def test_qcut_rebal_shape_and_monotonic():
-    from scripts.factor_explorer_report import qcut_rebal
+    from research.factor_report import qcut_rebal
     f = _mock_factor_panel()
     r = _mock_returns_like(f)
     for n, freq in [(5, "M"), (10, "W")]:
@@ -47,7 +47,7 @@ def test_qcut_rebal_shape_and_monotonic():
 
 def test_qcut_rebal_monotonic_direction():
     """正预测力 mock 下 Qn 应 >= Q1（分层单调方向正确）。"""
-    from scripts.factor_explorer_report import qcut_rebal
+    from research.factor_report import qcut_rebal
     f = _mock_factor_panel()
     r = _mock_returns_like(f, score=f, alpha=0.02)  # 收益与因子正相关
     nav = qcut_rebal(f, r, 5, "M", monthly_points=True)
@@ -57,10 +57,10 @@ def test_qcut_rebal_monotonic_direction():
 
 
 def test_layer_stats_and_avg():
-    from scripts.factor_explorer_report import layer_stats_from_nav, layer_avg_ret
+    from research.factor_report import layer_stats_from_nav, layer_avg_ret
     f = _mock_factor_panel()
     r = _mock_returns_like(f)
-    from scripts.factor_explorer_report import qcut_rebal
+    from research.factor_report import qcut_rebal
     nav = qcut_rebal(f, r, 5, "M", monthly_points=True)
     stats = layer_stats_from_nav(nav)
     avg = layer_avg_ret(nav)
@@ -70,7 +70,7 @@ def test_layer_stats_and_avg():
 
 
 def test_ic_decay_and_heatmap():
-    from scripts.factor_explorer_report import ic_decay_series, ic_heatmap, monthly_series
+    from research.factor_report import ic_decay_series, ic_heatmap, monthly_series
     rng = np.random.RandomState(0)
     ic = pd.Series(rng.normal(0, 0.05, 300),
                    index=pd.bdate_range("2023-01-02", periods=300))

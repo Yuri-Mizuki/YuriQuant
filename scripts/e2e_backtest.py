@@ -27,18 +27,23 @@ import sys
 import time
 from pathlib import Path
 
-import pandas as pd
-
 import numpy as np
+import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from backtest.metrics import PERIODS_PER_YEAR  # noqa: E402
+from data.mock import load_mock_data  # noqa: E402
+from factor.classic import compute_classic_features  # noqa: E402
+from model.labels import build_label_pair  # noqa: E402
 from scripts.e2e_common import (  # noqa: E402
-    HORIZON, GBDT_PARAMS, build_labels, compute_classic_features,
-    drop_stale_factors, load_daily_data, load_mock_data, select_features,
+    GBDT_PARAMS,
+    HORIZON,
+    drop_stale_factors,
+    load_daily_data,
+    select_features,
 )
 
 logging.basicConfig(level=logging.INFO,
@@ -120,8 +125,8 @@ def _enforce_caps(w: pd.Series, cap: float) -> pd.Series:
 
 def _run_backtest(target_df, pred_reb, returns, full_dates, label):
     """预计算目标权重 -> VectorBacktest 记账（含成本）。"""
-    from optimize.multi_period import PrecomputedWeightsStrategy
     from backtest.engine import VectorBacktest
+    from optimize.multi_period import PrecomputedWeightsStrategy
 
     target_df = target_df.reindex(columns=returns.columns)
     pred_panel = pred_reb.reindex(full_dates)
@@ -222,7 +227,7 @@ def run(args) -> dict:
     all_feats = drop_stale_factors(all_feats, close.index[-1])
 
     returns = close.pct_change(fill_method=None)
-    labels, fwd = build_labels(close, horizon=HORIZON)
+    labels, fwd = build_label_pair(close, horizon=HORIZON)
 
     # ---- 2. 特征选择（只用回测前窗口，防前视）----
     all_days = close.index

@@ -49,7 +49,7 @@ def main():
     from config import Config
     from data.cache_helpers import build_panel, build_tradable_mask
     from scripts.gtja_repro_eval import TOP_FRAC, FEE_RT, SIX, ls_metrics, load_backward_once
-    from scripts.mine_factors import _build_vwap_exec_returns
+    from factor.gtja import build_vwap_exec_returns
     from factor.formula import formula_builder
     from factor.genetic_mining import _ls_net_stats
 
@@ -60,7 +60,7 @@ def main():
     cfg["universe"]["default"] = "all_a"
     bwd = load_backward_once()
     panel, _ = build_panel(cfg, 20220101, 20251231, offline=True)
-    rets = _build_vwap_exec_returns(panel, bwd=bwd)
+    rets = build_vwap_exec_returns(panel, bwd=bwd)
     if "vwap" not in panel and "amount" in panel:
         panel["vwap"] = panel["amount"] / panel["volume"]
     bwd_al = (bwd.reindex(index=panel["close"].index, columns=panel["close"].columns)

@@ -16,132 +16,23 @@ from __future__ import annotations
 
 import argparse
 import logging
+import sys
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S")
 log = logging.getLogger("mine_factors")
 
 
 # ---------------------------------------------------------------------------
-# Mock 面板（注入动量信号 + 一个合成财务字段，验证挖掘流程）
+# 国君研报口径：应用基准预设（次日 VWAP 执行链收益率见 factor.gtja）
 # ---------------------------------------------------------------------------
-def gen_mock_panel_with_signal(n_days: int = 400, n_codes: int = 50, seed: int = 0) -> dict[str, pd.DataFrame]:
-    """AR(1) 收益注入动量信号：rets[t] = phi*rets[t-1] + noise，使 ts_mean/momentum 类因子有正 IC。"""
-    rng = np.random.default_rng(seed)
-    idx = pd.date_range("2022-01-01", periods=n_days, freq="B")
-    codes = [f"{600000 + i:06d}.SH" for i in range(n_codes)]
-
-    phi = 0.25
-    rets = np.zeros((n_days, n_codes))
-    for t in range(1, n_days):
-        rets[t] = phi * rets[t - 1] + rng.normal(0, 0.02, n_codes)
-
-    base = 10.0 + rng.uniform(0, 50, n_codes)
-    close = pd.DataFrame(base * np.exp(np.cumsum(rets, axis=0)), idx, codes)
-    open_ = close * (1 + rng.normal(0, 0.005, (n_days, n_codes)))
-    high = np.maximum(close.values, open_.values) * (1 + np.abs(rng.normal(0, 0.005, (n_days, n_codes))))
-    low = np.minimum(close.values, open_.values) * (1 - np.abs(rng.normal(0, 0.005, (n_days, n_codes))))
-    volume = pd.DataFrame(rng.lognormal(12, 0.5, (n_days, n_codes)), idx, codes)
-    amount = volume * close
-
-    # 合成"财务字段"：慢漂移的 OPERA_REV，PIT 化（每 60 日更新一次，中间 ffill）
-    rev_raw = pd.DataFrame(100 * np.exp(np.cumsum(rng.normal(0, 0.01, (n_days, n_codes)), axis=0)), idx, codes)
-    rev = rev_raw.copy()
-    rev.loc[np.arange(n_days) % 60 != 0] = np.nan
-    rev = rev.ffill()
-
-    return {
-        "close": close, "open": pd.DataFrame(open_, idx, codes),
-        "high": pd.DataFrame(high, idx, codes), "low": pd.DataFrame(low, idx, codes),
-        "volume": volume, "amount": amount, "OPERA_REV": rev,
-    }
-
-
-# ---------------------------------------------------------------------------
-# 真实面板（从缓存 + 财务 PIT 构建）
-# ---------------------------------------------------------------------------
-def build_real_panel(cfg: dict, begin: int, end: int,
-                     offline: bool = False) -> tuple[dict[str, pd.DataFrame], pd.DataFrame]:
-    """统一真实面板构建。
-
-    2026-08-17 重构：收敛到 ``data.cache_helpers.build_panel``（与 run_gflownet_phase1
-    的 build_real_panel 共享同一实现），消除两套 PIT 并集池 / 复权 / 财务 PIT 并行逻辑。
-    返回 ``(panel, returns_panel)``，口径不变。
-
-    ``offline=True``：只用本地 parquet 缓存构建（不触发任何 SDK 增量刷新）。
-    财务/股东表的全市场 SDK 查询在 5400+ 只代码下会挂死（2026-08-27 两次实证），
-    缓存已就绪的复现场景应一律走离线。
-    """
-    from data.cache_helpers import build_panel as _build_panel
-
-    log.info("构建真实面板 %s~%s (offline=%s) ...", begin, end, offline)
-    return _build_panel(cfg, begin, end, offline=offline)
-
-
-# ---------------------------------------------------------------------------
-# 国君研报口径：次日 VWAP 执行链收益率
-# ---------------------------------------------------------------------------
-def _build_vwap_exec_returns(panel: dict[str, pd.DataFrame],
-                             bwd: pd.DataFrame | None = None) -> pd.DataFrame:
-    """次日 VWAP 执行链收益率（国君研报表1「调仓价格=次日VWAP」口径）。
-
-    信号 T 日收盘后计算 → T+1 日 VWAP 成交建仓 → 持有至 T+2 日 VWAP 换仓，
-    故 T 日因子配对的持仓收益 = vwap_adj[T+2] / vwap_adj[T+1] - 1。
-
-    VWAP = amount / volume 为未复权每股均价，乘以后复权因子
-    （``load_backward_factor``）与 returns/因子库口径对齐，消除除权跳空；
-    ``bwd`` 可传入预取的复权因子（多次构建复用同一份，保证口径一致）。
-    复权因子不可得时（离线/mock）退化为不调整的 VWAP 链——mock 无分红，
-    真实数据 SDK 可用时会自动带复权。
-    """
-    close = panel["close"]
-    vwap_raw = panel["amount"] / panel["volume"]
-    if bwd is None:
-        try:
-            from data.cache import DataCache
-            from data.cache_helpers import load_backward_factor
-            from data.datasource import create_datasource
-            bwd = load_backward_factor(DataCache(create_datasource()), list(close.columns))
-        except Exception as exc:
-            bwd = None
-            log.warning("后复权 VWAP 构建失败，退化用未复权 VWAP 链（mock 场景正常）: %s", exc)
-    if bwd is not None and len(bwd):
-        bwd_al = bwd.reindex(index=close.index, columns=close.columns).ffill()
-        vwap_adj = vwap_raw * bwd_al
-        log.info("VWAP 执行链收益率：已按后复权因子对齐")
-    else:
-        vwap_adj = vwap_raw
-    rets = vwap_adj.shift(-2) / vwap_adj.shift(-1) - 1.0
-    return rets.replace([np.inf, -np.inf], np.nan)
-
-
-def _build_gtja_tradable(panel_full: dict[str, pd.DataFrame]) -> pd.DataFrame | None:
-    """gtja 真实模式构建可交易性掩码（T+1 停牌/封板 + 当日 ST/停牌 剔除）。
-
-    复用 VWAP 链的后复权因子（封板判定需要未复权收盘价）。
-    状态表缺失 → 返回 None（适应度退化为不过滤，日志可见）。
-    """
-    try:
-        from data.cache import DataCache
-        from data.cache_helpers import build_tradable_mask, load_backward_factor
-        from data.datasource import create_datasource
-        close = panel_full["close"]
-        bwd = load_backward_factor(DataCache(create_datasource()), list(close.columns))
-        bwd_al = bwd.reindex(index=close.index, columns=close.columns).ffill() if len(bwd) else None
-        mask = build_tradable_mask(close, bwd=bwd_al)
-        frac = float(mask.values.mean())
-        log.info("可交易性掩码：平均可交易比例 %.2f（False=剔除 T+1 停牌/封板、当日 ST/停牌）", frac)
-        if frac > 0.999:
-            log.warning("掩码几乎全 True——状态表可能缺失，请先跑 scripts/fetch_status_batched.py")
-        return mask
-    except Exception as exc:
-        log.warning("可交易性掩码构建失败（适应度将不过滤）: %s", exc)
-        return None
-
-
 def _apply_gtja_preset(args, panel: dict[str, pd.DataFrame],
                        real: bool) -> tuple[dict[str, pd.DataFrame], pd.DataFrame]:
     """应用国君研报基准预设（2023 解构系列之一，表1），返回 (gp 用面板, gp 用收益面板)。
@@ -154,17 +45,19 @@ def _apply_gtja_preset(args, panel: dict[str, pd.DataFrame],
       beam/family/crowding 不动（消融项，由用户显式叠加）。
     只填用户未显式指定的项（None 哨兵），显式传参优先。
     """
+    from factor.gtja import build_gtja_tradable, build_vwap_exec_returns
+
     missing = [f for f in ("amount", "volume") if f not in panel]
     if missing:
         raise SystemExit(f"--gp-gtja 需要 {missing} 字段构建 VWAP，当前面板缺失")
 
     # 0) 可交易性掩码（真实模式）：T+1 停牌/封板、当日 ST/停牌 剔除进适应度。
     #    须在终端裁剪前构建（封板判定用全量 close + 复权因子）。
-    tradable = _build_gtja_tradable(panel) if real else None
+    tradable = build_gtja_tradable(panel) if real else None
     args._gtja_tradable = tradable      # 主流程取用后传入 run_gp_mining
 
     # 1) 收益率先于终端裁剪构建（helper 需要 amount/volume/close）
-    returns_gp = _build_vwap_exec_returns(panel)
+    returns_gp = build_vwap_exec_returns(panel)
 
     # 2) 终端裁剪：六量价字段
     six = {"open", "high", "low", "close", "volume", "vwap"}
@@ -205,62 +98,6 @@ def _apply_gtja_preset(args, panel: dict[str, pd.DataFrame],
              args.gp_tournament, args.gp_min_fitness, args.gp_dedup_corr,
              args.gp_fitness, args.gp_separated_mutation)
     return panel, returns_gp
-
-
-def _build_htai_neutral_panels(panel: dict[str, pd.DataFrame],
-                               real: bool = False) -> dict[str, pd.DataFrame]:
-    """构建华泰五因子中性化协变量面板。
-
-    对应研报报告21 适应度计算的「行业、市值、过去20日收益率、过去20日平均换手率、
-    过去20日波动率」五个中性化因子：
-
-        size:   市值 = TOT_SHARE(PIT) × 后复权 close
-        industry: 申万一级行业映射（date×code，值=行业名）
-        mom20:  过去 20 日收益率 = close.pct_change(20)
-        vol20:  过去 20 日波动率 = 日收益的 20 日滚动 std
-        turn20: 过去 20 日平均换手率 = (volume / TOT_SHARE) 的 20 日滚动均值
-
-    ``real=False``（mock）时跳过需要 SDK 的行业/市值/换手部分，只返回 mom20/vol20；
-    任一协变量构建失败时自动从返回 dict 剔除（neutralize 只回归可用的部分）。
-    """
-    out: dict[str, pd.DataFrame] = {}
-    close = panel["close"]
-    try:
-        out["mom20"] = close.pct_change(20)
-        out["vol20"] = close.pct_change().rolling(20).std()
-    except Exception:
-        pass
-    if not real:
-        return out
-    try:
-        from data.cache import DataCache
-        from data.datasource import create_datasource
-        from data.financials import build_pit_panel
-        ds = create_datasource()
-        cache = DataCache(ds)
-        codes = list(close.columns)
-        dates = close.index
-        cal = cache.get_calendar(int(dates.min().strftime("%Y%m%d")),
-                                 int(dates.max().strftime("%Y%m%d")))
-        ind = cache.get_industry_classification(level=1)
-        if not ind.empty:
-            ind["in_date"] = pd.to_datetime(ind["in_date"], errors="coerce")
-            ind["out_date"] = pd.to_datetime(ind["out_date"], errors="coerce")
-            rows = {}
-            for d in dates:
-                m = ind[(ind["in_date"] <= d) & (ind["out_date"].fillna(pd.Timestamp.max) >= d)]
-                rows[d] = {r["code"]: r["industry_name"]
-                           for _, r in m.iterrows() if r["code"] in codes}
-            out["industry"] = pd.DataFrame(rows).T.reindex(index=dates, columns=codes)
-        balance = cache.get_balance_sheet(codes)
-        if not balance.empty and "TOT_SHARE" in balance.columns:
-            ts = build_pit_panel(balance, cal, "TOT_SHARE").reindex(index=dates, columns=codes)
-            out["size"] = ts * close
-            turn = panel["volume"] / ts
-            out["turn20"] = turn.rolling(20).mean()
-    except Exception as exc:
-        log.warning("华泰中性化协变量面板构建不完整（缺失项自动跳过）: %s", exc)
-    return out
 
 
 # ---------------------------------------------------------------------------
@@ -427,6 +264,20 @@ def main():
                         help="三段式纪律：train 段算 IC 排序 → valid 段重新算 IC 验证 → "
                              "只保留 valid 段显著的因子（防泄漏，与 GP/ML 同纪律）。"
                              "默认日期 train 22-23 / valid 24 / test 25（真实数据时生效）")
+    parser.add_argument("--rolling", type=int, default=None, metavar="N_SPLITS",
+                        help="滚动复核挖因子（walk-forward mining）：用 forward_folds 切 "
+                             "expanding 前推折，每折 train 段评估候选 → test 段复核 top 候选，"
+                             "要求跨折 IC 方向一致且 test 段显著占比达标才标 rolling_significant。"
+                             "N_SPLITS>=2（实际折数 N_SPLITS-1）。与 --three-period 互斥。"
+                             "可用 --rolling-top-train/--rolling-min-consistent/--rolling-min-sig 微调")
+    parser.add_argument("--rolling-top-train", type=int, default=50,
+                        help="滚动复核：每折 train 段取 top N 候选进入 test 复核（默认50）")
+    parser.add_argument("--rolling-min-consistent", type=float, default=0.6,
+                        help="滚动复核：跨折 IC 方向一致率下限（默认0.6）")
+    parser.add_argument("--rolling-min-sig", type=float, default=0.3,
+                        help="滚动复核：跨折 test 段显著折占比下限（默认0.3）")
+    parser.add_argument("--rolling-min-folds", type=int, default=2,
+                        help="滚动复核：有效折数下限（默认2）")
     parser.add_argument("--top", type=int, default=20, help="打印前 N 个因子")
     parser.add_argument("--detail-n", type=int, default=50,
                         help="计算 IC衰减/自相关(turnover代理)的 top-N 因子数（默认50）")
@@ -511,6 +362,7 @@ def main():
 
     if args.real:
         from config import Config
+        from data.cache_helpers import build_real_panel
         cfg = Config.get()
         if args.universe:
             cfg["universe"]["default"] = args.universe
@@ -519,6 +371,7 @@ def main():
         end = args.end or cfg.get("end_date")
         panel, returns_panel = build_real_panel(cfg, begin, end, offline=args.offline)
     else:
+        from data.mock import gen_mock_panel_with_signal
         log.info("使用 Mock 数据（注入 AR(1) 动量信号）...")
         panel = gen_mock_panel_with_signal()
         returns_panel = panel["close"].pct_change().shift(-1)
@@ -544,6 +397,7 @@ def main():
     # ---- 华泰复现模式：特征补全 + 参数按研报解析 + 中性化协变量面板 ----
     neutral_panels = None
     if args.gp_htai:
+        from data.cache_helpers import build_htai_neutral_panels
         if "returns" not in panel and "close" in panel:
             panel["returns"] = panel["close"].pct_change()   # 研报 RETURNS
         if "vwap" not in panel and "amount" in panel and "volume" in panel:
@@ -560,7 +414,7 @@ def main():
             args.gp_tournament = 20
         if args.train_frac is None:
             args.train_frac = 1.0     # 研报21 全样本；报告23 CV 口径可显式 --train-frac 0.8
-        neutral_panels = _build_htai_neutral_panels(panel, real=args.real)
+        neutral_panels = build_htai_neutral_panels(panel, real=args.real)
         log.info("华泰复现模式：特征补 returns/vwap，中性化协变量=%s，参数 pop=%d gen=%d depth=(%d,%d) tourn=%d train_frac=%.2f",
                  list(neutral_panels.keys()), args.pop, args.gen, args.min_depth,
                  args.max_depth, args.gp_tournament, args.train_frac)
@@ -715,27 +569,63 @@ def main():
                         .reindex(result["name"]).values
                     n_sig = int(result["significant"].sum()) if "significant" in result else 0
                     log.info("三段式完成：valid 段显著因子 %d/%d", n_sig, len(result))
+        elif args.rolling:
+            # 滚动复核挖因子：forward_folds 前推折，每折 train 评估 → test 复核，
+            # 跨折 IC 方向一致 + test 显著占比达标才标 rolling_significant
+            if args.gp or args.gp_gtja:
+                log.warning("--rolling 与 GP 模式互斥，忽略 GP 开关，走候选枚举滚动复核")
+            from factor.mining import rolling_evaluate_candidates
+            log.info("滚动复核：n_splits=%d, embargo=5, top_train=%d, "
+                     "min_consistent=%.2f, min_sig=%.2f, min_folds=%d",
+                     args.rolling, args.rolling_top_train, args.rolling_min_consistent,
+                     args.rolling_min_sig, args.rolling_min_folds)
+            result = rolling_evaluate_candidates(
+                cands, panel, returns_panel,
+                n_splits=args.rolling, embargo_days=5,
+                method=args.method, fdr_q=args.fdr_q,
+                n_jobs=n_jobs, top_train=args.rolling_top_train,
+                min_consistent_frac=args.rolling_min_consistent,
+                min_sig_frac=args.rolling_min_sig,
+                min_folds=args.rolling_min_folds,
+                verbose=True,
+            )
+            log.info("滚动复核完成：候选 %d，rolling_significant %d",
+                     len(result), int(result["rolling_significant"].sum())
+                     if len(result) else 0)
         else:
             result = evaluate_candidates(
                 cands, panel, returns_panel,
                 method=args.method, fdr_q=args.fdr_q, verbose=True,
                 detail_n=args.detail_n, n_jobs=n_jobs,
             )
-        log.info("有效评估因子数: %d，显著因子数(FDR q=%.2f): %d",
-                 len(result), args.fdr_q, int(result["significant"].sum()) if len(result) else 0)
+        if args.rolling:
+            log.info("滚动复核因子数: %d，rolling_significant %d", len(result),
+                     int(result["rolling_significant"].sum()) if len(result) else 0)
+        else:
+            log.info("有效评估因子数: %d，显著因子数(FDR q=%.2f): %d",
+                     len(result), args.fdr_q,
+                     int(result["significant"].sum()) if len(result) else 0)
 
         if len(result):
             top = result.head(args.top)
-            cols = ["name", "ir", "ic_mean", "ic_std", "ic_win_rate",
-                    "ic_decay5", "ic_decay10", "autocorr",
-                    "t_stat", "p_value", "significant", "n"]
-            if args.three_period and args.real and "ic_train" in result.columns:
-                cols = ["name", "ic_train", "ic_mean", "t_train", "t_stat",
-                        "ir", "ic_win_rate", "significant", "n"]
-            print("\n===== Top {} 候选因子（按 |IR| 排序，Alphalens 式标准摘要）=====".format(args.top))
-            with pd.option_context("display.max_rows", None, "display.width", 200,
-                                   "display.float_format", lambda v: f"{v:.4f}"):
-                print(top[cols].to_string(index=False))
+            if args.rolling:
+                cols = ["name", "ir_fold", "ic_mean", "n_folds", "consistent_frac",
+                        "significant_frac", "direction", "rolling_significant"]
+                print("\n===== Top {} 滚动复核因子（按 |IR_fold| 排序，跨折一致）=====".format(args.top))
+                with pd.option_context("display.max_rows", None, "display.width", 200,
+                                       "display.float_format", lambda v: f"{v:.4f}"):
+                    print(top[cols].to_string(index=False))
+            else:
+                cols = ["name", "ir", "ic_mean", "ic_std", "ic_win_rate",
+                        "ic_decay5", "ic_decay10", "autocorr",
+                        "t_stat", "p_value", "significant", "n"]
+                if args.three_period and args.real and "ic_train" in result.columns:
+                    cols = ["name", "ic_train", "ic_mean", "t_train", "t_stat",
+                            "ir", "ic_win_rate", "significant", "n"]
+                print("\n===== Top {} 候选因子（按 |IR| 排序，Alphalens 式标准摘要）=====".format(args.top))
+                with pd.option_context("display.max_rows", None, "display.width", 200,
+                                       "display.float_format", lambda v: f"{v:.4f}"):
+                    print(top[cols].to_string(index=False))
 
     if args.save_library:
         _save_library(result, panel, returns_panel, args, is_gp=args.gp, dataset=lib_dataset)
@@ -766,7 +656,7 @@ def main():
             metrics_summary = {
                 "n_factors": int(len(result)),
                 "top_ic": float(top.get("ic_mean", 0.0) or 0.0),
-                "top_t": float(top.get("t_stat", 0.0) or 0.0),
+                "top_t": float(top.get("t_stat", top.get("ir_fold", 0.0)) or 0.0),
                 "top_formula": str(top.get("formula", top.get("name", ""))),
             }
         record_experiment(

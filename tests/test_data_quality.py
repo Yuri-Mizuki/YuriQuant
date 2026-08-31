@@ -6,7 +6,7 @@ import pandas as pd
 import pytest
 
 from data.cache import DataCache
-from scripts.check_data_quality import (
+from data.quality import (
     check_adjust_factor_jumps, check_coverage, check_financial_nan,
     check_kline_missing,
 )

@@ -48,7 +48,7 @@ def _mock_pred_and_fwd():
 
 
 def test_factor_test_structure(tmp_path):
-    from scripts.investment_report import factor_test
+    from research.factor_report import factor_test
     sparse, fwd, close = _mock_pred_and_fwd()
     out = factor_test(sparse, fwd, close, tmp_path, "mock")
     assert set(out) == {"sum_sparse", "sum_hold", "layer_nav", "ic_hold", "monthly_ic"}
@@ -64,7 +64,7 @@ def test_factor_test_structure(tmp_path):
 
 def test_layer_nav_not_exploding(tmp_path):
     """回归：分层净值不得因 horizon 累计收益按日累乘而重叠放大（曾出现 Q1=6.56 假象）。"""
-    from scripts.investment_report import factor_test
+    from research.factor_report import factor_test
     sparse, fwd, close = _mock_pred_and_fwd()
     out = factor_test(sparse, fwd, close, tmp_path, "explode_check")
     nav = out["layer_nav"].dropna(how="all")
@@ -79,7 +79,7 @@ def test_layer_nav_not_exploding(tmp_path):
 
 
 def test_load_index_returns_from_cache():
-    from scripts.investment_report import load_index_returns
+    from data.cache_helpers import load_index_returns
     ret = load_index_returns("000300.SH", 20240101, 20241231, real=False)
     if ret is None:
         pytest.skip("本机无沪深300指数缓存")
@@ -88,7 +88,7 @@ def test_load_index_returns_from_cache():
 
 
 def test_plot_images():
-    from scripts.investment_report import plot_layers, plot_monthly_ic
+    from research.factor_report import plot_layers, plot_monthly_ic
     idx = pd.bdate_range("2024-01-01", periods=60)
     layer = pd.DataFrame({
         "Q1": np.cumprod(1 + 0.001 * np.arange(1, 61)),

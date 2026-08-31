@@ -150,8 +150,8 @@ def test_composite_stats(mock_parts):
 
 def test_build_components_reconstructs():
     """build_components 能按挖掘结果 name 重建因子面板。"""
+    from data.mock import gen_mock_panel_with_signal
     from factor.mining import dedup_by_formula, evaluate_candidates, generate_candidates
-    from scripts.mine_factors import gen_mock_panel_with_signal
 
     panel = gen_mock_panel_with_signal(n_days=200, n_codes=20, seed=1)
     returns_panel = panel["close"].pct_change().shift(-1)
@@ -170,7 +170,7 @@ def test_build_components_gp_formula_reconstruction():
     name 为 GP 前缀表达式（窗口编名）时，走统一公式解析器重建，不再依赖
     deap pset / 模块级 prim_map。
     """
-    from scripts.mine_factors import gen_mock_panel_with_signal
+    from data.mock import gen_mock_panel_with_signal
 
     panel = gen_mock_panel_with_signal(n_days=200, n_codes=20, seed=2)
     features = list(panel.keys())

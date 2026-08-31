@@ -137,3 +137,37 @@ ALL_FACTORS = {
     "vol_ratio_20": lambda: VolumeRatio(20),
     "price_ma_60": lambda: PriceMA(60),
 }
+
+
+# ===========================================================================
+# 经典量价特征集（2026-08-31 从 scripts/e2e_common 下沉，e2e/实验脚本单一实现）
+# ===========================================================================
+def compute_classic_features(px: dict[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
+    """经典量价因子（动量/反转/波动/流动性/换手结构），截面标准化。
+
+    Args:
+        px: {open/high/low/close/volume/amount: date×code 面板}。
+    Returns:
+        {name: 已截面标准化面板}，共 12 个经典特征。
+    """
+    from factor.preprocessing import standardize_zscore
+
+    close, open_ = px["close"], px["open"]
+    amount = px["amount"]
+    ret1 = close.pct_change(fill_method=None)
+    feats = {
+        "mom5": close.pct_change(5, fill_method=None),
+        "mom10": close.pct_change(10, fill_method=None),
+        "mom20": close.pct_change(20, fill_method=None),
+        "mom60": close.pct_change(60, fill_method=None),
+        "rev1": -ret1,
+        "rev5": -close.pct_change(5, fill_method=None),
+        "vol20": ret1.rolling(20).std(),
+        "vol60": ret1.rolling(60).std(),
+        "amihud20": (ret1.abs() / (amount + 1e-12)).rolling(20).mean(),
+        "turn_trend": (px["volume"].rolling(5).mean()
+                       / (px["volume"].rolling(60).mean() + 1e-12)),
+        "gap": open_ / close.shift(1) - 1,
+        "range20": (px["high"] - px["low"]).rolling(20).mean() / (close + 1e-12),
+    }
+    return {k: standardize_zscore(v) for k, v in feats.items()}

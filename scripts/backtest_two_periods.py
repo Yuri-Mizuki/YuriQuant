@@ -118,7 +118,7 @@ def build_panels(begin: int, end: int) -> tuple[dict[str, pd.DataFrame], pd.Data
         from data.cache_helpers import load_financial_tables
         from scripts.build_fundamental_factors import build_factor_panels
         fin = load_financial_tables(cache, codes)
-        fund = build_factor_panels(dailyw, calw,
+        fund = build_factor_panels(dailyw, cal,
                                    fin["income"], fin["balance_sheet"], fin["cash_flow"],
                                    fin["equity_structure"], fin["dividend"],
                                    fin["share_holder"], fin["holder_num"])

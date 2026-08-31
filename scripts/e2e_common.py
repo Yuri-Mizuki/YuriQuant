@@ -2,14 +2,22 @@
 端到端工作流共享模块
 ====================
 
-e2e_stock_picks.py（今日选股）与 e2e_backtest.py（walk-forward 回测）共用的
-数据加载 / 因子构建 / 特征选择 / 标签逻辑，避免两处重复实现导致口径漂移。
+e2e_stock_picks.py（今日选股）、e2e_backtest.py（walk-forward 回测）与
+investment_report / optimize_e2e 等 e2e 家族脚本共用的编排逻辑：
+数据加载（``load_daily_data``）、特征选择漏斗（``select_features``）、
+面板新鲜度守卫（``drop_stale_factors``）、风格中性化
+（``build_neutral_covariates`` / ``neutralize_predictions``）。
 
-约定（两个脚本必须一致）：
+约定（e2e 家族必须一致）：
 - 股票池：因子库 significant 面板的列并集（HS300 PIT 历史成员，~420 股）
-- 因子：经典量价 12 + 因子库 significant（默认排除 model:* 防循环引用）
+- 因子：经典量价 12（``factor.classic.compute_classic_features``）+ 因子库
+  significant（``FactorLibrary.load_significant_features``，默认排除 model:*）
 - 特征选择：build_feature_set 三级漏斗（覆盖率>=0.5 → |corr|<0.7 去冗余
   → valid 段 |IC| 质量分降序截断），只在调用方指定的选择窗口上做（防前视）
+
+已下沉（2026-08-31，见 packages 单一实现）：
+- 经典特征 / mock 数据 / 标签构建 / 因子库加载 → factor.classic / data.mock /
+  model.labels / research.factor_library，scripts 只保留编排入口。
 """
 from __future__ import annotations
 
@@ -49,7 +57,7 @@ def load_daily_data(begin: int = 20220101) -> tuple[dict, dict]:
     d = pd.read_parquet(cache.root / "daily_hs300.parquet")
 
     # 股票池 = significant 因子面板列并集（排除 model:*）
-    lib_feats = load_library_factors(exclude_model=True)
+    lib_feats = FactorLibrary(dataset=DATASET).load_significant_features(exclude_model=True)
     pool = None
     for p in lib_feats.values():
         pool = set(p.columns) if pool is None else pool | set(p.columns)
@@ -65,86 +73,6 @@ def load_daily_data(begin: int = 20220101) -> tuple[dict, dict]:
         w = w[w.index >= pd.Timestamp(str(begin))]
         px[col] = w
     return px, lib_feats
-
-
-def load_mock_data(n_days: int = 500, n_codes: int = 50, seed: int = 0) -> dict:
-    """生成 mock OHLCV 面板（无外部依赖，供测试/演示）。"""
-    import numpy as np
-
-    rng = np.random.RandomState(seed)
-    codes = [f"{i:06d}.SZ" for i in range(n_codes)]
-    dates = pd.bdate_range(end="2026-08-21", periods=n_days)
-    close = 100 * np.exp(np.cumsum(rng.randn(n_days, n_codes) * 0.02, axis=0))
-    px = {}
-    px["close"] = pd.DataFrame(close, index=dates, columns=codes)
-    px["open"] = px["close"] * (1 + rng.randn(n_days, n_codes) * 0.005)
-    px["high"] = pd.DataFrame(
-        np.maximum(px["open"].values, px["close"].values) * (1 + rng.rand(n_days, n_codes) * 0.01),
-        index=dates, columns=codes)
-    px["low"] = pd.DataFrame(
-        np.minimum(px["open"].values, px["close"].values) * (1 - rng.rand(n_days, n_codes) * 0.01),
-        index=dates, columns=codes)
-    px["volume"] = pd.DataFrame(rng.randint(1e6, 1e8, (n_days, n_codes)),
-                                index=dates, columns=codes)
-    px["amount"] = px["volume"] * px["close"]
-    return px
-
-
-# ---------------------------------------------------------------------------
-# 因子
-# ---------------------------------------------------------------------------
-def compute_classic_features(px: dict) -> dict:
-    """经典量价因子（动量/反转/波动/流动性/换手结构），截面标准化。"""
-    from factor.preprocessing import standardize_zscore
-
-    close, open_ = px["close"], px["open"]
-    amount = px["amount"]
-    ret1 = close.pct_change(fill_method=None)
-    feats = {
-        "mom5": close.pct_change(5, fill_method=None),
-        "mom10": close.pct_change(10, fill_method=None),
-        "mom20": close.pct_change(20, fill_method=None),
-        "mom60": close.pct_change(60, fill_method=None),
-        "rev1": -ret1,
-        "rev5": -close.pct_change(5, fill_method=None),
-        "vol20": ret1.rolling(20).std(),
-        "vol60": ret1.rolling(60).std(),
-        "amihud20": (ret1.abs() / (amount + 1e-12)).rolling(20).mean(),
-        "turn_trend": (px["volume"].rolling(5).mean()
-                       / (px["volume"].rolling(60).mean() + 1e-12)),
-        "gap": open_ / close.shift(1) - 1,
-        "range20": (px["high"] - px["low"]).rolling(20).mean() / (close + 1e-12),
-    }
-    return {k: standardize_zscore(v) for k, v in feats.items()}
-
-
-def load_library_factors(exclude_model: bool = True) -> dict:
-    """加载因子库 significant 因子面板。
-
-    Args:
-        exclude_model: 排除 model:* 来源（模型预测回写因子，面板通常滞后且
-            与本工作流自身预测循环引用）。默认 True——这是 e2e 预测日能到
-            2026-08-21 的关键（model:* 面板截至 2025-12-31）。
-    """
-    from research.factor_library import FactorLibrary
-
-    lib = FactorLibrary(dataset=DATASET)
-    reg = lib.list_all()
-
-    mask = reg["significant"] == True
-    if exclude_model:
-        mask &= ~reg["source"].fillna("").str.startswith("model:")
-    sig_names = set(reg[mask]["name"])
-    log.info("因子库: %d 个因子, significant %d 个（排除 model:* 后 %d）",
-             len(reg), int((reg["significant"] == True).sum()), len(sig_names))
-
-    all_feats = lib.load_library_features()
-    feats = {k: v for k, v in all_feats.items() if k in sig_names}
-    if feats:
-        sample = next(iter(feats.values()))
-        log.info("加载面板 %d 个, 日期范围 %s ~ %s",
-                 len(feats), sample.index[0].date(), sample.index[-1].date())
-    return feats
 
 
 # ---------------------------------------------------------------------------
@@ -225,18 +153,6 @@ def drop_stale_factors(
 
 
 # ---------------------------------------------------------------------------
-# 标签
-# ---------------------------------------------------------------------------
-def build_labels(close: pd.DataFrame, horizon: int = HORIZON) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """(labels: rank 变换, fwd: 原始 horizon 收益)。"""
-    from model.labels import build_labels as _build_labels, forward_returns
-
-    fwd = forward_returns(close, horizon=horizon)
-    labels, _ = _build_labels(close_panel=close, horizon=horizon, mode="rank")
-    return labels, fwd
-
-
-# ---------------------------------------------------------------------------
 # 风格中性化（华泰五因子：市值/行业/动量/波动/换手）
 # ---------------------------------------------------------------------------
 def build_neutral_covariates(px: dict, close: pd.DataFrame, real: bool = True):
@@ -251,9 +167,9 @@ def build_neutral_covariates(px: dict, close: pd.DataFrame, real: bool = True):
     if real:
         try:
             from data.cache import DataCache
-            from data.offline import OfflineQuietDataSource
-            from data.market_cap import build_market_cap_panel
             from data.industry import IndustryClassification
+            from data.market_cap import build_market_cap_panel
+            from data.offline import OfflineQuietDataSource
 
             # 注意：必须用 OfflineQuietDataSource（数据源方法返回空 -> 走缓存
             # fallback）。普通 OfflineDataSource 直接抛异常，get_equity_structure

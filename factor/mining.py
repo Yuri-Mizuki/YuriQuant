@@ -31,6 +31,7 @@ from factor.operators import (
     CS_OPS, DEFAULT_FEATURES, DEFAULT_WINDOWS, TS_OPS, cs_rank, op_registry,
     ts_corr, ts_mean,
 )
+from factor.cv import forward_folds
 from stats.ic import calc_ic_series, calc_ir, calc_ic_decay, factor_autocorr
 
 
@@ -401,3 +402,159 @@ def dedup_by_formula(candidates: list[Candidate]) -> list[Candidate]:
         seen.add(c.name)
         out.append(c)
     return out
+
+
+# ===========================================================================
+# 滚动复核挖因子（walk-forward mining）
+# ===========================================================================
+def rolling_evaluate_candidates(
+    candidates: list[Candidate],
+    panel: dict[str, pd.DataFrame],
+    returns_panel: pd.DataFrame,
+    n_splits: int = 5,
+    embargo_days: int = 5,
+    method: str = "spearman",
+    fdr_q: float = 0.05,
+    min_obs: int = 10,
+    sort_by: str = "ir",
+    robust: bool = True,
+    n_jobs: int = 1,
+    top_train: int = 50,
+    min_consistent_frac: float = 0.6,
+    min_sig_frac: float = 0.3,
+    min_folds: int = 2,
+    verbose: bool = False,
+) -> pd.DataFrame:
+    """滚动复核：跨折持续有效（而非单段运气）的因子挖掘。
+
+    外层用 ``factor.cv.forward_folds`` 生成 expanding 前推折，内层每折做
+    【train 段评估候选 → test 段复核 top 候选】。只有跨折 IC 方向稳定、
+    test 段显著占比达标、且折数足够的候选才标记 ``rolling_significant``。
+
+    回答的核心问题：一次三段式（``split_three_periods``）挖出的因子，会不会
+    只是 valid 那一段恰好表现好？滚动复核要求因子在多个滚动时点都持续有效。
+
+    Args:
+        candidates: generate_candidates 输出（一次性生成，跨折共用）。
+        panel: 特征面板字典。
+        returns_panel: 未来一期收益面板（已对齐到当日）。
+        n_splits: 前推折数（>1）；实际产出折数 = n_splits-1。
+        embargo_days: 训练段末尾剔除与测试段相邻的天数。
+        method: 'spearman'(默认) | 'pearson'。
+        fdr_q: 每折 test 段显著性判断的 BH-FDR 水平。
+        min_obs: IC 序列有效观测数下限（每折 test 段）。
+        sort_by: 每折 train 段排序主轴，'ir'(默认) | 't'。
+        robust: 是否用 Newey-West 稳健 t 判显著。
+        n_jobs: 每折 evaluate_candidates 的并行进程数。
+        top_train: 每折 train 段取 top N 候选进入该折 test 段复核（宽进严出）。
+        min_consistent_frac: 跨折 IC 方向一致率下限（>0 或 <0 的折占比）。
+        min_sig_frac: 跨折 test 段显著（BH-FDR）折占比下限。
+        min_folds: 有效折数下限（不足则全标记 False）。
+        verbose: 每折进度日志。
+
+    Returns:
+        DataFrame，每行一个候选，按 |ir_fold| 降序。核心列：
+        - n_folds / ic_mean / ic_std / ir_fold / win_rate_fold
+        - consistent_frac（IC 方向一致率）/ significant_frac（显著折占比）
+        - direction（主导方向 +1/-1）/ rolling_significant（是否跨折稳健）
+    """
+    if n_splits < 2:
+        raise ValueError(f"n_splits >= 2, got {n_splits}")
+    folds = forward_folds(returns_panel.index, n_splits, embargo_days)
+    if not folds:
+        raise ValueError("无有效折（日期数不足或训练段过短）")
+
+    names = list(dict.fromkeys(c.name for c in candidates))
+    cand_map = {c.name: c for c in candidates}
+    n_cand = len(names)
+
+    # 跨折累计矩阵：name x fold 的 test 段 IC 均值 / 显著标记
+    fold_ic = {nm: [] for nm in names}
+    fold_sig = {nm: [] for nm in names}
+    fold_train_ir = {nm: [] for nm in names}
+
+    for fi, fold in enumerate(folds, 1):
+        tr_panel = {k: v.loc[fold.train_days] for k, v in panel.items()}
+        tr_ret = returns_panel.loc[fold.train_days]
+        te_panel = {k: v.loc[fold.test_days] for k, v in panel.items()}
+        te_ret = returns_panel.loc[fold.test_days]
+
+        # 1) train 段评估全部候选 → 取 top_train 进 test 复核（宽进严出）
+        res_tr = evaluate_candidates(
+            candidates, tr_panel, tr_ret, method=method, fdr_q=fdr_q,
+            min_obs=min_obs, sort_by=sort_by, detail_n=0,
+            robust=robust, verbose=False, n_jobs=n_jobs,
+        )
+        if res_tr.empty:
+            if verbose:
+                print(f"  ...折 {fi}: train 段无有效候选，跳过", flush=True)
+            continue
+        top_names = res_tr.head(top_train)["name"].tolist()
+        top_cands = [cand_map[nm] for nm in top_names if nm in cand_map]
+
+        # 2) test 段复核 top 候选的显著性
+        res_te = evaluate_candidates(
+            top_cands, te_panel, te_ret, method=method, fdr_q=fdr_q,
+            min_obs=min_obs, sort_by=sort_by, detail_n=0,
+            robust=robust, verbose=False, n_jobs=n_jobs,
+        )
+        if res_te.empty:
+            if verbose:
+                print(f"  ...折 {fi}: test 段无有效候选，跳过", flush=True)
+            continue
+
+        te_map = res_te.set_index("name")
+        tr_map = res_tr.set_index("name")
+        for nm in top_names:
+            if nm in te_map.index:
+                fold_ic[nm].append(float(te_map.at[nm, "ic_mean"]))
+                fold_sig[nm].append(bool(te_map.at[nm, "significant"]))
+            if nm in tr_map.index:
+                fold_train_ir[nm].append(float(tr_map.at[nm, "ir"]))
+        if verbose:
+            print(f"  ...折 {fi}/{len(folds)}: train top {len(top_names)} "
+                  f"-> test 复核 {len(res_te)}", flush=True)
+
+    rows: list[dict] = []
+    for nm in names:
+        ics = fold_ic[nm]
+        n_f = len(ics)
+        if n_f == 0:
+            rows.append({
+                "name": nm, "n_folds": 0, "ic_mean": np.nan, "ic_std": np.nan,
+                "ir_fold": np.nan, "win_rate_fold": np.nan,
+                "consistent_frac": np.nan, "significant_frac": np.nan,
+                "direction": 0, "mean_train_ir": np.nan,
+                "rolling_significant": False,
+            })
+            continue
+        arr = np.asarray(ics, dtype=float)
+        pos_frac = float((arr > 0).mean())
+        direction = 1 if pos_frac >= 0.5 else -1
+        aligned = arr * direction  # 对齐主导方向后取均值
+        mean_ic = float(aligned.mean())
+        std_ic = float(aligned.std())
+        ir_fold = mean_ic / std_ic if std_ic > 0 else 0.0
+        sig_frac = float(np.mean(fold_sig[nm]))
+        train_ir = fold_train_ir[nm]
+        rows.append({
+            "name": nm, "n_folds": n_f,
+            "ic_mean": mean_ic, "ic_std": std_ic, "ir_fold": ir_fold,
+            "win_rate_fold": pos_frac,
+            "consistent_frac": max(pos_frac, 1.0 - pos_frac),
+            "significant_frac": sig_frac,
+            "direction": direction,
+            "mean_train_ir": float(np.mean(train_ir)) if train_ir else np.nan,
+            "rolling_significant": (
+                n_f >= min_folds
+                and max(pos_frac, 1.0 - pos_frac) >= min_consistent_frac
+                and sig_frac >= min_sig_frac
+            ),
+        })
+
+    df = pd.DataFrame(rows)
+    if df.empty:
+        return df
+    return df.reindex(
+        df["ir_fold"].abs().sort_values(ascending=False, na_position="last").index
+    ).reset_index(drop=True)

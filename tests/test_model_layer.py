@@ -7,7 +7,7 @@
 - ③ Predictor     : ridge/gbdt fit-predict、截面标准化、fit_predict_oos 折纪律
 - ④ Trainer       : train_predictor_model / train_and_register(kind=predictor)
 - ⑤ Serving       : register_model_as_factor 血缘回写因子库
-- 编排            : walk_forward_model.rolling_oos 的折边界 embargo 纪律
+- 编排            : model.predictor.rolling_oos 的折边界 embargo 纪律
 """
 import numpy as np
 import pandas as pd
@@ -19,11 +19,11 @@ from model.predictor import (
     PREDICTORS,
     RidgePredictor,
     fit_predict_oos,
+    rolling_oos,
 )
 from model.registry import ModelRegistry
 from model.serving import register_model_as_factor
 from model.training import train_and_register, train_predictor_model
-from scripts.walk_forward_model import rolling_oos
 
 
 def _lgbm_missing() -> bool:

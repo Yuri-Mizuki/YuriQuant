@@ -15,13 +15,14 @@ experiments.py 记录实验）。
 """
 from model.evaluation import evaluate_model
 from model.features import build_feature_set
-from model.labels import build_labels, forward_returns
+from model.labels import build_label_pair, build_labels, forward_returns
 from model.predictor import (
     PREDICTORS,
     BasePredictor,
     LGBMPredictor,
     RidgePredictor,
     fit_predict_oos,
+    rolling_oos,
 )
 from model.registry import ModelRegistry, default_model_root
 from model.serving import register_model_as_factor
@@ -35,8 +36,8 @@ __all__ = [
     "ModelRegistry", "default_model_root",
     "train_stacking_model", "train_predictor_model", "train_and_register",
     "evaluate_model",
-    "build_feature_set", "build_labels", "forward_returns",
+    "build_feature_set", "build_labels", "build_label_pair", "forward_returns",
     "BasePredictor", "RidgePredictor", "LGBMPredictor", "PREDICTORS",
-    "fit_predict_oos",
+    "fit_predict_oos", "rolling_oos",
     "register_model_as_factor",
 ]

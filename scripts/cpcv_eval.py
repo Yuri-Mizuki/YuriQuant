@@ -39,7 +39,7 @@ log = setup_logging("cpcv_eval")
 
 OUT_DIR = Path("reports") / "cpcv_eval"
 
-from factor.cv import cpcv, CPCVPath  # noqa: E402
+from factor.cv import CPCVPath, cpcv  # noqa: E402
 from research.factor_analysis import calc_ic_series  # noqa: E402
 
 
@@ -113,10 +113,10 @@ def _build_mock_data():
 
 def _build_real_data():
     """真实 HS300 数据：复用 ml_algorithm_compare 的数据加载。"""
-    from scripts.e2e_common import compute_classic_features
-    from scripts.ml_algorithm_compare import _px_panels, BEGIN
-    from scripts.ml_synthesis_experiment import _eval_row  # noqa: F401
+    from factor.classic import compute_classic_features
     from model.labels import build_labels, forward_returns
+    from scripts.ml_algorithm_compare import BEGIN, _px_panels
+    from scripts.ml_synthesis_experiment import _eval_row  # noqa: F401
 
     px = _px_panels(BEGIN, None)
     classic = compute_classic_features(px)
@@ -162,7 +162,7 @@ def main():
     log.info("CPCV: N=%d k=%d → %d 条路径", args.n_groups, args.k, len(paths))
 
     # ---- 评估方法 ----
-    from model.predictor import RidgePredictor, LGBMPredictor
+    from model.predictor import LGBMPredictor, RidgePredictor
     method_map = {
         "ridge": (RidgePredictor, {"alpha": 1.0}),
         "gbdt": (LGBMPredictor, {"learning_rate": 0.03, "num_leaves": 31, "seed": 42}),

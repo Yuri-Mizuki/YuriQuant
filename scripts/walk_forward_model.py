@@ -38,7 +38,6 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from factor.cv import forward_roll_folds
 from scripts.cli_common import add_real_mock_args, setup_logging  # noqa: E402
 
 log = setup_logging("walk_forward_model")
@@ -108,52 +107,6 @@ def _load_real_features(args, begin: int, end: int
 
 
 # ---------------------------------------------------------------------------
-# 滚动训练（上线期）
-# ---------------------------------------------------------------------------
-def rolling_oos(
-    predictor_cls,
-    features: dict[str, pd.DataFrame],
-    labels: pd.DataFrame,
-    test_days: pd.DatetimeIndex,
-    all_days: pd.DatetimeIndex,
-    n_folds: int,
-    embargo_days: int,
-    min_train_days: int,
-    **predictor_params,
-) -> pd.DataFrame:
-    """test 段按日历等分折；每折用「折前全部历史 − embargo 隔离带」训练，预测折内。
-
-    OOS 拼接纪律：折间日期不交叉（每天只被其之后的数据预测过）；训练段尾部
-    剔除 embargo_days 天（horizon 标签前视隔离带）。切分统一走
-    ``factor.cv.forward_roll_folds``（生产唯一合法的前推滚动纪律）。
-    """
-    test_folds = forward_roll_folds(all_days, test_days, n_folds, embargo_days)
-    codes = labels.columns
-    out = pd.DataFrame(np.nan, index=test_days, columns=codes)
-    for i, fold in enumerate(test_folds, 1):
-        fold_days = fold.test_days
-        tr_days = fold.train_days
-        # 生产防泄漏硬约束：训练段必须严格早于测试折，绝不掺入测试折及其后数据
-        assert len(tr_days) == 0 or tr_days.max() < fold_days[0], (
-            f"生产训练段混入未来数据（train_max={tr_days.max().date()}, "
-            f">= test_cut={fold_days[0].date()}）")
-        assert len(set(tr_days) & set(fold_days)) == 0, "生产训练段与测试折日期交叉"
-        if len(tr_days) < min_train_days:
-            log.warning("折 %d 训练段不足（%d 日 < %d），跳过", i, len(tr_days), min_train_days)
-            continue
-        p = predictor_cls(**predictor_params)
-        p.fit({k: v.loc[tr_days] for k, v in features.items()}, labels.loc[tr_days])
-        pred = p.predict({k: v.loc[fold_days] for k, v in features.items()})
-        out.loc[fold_days] = pred.reindex(index=fold_days, columns=codes)
-        log.info("滚动折 %d/%d: train %s~%s (%d 日, 去 %d 日隔离带) -> 预测 %s~%s (%d 日)",
-                 i, len(test_folds), tr_days[0].date(), tr_days[-1].date(), len(tr_days),
-                 embargo_days, fold_days[0].date(), fold_days[-1].date(), len(fold_days))
-    if not out.notna().any().any():
-        raise RuntimeError("滚动训练无任何 OOS 预测产出")
-    return out
-
-
-# ---------------------------------------------------------------------------
 # 基线（蓝图验收纪律：等权 / IC 加权，valid 段定权重）
 # ---------------------------------------------------------------------------
 def _equal_weight_panel(features: dict[str, pd.DataFrame]) -> pd.DataFrame:
@@ -220,7 +173,7 @@ def main():
     args = ap.parse_args()
 
     from model.labels import build_labels, forward_returns
-    from model.predictor import PREDICTORS
+    from model.predictor import PREDICTORS, rolling_oos
     from model.registry import ModelRegistry
     from model.serving import register_model_as_factor
 
@@ -247,7 +200,7 @@ def main():
         fingerprint = _real_fingerprint()
         tag = f"real_{args.library_dataset}"
     else:
-        from scripts.mine_factors import gen_mock_panel_with_signal
+        from data.mock import gen_mock_panel_with_signal
         panel = gen_mock_panel_with_signal(n_days=args.mock_days,
                                            n_codes=args.mock_codes, seed=args.seed)
         close = panel["close"]

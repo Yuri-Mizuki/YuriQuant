@@ -37,10 +37,10 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from backtest.engine import BacktestResult, VectorBacktest
 from backtest.costs import ShortCostModel
+from backtest.engine import BacktestResult, VectorBacktest
 from backtest.metrics import PERIODS_PER_YEAR, calc_all_metrics
-from research.factor_analysis import calc_ic_series, calc_ir, calc_ic_decay, factor_autocorr
+from research.factor_analysis import calc_ic_decay, calc_ic_series, calc_ir, factor_autocorr
 from strategy.examples import TopKLongOnly, TopKLongShort
 
 log = logging.getLogger("factor_library")
@@ -373,6 +373,31 @@ class FactorLibrary:
             if p.exists():
                 out[r["name"]] = pd.read_parquet(p)
         return out
+
+    def load_significant_features(self, exclude_model: bool = True) -> dict:
+        """加载 significant 因子面板（2026-08-31 从 e2e_common 下沉）。
+
+        Args:
+            exclude_model: 排除 model:* 来源（模型预测回写因子，面板通常滞后，
+                且与预测/回测工作流自身循环引用）。默认 True——这是 e2e
+                预测日能到数据末端的关键（model:* 面板截至 2025-12-31）。
+        """
+        reg = self.list_all()
+        sig = reg["significant"].fillna(False).astype(bool)
+        mask = sig.copy()
+        if exclude_model:
+            mask &= ~reg["source"].fillna("").str.startswith("model:")
+        sig_names = set(reg[mask]["name"])
+        log.info("因子库: %d 个因子, significant %d 个（排除 model:* 后 %d）",
+                 len(reg), int(sig.sum()), len(sig_names))
+
+        all_feats = self.load_library_features()
+        feats = {k: v for k, v in all_feats.items() if k in sig_names}
+        if feats:
+            sample = next(iter(feats.values()))
+            log.info("加载面板 %d 个, 日期范围 %s ~ %s",
+                     len(feats), sample.index[0].date(), sample.index[-1].date())
+        return feats
 
     # ---- 时间段回测查看 ----
     def evaluate_period(self, name: str, start=None, end=None, config: str = "ls_M") -> dict:

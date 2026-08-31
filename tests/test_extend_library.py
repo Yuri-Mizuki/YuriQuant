@@ -4,7 +4,9 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from scripts.extend_factor_library import _warmup_begin, extend_gp_factors, verify_overlap
+from research.factor_extension import (
+    extend_gp_factors, verify_overlap, warmup_begin,
+)
 
 
 def _gp_reg_row(name: str, formula: str) -> pd.DataFrame:
@@ -16,9 +18,9 @@ def _gp_reg_row(name: str, formula: str) -> pd.DataFrame:
 
 
 def test_warmup_begin():
-    assert _warmup_begin(20220101) == 20200101
-    assert _warmup_begin(20230601) == 20210601
-    assert _warmup_begin(20200101) == 20190102  # 不早于缓存起点
+    assert warmup_begin(20220101) == 20200101
+    assert warmup_begin(20230601) == 20210601
+    assert warmup_begin(20200101) == 20190102  # 不早于缓存起点
 
 
 def test_verify_overlap():

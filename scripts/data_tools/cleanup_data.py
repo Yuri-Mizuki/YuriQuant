@@ -6,8 +6,8 @@
 2. 修复 meta：重新扫描各表实际日期 + 池口径（调用 fix_meta）。
 
 用法：
-    python -m scripts.data.cleanup_data --check              # 只体检
-    python -m scripts.data.cleanup_data --fix-meta           # 修 meta
+    python -m scripts.data_tools.cleanup_data --check              # 只体检
+    python -m scripts.data_tools.cleanup_data --fix-meta           # 修 meta
 
 注意：
     - 池口径以财务表（income.parquet）的 code 集为准。
@@ -95,7 +95,7 @@ def cmd_check(args) -> None:
 
 
 def cmd_fix_meta(args) -> None:
-    from scripts.data.fix_meta import main as fix_main
+    from scripts.data_tools.fix_meta import main as fix_main
     fix_main()
 
 

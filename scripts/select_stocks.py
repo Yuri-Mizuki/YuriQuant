@@ -44,8 +44,6 @@ from data.cache import DataCache
 from data.cache_helpers import returns_from_cache
 from data.offline import OfflineDataSource
 from research.factor_library import FactorLibrary
-from data.datasource import create_datasource
-from research.factor_library import FactorLibrary
 from strategy import QuantileLongShort, TopKLongOnly, TopKLongShort
 from strategy.examples import build_strategy
 

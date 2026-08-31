@@ -65,6 +65,11 @@ packages = [
 [tool.ruff]
 target-version = "py310"
 line-length = 100
+# 死代码区不参与活跃扫描：archive=已废弃/被取代的旧入口，oneoff=历史实验
+exclude = [
+    "scripts/archive/**",
+    "scripts/oneoff/**",
+]
 
 [tool.ruff.lint]
 select = ["E", "F", "I"]

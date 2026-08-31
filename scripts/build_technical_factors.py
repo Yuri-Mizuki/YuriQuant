@@ -43,7 +43,7 @@ from data.cache_helpers import load_backward_factor, load_daily
 from factor.technical import calc_indicators
 from factor.technical_indicators import TechnicalIndicators as _TI
 from research.factor_library import FactorLibrary
-from scripts._build_common import (
+from scripts.cli_common import (
     add_build_args, make_data_context, print_no_save, record_experiment_safe,
     register_panels, returns_from_daily,
 )

@@ -161,9 +161,10 @@ def _time_fold_masks(date_arr: np.ndarray, n_splits: int, embargo_days: int = 0)
     """
     folds = forward_folds(pd.DatetimeIndex(date_arr), n_splits, embargo_days)
     out = []
+    day_idx = pd.DatetimeIndex(date_arr)  # 统一 dtype，避免 object 数组 isin DatetimeIndex 失配
     for f in folds:
-        train_mask = np.isin(date_arr, f.train_days)
-        test_mask = np.isin(date_arr, f.test_days)
+        train_mask = np.isin(day_idx, f.train_days)
+        test_mask = np.isin(day_idx, f.test_days)
         out.append((train_mask, test_mask))
     return out
 

@@ -99,11 +99,10 @@ def neutralize_panel(signal, cov):
 
 def build_model_panel(model: str, horizon: int, test_days: pd.DatetimeIndex):
     """walk-forward 训练 model，返回 (test 段 OOS 预测面板, panel)."""
-    from model.predictor import PREDICTORS
-    from scripts.walk_forward_model import rolling_oos
+    from data.cache_helpers import build_panel
     from factor.preprocessing import standardize_zscore
     from model.labels import build_labels
-    from data.cache_helpers import build_panel
+    from model.predictor import PREDICTORS, rolling_oos
 
     disc = Config.discipline()
     cfg = Config.get()

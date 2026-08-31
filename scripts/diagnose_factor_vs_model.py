@@ -34,7 +34,7 @@ from scripts.e2e_common import (  # noqa: E402
 from scripts.e2e_backtest import (  # noqa: E402
     run_equal_weight_backtest, perf_stats,
 )
-from scripts.investment_report import load_index_returns  # noqa: E402
+from data.cache_helpers import load_index_returns  # noqa: E402
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S")

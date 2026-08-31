@@ -165,14 +165,14 @@ def test_alpha101_skipped_documented():
 def test_build_alpha_factors_mock_register(tmp_path: Path):
     from data.cache import DataCache
     from data.universe import Universe
+    from factor.alpha_base import load_alpha_panels
     from research.factor_library import FactorLibrary
-    from scripts._build_common import register_panels
-    from scripts.build_alpha_factors import load_panels
+    from scripts.cli_common import register_panels
     from tests.conftest import MockDataSource
 
     cache = DataCache(MockDataSource(), cache_root=str(tmp_path / "cache"))
     uni = Universe(cache)
-    panels_px, industry, close_adj = load_panels(
+    panels_px, industry, close_adj = load_alpha_panels(
         cache, uni, "000300.SH", 20220101, 20241231)
     d = AlphaData(panels_px, industry=industry)
     assert panels_px["close"].shape[0] > 400

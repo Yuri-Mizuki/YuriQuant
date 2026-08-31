@@ -28,6 +28,7 @@ import numpy as np
 import pandas as pd
 
 from backtest.metrics import PERIODS_PER_YEAR
+from config import Config
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S")
 log = logging.getLogger("gtja_repro_eval")
@@ -52,15 +53,14 @@ def build_eval_env(begin: int, end: int, bwd: pd.DataFrame | None = None):
     ``bwd`` 复权因子只取一次并复用，保证样本内/外口径一致（SDK 登录抖动时
     不会出现一段复权一段未复权的混合链）。
     """
-    from config import Config
     from data.cache_helpers import build_panel, build_tradable_mask
-    from scripts.mine_factors import _build_vwap_exec_returns
+    from factor.gtja import build_vwap_exec_returns
 
     cfg = Config.get()
     cfg["universe"]["default"] = "all_a"
     panel, _ = build_panel(cfg, begin, end, offline=True)
     # 执行链收益需要 amount/volume/close，先于终端裁剪构建
-    rets = _build_vwap_exec_returns(panel, bwd=bwd)
+    rets = build_vwap_exec_returns(panel, bwd=bwd)
     if "vwap" not in panel and "amount" in panel:
         panel = dict(panel)
         panel["vwap"] = panel["amount"] / panel["volume"]

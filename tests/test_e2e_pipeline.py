@@ -15,7 +15,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 import pytest
 
@@ -26,7 +25,8 @@ ROOT = Path(__file__).resolve().parents[1]
 # 共享模块单元测试
 # ---------------------------------------------------------------------------
 def test_classic_features_shape():
-    from scripts.e2e_common import compute_classic_features, load_mock_data
+    from data.mock import load_mock_data
+    from factor.classic import compute_classic_features
     px = load_mock_data(n_days=200, n_codes=30, seed=0)
     feats = compute_classic_features(px)
     assert set(feats) == {
@@ -38,17 +38,17 @@ def test_classic_features_shape():
 
 
 def test_mock_data_shape():
-    from scripts.e2e_common import load_mock_data
+    from data.mock import load_mock_data
     px = load_mock_data(n_days=100, n_codes=20, seed=3)
     assert px["close"].shape == (100, 20)
     assert px["high"].ge(px["low"]).all().all()  # high >= low
 
 
 def test_build_labels_horizon():
-    from scripts.e2e_common import build_labels
-    from scripts.e2e_common import load_mock_data
+    from data.mock import load_mock_data
+    from model.labels import build_label_pair
     px = load_mock_data(n_days=120, n_codes=10, seed=0)
-    labels, fwd = build_labels(px["close"], horizon=5)
+    labels, fwd = build_label_pair(px["close"], horizon=5)
     # 尾部 horizon 日标签为 NaN（无未来窗口）
     assert labels.iloc[-5:].isna().all().all()
 
@@ -56,10 +56,11 @@ def test_build_labels_horizon():
 def test_load_library_factors_excludes_model():
     """stale-date 回归：排除 model:* 因子，面板末端必须到数据末端而非 2025-12-31。"""
     try:
-        from scripts.e2e_common import load_library_factors
+        from research.factor_library import FactorLibrary
     except Exception:
         pytest.skip("因子库不可用")
-    feats = load_library_factors(exclude_model=True)
+    feats = FactorLibrary(dataset="hs300_2022_2025").load_significant_features(
+        exclude_model=True)
     if not feats:
         pytest.skip("库内无 significant 因子")
     names = list(feats)

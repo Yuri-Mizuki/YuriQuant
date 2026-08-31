@@ -44,7 +44,8 @@ import numpy as np
 import pandas as pd
 
 from data.cache_helpers import load_daily
-from scripts._build_common import (
+from research.factor_library import FactorLibrary
+from scripts.cli_common import (
     add_build_args, make_data_context, print_no_save, record_experiment_safe,
     register_panels, returns_from_daily,
 )

@@ -31,6 +31,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from research.factor_library import FactorLibrary
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S")
 log = logging.getLogger("factor_library_cli")
 
@@ -206,7 +208,6 @@ def cmd_delete(args):
 
 
 def _lib() -> "FactorLibrary":
-    from research.factor_library import FactorLibrary
     return FactorLibrary(
         root=args.root if getattr(args, "root", None) else None,
         dataset=getattr(args, "dataset", None),
@@ -214,7 +215,6 @@ def _lib() -> "FactorLibrary":
 
 
 def cmd_datasets(args):
-    from research.factor_library import FactorLibrary
     ds = FactorLibrary.list_datasets(root=args.root)
     if not ds:
         print("尚未创建任何数据集库。运行 mine/synthesize --library-dataset <name> 创建。")

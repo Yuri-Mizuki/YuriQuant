@@ -31,10 +31,15 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from data.mock import load_mock_data  # noqa: E402
+from factor.classic import compute_classic_features  # noqa: E402
+from model.labels import build_label_pair  # noqa: E402
 from scripts.e2e_common import (  # noqa: E402
-    HORIZON, RIDGE_ALPHA, compute_classic_features, drop_stale_factors,
-    load_daily_data, load_library_factors, load_mock_data, select_features,
-    build_labels,
+    HORIZON,
+    RIDGE_ALPHA,
+    drop_stale_factors,
+    load_daily_data,
+    select_features,
 )
 
 logging.basicConfig(level=logging.INFO,
@@ -84,8 +89,8 @@ def train_and_predict(
 
     if model == "gbdt":
         try:
-            from scripts.e2e_common import GBDT_PARAMS
             from model.predictor import LGBMPredictor
+            from scripts.e2e_common import GBDT_PARAMS
             p = LGBMPredictor(**GBDT_PARAMS)
         except ImportError:
             log.warning("lightgbm 不可用，降级 ridge")
@@ -247,7 +252,7 @@ def run(args) -> dict:
     all_feats = drop_stale_factors(all_feats, px["close"].index[-1])
     log.info("新鲜度过滤后: %d 个", len(all_feats))
 
-    labels, fwd = build_labels(px["close"], horizon=HORIZON)
+    labels, fwd = build_label_pair(px["close"], horizon=HORIZON)
     last_feat_day = None
     for f in all_feats.values():
         d = f.dropna(how="all").index[-1] if len(f) > 0 else None

@@ -10,7 +10,7 @@
 2. 每表增加 pool 口径字段：hs300（当前主池）| hs300_zz1000 | all_a | market | index_*
 3. 记录 archive_zz1000 目录的存在（ZZ1000 数据离线归档，未删除）
 
-用法：python -m scripts.data.fix_meta
+用法：python -m scripts.data_tools.fix_meta
 """
 from __future__ import annotations
 

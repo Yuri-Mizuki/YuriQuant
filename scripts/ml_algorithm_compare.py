@@ -60,7 +60,7 @@ N_FOLDS = 8
 OUT_DIR = Path("reports/ml_algorithm_compare")
 
 # 复用 ml_synthesis_experiment 的口径（纯函数：经典因子 / 评价 / valid 调参）
-from scripts.e2e_common import compute_classic_features
+from factor.classic import compute_classic_features
 from scripts.ml_synthesis_experiment import (  # noqa: E402
     _eval_row,
     _fit_predict_valid,
@@ -92,8 +92,7 @@ def _px_panels(begin: int, end: int | None) -> dict[str, pd.DataFrame]:
 # ---------------------------------------------------------------------------
 def main(skip_tune: bool = False, do_register: bool = True) -> None:
     from model.labels import build_labels, forward_returns
-    from model.predictor import LGBMPredictor, RidgePredictor, TabICLPredictor
-    from scripts.walk_forward_model import rolling_oos
+    from model.predictor import LGBMPredictor, RidgePredictor, TabICLPredictor, rolling_oos
 
     t0 = time.time()
     OUT_DIR.mkdir(parents=True, exist_ok=True)

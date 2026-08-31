@@ -22,8 +22,6 @@
 from __future__ import annotations
 
 import argparse
-import base64
-import io
 import json
 import logging
 import sys
@@ -38,13 +36,26 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from backtest.metrics import PERIODS_PER_YEAR  # noqa: E402
-from scripts.e2e_common import (  # noqa: E402
-    HORIZON, build_labels, compute_classic_features, drop_stale_factors,
-    load_daily_data, load_mock_data, select_features,
+from data.mock import load_mock_data  # noqa: E402
+from factor.classic import compute_classic_features  # noqa: E402
+from model.labels import build_label_pair  # noqa: E402
+from research.factor_report import (  # noqa: E402
+    _fig_to_b64,
+    factor_test,
+    plot_layers,
+    plot_monthly_ic,
 )
 from scripts.e2e_backtest import (  # noqa: E402
-    walk_forward_predictions, run_equal_weight_backtest,
-    run_risk_parity_backtest, perf_stats,
+    perf_stats,
+    run_equal_weight_backtest,
+    run_risk_parity_backtest,
+    walk_forward_predictions,
+)
+from scripts.e2e_common import (  # noqa: E402
+    HORIZON,
+    drop_stale_factors,
+    load_daily_data,
+    select_features,
 )
 
 logging.basicConfig(level=logging.INFO,
@@ -56,128 +67,17 @@ BT_START = "2024-01-01"
 
 # matplotlib 中文字体（Windows 微软雅黑）
 import matplotlib  # noqa: E402
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
+
 plt.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "Arial"]
 plt.rcParams["axes.unicode_minus"] = False
 
 
 # ---------------------------------------------------------------------------
-# 指数基准
-# ---------------------------------------------------------------------------
-def load_index_returns(index_code: str, begin: int, end: int,
-                       real: bool = False) -> pd.Series | None:
-    """指数日收益（委托 data.cache_helpers.load_index_returns 单一实现）。
-
-    Returns:
-        Series(index=date, value=日收益)；不可用（mock / 无缓存且非 real）返回 None。
-    """
-    from data.cache_helpers import load_index_returns as _load
-    return _load(index_code, begin=begin, end=end, real=real)
-
-
-# ---------------------------------------------------------------------------
-# 因子检验（模型预测作为因子）
-# ---------------------------------------------------------------------------
-def factor_test(pred_panel: pd.DataFrame, fwd: pd.DataFrame, close: pd.DataFrame,
-                out_dir: Path, label: str) -> dict:
-    """把模型预测面板作为因子做标准检验。
-
-    两种口径：
-    - 稀疏：只在调仓日有预测值（纯信号检验，样本=调仓次数）
-    - 持仓：预测值 ffill 到下一次调仓前（与组合持仓一致，样本=交易日）
-
-    口径纪律（修复 2026-08-25）：
-    - IC 检验用 fwd（未来 horizon 累计收益）——模型预测什么就评估什么；
-    - **分层回测必须用日频未来一期收益**（close.pct_change().shift(-1)），
-      若把 horizon 累计收益按日累乘 (1+r).cumprod()，5 日滚动窗口重叠会把
-      同一段收益重复算约 5 次（净值虚高 5 倍，Q1 曾显示 +556% 假象）；
-    - 网格裁剪到因子有效起始（2024-01），消除回测前全 NaN 的 1.0 平线段。
-
-    Returns:
-        {summary_sparse, summary_hold, layer_nav, ic_sparse, ic_hold, monthly_ic}
-    """
-    from research.factor_analysis import calc_ic_series, quantile_backtest, standard_factor_summary
-
-    common = fwd.dropna(how="all").index
-    sparse = pred_panel.reindex(index=common)
-    hold = sparse.ffill()
-
-    # 裁剪到因子有效起始（2024-01）：消除 2022~2024 全 NaN 平线
-    valid = hold.dropna(how="all").index
-    if len(valid):
-        common = common[common >= valid[0]]
-        sparse = sparse.reindex(index=common)
-        hold = hold.reindex(index=common)
-    fwd_aligned = fwd.reindex(index=common)
-    log.info("因子检验网格: %s ~ %s (%d 日)", common[0].date(), common[-1].date(), len(common))
-
-    # IC 口径（模型预测 horizon 累计收益）
-    sum_sparse = standard_factor_summary(sparse, fwd_aligned)
-    sum_hold = standard_factor_summary(hold, fwd_aligned)
-    ic_sparse = calc_ic_series(sparse, fwd_aligned)
-
-    # 分层净值（持仓口径）：日频未来一期收益，避免 horizon 重叠放大
-    ret_d = close.pct_change(fill_method=None).shift(-1).reindex(index=common)
-    layer_nav = quantile_backtest(hold, ret_d, n_quantiles=5)
-    layer_nav.to_csv(out_dir / f"layer_nav_{label}.csv", encoding="utf-8-sig")
-
-    # 月度 IC（持仓口径，horizon 累计收益）
-    ic_hold = calc_ic_series(hold, fwd_aligned)
-    ic_hold.name = "ic"
-    monthly_ic = ic_hold.groupby(ic_hold.index.to_period("M")).mean()
-    monthly_ic.to_csv(out_dir / f"monthly_ic_{label}.csv", encoding="utf-8-sig")
-
-    pd.DataFrame([sum_sparse, sum_hold], index=["稀疏(调仓日)", "持仓(日频)"]) \
-        .to_csv(out_dir / f"factor_summary_{label}.csv", encoding="utf-8-sig")
-
-    log.info("因子检验[%s]: 稀疏 IC=%.4f IR=%.2f t_nw=%.2f | 持仓 IC=%.4f IR=%.2f t_nw=%.2f",
-             label, sum_sparse["ic_mean"], sum_sparse["ir"], sum_sparse["t_stat_nw"],
-             sum_hold["ic_mean"], sum_hold["ir"], sum_hold["t_stat_nw"])
-    return {"sum_sparse": sum_sparse, "sum_hold": sum_hold, "layer_nav": layer_nav,
-            "ic_hold": ic_hold, "monthly_ic": monthly_ic}
-
-
-# ---------------------------------------------------------------------------
 # 图
 # ---------------------------------------------------------------------------
-def _fig_to_b64(fig) -> str:
-    buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=110, bbox_inches="tight")
-    plt.close(fig)
-    return base64.b64encode(buf.getvalue()).decode()
-
-
-def plot_layers(layer_nav: pd.DataFrame) -> str:
-    """分层累计收益图：Q1~Q5 与多空全部用累计收益（净值-1，0 起点），
-    同一量纲、Y 轴按百分比自动展开——避免净值 1 起点导致差异被压扁。"""
-    fig, ax = plt.subplots(figsize=(9, 4))
-    ret = layer_nav - 1.0  # 累计收益，起点 0
-    for q in layer_nav.columns:
-        ax.plot(ret.index, ret[q], label=q, linewidth=1.2)
-    ls = ret["Q5"] - ret["Q1"]  # 多空 = 收益差，同样 0 起点
-    ax.plot(ls.index, ls, label="Q5-Q1(多空)", linewidth=1.6,
-            color="#A32D2D", linestyle="--")
-    ax.axhline(0, color="gray", linewidth=0.6, linestyle=":")
-    ax.set_title("模型预测因子分层累计收益（Q1=预测最低组, Q5=最高组）")
-    ax.set_ylabel("累计收益")
-    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v * 100:.0f}%"))
-    ax.legend(ncol=3, fontsize=9)
-    ax.grid(alpha=0.3)
-    return _fig_to_b64(fig)
-
-
-def plot_monthly_ic(monthly_ic: pd.Series) -> str:
-    fig, ax = plt.subplots(figsize=(9, 3.2))
-    colors = ["#A32D2D" if v > 0 else "#3B6D11" for v in monthly_ic]
-    ax.bar(monthly_ic.index.astype(str), monthly_ic.values, color=colors)
-    ax.axhline(0, color="gray", linewidth=0.6)
-    ax.set_title("模型预测因子月度 IC（持仓口径）")
-    ax.tick_params(axis="x", rotation=60, labelsize=8)
-    ax.grid(alpha=0.3, axis="y")
-    return _fig_to_b64(fig)
-
-
 def plot_equity_curves(equity: pd.DataFrame) -> str:
     """净值曲线（equity 已含指数基准列，统一日历 + 起点 1.0，勿重复传基准）。"""
     fig, ax = plt.subplots(figsize=(9, 4.2))
@@ -251,7 +151,7 @@ def run(args) -> dict:
 
     close = px["close"]
     returns = close.pct_change(fill_method=None)
-    labels, fwd = build_labels(close, horizon=HORIZON)
+    labels, fwd = build_label_pair(close, horizon=HORIZON)
 
     # 面板新鲜度守卫（真实模式）
     if args.real:
@@ -318,6 +218,7 @@ def run(args) -> dict:
             log.warning("risk_parity 跳过: %s", e)
 
     # ---- 7. 指数基准 ----
+    from data.cache_helpers import load_index_returns
     bench_ret = load_index_returns(args.index, int(bt_days[0].strftime("%Y%m%d")),
                                    int(bt_days[-1].strftime("%Y%m%d")), real=args.real)
     bench_ret = bench_ret.reindex(bt_days) if bench_ret is not None else None

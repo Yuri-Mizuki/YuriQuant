@@ -41,6 +41,7 @@ from factor.synthesis import (
     synthesize_stacking_lambdarank,
 )
 from research.factor_library import FactorLibrary
+from stats.ic import calc_ic_series, calc_ir
 from backtest.engine import VectorBacktest
 from strategy.examples import TopKLongShort
 

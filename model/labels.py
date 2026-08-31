@@ -22,7 +22,7 @@ import pandas as pd
 
 from factor.preprocessing import standardize_zscore
 
-__all__ = ["build_labels", "forward_returns"]
+__all__ = ["build_labels", "build_label_pair", "forward_returns"]
 
 
 def forward_returns(
@@ -79,3 +79,17 @@ def build_labels(
     if not labels.notna().any().any():
         raise ValueError("标签面板全为 NaN：检查 horizon 与面板长度")
     return labels, int(horizon)
+
+
+def build_label_pair(
+    close_panel: pd.DataFrame,
+    horizon: int = 5,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """(rank 标签, 原始 horizon 收益) 二元组 —— 预测/回测共口径（e2e 下沉）。
+
+    即 ``build_labels(mode="rank")`` 与 ``forward_returns`` 的组合：标签用于
+    训练，原始收益用于 IC/分层评价，两者出自同一前瞻窗口（h=horizon）。
+    """
+    fwd = forward_returns(close_panel, horizon)
+    labels, _ = build_labels(close_panel=close_panel, horizon=horizon, mode="rank")
+    return labels, fwd

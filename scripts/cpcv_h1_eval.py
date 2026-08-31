@@ -55,11 +55,11 @@ log = setup_logging("cpcv_h1_eval")
 
 OUT_DIR = Path("reports") / "cpcv_h1"
 
-from factor.cv import cpcv, CPCVPath  # noqa: E402
-from model.labels import build_labels, forward_returns  # noqa: E402
-from research.factor_analysis import calc_ic_series  # noqa: E402
 from scipy import stats as sp_stats  # noqa: E402
 
+from factor.cv import CPCVPath, cpcv  # noqa: E402
+from model.labels import build_labels, forward_returns  # noqa: E402
+from research.factor_analysis import calc_ic_series  # noqa: E402
 
 # ===========================================================================
 # h=1 固定配置（已定型，不重新选择）
@@ -129,8 +129,8 @@ def _build_mock_data(horizon: int = 1):
 
 def _build_real_data(horizon: int = 1):
     """真实 HS300 数据：复用 ml_synthesis_experiment 的数据加载 + 固定 10 特征。"""
-    from scripts.e2e_common import compute_classic_features
-    from scripts.ml_synthesis_experiment import _px_panels, DATASET
+    from factor.classic import compute_classic_features
+    from scripts.ml_synthesis_experiment import DATASET, _px_panels
 
     px = _px_panels()
     classic = compute_classic_features(px)
@@ -381,9 +381,9 @@ def main():
     h1_row = summary_df[summary_df["horizon"] == 1]
     if not h1_row.empty:
         h1 = h1_row.iloc[0]
-        print(f"\n--- h=1 判定 ---")
+        print("\n--- h=1 判定 ---")
         print(f"  CPCV IC 均值:      {h1['cpcv_ic_mean']:.4f}")
-        print(f"  原单路径 test IC:  ~0.040（乐观有偏估计）")
+        print("  原单路径 test IC:  ~0.040（乐观有偏估计）")
         if not np.isnan(h1["ttest_p"]):
             if h1["ttest_p"] < 0.05 and h1["pct_positive"] > 10/15:
                 print(f"  ✅ t-test p={h1['ttest_p']:.4f} < 0.05，正路径 {h1['n_positive']}/{h1['n_valid']} → 信号真实")

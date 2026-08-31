@@ -32,14 +32,22 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.e2e_common import (  # noqa: E402
-    HORIZON, build_labels, build_neutral_covariates, compute_classic_features,
-    drop_stale_factors, load_daily_data, neutralize_predictions, select_features,
-)
+from data.cache_helpers import load_index_returns  # noqa: E402
+from factor.classic import compute_classic_features  # noqa: E402
+from model.labels import build_label_pair  # noqa: E402
 from scripts.e2e_backtest import (  # noqa: E402
-    run_equal_weight_backtest, perf_stats, walk_forward_predictions,
+    perf_stats,
+    run_equal_weight_backtest,
+    walk_forward_predictions,
 )
-from scripts.investment_report import load_index_returns  # noqa: E402
+from scripts.e2e_common import (  # noqa: E402
+    HORIZON,
+    build_neutral_covariates,
+    drop_stale_factors,
+    load_daily_data,
+    neutralize_predictions,
+    select_features,
+)
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S")
@@ -74,7 +82,7 @@ def run(args) -> None:
     all_feats = drop_stale_factors(all_feats, px["close"].index[-1])
     close = px["close"]
     returns = close.pct_change(fill_method=None)
-    labels, fwd = build_labels(close, horizon=HORIZON)
+    labels, fwd = build_label_pair(close, horizon=HORIZON)
 
     # 特征选择（回测前窗口）
     all_days = close.index

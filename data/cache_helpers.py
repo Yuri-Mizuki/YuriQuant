@@ -447,3 +447,74 @@ def build_panel(
 
     returns_panel = close.pct_change().shift(-1)
     return panel, returns_panel
+
+
+def build_real_panel(cfg: dict, begin: int, end: int,
+                     offline: bool = False) -> tuple[dict[str, pd.DataFrame], pd.DataFrame]:
+    """统一真实面板构建（带日志的 ``build_panel`` 便捷包装）。
+
+    2026-08-31 自 ``scripts.mine_factors`` 下沉（跨 scripts 复用：
+    synthesize_factors / compare_ml_synthesis / compare_htai_fitness），
+    与 ``build_panel`` 完全同口径。
+    """
+    _log.info("构建真实面板 %s~%s (offline=%s) ...", begin, end, offline)
+    return build_panel(cfg, begin, end, offline=offline)
+
+
+def build_htai_neutral_panels(panel: dict[str, pd.DataFrame],
+                              real: bool = False) -> dict[str, pd.DataFrame]:
+    """构建华泰五因子中性化协变量面板。
+
+    2026-08-31 自 ``scripts.mine_factors._build_htai_neutral_panels`` 下沉
+    （跨 scripts 复用：walk_forward / compare_ml_synthesis / compare_htai_fitness）。
+
+    对应研报报告21 适应度计算的「行业、市值、过去20日收益率、过去20日平均换手率、
+    过去20日波动率」五个中性化因子：
+
+        size:   市值 = TOT_SHARE(PIT) × 后复权 close
+        industry: 申万一级行业映射（date×code，值=行业名）
+        mom20:  过去 20 日收益率 = close.pct_change(20)
+        vol20:  过去 20 日波动率 = 日收益的 20 日滚动 std
+        turn20: 过去 20 日平均换手率 = (volume / TOT_SHARE) 的 20 日滚动均值
+
+    ``real=False``（mock）时跳过需要 SDK 的行业/市值/换手部分，只返回 mom20/vol20；
+    任一协变量构建失败时自动从返回 dict 剔除（neutralize 只回归可用的部分）。
+    """
+    out: dict[str, pd.DataFrame] = {}
+    close = panel["close"]
+    try:
+        out["mom20"] = close.pct_change(20)
+        out["vol20"] = close.pct_change().rolling(20).std()
+    except Exception:
+        pass
+    if not real:
+        return out
+    try:
+        from data.cache import DataCache
+        from data.datasource import create_datasource
+        from data.financials import build_pit_panel
+        ds = create_datasource()
+        cache = DataCache(ds)
+        codes = list(close.columns)
+        dates = close.index
+        cal = cache.get_calendar(int(dates.min().strftime("%Y%m%d")),
+                                 int(dates.max().strftime("%Y%m%d")))
+        ind = cache.get_industry_classification(level=1)
+        if not ind.empty:
+            ind["in_date"] = pd.to_datetime(ind["in_date"], errors="coerce")
+            ind["out_date"] = pd.to_datetime(ind["out_date"], errors="coerce")
+            rows = {}
+            for d in dates:
+                m = ind[(ind["in_date"] <= d) & (ind["out_date"].fillna(pd.Timestamp.max) >= d)]
+                rows[d] = {r["code"]: r["industry_name"]
+                           for _, r in m.iterrows() if r["code"] in codes}
+            out["industry"] = pd.DataFrame(rows).T.reindex(index=dates, columns=codes)
+        balance = cache.get_balance_sheet(codes)
+        if not balance.empty and "TOT_SHARE" in balance.columns:
+            ts = build_pit_panel(balance, cal, "TOT_SHARE").reindex(index=dates, columns=codes)
+            out["size"] = ts * close
+            turn = panel["volume"] / ts
+            out["turn20"] = turn.rolling(20).mean()
+    except Exception as exc:
+        _log.warning("华泰中性化协变量面板构建不完整（缺失项自动跳过）: %s", exc)
+    return out

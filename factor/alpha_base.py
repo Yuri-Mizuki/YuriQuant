@@ -16,6 +16,8 @@
 """
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 import pandas as pd
 
@@ -44,6 +46,8 @@ from factor.operators import (
     ts_sum,
     ts_wma,
 )
+
+log = logging.getLogger("alpha_base")
 
 __all__ = [
     "AlphaData", "if_else", "sma_tdx", "sumif", "count_", "highday", "lowday",
@@ -264,3 +268,64 @@ class AlphaData:
     def ind(self, x: pd.DataFrame) -> pd.DataFrame:
         """行业中性化的便捷入口。"""
         return ind_neutralize(x, self.industry)
+
+
+# ---------------------------------------------------------------------------
+# 构建入口（build_alpha_factors / extend_factor_library 共用）
+# ---------------------------------------------------------------------------
+SET_LABELS = {
+    "alpha101": "WorldQuant Alpha101 (Kakushadze 2016)",
+    "alpha191": "GTJA Alpha191 短周期价量因子 (2017)",
+    "alpha158": "Qlib Alpha158 量价特征集 (Microsoft, 2020)",
+    "alpha360": "Qlib Alpha360 原始OHLCV序列 (Microsoft, 2020)",
+}
+
+
+def load_alpha_panels(cache, uni, index_code: str, warmup: int, end: int):
+    """拉 warmup..end 的 PIT 日线并组装 AlphaData 输入面板（后复权）。
+
+    Returns:
+        (panels, industry, close_adj)：panels 含 open/high/low/close/volume/
+        amount/vwap（后复权口径）；industry 为申万一级行业 PIT 面板（缺省 None）；
+        close_adj 为复权 close（收益口径用）。
+    """
+    from data.cache_helpers import load_backward_factor, load_daily
+    from data.industry import IndustryClassification
+
+    codes, cal, daily = load_daily(cache, uni, index_code, warmup, end)
+    bf = load_backward_factor(cache, codes)
+    log.info("日线 %d 行 / 复权因子 %d 列", len(daily),
+             bf.shape[1] if not bf.empty else 0)
+
+    d = daily.reset_index()
+    d["date"] = d["date"].dt.normalize()
+
+    def _panel(col: str) -> pd.DataFrame:
+        return d.pivot(index="date", columns="code", values=col).sort_index()
+
+    o, h, l, c = _panel("open"), _panel("high"), _panel("low"), _panel("close")
+    v, amt = _panel("volume"), _panel("amount")
+
+    if not bf.empty:
+        f = bf.reindex(index=c.index, columns=c.columns).ffill()
+        for pnl in (o, h, l, c):
+            pnl[:] = pnl.values * f.values
+        # vwap = 均价 × 后复权因子（与价格同口径）
+        vwap = (amt / v).replace([np.inf, -np.inf], np.nan) * f
+    else:
+        log.warning("无复权因子，使用原始价（除权日价量关系会有跳变）")
+        vwap = (amt / v).replace([np.inf, -np.inf], np.nan)
+
+    # 申万一级行业 PIT 面板（IndNeutralize 用；失败则恒等中性化）
+    industry = None
+    try:
+        industry = IndustryClassification(cache, level=1).get_industry_panel(
+            list(c.columns), c.index)
+        if industry.isna().all().all():
+            industry = None
+    except Exception as e:  # noqa: BLE001
+        log.warning("行业面板不可用（%s），IndNeutralize 退化为恒等", str(e)[:80])
+
+    panels = {"open": o, "high": h, "low": l, "close": c,
+              "volume": v, "amount": amt, "vwap": vwap}
+    return panels, industry, c

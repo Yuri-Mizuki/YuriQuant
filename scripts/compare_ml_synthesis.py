@@ -118,7 +118,8 @@ def main():
     ap.add_argument("--out", default=None, help="结果 CSV 路径")
     args = ap.parse_args()
 
-    from scripts.mine_factors import build_real_panel, gen_mock_panel_with_signal, _build_htai_neutral_panels
+    from data.cache_helpers import build_htai_neutral_panels, build_real_panel
+    from data.mock import gen_mock_panel_with_signal
     from factor.synthesis import (CompositeInput, synthesize_stacking,
                                   synthesize_stacking_gbdt)
     from factor.preprocessing import standardize_zscore
@@ -134,7 +135,7 @@ def main():
     panel["returns"] = panel["close"].pct_change()
     if "amount" in panel and "volume" in panel:
         panel["vwap"] = panel["amount"] / panel["volume"]
-    neutral_panels = _build_htai_neutral_panels(panel, real=args.real)
+    neutral_panels = build_htai_neutral_panels(panel, real=args.real)
     log.info("面板: %d 日 × %d 股, 中性化协变量=%s", len(rets), panel["close"].shape[1],
              list(neutral_panels.keys()))
 

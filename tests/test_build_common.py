@@ -1,11 +1,11 @@
-"""_build_common 公共 CI/CD 骨架的单元测试。"""
+"""cli_common 公共 CI/CD 骨架的单元测试。"""
 import argparse
 
 import numpy as np
 import pandas as pd
 import pytest
 
-from scripts._build_common import (
+from scripts.cli_common import (
     add_build_args, make_data_context, print_no_save, register_panels,
     returns_from_daily,
 )

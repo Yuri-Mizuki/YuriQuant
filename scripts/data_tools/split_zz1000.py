@@ -7,7 +7,7 @@
 注意：2026-08-26 池隔离扩展后，新数据按池分文件（daily_{pool}.parquet），
 正常拉取不再产生混池，本脚本仅用于历史文件迁移或回退场景。
 
-用法：python -m scripts.data.split_zz1000
+用法：python -m scripts.data_tools.split_zz1000
 """
 from __future__ import annotations
 

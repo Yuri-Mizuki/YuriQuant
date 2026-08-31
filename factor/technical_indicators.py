@@ -842,7 +842,7 @@ class TechnicalIndicators:
             }
 
     @staticmethod
-    def XS(close, high, low, n=13):
+    def XS(close, high, low, volume, n=13):
             """XS 薛斯通道
             SMA_C = SMA(CLOSE, N, 1)
             SMA_H = SMA(HIGH, N, 1)

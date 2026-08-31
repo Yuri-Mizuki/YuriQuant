@@ -27,16 +27,23 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 logging.basicConfig(level=logging.WARNING)
 log = logging.getLogger("diagnose_neu")
 
-from scripts.e2e_common import (  # noqa: E402
-    HORIZON, build_labels, compute_classic_features, drop_stale_factors,
-    load_daily_data, select_features,
-)
-from scripts.e2e_backtest import (  # noqa: E402
-    run_equal_weight_backtest, perf_stats, walk_forward_predictions,
-)
-from scripts.investment_report import load_index_returns  # noqa: E402
-from scripts.optimize_e2e import build_neutral_covariates, neutralize_predictions  # noqa: E402
+from data.cache_helpers import load_index_returns  # noqa: E402
+from factor.classic import compute_classic_features  # noqa: E402
+from model.labels import build_label_pair  # noqa: E402
 from research.factor_analysis import calc_ic_series  # noqa: E402
+from scripts.e2e_backtest import (  # noqa: E402
+    perf_stats,
+    run_equal_weight_backtest,
+    walk_forward_predictions,
+)
+from scripts.e2e_common import (  # noqa: E402
+    DATASET,
+    HORIZON,
+    drop_stale_factors,
+    load_daily_data,
+    select_features,
+)
+from scripts.optimize_e2e import build_neutral_covariates, neutralize_predictions  # noqa: E402
 
 BT_START = "2024-01-01"
 TOP_N = 50
@@ -113,7 +120,7 @@ def main():
         all_feats = compute_classic_features(px)
 
     returns = close.pct_change(fill_method=None)
-    labels, fwd = build_labels(close, horizon=HORIZON)
+    labels, fwd = build_label_pair(close, horizon=HORIZON)
 
     common = None
     for f in all_feats.values():
@@ -141,8 +148,8 @@ def main():
     # 单因子候选（因子库）
     cands = {"模型预测": pred}
     if args.real:
-        from scripts.e2e_common import load_library_factors
-        lib = load_library_factors(exclude_model=True)
+        from research.factor_library import FactorLibrary
+        lib = FactorLibrary(dataset=DATASET).load_significant_features(exclude_model=True)
         for name in ["range20", "alpha191_159", "vol60", "alpha191_167", "mom20"]:
             if name in lib:
                 cands[name] = lib[name].reindex(common)

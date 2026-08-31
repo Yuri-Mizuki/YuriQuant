@@ -38,8 +38,8 @@ from scipy import stats
 
 def build_panel(args) -> tuple[dict[str, pd.DataFrame], pd.DataFrame, dict]:
     """构建面板 + 华泰特征补全 + 中性化协变量（复用 mine_factors 的构造逻辑）。"""
-    from scripts.mine_factors import (build_real_panel, gen_mock_panel_with_signal,
-                                      _build_htai_neutral_panels)
+    from data.cache_helpers import build_htai_neutral_panels, build_real_panel
+    from data.mock import gen_mock_panel_with_signal
     if args.real:
         from config import Config
         cfg = Config.get()
@@ -53,7 +53,7 @@ def build_panel(args) -> tuple[dict[str, pd.DataFrame], pd.DataFrame, dict]:
         panel["returns"] = panel["close"].pct_change()
     if "vwap" not in panel and "amount" in panel and "volume" in panel:
         panel["vwap"] = panel["amount"] / panel["volume"]
-    neutral_panels = _build_htai_neutral_panels(panel, real=args.real)
+    neutral_panels = build_htai_neutral_panels(panel, real=args.real)
     return panel, rets, neutral_panels
 
 
@@ -198,7 +198,7 @@ def main():
             "avg_poly_gain": float(sub["poly_gain"].mean()),
         })
     sum_df = pd.DataFrame(summary)
-    print("\n===== 适应度模式效果对比（hof 前 %d 因子平均）=====".format(args.top))
+    print(f"\n===== 适应度模式效果对比（hof 前 {args.top} 因子平均）=====")
     with pd.option_context("display.width", 200, "display.float_format", lambda v: f"{v:.4f}"):
         print(sum_df.to_string(index=False))
     print("\n指标含义: lin_ic=月频线性RankIC | mi=互信息(非线性) | top_excess=多头超额")

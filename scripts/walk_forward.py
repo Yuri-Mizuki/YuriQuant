@@ -142,7 +142,7 @@ def load_full_panels(begin: int = 20220101, end: int = 20251231):
         from data.cache_helpers import load_financial_tables
         from scripts.build_fundamental_factors import build_factor_panels
         fin = load_financial_tables(cache, codes)
-        fund = build_factor_panels(daily if "daily" in dir() else d, cal,
+        fund = build_factor_panels(d, cal,
                                    fin["income"], fin["balance_sheet"], fin["cash_flow"],
                                    fin["equity_structure"], fin["dividend"],
                                    fin["share_holder"], fin["holder_num"])
@@ -239,8 +239,8 @@ def main():
                          monthly_weight=args.gp_monthly_weight, fitness_mode=args.gp_fitness,
                          n_jobs=args.gp_jobs, seed=args.gp_seed, verbose=args.gp_verbose)
         if args.gp_htai:
-            from scripts.mine_factors import _build_htai_neutral_panels
-            neutral = _build_htai_neutral_panels(train_panel, real=False)
+            from data.cache_helpers import build_htai_neutral_panels
+            neutral = build_htai_neutral_panels(train_panel, real=False)
             gp_kwargs.update(htai=True, neutral_panels=neutral if neutral else None)
             log.info("GP htai 口径：中性化协变量=%s", list(neutral.keys()))
         log.info("GP train 段挖掘: pop=%d gen=%d seed=%d fitness=%s", args.gp_pop,

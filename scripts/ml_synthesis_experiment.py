@@ -47,9 +47,9 @@ logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S")
 log = logging.getLogger("ml_synthesis_experiment")
 
-# 经典量价 12 因子：单一实现在 e2e_common.compute_classic_features
+# 经典量价 12 因子：单一实现在 factor.classic.compute_classic_features
 # （2026-08-29 收敛逐字副本；保留本别名兼容历史 import 与内部调用）
-from scripts.e2e_common import compute_classic_features as _classic_features  # noqa: E402
+from factor.classic import compute_classic_features as _classic_features  # noqa: E402
 
 DATASET = "hs300_2022_2025"
 HORIZON = 5
@@ -194,9 +194,8 @@ def holdout_predict(predictor, feats, labels, tr_va_days, te_days, embargo: int)
 # ---------------------------------------------------------------------------
 def _main_impl(H: int, out_dir: Path, skip_tune: bool, do_register: bool):
     from model.labels import build_labels, forward_returns
-    from model.predictor import RidgePredictor
+    from model.predictor import RidgePredictor, rolling_oos
     from research.factor_library import FactorLibrary
-    from scripts.walk_forward_model import rolling_oos
 
     t0 = time.time()
 

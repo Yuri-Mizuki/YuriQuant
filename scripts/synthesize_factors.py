@@ -167,13 +167,13 @@ def main():
     # 1) 面板
     if args.real or args.from_library:
         from config import Config
-        from scripts.mine_factors import build_real_panel
+        from data.cache_helpers import build_real_panel
         cfg = Config.get()
         begin = begin or cfg["fetch"]["begin_date"]
         end = end or cfg.get("end_date")
         panel, returns_panel = build_real_panel(cfg, begin, end)
     else:
-        from scripts.mine_factors import gen_mock_panel_with_signal
+        from data.mock import gen_mock_panel_with_signal
         log.info("使用 Mock 数据（注入 AR(1) 动量信号）...")
         panel = gen_mock_panel_with_signal()
         returns_panel = panel["close"].pct_change().shift(-1)

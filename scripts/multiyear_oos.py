@@ -52,9 +52,8 @@ def build_features(close, valid_days, dev_days):
 
 def run_year(year, model, horizon, features, close, all_days):
     """walk-forward 预测 year 全年，返回 OOS 预测面板 + 该年 fwd 面板。"""
-    from model.predictor import PREDICTORS
-    from scripts.walk_forward_model import rolling_oos
     from model.labels import build_labels
+    from model.predictor import PREDICTORS, rolling_oos
 
     test_days = all_days[(all_days >= pd.Timestamp(f"{year}-01-01")) &
                          (all_days <= pd.Timestamp(f"{year}-12-31"))]

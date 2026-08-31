@@ -262,6 +262,83 @@ mock 落 `reports/models_mock`，真实落 `reports/models`。
   基于含 bug 的 h>1 结算口径，修复后需重新验证。
   注：多年度结果需在真实数据下运行该脚本重新生成（`reports/multiyear/` 尚空）。
 
+## scripts 目录索引
+
+脚本层按角色分类（2026-08-31 整理）。注意区分几组**名字相近但职责不同**的脚本：
+`walk_forward`（因子挖掘三段验证）≠ `walk_forward_model`（模型层滚动 OOS）；
+`synthesize_factors`（SDK 在线合成）≠ `synthesize_library`（离线合成）；
+`run_backtest`（一键入口）/ `backtest_two_periods`（两期面板回测）/ `multi_period_backtest`（多期执行）为三件不同的事。
+
+### 生产入口（正式 / 调度）
+| 脚本 | 职责 |
+|---|---|
+| `update_data` | 增量更新行情/财务缓存（`--pool` / `--no-minute`） |
+| `fetch_status_batched` | 批量拉全A状态表（涨跌停/停牌/ST），断点续拉 |
+| `fetch_textmining` | 拉取文本挖掘数据（研报/公告） |
+| `update_etf` | ETF 行情更新（需系统 Python 3.12 + SDK） |
+| `check_data_quality` | 拉数后质量体检：缺失率/复权跳变/价格异常告警 |
+| `extend_factor_library` | 因子库面板延长到数据源最新交易日 |
+| `monitor_performance` | 生产化监控调度（Windows 计划任务 `YuriQuant Monitor` 每日 17:30 调用） |
+| `generate_signals` | 每日可执行交易信号导出（P3） |
+| `run_model_portfolio` | 模型增强组合正式入口（h=1 / gbdt / Top20% 月度调仓） |
+
+### 因子构建 / 合成 / 挖掘
+| 脚本 | 职责 |
+|---|---|
+| `build_alpha_factors` | Alpha101 / GTJA Alpha191 公开因子构建入库 |
+| `build_fundamental_factors` | 财务 PIT 因子（价值/质量/成长/规模） |
+| `build_technical_factors` | 技术迭代/累积类指标因子 |
+| `build_intraday_factors` | 5 分钟 K 线 → 日频因子 |
+| `synthesize_factors` | 多因子合成 CLI（SDK 在线版） |
+| `synthesize_library` | 因子库合成（离线版，免 SDK，与 `synthesize_factors --from-library` 等价） |
+| `mine_factors` | 因子挖掘 CLI（exhaustive / GP / GTJA 预设） |
+| `run_gflownet_phase0` / `run_gflownet_phase1` | GFlowNet 挖掘：最小闭环 / 真实 HS300 对齐研报 |
+| `gflownet_library_ingest` | GFlowNet 因子入库 |
+| `factor_library` | 因子库 CLI（list / compare / export / delete） |
+
+### 回测 / 模型
+| 脚本 | 职责 |
+|---|---|
+| `walk_forward_model` | 模型层滚动 OOS（`rolling_oos`，生产前推切分，唯一生产切分入口） |
+| `walk_forward` | 因子挖掘三段样本外：train 挖 → valid 选 → test 验 |
+| `e2e_backtest` / `e2e_stock_picks` | 端到端选股 walk-forward 回测 / 今日选股流水线 |
+| `run_backtest` | 一键回测入口（数据→因子→策略→回测→报告） |
+| `backtest_two_periods` | 两期（预热+研究）基本面/技术因子面板回测 |
+| `multi_period_backtest` | 多期组合执行回测（QP + 成本 + 约束，P3） |
+| `optimize_e2e` | 调仓频率 × 风格中性化端到端优化 |
+| `run_etf_rotation` | ETF 轮动最小闭环回测 |
+| `select_stocks` | 因子库 → 选股回测演示入口 |
+| `multiyear_oos` | 多年度 OOS（2023/24/25 × h1/h5 × D/W/M） |
+| `freq_tune` | 调仓频率精修（h=1 时 M 月度最优） |
+
+### 报告
+| 脚本 | 职责 |
+|---|---|
+| `investment_report` | 投资收益报告（端到端最终交付物） |
+| `factor_explorer_report` | 交互式因子检测报告（时间段/来源筛选/指标排序） |
+| `factor_library_full_report` | 全因子库标准检验汇总报告（自包含 HTML） |
+| `risk_decomposition_report` | 组合级风险分解报告 |
+| `generate_report` | 一键汇总 reports/ 产物为单个 HTML 报告 |
+| `attribution` | 收益归因 CLI（三大归因框架） |
+| `factor_correlation` | 因子两两相关性矩阵报告 |
+| `intraday_analysis` | 日内收益分解 + 时段效应分析 |
+
+### 研究 / 实验（一次性 / 对比 / 诊断）
+`compare_htai_fitness`、`compare_ml_synthesis`、`compare_portfolio_methods`（对比）、
+`cpcv_eval`、`cpcv_h1_eval`（CPCV 评估）、`diagnose_factor_vs_model`、`diagnose_neutralized_compare`（诊断）、
+`gtja_discipline_eval`、`gtja_repro_eval`（国金复现）、`gp_tune_budget`（GP 预算调参）、
+`ml_algorithm_compare`、`ml_synthesis_experiment`（ML 实验）。
+
+### 公共库（被其他模块 import，非独立入口）
+| 脚本 | 职责 |
+|---|---|
+| `cli_common` | 脚本层公共 CLI 骨架（argparse / logging / 三态数据源样板）+ build 家族助手 |
+| `e2e_common` | e2e 家族编排（`load_daily_data` / `select_features` / `drop_stale_factors` / 风格中性化） |
+
+### 归档区 `scripts/archive/`
+`daily_pipeline`（被 monitor/update/extend 拆散取代）、`factor_screening`（消费端未接线）、
+`factor_usability_stats`（无 main，功能被覆盖）、`dpp_library_compare`（历史对比实验）。
+
 ## 安装
 
 本项目依赖用 `pyproject.toml` 管理，可直接装成可编辑包：

@@ -633,7 +633,7 @@ def test_apply_gtja_preset_resolution(signal_panel):
 
 def test_build_vwap_exec_returns_alignment():
     """VWAP 执行链：首两行应为 NaN（未来函数保护），无 inf。"""
-    from scripts.mine_factors import _build_vwap_exec_returns
+    from factor.gtja import build_vwap_exec_returns
 
     rng = np.random.default_rng(0)
     n_days, n_codes = 80, 6
@@ -643,7 +643,7 @@ def test_build_vwap_exec_returns_alignment():
     amount = pd.DataFrame(rng.lognormal(15, 0.3, (n_days, n_codes)), idx, cols) * 1e4
     close = pd.DataFrame(rng.normal(50, 1, (n_days, n_codes)), idx, cols).abs()
     panel = {"close": close, "volume": volume, "amount": amount}
-    rets = _build_vwap_exec_returns(panel)
+    rets = build_vwap_exec_returns(panel)
     # T 需要 T+1、T+2 的 VWAP → 最后两行必为 NaN
     assert rets.iloc[-1].isna().all() and rets.iloc[-2].isna().all()
     assert np.isfinite(rets.iloc[:-2]).all().all()
