@@ -10,21 +10,25 @@ walk-forward OOS 验证。目标：确认 horizon=1 + 月度调仓的最优性�
   - 目标年份 = 2023/2024/2025（2022 是最早训练段，无前置历史，不作目标年）。
   - 调仓频率合法组合：horizon=1 → D/W/M；horizon=5 → 仅 M（引擎守卫约束）。
 """
+
 from __future__ import annotations
 
-import logging
+import sys
 import time
 from pathlib import Path
-
-import numpy as np
 import pandas as pd
 
-from backtest.metrics import PERIODS_PER_YEAR
-from config import Config
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-log = logging.getLogger("multiyear")
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s",
-                    datefmt="%H:%M:%S")
+from scripts.cli_common import setup_logging  # noqa: E402
+
+
+from backtest.metrics import PERIODS_PER_YEAR  # noqa: E402
+from config import Config  # noqa: E402
+
+log = setup_logging("multiyear")
 
 DATASET = "hs300_2022_2025"
 # 模型超参单一真源：scripts/run_model_portfolio.DEFAULT_MODEL_PARAMS
@@ -33,7 +37,6 @@ N_FOLDS = 4
 YEARS = [2023, 2024, 2025]
 FRACS = 0.20
 OUT = Path("reports") / "multiyear"
-
 
 def build_features(close, valid_days, dev_days):
     from factor.preprocessing import standardize_zscore
@@ -48,7 +51,6 @@ def build_features(close, valid_days, dev_days):
     sel, _quality = select_features(feats, fwd_v, quality_days=valid_days,
                                     panel_days=dev_days, max_features=50)
     return sel
-
 
 def run_year(year, model, horizon, features, close, all_days):
     """walk-forward 预测 year 全年，返回 OOS 预测面板 + 该年 fwd 面板。"""
@@ -69,7 +71,6 @@ def run_year(year, model, horizon, features, close, all_days):
     else:
         fwd = close.pct_change(horizon, fill_method=None).shift(-horizon).loc[test_days]
     return pred.loc[test_days], fwd, test_days
-
 
 def main():
     from scripts.run_model_portfolio import (
@@ -154,7 +155,6 @@ def main():
     with pd.option_context("display.float_format", lambda v: f"{v:.4f}"):
         print(g.sort_values("mean", ascending=False).round(4).to_string())
     print(f"\n耗时 {time.time()-t0:.0f}s | 保存 {OUT}")
-
 
 if __name__ == "__main__":
     main()

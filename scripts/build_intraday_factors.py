@@ -33,29 +33,28 @@
     python -m scripts.build_intraday_factors --offline --factors rv,overnight_ret  # 子集
     python -m scripts.build_intraday_factors --offline --dataset hs300_2025 --no-save  # 只算不入库
 """
+
 from __future__ import annotations
 
 import argparse
-import logging
 import sys
 from pathlib import Path
-
 import numpy as np
 import pandas as pd
 
-from data.cache_helpers import load_daily
-from research.factor_library import FactorLibrary
-from scripts.cli_common import (
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from data.cache_helpers import load_daily  # noqa: E402
+from research.factor_library import FactorLibrary  # noqa: E402
+from scripts.cli_common import (  # noqa: E402
     add_build_args, make_data_context, print_no_save, record_experiment_safe,
     register_panels, returns_from_daily,
+    setup_logging,
 )
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%H:%M:%S",
-)
-log = logging.getLogger("build_intraday_factors")
+log = setup_logging("build_intraday_factors")
 
 PERIOD = 5
 _BARS_PER_DAY = 240 // PERIOD          # 48
@@ -82,7 +81,6 @@ FACTOR_DEFS: dict[str, str] = {
     "intraday_amihud": "日内非流动性 mean(|bar_ret|/amount)",
 }
 
-
 def load_data(cache, uni, index_code, begin, end):
     codes, cal, daily = load_daily(cache, uni, index_code, begin, end)
     target = end or cal[-1]
@@ -90,7 +88,6 @@ def load_data(cache, uni, index_code, begin, end):
     status = cache.get_history_stock_status(codes, begin, target)
     log.info("日线 %d 行 / %d分钟 %d 行 / 状态 %d 行", len(daily), PERIOD, len(mk), len(status))
     return codes, daily, mk, status
-
 
 def _ex_div_keys(status) -> set:
     """返回除权/除息日 (date, code) 集合。"""
@@ -103,7 +100,6 @@ def _ex_div_keys(status) -> set:
     if flags.empty:
         return set()
     return set(zip(pd.to_datetime(flags["date"]).dt.normalize(), flags["code"]))
-
 
 def _minute_frame(mk, status) -> pd.DataFrame:
     """5 分钟长表：date/code/bar_ret/vol/amount/typical，剔除除权日。"""
@@ -124,15 +120,12 @@ def _minute_frame(mk, status) -> pd.DataFrame:
     df["typical"] = (df["high"] + df["low"] + df["close"]) / 3.0
     return df
 
-
 def _panel_from_series(s: pd.Series, daily_dates: pd.DatetimeIndex) -> pd.DataFrame:
     """(date, code) 长表 Series → date×code 宽表，与日线日期对齐。"""
     p = s.unstack("code")
     return p.reindex(index=daily_dates)
 
-
 # ---- 特征计算 ----
-
 
 def build_features(mf: pd.DataFrame, daily: pd.DataFrame,
                    status: pd.DataFrame | None = None) -> dict[str, pd.DataFrame]:
@@ -236,11 +229,9 @@ def build_features(mf: pd.DataFrame, daily: pd.DataFrame,
         aligned[name] = p
     return aligned
 
-
 def build_returns(daily: pd.DataFrame) -> pd.DataFrame:
     """未来一期收益面板：次日收益（与挖掘/库 IC 口径一致）。"""
     return returns_from_daily(daily)
-
 
 def main():
     parser = argparse.ArgumentParser(description="日内特征 → 日频因子构建与入库")
@@ -295,7 +286,6 @@ def main():
 
     log.info("完成。数据集 %s 现有 %d 个因子（新增 %d 个日内因子）",
              dataset, len(lib.list_all()), len(reg_rows))
-
 
 if __name__ == "__main__":
     main()

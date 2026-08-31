@@ -23,8 +23,8 @@ from __future__ import annotations
 
 import argparse
 import glob
-import logging
 import re
+import sys
 from pathlib import Path
 
 import joblib
@@ -34,8 +34,12 @@ import pandas as pd
 from scripts.textmining.train_sue_txt import SUEVectorizer  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+from scripts.cli_common import setup_logging  # noqa: E402
+
 OUT_DIR = ROOT / "reports" / "textmining"
-log = logging.getLogger("word_importance")
+log = setup_logging("word_importance")
 
 # 任务参数：sue(AI51: 词域100/500, 训练窗24月) vs fadt(AI57: 200/1000, 12月)
 TASK_CFG = {
@@ -161,5 +165,4 @@ if __name__ == "__main__":
     ap.add_argument("--round", type=int, default=None)
     ap.add_argument("--task", default="sue", choices=["sue", "fadt"])
     args = ap.parse_args()
-    logging.basicConfig(level=logging.INFO, format="%(message)s")
     main(args.pool, args.round, args.task)

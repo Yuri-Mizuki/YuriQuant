@@ -25,8 +25,7 @@ SUE.txt 训练与因子构建（对齐华泰 AI 51 文本PEAD）
 from __future__ import annotations
 
 import argparse
-import logging
-import re
+import sys
 from pathlib import Path
 
 import joblib
@@ -41,6 +40,10 @@ from sklearn.feature_extraction.text import CountVectorizer
 from scripts.textmining.build_sue_txt_samples import _load_daily, _to_naive
 
 ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+from scripts.cli_common import setup_logging  # noqa: E402
+
 OUT_DIR = ROOT / "reports" / "textmining"
 SAMPLE_PATH = OUT_DIR / "sue_txt_samples.parquet"
 
@@ -56,7 +59,7 @@ TEST_MONTHS = 12
 LOOKBACK_MONTHS = 3
 DECAY = 0.95
 
-log = logging.getLogger("sue_txt")
+log = setup_logging("sue_txt")
 
 
 # ---------- 分词 ----------
@@ -446,11 +449,7 @@ if __name__ == "__main__":
     args = ap.parse_args()
 
     log_suffix = f"_{args.label_horizon}" if args.label_horizon != "t01" else ""
-    logging.basicConfig(level=logging.INFO,
-                        format="%(asctime)s %(message)s",
-                        handlers=[logging.StreamHandler(),
-                                  logging.FileHandler(
-                                      OUT_DIR / f"sue_txt_train_{args.model}_{args.pool}{log_suffix}.log",
-                                      encoding="utf-8")])
+    setup_logging("sue_txt",
+                  file=OUT_DIR / f"sue_txt_train_{args.model}_{args.pool}{log_suffix}.log")
     run(args.begin, args.end, args.model, args.force_tokenize,
         pool=args.pool, label_horizon=args.label_horizon)

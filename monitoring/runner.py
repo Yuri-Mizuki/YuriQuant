@@ -28,6 +28,11 @@ from monitoring.metrics import (
     load_returns_panel,
 )
 from monitoring.state import confirm_rows
+from research.html_report import (
+    page,
+    svg_sparkline as _sparkline,
+    svg_sparkline_monthly as _sparkline_monthly,
+)
 
 log = logging.getLogger("monitoring")
 
@@ -273,127 +278,8 @@ th.sortable.desc::after { content: ' ↓'; color: #0E6E5C; }
 .filter-btn.active { background: #0E6E5C; color: #fff; border-color: #0E6E5C; }
 """
 
-
-def _fmt(v, fmt: str = "{:+.4f}") -> str:
-    return fmt.format(v) if v == v else "—"
-
-
-def _med(vals) -> float:
-    """中位数（空列表 → NaN）。"""
-    return float(np.median(vals)) if len(vals) else float("nan")
-
-
-def _med_abs(ms: list) -> float:
-    """一组监控对象 |近252日IC| 的中位数（缺值跳过；全缺 → NaN）。"""
-    vals = [abs(m.ic_mean_recent_252) for m in ms
-            if m.ic_mean_recent_252 == m.ic_mean_recent_252]
-    return _med(vals)
-
-
-# 报告展示用中文映射（CSV 账本仍存原始英文值，供程序消费）
-_STATUS_ZH = {"normal": "正常", "warning": "预警", "critical": "严重"}
-_CATEGORY_ZH = {"factor": "因子", "model": "模型", "signal": "信号", "crowd": "拥挤度"}
-_RULE_ZH = {
-    "stale_data": "数据滞后",
-    "coverage_drop": "覆盖率下降",
-    "ic_decay": "IC衰减",
-    "significance_loss": "显著性丢失",
-    "monotonicity_break": "单调性恶化",
-    "factor_crowding": "因子拥挤",
-    "signal_stale": "信号滞后",
-    "signal_coverage": "信号覆盖不足",
-    "signal_concentration": "持仓集中",
-    "signal_turnover": "换手过高",
-    "signal_blocked": "交易受阻",
-}
-
-
-def _status_zh(s: str) -> str:
-    return _STATUS_ZH.get(s, s)
-
-
-def _category_zh(c: str) -> str:
-    return _CATEGORY_ZH.get(c, c)
-
-
-def _rule_zh(r: str) -> str:
-    """规则中文展示名（保留英文 ID 便于与 alerts.csv 对照）。"""
-    zh = _RULE_ZH.get(r)
-    return f"{zh}({r})" if zh else r
-
-
-def _sparkline(ic: pd.Series, width: int = 150, height: int = 28) -> str:
-    if ic is None or len(ic) < 2:
-        return ""
-    vals = ic.values
-    vmin, vmax = float(vals.min()), float(vals.max())
-    rng = (vmax - vmin) or 1.0
-    n = len(vals)
-    pts = []
-    for i, v in enumerate(vals):
-        x = i * (width - 2) / (n - 1) + 1
-        y = height - 2 - (v - vmin) / rng * (height - 4)
-        pts.append(f"{x:.1f},{y:.1f}")
-    zero_y = height - 2 - (0 - vmin) / rng * (height - 4)
-    zero_y = max(2, min(height - 2, zero_y))
-    up = vals[-1] >= vals[0]
-    color = "#0E6E5C" if up else "#B3402A"
-    return (
-        f'<svg class="spark" width="{width}" height="{height}">'
-        f'<line x1="0" y1="{zero_y:.1f}" x2="{width}" y2="{zero_y:.1f}" '
-        f'stroke="#D5D4CA" stroke-width="1" stroke-dasharray="2,2"/>'
-        f'<polyline points="{" ".join(pts)}" fill="none" stroke="{color}" '
-        f'stroke-width="1.4"/></svg>'
-    )
-
-
-def _sparkline_monthly(ic: pd.Series, width: int = 150, height: int = 28) -> str:
-    """月频 IC 趋势 sparkline：先 resample 月均 IC 再画线。
-
-    252 日 ≈ 12 个月，月频比日频更平滑、噪音更小，趋势可读性更高；
-    SVG 点数更少，全库 300+ 因子也不会让报告体积膨胀。
-    """
-    if ic is None or len(ic) < 2:
-        return ""
-    monthly = ic.resample("ME").mean().dropna()
-    if len(monthly) < 2:
-        # 月度数据不足（如新因子），回退日频
-        return _sparkline(ic, width, height)
-    return _sparkline(monthly, width, height)
-
-
-def generate_html_report(
-    snapshots: list[MonitorMetrics],
-    alert_rows: list[dict],
-    ic_history: dict[str, pd.Series],
-    out_path: Path,
-    dataset: str = "",
-    window: int = 60,
-    window_long: int = 252,
-    as_of: pd.Timestamp | None = None,
-    pending_count: int = 0,
-) -> None:
-    """生成自包含 HTML 监控报告（inline SVG，无外部依赖，可直接归档/邮件转发）。
-
-    章节顺序：概要 → 模型预测 → 全部快照 → 拥挤度 → 告警明细。
-    所有表格使用 thead/tbody 分离，排序 JS 只排 tbody 行，不会把表头挤走。
-    """
-    out_path = Path(out_path)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-
-    n_model = sum(1 for m in snapshots if m.category == "model")
-    n_factor = sum(1 for m in snapshots if m.category == "factor")
-    n_crit = sum(1 for m in snapshots if m.status == "critical")
-    n_warn = sum(1 for m in snapshots if m.status == "warning")
-    n_ok = sum(1 for m in snapshots if m.status == "normal")
-
-    parts = [
-        "<!DOCTYPE html><html lang='zh-CN'><head><meta charset='UTF-8'>",
-        "<title>性能监控报告</title><style>",
-        _CSS,
-        "</style>",
-        "<script>",
-        """// 表头点击排序：所有表均用 thead/tbody 分离，JS 只排 tbody 行。
+# 页面交互 JS：表头点击排序（thead/tbody 分离，只排 tbody 行）+ 来源筛选
+_JS = """// 表头点击排序：所有表均用 thead/tbody 分离，JS 只排 tbody 行。
 document.addEventListener('click', function(e) {
     var th = e.target.closest('th.sortable');
     if (!th) return;
@@ -444,8 +330,85 @@ document.addEventListener('click', function(e) {
             r.style.display = r.getAttribute('data-src') === src ? '' : 'none';
         }
     });
-});""",
-        "</script></head><body><div class='wrap'>",
+});
+"""
+
+
+def _fmt(v, fmt: str = "{:+.4f}") -> str:
+    return fmt.format(v) if v == v else "—"
+
+
+def _med(vals) -> float:
+    """中位数（空列表 → NaN）。"""
+    return float(np.median(vals)) if len(vals) else float("nan")
+
+
+def _med_abs(ms: list) -> float:
+    """一组监控对象 |近252日IC| 的中位数（缺值跳过；全缺 → NaN）。"""
+    vals = [abs(m.ic_mean_recent_252) for m in ms
+            if m.ic_mean_recent_252 == m.ic_mean_recent_252]
+    return _med(vals)
+
+
+# 报告展示用中文映射（CSV 账本仍存原始英文值，供程序消费）
+_STATUS_ZH = {"normal": "正常", "warning": "预警", "critical": "严重"}
+_CATEGORY_ZH = {"factor": "因子", "model": "模型", "signal": "信号", "crowd": "拥挤度"}
+_RULE_ZH = {
+    "stale_data": "数据滞后",
+    "coverage_drop": "覆盖率下降",
+    "ic_decay": "IC衰减",
+    "significance_loss": "显著性丢失",
+    "monotonicity_break": "单调性恶化",
+    "factor_crowding": "因子拥挤",
+    "signal_stale": "信号滞后",
+    "signal_coverage": "信号覆盖不足",
+    "signal_concentration": "持仓集中",
+    "signal_turnover": "换手过高",
+    "signal_blocked": "交易受阻",
+}
+
+
+def _status_zh(s: str) -> str:
+    return _STATUS_ZH.get(s, s)
+
+
+def _category_zh(c: str) -> str:
+    return _CATEGORY_ZH.get(c, c)
+
+
+def _rule_zh(r: str) -> str:
+    """规则中文展示名（保留英文 ID 便于与 alerts.csv 对照）。"""
+    zh = _RULE_ZH.get(r)
+    return f"{zh}({r})" if zh else r
+
+
+def generate_html_report(
+    snapshots: list[MonitorMetrics],
+    alert_rows: list[dict],
+    ic_history: dict[str, pd.Series],
+    out_path: Path,
+    dataset: str = "",
+    window: int = 60,
+    window_long: int = 252,
+    as_of: pd.Timestamp | None = None,
+    pending_count: int = 0,
+) -> None:
+    """生成自包含 HTML 监控报告（inline SVG，无外部依赖，可直接归档/邮件转发）。
+
+    章节顺序：概要 → 模型预测 → 全部快照 → 拥挤度 → 告警明细。
+    所有表格使用 thead/tbody 分离，排序 JS 只排 tbody 行，不会把表头挤走。
+    """
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    n_model = sum(1 for m in snapshots if m.category == "model")
+    n_factor = sum(1 for m in snapshots if m.category == "factor")
+    n_crit = sum(1 for m in snapshots if m.status == "critical")
+    n_warn = sum(1 for m in snapshots if m.status == "warning")
+    n_ok = sum(1 for m in snapshots if m.status == "normal")
+
+    parts = [
+        "<div class='wrap'>",
         "<h1>因子与模型预测 · 性能监控报告</h1>",
         f"<div class='meta'>数据集={_html.escape(dataset)} · 基准日="
         f"{as_of.date() if as_of is not None else ''} · 双窗口={window}/{window_long}日"
@@ -677,6 +640,13 @@ document.addEventListener('click', function(e) {
 
     parts.append(
         "<footer>YuriQuant monitoring · 快照/告警账本见 reports/monitoring/*.csv · "
-        "同一 run_date 重跑幂等覆盖</footer></div></body></html>"
+        "同一 run_date 重跑幂等覆盖</footer></div>"
     )
-    out_path.write_text("\n".join(parts), encoding="utf-8")
+    html = page(
+        "性能监控报告",
+        header="",
+        body="\n".join(parts),
+        css=_CSS,
+        scripts=f"<script>\n{_JS}\n</script>",
+    )
+    out_path.write_text(html, encoding="utf-8")

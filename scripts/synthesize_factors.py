@@ -13,29 +13,33 @@
     # 直接基于已有挖掘结果 CSV
     python scripts/synthesize_factors.py --from reports/factor_mining_xxxx.csv --topk 8
 """
+
 from __future__ import annotations
 
+import sys
 import argparse
-import logging
 from datetime import datetime
 from pathlib import Path
-
-import numpy as np
 import pandas as pd
 
-from factor.preprocessing import standardize_zscore
-from factor.synthesis import (
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from scripts.cli_common import add_real_mock_args, setup_logging  # noqa: E402
+
+
+from factor.preprocessing import standardize_zscore  # noqa: E402
+from factor.synthesis import (  # noqa: E402
     CompositeInput, build_components, composite_stats,
     rebuild_train_weights,
     synthesize_ic_weighted, synthesize_orthogonal, synthesize_pca, synthesize_stacking,
 )
-from research.factor_library import FactorLibrary
+from research.factor_library import FactorLibrary  # noqa: E402
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S")
-log = logging.getLogger("synthesize_factors")
+log = setup_logging("synthesize_factors")
 
 METHODS = ["ic_weighted", "pca", "orthogonal", "stacking"]
-
 
 def _run_mining(panel, returns_panel, features, windows, depth, method, fdr_q):
     """返回挖掘结果 DataFrame（含 name/ic_mean/ir/t_stat/significant）。"""
@@ -47,7 +51,6 @@ def _run_mining(panel, returns_panel, features, windows, depth, method, fdr_q):
              len(result), fdr_q, int(result["significant"].sum()) if len(result) else 0)
     return result
 
-
 def _select_topk(result: pd.DataFrame, topk: int) -> pd.DataFrame:
     """优先选显著因子；显著不足 topk 时按 |t| 补足。"""
     if result.empty:
@@ -57,7 +60,6 @@ def _select_topk(result: pd.DataFrame, topk: int) -> pd.DataFrame:
         return sig.head(topk)
     extra = result[~result["significant"]].head(topk - len(sig))
     return pd.concat([sig, extra]).head(topk).reset_index(drop=True)
-
 
 def _backtest_metrics(composite, returns_panel, strategy_name, k, freq):
     """对单个因子面板跑回测，返回绩效指标 dict。"""
@@ -80,7 +82,6 @@ def _backtest_metrics(composite, returns_panel, strategy_name, k, freq):
         "win_rate": m.get("win_rate", float("nan")),
     }
 
-
 def _derive_dates_from_dataset(name: str):
     """从数据集名推导 (begin, end)，如 hs300_2025 → (20250101, 20251231)。"""
     if not name:
@@ -92,7 +93,6 @@ def _derive_dates_from_dataset(name: str):
     if len(yrs) == 1:
         return int(yrs[0] + "0101"), int(yrs[0] + "1231")
     return None, None
-
 
 def _components_from_library(lib) -> list:
     """从因子库加载 raw 因子面板，包装为 CompositeInput（用存储的 ic/ir 加权）。
@@ -117,10 +117,9 @@ def _components_from_library(lib) -> list:
     out.sort(key=lambda c: abs(c.ic), reverse=True)
     return out
 
-
 def main():
     parser = argparse.ArgumentParser(description="YuriQuant 多因子合成")
-    parser.add_argument("--real", action="store_true", help="真实数据（默认 mock）")
+    add_real_mock_args(parser)
     parser.add_argument("--from", dest="from_csv", default=None, help="直接读已有挖掘结果 CSV")
     parser.add_argument("--begin", type=int, default=None)
     parser.add_argument("--end", type=int, default=None)
@@ -355,7 +354,6 @@ def main():
         log.info("复合因子入库完成（%d 个，库内 IC 基于训练段），"
                  "可用 `python scripts/mine_factors.py --use-library` 参与下一轮",
                  len(panels_out))
-
 
 if __name__ == "__main__":
     main()

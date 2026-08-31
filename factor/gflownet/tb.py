@@ -15,6 +15,7 @@ forward-only TB。其解仍满足 P(x) ∝ R(x)/Z（Z 吸收归一化常数）�
 """
 from __future__ import annotations
 
+import logging
 import os
 from typing import Callable, Optional
 
@@ -25,6 +26,8 @@ import torch.nn as nn
 from factor.gflownet.env import FactorMDP
 from factor.gflownet.expr import ExprBuilder, canonical_formula
 from factor.gflownet.net import TBPolicy, policy_logits
+
+log = logging.getLogger(__name__)
 
 __all__ = ["sample_trajectory_logp", "train_tb", "evaluate_samples", "RewardFn"]
 
@@ -81,7 +84,7 @@ def train_tb(mdp: FactorMDP, reward_fn: RewardFn, net: TBPolicy,
         net.load_state_dict(ckpt["model"])
         net.logZ.data = torch.tensor(float(ckpt["logz"]))
         start = int(ckpt["iter"])
-        print(f"  [resume] 从 iter {start} 续训（ckpt={ckpt_path}）", flush=True)
+        log.info("[resume] 从 iter %d 续训（ckpt=%s）", start, ckpt_path)
 
     net_params = [p for p in net.parameters() if p is not net.logZ]
     opt = torch.optim.Adam(net_params, lr=lr)
@@ -113,9 +116,9 @@ def train_tb(mdp: FactorMDP, reward_fn: RewardFn, net: TBPolicy,
         opt_z.step()
         losses.append(float(loss.detach()))
         if log_every and (it + 1) % log_every == 0:
-            print(f"  [tb] iter {it + 1}/{n_iters}  loss={loss.item():.4f}  "
-                  f"logZ={net.logZ.item():.2f}  轨迹R均值={np.mean(r_vals):.4f} "
-                  f"Rmax={np.max(r_vals):.4f}", flush=True)
+            log.info("[tb] iter %d/%d  loss=%.4f  logZ=%.2f  轨迹R均值=%.4f Rmax=%.4f",
+                     it + 1, n_iters, loss.item(), net.logZ.item(),
+                     np.mean(r_vals), np.max(r_vals))
             if ckpt_path:
                 torch.save({"iter": it + 1, "model": net.state_dict(),
                             "logz": float(net.logZ.item())}, ckpt_path)

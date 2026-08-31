@@ -21,15 +21,13 @@ FADT 训练与因子构建（对齐华泰 AI 57 文本FADT选股）
 from __future__ import annotations
 
 import argparse
-import logging
+import sys
 from pathlib import Path
 
 import joblib
-import numpy as np
 import pandas as pd
 
 from scripts.textmining.train_sue_txt import (
-    LOGIT_LAMBDA,
     SUEVectorizer,
     _auc_ovr,
     _sue0_from_model,
@@ -40,6 +38,10 @@ from scripts.textmining.train_sue_txt import (
 )
 
 ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+from scripts.cli_common import setup_logging  # noqa: E402
+
 OUT_DIR = ROOT / "reports" / "textmining"
 # AI 57 基准参数
 TITLE_TOP = 200
@@ -48,7 +50,7 @@ TRAIN_MONTHS = 12   # AI 57：样本内 12 个月
 TEST_MONTHS = 12
 LOOKBACK_MONTHS = 3  # 因子回溯 1 季度
 
-log = logging.getLogger("fadt")
+log = setup_logging("fadt")
 
 # FADT 样本量约为预告场景 2-9 倍，XGBoost 网格减半控制训练时长
 # （lr 3→2 / subsample 4→2，保留 depth 3/5 覆盖复杂度）
@@ -200,9 +202,5 @@ if __name__ == "__main__":
     ap.add_argument("--force-tokenize", action="store_true")
     args = ap.parse_args()
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s",
-                        handlers=[logging.StreamHandler(),
-                                  logging.FileHandler(
-                                      OUT_DIR / f"fadt_train_{args.model}_{args.pool}.log",
-                                      encoding="utf-8")])
+    setup_logging("fadt", file=OUT_DIR / f"fadt_train_{args.model}_{args.pool}.log")
     run(args.begin, args.end, args.model, args.force_tokenize, pool=args.pool)

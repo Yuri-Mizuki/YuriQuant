@@ -25,22 +25,27 @@
     reports/risk_decomposition/risk_contributions.csv
     reports/risk_decomposition/variance_decomp.json
 """
+
 from __future__ import annotations
 
+import sys
 import argparse
 import json
-import logging
-import warnings
 from pathlib import Path
-
 import numpy as np
 import pandas as pd
 
-from optimize.risk import risk_decomposition
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S")
-log = logging.getLogger("risk_decomposition_report")
+from scripts.cli_common import add_real_mock_args, setup_logging  # noqa: E402
 
+
+from optimize.risk import risk_decomposition  # noqa: E402
+from research.html_report import page  # noqa: E402
+
+log = setup_logging("risk_decomposition_report")
 
 # ---------------------------------------------------------------------------
 # Mock 数据
@@ -83,10 +88,68 @@ def gen_mock_data(n_days: int = 300, n_codes: int = 30, seed: int = 42):
         "industry": industry,
     }
 
-
 # ---------------------------------------------------------------------------
 # HTML 报告渲染
 # ---------------------------------------------------------------------------
+_CSS = """
+body { font-family: -apple-system, "Microsoft YaHei", sans-serif; margin: 0; padding: 20px; background: #f5f5f5; color: #333; }
+h1 { color: #1a1a1a; border-bottom: 3px solid #d32f2f; padding-bottom: 10px; }
+h2 { color: #d32f2f; margin-top: 30px; }
+.container { max-width: 1200px; margin: 0 auto; }
+.cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin: 20px 0; }
+.card { background: white; border-radius: 8px; padding: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.08); text-align: center; }
+.card .label { font-size: 12px; color: #888; margin-bottom: 5px; }
+.card .value { font-size: 24px; font-weight: bold; color: #d32f2f; }
+.card .sub { font-size: 11px; color: #aaa; margin-top: 3px; }
+table { width: 100%; border-collapse: collapse; background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 4px rgba(0,0,0,0.08); margin: 10px 0; }
+th { background: #d32f2f; color: white; padding: 10px; text-align: left; font-size: 13px; }
+td { padding: 8px 10px; border-bottom: 1px solid #eee; font-size: 13px; }
+tr:nth-child(even) { background: #fafafa; }
+.chart-container { background: white; border-radius: 8px; padding: 20px; margin: 15px 0; box-shadow: 0 2px 4px rgba(0,0,0,0.08); }
+.chart { height: 300px; position: relative; }
+.note { background: #fff3cd; border-left: 4px solid #ffc107; padding: 10px 15px; margin: 15px 0; font-size: 12px; color: #856404; }
+"""
+
+_JS = """
+const volData = __VOL__;
+const pieData = __PIE__;
+
+// 波动率时序
+new Chart(document.getElementById('volChart'), {
+  type: 'line',
+  data: {
+    labels: volData.map(d => d[0]),
+    datasets: [{
+      label: '组合波动率',
+      data: volData.map(d => d[1]),
+      borderColor: '#d32f2f',
+      backgroundColor: 'rgba(211,47,47,0.1)',
+      fill: true,
+    }]
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: { legend: { display: false } },
+    scales: { x: { ticks: { maxTicksLimit: 12 } } }
+  }
+});
+
+// 方差分解饼图
+new Chart(document.getElementById('pieChart'), {
+  type: 'doughnut',
+  data: {
+    labels: pieData.map(d => d.name),
+    datasets: [{
+      data: pieData.map(d => Math.max(d.value, 0)),
+      backgroundColor: ['#d32f2f', '#1976d2', '#388e3c', '#f57c00', '#7b1fa2', '#0097a7', '#757575'],
+    }]
+  },
+  options: { responsive: true, maintainAspectRatio: false }
+});
+"""
+
+
 def render_html(result: dict, out_dir: Path) -> Path:
     """自包含 HTML 报告。"""
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -149,34 +212,7 @@ def render_html(result: dict, out_dir: Path) -> Path:
     explained_pct = vd["explained_variance"] / vd["total_variance"] * 100 if vd["total_variance"] > 0 else 0
     idio_pct = vd["idiosyncratic_risk"] / vd["total_variance"] * 100 if vd["total_variance"] > 0 else 0
 
-    html = f"""<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>组合级风险分解报告</title>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-<style>
-  body {{ font-family: -apple-system, "Microsoft YaHei", sans-serif; margin: 0; padding: 20px; background: #f5f5f5; color: #333; }}
-  h1 {{ color: #1a1a1a; border-bottom: 3px solid #d32f2f; padding-bottom: 10px; }}
-  h2 {{ color: #d32f2f; margin-top: 30px; }}
-  .container {{ max-width: 1200px; margin: 0 auto; }}
-  .cards {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin: 20px 0; }}
-  .card {{ background: white; border-radius: 8px; padding: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.08); text-align: center; }}
-  .card .label {{ font-size: 12px; color: #888; margin-bottom: 5px; }}
-  .card .value {{ font-size: 24px; font-weight: bold; color: #d32f2f; }}
-  .card .sub {{ font-size: 11px; color: #aaa; margin-top: 3px; }}
-  table {{ width: 100%; border-collapse: collapse; background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 4px rgba(0,0,0,0.08); margin: 10px 0; }}
-  th {{ background: #d32f2f; color: white; padding: 10px; text-align: left; font-size: 13px; }}
-  td {{ padding: 8px 10px; border-bottom: 1px solid #eee; font-size: 13px; }}
-  tr:nth-child(even) {{ background: #fafafa; }}
-  .chart-container {{ background: white; border-radius: 8px; padding: 20px; margin: 15px 0; box-shadow: 0 2px 4px rgba(0,0,0,0.08); }}
-  .chart {{ height: 300px; position: relative; }}
-  .note {{ background: #fff3cd; border-left: 4px solid #ffc107; padding: 10px 15px; margin: 15px 0; font-size: 12px; color: #856404; }}
-</style>
-</head>
-<body>
-<div class="container">
+    body = f"""<div class="container">
   <h1>组合级风险分解报告</h1>
 
   <div class="cards">
@@ -254,59 +290,25 @@ def render_html(result: dict, out_dir: Path) -> Path:
   <div class="chart-container">
     <div class="chart"><canvas id="volChart"></canvas></div>
   </div>
-</div>
-
-<script>
-const volData = {vol_json};
-const pieData = {pie_json};
-
-// 波动率时序
-new Chart(document.getElementById('volChart'), {{
-  type: 'line',
-  data: {{
-    labels: volData.map(d => d[0]),
-    datasets: [{{
-      label: '组合波动率',
-      data: volData.map(d => d[1]),
-      borderColor: '#d32f2f',
-      backgroundColor: 'rgba(211,47,47,0.1)',
-      fill: true,
-    }}]
-  }},
-  options: {{
-    responsive: true,
-    maintainAspectRatio: false,
-    plugins: {{ legend: {{ display: false }} }},
-    scales: {{ x: {{ ticks: {{ maxTicksLimit: 12 }} }} }}
-  }}
-}});
-
-// 方差分解饼图
-new Chart(document.getElementById('pieChart'), {{
-  type: 'doughnut',
-  data: {{
-    labels: pieData.map(d => d.name),
-    datasets: [{{
-      data: pieData.map(d => Math.max(d.value, 0)),
-      backgroundColor: ['#d32f2f', '#1976d2', '#388e3c', '#f57c00', '#7b1fa2', '#0097a7', '#757575'],
-    }}]
-  }},
-  options: {{ responsive: true, maintainAspectRatio: false }}
-}});
-</script>
-</body>
-</html>"""
+</div>"""
+    js = _JS.replace("__VOL__", vol_json).replace("__PIE__", pie_json)
+    html = page(
+        "组合级风险分解报告",
+        header="",
+        body=body,
+        css=_CSS,
+        head_extra='<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>',
+        scripts=f"<script>\n{js}\n</script>",
+    )
     html_path.write_text(html, encoding="utf-8")
     return html_path
-
 
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 def main():
     parser = argparse.ArgumentParser(description="组合级风险分解报告")
-    parser.add_argument("--mock", action="store_true", help="用 mock 数据")
-    parser.add_argument("--real", action="store_true", help="用真实数据（需 --weights-path）")
+    add_real_mock_args(parser, real_help="用真实数据（需 --weights-path）", mock_help="用 mock 数据")
     parser.add_argument("--weights-path", type=str, help="权重历史 parquet 路径（--real 模式）")
     parser.add_argument("--returns-path", type=str, help="收益面板 parquet 路径（--real 模式）")
     parser.add_argument("--n-days", type=int, default=300)
@@ -396,7 +398,6 @@ def main():
     for code, pct in s["top5_risk_contributors"].items():
         print(f"  {code}: {pct*100:.2f}%")
     print(f"{'='*60}")
-
 
 if __name__ == "__main__":
     main()

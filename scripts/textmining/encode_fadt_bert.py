@@ -25,7 +25,6 @@ FinBERT CLS 编码（对齐华泰 AI 63 文本表示升级）
 from __future__ import annotations
 
 import argparse
-import logging
 import sys
 import time
 from pathlib import Path
@@ -36,6 +35,7 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+from scripts.cli_common import setup_logging  # noqa: E402
 
 OUT_DIR = ROOT / "reports" / "textmining"
 # 本地模型目录（hf-mirror 下载，沙箱无法用 huggingface_hub 缓存管理）；
@@ -51,7 +51,7 @@ def _bert_model_dir() -> str:
     return r"E:/data/models/finbert_tone_chinese"
 
 MODEL_DIR = _bert_model_dir()
-log = logging.getLogger("encode_bert")
+log = setup_logging("encode_bert")
 
 # tokenizer 缺失时手动加载的中文 BERT 词表（bert-base-chinese 同款）——不使用，
 # 直接依赖 transformers 的 AutoTokenizer
@@ -59,7 +59,6 @@ log = logging.getLogger("encode_bert")
 
 def load_model(max_len: int = 500):
     """加载 FinBERT + tokenizer（CPU 推理）。"""
-    import torch
     from transformers import AutoModel, AutoTokenizer
     tok = AutoTokenizer.from_pretrained(MODEL_DIR)
     model = AutoModel.from_pretrained(MODEL_DIR)
@@ -165,7 +164,5 @@ if __name__ == "__main__":
     ap.add_argument("--limit", type=int, default=None)
     args = ap.parse_args()
 
-    logging.basicConfig(level=logging.INFO,
-                        format="%(asctime)s %(message)s",
-                        handlers=[logging.StreamHandler()])
+
     run(args.task, args.pool, args.max_len, args.force, args.limit)

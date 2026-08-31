@@ -22,8 +22,6 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 from scripts.textmining.evaluate_sue_txt import (  # noqa: E402
     coverage,
-    load_bench_ret,
-    load_next_ret,
     rank_ic,
     stratified_backtest,
 )

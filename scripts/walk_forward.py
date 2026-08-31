@@ -24,16 +24,18 @@
 from __future__ import annotations
 
 import argparse
-import logging
 import sys
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s",
-                    datefmt="%H:%M:%S")
-log = logging.getLogger("walk_forward")
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+from scripts.cli_common import setup_logging  # noqa: E402
+
+log = setup_logging("walk_forward")
 
 from config import Config  # noqa: E402  缓存根单一真源（原硬编码 e:/data/parquet）
 

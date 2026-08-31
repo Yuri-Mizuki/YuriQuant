@@ -18,6 +18,7 @@
 """
 from __future__ import annotations
 
+import logging
 import operator
 import random
 from typing import Sequence
@@ -37,6 +38,8 @@ from factor.operators import (
 )
 from stats import PERIODS_PER_YEAR
 from stats.ic import calc_ic_series, calc_ir
+
+log = logging.getLogger(__name__)
 
 
 # 窗口已编入算子名时使用的时序单目算子（不含需要布尔输入的 ts_count）
@@ -992,6 +995,191 @@ def _ensure_creator():
         creator.create("IndividualGP", gp.PrimitiveTree, fitness=creator.FitnessMaxGP)
 
 
+def _evolve_gp(
+    toolbox,
+    pop: list,
+    hof_track,
+    hof_out,
+    panel: dict[str, pd.DataFrame],
+    prim_map,
+    memo: dict,
+    generations: int,
+    cx_prob: float,
+    mut_prob: float,
+    family_competition: bool,
+    crowding: str | None,
+    crowd_corr_thr: float,
+    patience: int,
+    improve_eps: float,
+    verbose: bool,
+    executor,
+) -> int:
+    """手动进化循环（支持早停；eaSimple 无此能力）。返回实际代数。
+
+    初始种群评估 → 每代 varOr 繁殖 → 家庭竞争/排挤 → 选择 → 早停判断；
+    结束后关闭并行 executor（如有）。
+    """
+    fits = toolbox.map(toolbox.evaluate, pop)
+    for ind, fit in zip(pop, fits):
+        ind.fitness.values = fit
+    hof_track.update(pop)
+    hof_out.update(pop)
+    stats = tools.Statistics(lambda ind: ind.fitness.values[0])
+    stats.register("avg", lambda v: float(np.mean(v)) if v else 0.0)
+    stats.register("max", lambda v: float(np.max(v)) if v else 0.0)
+    record = stats.compile(pop)
+    best_ever = float(hof_track[0].fitness.values[0]) if len(hof_track) else 0.0
+    stall = 0
+    gen_done = 0
+    if verbose:
+        log.info("gen %3d: avg=%.4f max=%.4f best=%.4f", 0, record['avg'], record['max'], best_ever)
+    try:
+        for gen in range(1, generations + 1):
+            offspring = algorithms.varOr(pop, toolbox, len(pop), cx_prob, mut_prob)
+            fits = toolbox.map(toolbox.evaluate, offspring)
+            for ind, fit in zip(offspring, fits):
+                ind.fitness.values = fit
+            hof_track.update(offspring)
+            hof_out.update(offspring)
+            # ---- 国君研报优化算法 B：家庭竞争 ----
+            # 新个体适应度高于其父代时从选择池剔除该父代，限制单一父代过度繁衍，
+            # 保证子代多样性（varOr 产出与 pop 一一对应可回溯）。
+            if family_competition:
+                parents_alive = [p for p, c in zip(pop, offspring)
+                                 if c.fitness.values[0] <= p.fitness.values[0]]
+                pool = parents_alive + list(offspring)
+            else:
+                pool = offspring
+            # ---- 国君研报优化算法 C：排挤/共享适应度 ----
+            crowding_saved: dict[int, float] = {}
+            if crowding:
+                crowding_saved = _adjust_crowding(pool, panel, prim_map,
+                                                  method=crowding,
+                                                  corr_thr=crowd_corr_thr, memo=memo)
+                # 选择前重算被改写个体的 fitness 元组已被替换，直接进 selTournament
+            selected = toolbox.select(pool, len(pop))
+            if crowding_saved:
+                _restore_crowding(pool, crowding_saved)
+            pop[:] = selected
+            record = stats.compile(pop)
+            gen_done = gen
+            cur_best = float(hof_track[0].fitness.values[0]) if len(hof_track) else 0.0
+            if verbose:
+                log.info("gen %3d: avg=%.4f max=%.4f best=%.4f", gen, record['avg'], record['max'], cur_best)
+            if cur_best - best_ever > improve_eps:
+                best_ever = cur_best
+                stall = 0
+            else:
+                stall += 1
+                if patience and stall >= patience:
+                    if verbose:
+                        log.info("  [early stop] gen %d: best 连续 %d 代无提升（> %s）", gen, patience, improve_eps)
+                    break
+        setattr(hof_track, "generations_run", gen_done)
+        if isinstance(hof_out, _FitnessGateHallOfFame):
+            setattr(hof_out._hof, "generations_run", gen_done)
+    finally:
+        if executor is not None:
+            executor.shutdown()
+    return gen_done
+
+
+def _summarize_gp_results(
+    hof_out,
+    panel: dict[str, pd.DataFrame],
+    prim_map,
+    returns_panel: pd.DataFrame,
+    returns_fit: pd.DataFrame,
+    returns_oos: pd.DataFrame,
+    returns_month_fit: pd.DataFrame | None,
+    neutral_panels: dict | None,
+    htai: bool,
+    fitness_mode: str,
+    train_frac: float,
+    dedup_corr: float,
+    feats: Sequence[str],
+) -> pd.DataFrame:
+    """汇总 HallOfFame：全样本 IC + train/OOS 分段报告 + 按 train 段 t 排序去重。
+
+    htai 口径下 IC 目标 = 未来 20 日收益，且因子先做环内预处理（与适应度同口径）。
+    """
+    # htai 口径：IC 目标 = 未来 20 日收益，且因子先做环内预处理（与适应度同口径）
+    if htai:
+        returns_summary = _monthly_forward_returns(returns_panel)
+        returns_oos_seg = (_monthly_forward_returns(returns_oos)
+                           if train_frac is not None and 0.0 < train_frac < 1.0 else None)
+    else:
+        returns_summary = returns_panel
+        returns_oos_seg = returns_oos
+    rows = []
+    # 门控包装不实现 __iter__（__getattr__ 不代理双下划线协议），显式取内部 hof
+    hof_items = list(hof_out._hof if isinstance(hof_out, _FitnessGateHallOfFame) else hof_out)
+    for ind in hof_items:
+        try:
+            fp = eval_tree(ind, panel, prim_map)
+            fp_s = _htai_preprocess(fp, neutral_panels=neutral_panels) if htai else fp
+            ic = calc_ic_series(fp_s, returns_summary, method="spearman").dropna()
+            n = len(ic)
+            m, s = float(ic.mean()), float(ic.std())
+            ir = calc_ir(ic)
+            t = m / (s / np.sqrt(n)) if s > 0 else 0.0
+            ic_train, t_train = _seg_ic_stats(fp_s, returns_month_fit if htai else returns_fit)
+            ic_oos, t_oos = _seg_ic_stats(fp_s, returns_oos_seg)
+            row = {
+                "formula": str(ind),
+                "fitness": float(ind.fitness.values[0]),
+                "ic_mean": m,
+                "ic_train": ic_train,
+                "ic_oos": ic_oos,
+                "ic_std": s,
+                "ir": ir,
+                "t_stat": t,
+                "t_train": t_train,
+                "t_oos": t_oos,
+                "n": n,
+                "height": ind.height,
+            }
+            # 报告23 指标（htai 口径）：互信息 / 多头超额（Top、Bottom 层）
+            if htai:
+                try:
+                    mi = _mutual_info_series(fp_s, returns_summary).dropna()
+                    row["mi_mean"] = float(mi.mean()) if len(mi) else float("nan")
+                except Exception:
+                    row["mi_mean"] = float("nan")
+                try:
+                    t_ex, b_ex, _ = _top_excess_series(fp_s, returns_summary, top_frac=0.1)
+                    row["top_excess"] = t_ex
+                    row["bot_excess"] = b_ex
+                except Exception:
+                    row["top_excess"] = float("nan")
+                    row["bot_excess"] = float("nan")
+            rows.append(row)
+        except Exception:
+            rows.append({"formula": str(ind), "fitness": 0.0,
+                         "ic_mean": 0.0, "ic_train": float("nan"),
+                         "ic_oos": float("nan"), "ic_std": 0.0, "ir": 0.0,
+                         "t_stat": 0.0, "t_train": float("nan"), "t_oos": float("nan"),
+                         "n": 0, "height": ind.height})
+    df = pd.DataFrame(rows)
+    if not df.empty:
+        # P0-④（2026-08-04）：排序与去重都基于 **train 段** t（t_train），
+        # 全样本 t_stat 仅作报告——旧实现按全样本 |t| 排序，把 OOS 信息混入选择。
+        if fitness_mode in ("sharpe", "annual_return", "ret_minus_dd") and "fitness" in df:
+            sort_col = "fitness"    # 净值型模式：fitness 即费后表现本身（方向已中立化）
+        elif train_frac is not None and 0.0 < train_frac < 1.0:
+            sort_col = "t_train"
+        elif htai and fitness_mode == "mutual_info" and "mi_mean" in df:
+            sort_col = "mi_mean"        # MI 模式的优化目标是互信息
+        elif htai and fitness_mode == "top_excess" and "top_excess" in df:
+            sort_col = "top_excess"     # 多头超额模式的优化目标是 Top/Bottom 超额
+        else:
+            sort_col = "t_stat"
+        df = df.reindex(df[sort_col].abs().sort_values(ascending=False).index).reset_index(drop=True)
+        df = _dedup_hof_by_correlation(df, panel, feats, threshold=dedup_corr,
+                                       returns_fit=returns_fit if train_frac < 1.0 else None)
+    return df
+
+
 def run_gp_mining(
     panel: dict[str, pd.DataFrame],
     returns_panel: pd.DataFrame,
@@ -1145,148 +1333,18 @@ def run_gp_mining(
             # 删除后实例属性查找回退到 creator 的类级默认，后续 `ind.fitness.values =
             # fit` 会写到 FitnessMaxGP **类**上，类级元组遮蔽属性协议 → varOr 崩溃。
             del ind.fitness.values
-    stats = tools.Statistics(lambda ind: ind.fitness.values[0])
-    stats.register("avg", lambda v: float(np.mean(v)) if v else 0.0)
-    stats.register("max", lambda v: float(np.max(v)) if v else 0.0)
-
-    # ---- 手动进化循环（支持早停；eaSimple 无此能力）----
-    try:
-        # 初始种群评估
-        fits = toolbox.map(toolbox.evaluate, pop)
-        for ind, fit in zip(pop, fits):
-            ind.fitness.values = fit
-        hof_track.update(pop)
-        hof_out.update(pop)
-        record = stats.compile(pop)
-        best_ever = float(hof_track[0].fitness.values[0]) if len(hof_track) else 0.0
-        stall = 0
-        gen_done = 0
-        if verbose:
-            print(f"gen {0:3d}: avg={record['avg']:.4f} max={record['max']:.4f} best={best_ever:.4f}")
-
-        for gen in range(1, generations + 1):
-            offspring = algorithms.varOr(pop, toolbox, len(pop), cx_prob, mut_prob)
-            fits = toolbox.map(toolbox.evaluate, offspring)
-            for ind, fit in zip(offspring, fits):
-                ind.fitness.values = fit
-            hof_track.update(offspring)
-            hof_out.update(offspring)
-            # ---- 国君研报优化算法 B：家庭竞争 ----
-            # 新个体适应度高于其父代时从选择池剔除该父代，限制单一父代过度繁衍，
-            # 保证子代多样性（varOr 产出与 pop 一一对应可回溯）。
-            if family_competition:
-                parents_alive = [p for p, c in zip(pop, offspring)
-                                 if c.fitness.values[0] <= p.fitness.values[0]]
-                pool = parents_alive + list(offspring)
-            else:
-                pool = offspring
-            # ---- 国君研报优化算法 C：排挤/共享适应度 ----
-            crowding_saved: dict[int, float] = {}
-            if crowding:
-                crowding_saved = _adjust_crowding(pool, panel, prim_map,
-                                                  method=crowding,
-                                                  corr_thr=crowd_corr_thr, memo=memo)
-                # 选择前重算被改写个体的 fitness 元组已被替换，直接进 selTournament
-            selected = toolbox.select(pool, len(pop))
-            if crowding_saved:
-                _restore_crowding(pool, crowding_saved)
-            pop[:] = selected
-            record = stats.compile(pop)
-            gen_done = gen
-            cur_best = float(hof_track[0].fitness.values[0]) if len(hof_track) else 0.0
-            if verbose:
-                print(f"gen {gen:3d}: avg={record['avg']:.4f} max={record['max']:.4f} best={cur_best:.4f}")
-            if cur_best - best_ever > improve_eps:
-                best_ever = cur_best
-                stall = 0
-            else:
-                stall += 1
-                if patience and stall >= patience:
-                    if verbose:
-                        print(f"  [early stop] gen {gen}: best 连续 {patience} 代无提升（> {improve_eps}）")
-                    break
-        setattr(hof_track, "generations_run", gen_done)
-        if isinstance(hof_out, _FitnessGateHallOfFame):
-            setattr(hof_out._hof, "generations_run", gen_done)
-    finally:
-        if _ex is not None:
-            _ex.shutdown()
-
-    # 汇总 HallOfFame（全样本 IC + train/OOS 分段报告）
-    # htai 口径：IC 目标 = 未来 20 日收益，且因子先做环内预处理（与适应度同口径）
-    if htai:
-        returns_summary = _monthly_forward_returns(returns_panel)
-        returns_oos_seg = (_monthly_forward_returns(returns_oos)
-                           if train_frac is not None and 0.0 < train_frac < 1.0 else None)
-    else:
-        returns_summary = returns_panel
-        returns_oos_seg = returns_oos
-    rows = []
-    # 门控包装不实现 __iter__（__getattr__ 不代理双下划线协议），显式取内部 hof
-    hof_items = list(hof_out._hof if isinstance(hof_out, _FitnessGateHallOfFame) else hof_out)
-    for ind in hof_items:
-        try:
-            fp = eval_tree(ind, panel, prim_map)
-            fp_s = _htai_preprocess(fp, neutral_panels=neutral_panels) if htai else fp
-            ic = calc_ic_series(fp_s, returns_summary, method="spearman").dropna()
-            n = len(ic)
-            m, s = float(ic.mean()), float(ic.std())
-            ir = calc_ir(ic)
-            t = m / (s / np.sqrt(n)) if s > 0 else 0.0
-            ic_train, t_train = _seg_ic_stats(fp_s, returns_month_fit if htai else returns_fit)
-            ic_oos, t_oos = _seg_ic_stats(fp_s, returns_oos_seg)
-            row = {
-                "formula": str(ind),
-                "fitness": float(ind.fitness.values[0]),
-                "ic_mean": m,
-                "ic_train": ic_train,
-                "ic_oos": ic_oos,
-                "ic_std": s,
-                "ir": ir,
-                "t_stat": t,
-                "t_train": t_train,
-                "t_oos": t_oos,
-                "n": n,
-                "height": ind.height,
-            }
-            # 报告23 指标（htai 口径）：互信息 / 多头超额（Top、Bottom 层）
-            if htai:
-                try:
-                    mi = _mutual_info_series(fp_s, returns_summary).dropna()
-                    row["mi_mean"] = float(mi.mean()) if len(mi) else float("nan")
-                except Exception:
-                    row["mi_mean"] = float("nan")
-                try:
-                    t_ex, b_ex, _ = _top_excess_series(fp_s, returns_summary, top_frac=0.1)
-                    row["top_excess"] = t_ex
-                    row["bot_excess"] = b_ex
-                except Exception:
-                    row["top_excess"] = float("nan")
-                    row["bot_excess"] = float("nan")
-            rows.append(row)
-        except Exception:
-            rows.append({"formula": str(ind), "fitness": 0.0,
-                         "ic_mean": 0.0, "ic_train": float("nan"),
-                         "ic_oos": float("nan"), "ic_std": 0.0, "ir": 0.0,
-                         "t_stat": 0.0, "t_train": float("nan"), "t_oos": float("nan"),
-                         "n": 0, "height": ind.height})
-    df = pd.DataFrame(rows)
-    if not df.empty:
-        # P0-④（2026-08-04）：排序与去重都基于 **train 段** t（t_train），
-        # 全样本 t_stat 仅作报告——旧实现按全样本 |t| 排序，把 OOS 信息混入选择。
-        if fitness_mode in ("sharpe", "annual_return", "ret_minus_dd") and "fitness" in df:
-            sort_col = "fitness"    # 净值型模式：fitness 即费后表现本身（方向已中立化）
-        elif train_frac is not None and 0.0 < train_frac < 1.0:
-            sort_col = "t_train"
-        elif htai and fitness_mode == "mutual_info" and "mi_mean" in df:
-            sort_col = "mi_mean"        # MI 模式的优化目标是互信息
-        elif htai and fitness_mode == "top_excess" and "top_excess" in df:
-            sort_col = "top_excess"     # 多头超额模式的优化目标是 Top/Bottom 超额
-        else:
-            sort_col = "t_stat"
-        df = df.reindex(df[sort_col].abs().sort_values(ascending=False).index).reset_index(drop=True)
-        df = _dedup_hof_by_correlation(df, panel, feats, threshold=dedup_corr,
-                                       returns_fit=returns_fit if train_frac < 1.0 else None)
+    gen_done = _evolve_gp(
+        toolbox, pop, hof_track, hof_out,
+        panel, prim_map, memo,
+        generations, cx_prob, mut_prob,
+        family_competition, crowding, crowd_corr_thr,
+        patience, improve_eps, verbose, _ex,
+    )
+    df = _summarize_gp_results(
+        hof_out, panel, prim_map,
+        returns_panel, returns_fit, returns_oos, returns_month_fit,
+        neutral_panels, htai, fitness_mode, train_frac, dedup_corr, feats,
+    )
     return df, hof_out
 
 
@@ -1447,7 +1505,7 @@ def refine_gp_neighbors(
     merged = merged.reindex(
         merged["t_stat"].abs().sort_values(ascending=False).index).reset_index(drop=True)
     if verbose:
-        print(f"  ...memetic 局部搜索: {len(formulas)} 个近邻（train 段择优），合并后 {len(merged)} 条")
+        log.info("...memetic 局部搜索: %d 个近邻（train 段择优），合并后 %d 条", len(formulas), len(merged))
     return merged
 
 
@@ -1570,7 +1628,7 @@ def run_gp_nsga2(
     gen_done = 0
     if verbose:
         record = stats.compile(pop)
-        print(f"gen {0:3d}: avg={record['avg']:.4f} max_f1={record['max']:.4f} front={len(hof)}")
+        log.info("gen %3d: avg=%.4f max_f1=%.4f front=%d", 0, record['avg'], record['max'], len(hof))
 
     for gen in range(1, generations + 1):
         offspring = algorithms.varOr(pop, toolbox, len(pop), cx_prob, mut_prob)
@@ -1583,7 +1641,7 @@ def run_gp_nsga2(
         record = stats.compile(pop)
         cur_best = max(ind.fitness.values[0] for ind in pop)
         if verbose:
-            print(f"gen {gen:3d}: avg={record['avg']:.4f} max_f1={record['max']:.4f} front={len(hof)}")
+            log.info("gen %3d: avg=%.4f max_f1=%.4f front=%d", gen, record['avg'], record['max'], len(hof))
         if cur_best - best_ever > improve_eps:
             best_ever = cur_best
             stall = 0
@@ -1591,7 +1649,7 @@ def run_gp_nsga2(
             stall += 1
             if patience and stall >= patience:
                 if verbose:
-                    print(f"  [early stop] gen {gen}: f1 连续 {patience} 代无提升")
+                    log.info("  [early stop] gen %d: f1 连续 %d 代无提升", gen, patience)
                 break
     setattr(hof, "generations_run", gen_done)
 

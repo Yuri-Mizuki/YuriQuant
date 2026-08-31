@@ -21,20 +21,25 @@
 
 输出: reports/_htai_gp/compare_htai_fitness.csv + 终端对比表
 """
+
 from __future__ import annotations
 
+import sys
 import argparse
-import logging
 from pathlib import Path
-
 import numpy as np
 import pandas as pd
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S")
-log = logging.getLogger("compare_htai_fitness")
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-from scipy import stats
+from scripts.cli_common import add_real_mock_args, setup_logging  # noqa: E402
 
+
+log = setup_logging("compare_htai_fitness")
+
+from scipy import stats  # noqa: E402
 
 def build_panel(args) -> tuple[dict[str, pd.DataFrame], pd.DataFrame, dict]:
     """构建面板 + 华泰特征补全 + 中性化协变量（复用 mine_factors 的构造逻辑）。"""
@@ -55,7 +60,6 @@ def build_panel(args) -> tuple[dict[str, pd.DataFrame], pd.DataFrame, dict]:
         panel["vwap"] = panel["amount"] / panel["volume"]
     neutral_panels = build_htai_neutral_panels(panel, real=args.real)
     return panel, rets, neutral_panels
-
 
 def layer_excess_profile(fp: pd.DataFrame, rets: pd.DataFrame,
                          n_layers: int = 10) -> pd.Series:
@@ -91,7 +95,6 @@ def layer_excess_profile(fp: pd.DataFrame, rets: pd.DataFrame,
     if not prof:
         return pd.Series(dtype=float)
     return pd.DataFrame(prof).mean()
-
 
 def evaluate_factor(formula: str, panel: dict, returns_panel: pd.DataFrame,
                     neutral_panels: dict) -> dict:
@@ -138,10 +141,9 @@ def evaluate_factor(formula: str, panel: dict, returns_panel: pd.DataFrame,
         "convex": convex, "mono_rho": mono, "poly_gain": poly_gain,
     }
 
-
 def main():
     ap = argparse.ArgumentParser(description="华泰报告23 vs 基线：GP 适应度效果对比")
-    ap.add_argument("--real", action="store_true", help="真实数据（默认 mock）")
+    add_real_mock_args(ap)
     ap.add_argument("--begin", type=int, default=None)
     ap.add_argument("--end", type=int, default=None)
     ap.add_argument("--pop", type=int, default=300, help="每个模式的种群规模")
@@ -209,7 +211,6 @@ def main():
     ev_df.to_csv(out_path, index=False)
     sum_df.to_csv(out_path.with_name(out_path.stem + "_summary.csv"), index=False)
     log.info("结果已保存: %s (+ _summary.csv)", out_path)
-
 
 if __name__ == "__main__":
     main()

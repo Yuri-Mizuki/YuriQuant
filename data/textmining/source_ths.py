@@ -18,12 +18,15 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import time
 from typing import Iterable
 
 import pandas as pd
 import requests
+
+log = logging.getLogger(__name__)
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/120.0 Safari/537.36")
@@ -156,9 +159,9 @@ def fetch_ths_reports_batch(
                                        sleep_s=sleep_s, session=s)
                 frames.append(df)
             except Exception as e:  # noqa: BLE001
-                print(f"[ths] {c} 失败: {type(e).__name__}: {str(e)[:80]}")
+                log.warning("[ths] %s 失败: %s: %s", c, type(e).__name__, str(e)[:80])
             if progress and (i + 1) % 10 == 0:
-                print(f"[ths] {i + 1}/{len(codes)}")
+                log.info("[ths] %d/%d", i + 1, len(codes))
     if not frames:
         return pd.DataFrame(columns=["code", "date", "title", "summary", "rating",
                                      "org", "analyst", "source", "title_raw"])

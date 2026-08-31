@@ -31,28 +31,32 @@ python -m scripts.run_backtest 都可以在任意 cwd 下运行；参见 README 
 拉取行业分类与股本结构）；Mock 模式无行业/市值数据，中性化自动跳过，
 仅做去极值 + 标准化。
 """
+
 from __future__ import annotations
 
+import sys
 import argparse
-import logging
 from pathlib import Path
-
 import numpy as np
 import pandas as pd
 
-from backtest import VectorBacktest
-from backtest.costs import ShortCostModel
-from factor import ALL_FACTORS
-from factor.preprocessing import preprocess_factor
-from research import generate_excel_report
-from research.factor_analysis import factor_summary
-from research.html_report import generate_html_report
-from strategy import QuantileLongShort, TopKLongOnly, TopKLongShort
-from strategy.examples import build_strategy
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S")
-log = logging.getLogger("backtest")
+from scripts.cli_common import add_real_mock_args, setup_logging  # noqa: E402
 
+
+from backtest import VectorBacktest  # noqa: E402
+from backtest.costs import ShortCostModel  # noqa: E402
+from factor import ALL_FACTORS  # noqa: E402
+from factor.preprocessing import preprocess_factor  # noqa: E402
+from research import generate_excel_report  # noqa: E402
+from research.factor_analysis import factor_summary  # noqa: E402
+from research.html_report import generate_html_report  # noqa: E402
+from strategy.examples import build_strategy  # noqa: E402
+
+log = setup_logging("backtest")
 
 # ---------------------------------------------------------------------------
 # Mock 数据
@@ -74,7 +78,6 @@ def gen_mock_data(begin: int = 20200101, end: int = 20231231, n_codes: int = 100
     amount = volume * close
 
     return {"close": close, "high": high, "low": low, "volume": volume, "amount": amount}
-
 
 # ---------------------------------------------------------------------------
 # 单因子回测
@@ -131,13 +134,12 @@ def run_single_factor(
 
     return factor_name, result, fs
 
-
 # ---------------------------------------------------------------------------
 # 主流程
 # ---------------------------------------------------------------------------
 def main():
     parser = argparse.ArgumentParser(description="YuriQuant 回测")
-    parser.add_argument("--real", action="store_true", help="使用真实本地数据")
+    add_real_mock_args(parser, real_help="使用真实本地数据")
     parser.add_argument("--factor", default=None, help="单因子名称")
     parser.add_argument("--factors", default=None, help="多因子名称(逗号分隔)或 all")
     parser.add_argument("--strategy", default="topk_ls", choices=["topk_ls", "topk_lo", "quantile"], help="策略")
@@ -374,7 +376,6 @@ def main():
         log.warning("实验记录写入失败（不影响结果）: %s", e)
 
     log.info("=== 完成 ===")
-
 
 if __name__ == "__main__":
     main()

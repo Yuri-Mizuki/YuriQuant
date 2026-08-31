@@ -16,7 +16,6 @@
 from __future__ import annotations
 
 import argparse
-import logging
 import sys
 from pathlib import Path
 
@@ -26,19 +25,18 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+from scripts.cli_common import add_real_mock_args, setup_logging  # noqa: E402
 
-from scripts.e2e_common import (  # noqa: E402
-    HORIZON, build_labels, compute_classic_features, drop_stale_factors,
-    load_daily_data, select_features,
-)
+from scripts.e2e_common import HORIZON, drop_stale_factors, load_daily_data  # noqa: E402
+from factor.classic import compute_classic_features  # noqa: E402
+from model.labels import build_labels  # noqa: E402
 from scripts.e2e_backtest import (  # noqa: E402
     run_equal_weight_backtest, perf_stats,
 )
 from data.cache_helpers import load_index_returns  # noqa: E402
 
-logging.basicConfig(level=logging.INFO,
-                    format="%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S")
-log = logging.getLogger("diagnose")
+
+log = setup_logging("diagnose")
 
 BT_START = "2024-01-01"
 TOP_N = 50
@@ -157,7 +155,7 @@ def run(args) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="模型 vs 单因子诊断")
-    ap.add_argument("--real", action="store_true")
+    add_real_mock_args(ap)
     ap.add_argument("--k", type=int, default=8, help="参与对比的单因子个数")
     ap.add_argument("--model-predictions",
                     default="reports/investment_report/walk_forward_predictions.csv")

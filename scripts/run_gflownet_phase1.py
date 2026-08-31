@@ -25,11 +25,11 @@ import pandas as pd
 
 warnings.filterwarnings("ignore", message="invalid value encountered in reduce")
 
-from factor.gflownet.env import FactorMDP
-from factor.gflownet.net import TBPolicy
-from factor.gflownet.reward import RewardCache, make_reward_fn
-from factor.gflownet.selection import select_low_corr
-from factor.gflownet.tb import evaluate_samples, sample_formulas, sample_uniform, train_tb
+from factor.gflownet.env import FactorMDP  # noqa: E402
+from factor.gflownet.net import TBPolicy  # noqa: E402
+from factor.gflownet.reward import RewardCache, make_reward_fn  # noqa: E402
+from factor.gflownet.selection import select_low_corr  # noqa: E402
+from factor.gflownet.tb import sample_formulas, sample_uniform, train_tb  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # 真实面板（复用 data.cache_helpers.build_panel 的统一数据管道）

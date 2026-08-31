@@ -23,25 +23,29 @@
     python scripts/factor_library.py view "ts_delta(amount,20)" --dataset hs300_2025 --start 20250101 --end 20250601 --regime
     python scripts/factor_library.py report --dataset hs300_2025 --all --config ls_M --out reports/lib_report.xlsx
 """
+
 from __future__ import annotations
 
+import sys
 import argparse
-import logging
 from pathlib import Path
-
 import pandas as pd
 
-from research.factor_library import FactorLibrary
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S")
-log = logging.getLogger("factor_library_cli")
+from scripts.cli_common import setup_logging  # noqa: E402
 
+
+from research.factor_library import FactorLibrary  # noqa: E402
+
+log = setup_logging("factor_library_cli")
 
 def _print_df(df: pd.DataFrame, cols=None, max_rows=40):
     with pd.option_context("display.max_rows", max_rows, "display.width", 240,
                            "display.float_format", lambda v: f"{v:.4f}" if isinstance(v, float) else str(v)):
         print(df[cols] if cols else df)
-
 
 def cmd_list(args):
     lib = _lib()
@@ -52,7 +56,6 @@ def cmd_list(args):
     cols = ["name", "kind", "family", "maturity", "ic_mean", "t_stat", "significant",
             "best_sharpe", "best_config", "created_at"]
     _print_df(df, [c for c in cols if c in df.columns])
-
 
 def cmd_compare(args):
     lib = _lib()
@@ -69,7 +72,6 @@ def cmd_compare(args):
         out.parent.mkdir(parents=True, exist_ok=True)
         df.to_csv(out, index=False)
         log.info("对比结果已保存: %s", out)
-
 
 def cmd_view(args):
     lib = _lib()
@@ -106,7 +108,6 @@ def cmd_view(args):
                       "equity": info["equity_curve"].reindex(info["daily_returns"].index).values,
                       "ic": info["ic_series"].reindex(info["daily_returns"].index).values}).to_csv(out, index=False)
         log.info("时间段回测已保存: %s", out)
-
 
 def cmd_report(args):
     from research.xlsx_report import generate_excel_report
@@ -156,7 +157,6 @@ def cmd_report(args):
         )
         log.info("HTML 交互报告已生成: %s", html_path)
 
-
 def cmd_features(args):
     lib = _lib()
     feats = lib.load_library_features(kind=args.kind)
@@ -166,7 +166,6 @@ def cmd_features(args):
     print(f"可作为下一轮挖掘特征的因子（共 {len(feats)} 个）:")
     for name in feats:
         print(f"  - {name}")
-
 
 def cmd_set_tag(args):
     lib = _lib()
@@ -181,7 +180,6 @@ def cmd_set_tag(args):
     print(f"  family={hit.get('family', '')}  frequency={hit.get('frequency', '')}"
           f"  maturity={hit.get('maturity', '')}  note={hit.get('note', '')}")
 
-
 def cmd_monitor(args):
     lib = _lib()
     df = lib.monitor(window=args.window)
@@ -194,7 +192,6 @@ def cmd_monitor(args):
     n_warn = int((df["status"] == "warning").sum())
     print(f"\nwarning 因子 {n_warn}/{len(df)} —— 近期 IC 均值已跌破全期一半，建议评估是否衰减/降权（退役=set-tag --maturity retired，保留不删）")
 
-
 def cmd_delete(args):
     lib = _lib()
     if not lib.has(args.name):
@@ -206,13 +203,11 @@ def cmd_delete(args):
     lib.delete(args.name)
     print(f"已删除: {args.name}")
 
-
 def _lib() -> "FactorLibrary":
     return FactorLibrary(
         root=args.root if getattr(args, "root", None) else None,
         dataset=getattr(args, "dataset", None),
     )
-
 
 def cmd_datasets(args):
     ds = FactorLibrary.list_datasets(root=args.root)
@@ -224,7 +219,6 @@ def cmd_datasets(args):
         lib = FactorLibrary(dataset=name, root=args.root)
         n = len(lib.list_all())
         print(f"  {name:24s} 因子数={n}")
-
 
 def main():
     global args
@@ -296,7 +290,6 @@ def main():
 
     args = parser.parse_args()
     args.func(args)
-
 
 if __name__ == "__main__":
     main()

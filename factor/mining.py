@@ -18,6 +18,7 @@ returns_panel: DataFrame(date, code)，**已对齐为当日因子对应的未来
 """
 from __future__ import annotations
 
+import logging
 import warnings
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -33,6 +34,8 @@ from factor.operators import (
 )
 from factor.cv import forward_folds
 from stats.ic import calc_ic_series, calc_ir, calc_ic_decay, factor_autocorr
+
+log = logging.getLogger(__name__)
 
 
 @contextmanager
@@ -311,7 +314,7 @@ def evaluate_candidates(
                 if r is not None:
                     rows.append(r)
         if verbose:
-            print(f"  ...并行评估完成: {len(rows)}/{len(tasks)} 有效", flush=True)
+            log.info("...并行评估完成: %d/%d 有效", len(rows), len(tasks))
     else:
         for i, c in enumerate(candidates):
             try:
@@ -346,7 +349,7 @@ def evaluate_candidates(
                 "n": n,
             })
             if verbose and (i + 1) % 50 == 0:
-                print(f"  ...已评估 {i + 1}/{len(candidates)}", flush=True)
+                log.info("...已评估 %d/%d", i + 1, len(candidates))
 
     if not rows:
         return pd.DataFrame(columns=[
@@ -487,7 +490,7 @@ def rolling_evaluate_candidates(
         )
         if res_tr.empty:
             if verbose:
-                print(f"  ...折 {fi}: train 段无有效候选，跳过", flush=True)
+                log.info("...折 %d: train 段无有效候选，跳过", fi)
             continue
         top_names = res_tr.head(top_train)["name"].tolist()
         top_cands = [cand_map[nm] for nm in top_names if nm in cand_map]
@@ -500,7 +503,7 @@ def rolling_evaluate_candidates(
         )
         if res_te.empty:
             if verbose:
-                print(f"  ...折 {fi}: test 段无有效候选，跳过", flush=True)
+                log.info("...折 %d: test 段无有效候选，跳过", fi)
             continue
 
         te_map = res_te.set_index("name")
@@ -512,8 +515,8 @@ def rolling_evaluate_candidates(
             if nm in tr_map.index:
                 fold_train_ir[nm].append(float(tr_map.at[nm, "ir"]))
         if verbose:
-            print(f"  ...折 {fi}/{len(folds)}: train top {len(top_names)} "
-                  f"-> test 复核 {len(res_te)}", flush=True)
+            log.info("...折 %d/%d: train top %d -> test 复核 %d",
+                     fi, len(folds), len(top_names), len(res_te))
 
     rows: list[dict] = []
     for nm in names:

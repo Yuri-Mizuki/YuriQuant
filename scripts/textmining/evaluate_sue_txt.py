@@ -44,7 +44,6 @@ def load_next_ret(begin: int = 20190101, end: int = 20261231) -> pd.DataFrame:
     避免 calendar 增量写入触发 PermissionError——沙箱对 e:/data 写锁）。
     """
     from config import Config
-    import json
     daily = pd.read_parquet(
         Path(str(Config.cache()["root"]).replace("//", "/")) / "daily_hs300.parquet")
     daily = daily[daily.index.get_level_values("date") >= pd.Timestamp(str(begin))]

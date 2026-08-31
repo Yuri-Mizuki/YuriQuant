@@ -21,7 +21,7 @@ BERT 版 FADT 训练（对齐华泰 AI 63 文本表示升级）
 from __future__ import annotations
 
 import argparse
-import logging
+import sys
 from pathlib import Path
 
 import joblib
@@ -29,16 +29,19 @@ import numpy as np
 import pandas as pd
 
 from scripts.textmining.train_fadt import (
-    TRAIN_MONTHS, TEST_MONTHS, LOOKBACK_MONTHS,
-    build_factor_from_pred,
+    TRAIN_MONTHS, TEST_MONTHS, build_factor_from_pred,
 )
 from scripts.textmining.train_sue_txt import (
     _auc_ovr, _sue0_from_model, make_labels,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+from scripts.cli_common import setup_logging  # noqa: E402
+
 OUT_DIR = ROOT / "reports" / "textmining"
-log = logging.getLogger("fadt_bert")
+log = setup_logging("fadt_bert")
 
 # 与词频版同款网格（研报 AI 63 图表29 学习率 [0.025,0.05,0.075,0.1] × depth
 # [3,5,7] × subsample [0.8,0.85,0.9,0.95]；我们沿用 train_fadt 精简网格）
@@ -169,9 +172,6 @@ if __name__ == "__main__":
     ap.add_argument("--end", type=int, default=20261231)
     args = ap.parse_args()
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s",
-                        handlers=[logging.StreamHandler(),
-                                  logging.FileHandler(
-                                      OUT_DIR / f"{args.task}_train_bert_{args.model}_{args.pool}.log",
-                                      encoding="utf-8")])
+    setup_logging("fadt_bert",
+                  file=OUT_DIR / f"{args.task}_train_bert_{args.model}_{args.pool}.log")
     run(args.task, args.model, args.pool, args.begin, args.end)

@@ -23,31 +23,30 @@ WorldQuant 101 Formulaic Alphas（Kakushadze 2016）与国泰君安 191 短周�
     python -m scripts.build_alpha_factors --offline --sets alpha101
     python -m scripts.build_alpha_factors --mock                   # mock 验证
 """
+
 from __future__ import annotations
 
+from pathlib import Path
 import argparse
-import logging
 import sys
-
-import numpy as np
 import pandas as pd
 
-from factor.alpha101 import compute_alpha101
-from factor.alpha158 import compute_alpha158, compute_alpha360
-from factor.alpha191 import compute_alpha191
-from factor.alpha_base import AlphaData, SET_LABELS, load_alpha_panels
-from research.factor_library import FactorLibrary
-from scripts.cli_common import (
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from factor.alpha101 import compute_alpha101  # noqa: E402
+from factor.alpha158 import compute_alpha158, compute_alpha360  # noqa: E402
+from factor.alpha191 import compute_alpha191  # noqa: E402
+from factor.alpha_base import AlphaData, SET_LABELS, load_alpha_panels  # noqa: E402
+from research.factor_library import FactorLibrary  # noqa: E402
+from scripts.cli_common import (  # noqa: E402
     add_build_args, make_data_context, print_no_save, record_experiment_safe,
     register_panels,
+    setup_logging,
 )
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%H:%M:%S",
-)
-log = logging.getLogger("build_alpha_factors")
+log = setup_logging("build_alpha_factors")
 
 # 三态默认：监控主力库 hs300_2022_2025（2022-2025 全区间）；
 # warmup 起点取 begin 前约 1.5 年（> 最大回看 250 交易日）
@@ -59,7 +58,6 @@ DEFAULTS = {
     "real": {"begin": 20220101, "end": 20251231, "dataset": "hs300_2022_2025",
              "warmup": 20200701},
 }
-
 
 def main():
     parser = argparse.ArgumentParser(description="Alpha101/Alpha191 公开因子集构建入库")
@@ -149,7 +147,6 @@ def main():
         note="公开因子集（Alpha101/GTJA191）入库，统一监控按 source 分组对比",
     )
     log.info("完成。数据集 %s 现有 %d 个因子", dataset, len(lib.list_all()))
-
 
 if __name__ == "__main__":
     main()

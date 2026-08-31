@@ -10,23 +10,27 @@ SDK 对大代码清单的单次查询会硬崩宿主进程且无 traceback（202
 用法:
     python scripts/fetch_status_batched.py [--batch 200] [--begin 20220101] [--end 20251231]
 """
+
 from __future__ import annotations
 
+import sys
 import argparse
-import logging
 import time
 from pathlib import Path
-
-import numpy as np
 import pandas as pd
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S")
-log = logging.getLogger("fetch_status")
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-from config import Config  # 缓存根单一真源（原硬编码 e:/data/parquet）
+from scripts.cli_common import setup_logging  # noqa: E402
+
+
+log = setup_logging("fetch_status")
+
+from config import Config  # 缓存根单一真源（原硬编码 e:/data/parquet）  # noqa: E402
 
 CACHE_PATH = Path(str(Config.cache()["root"])) / "history_stock_status.parquet"
-
 
 def _covered_codes(df: pd.DataFrame, begin: int, end: int) -> set[str]:
     """已有缓存中，日期覆盖达到 begin~end 目标交易日 80% 的代码。"""
@@ -40,7 +44,6 @@ def _covered_codes(df: pd.DataFrame, begin: int, end: int) -> set[str]:
     approx_days = len(pd.bdate_range(str(begin), str(end)))
     ok = per_code[per_code >= approx_days * 0.8]
     return set(ok.index)
-
 
 def main():
     ap = argparse.ArgumentParser()
@@ -101,7 +104,6 @@ def main():
              ("：" + ",".join(failed[:20]) + ("..." if len(failed) > 20 else "")) if failed else "")
     if failed:
         log.info("重跑本脚本可自动补拉失败批次")
-
 
 if __name__ == "__main__":
     main()

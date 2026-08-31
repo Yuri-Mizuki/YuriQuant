@@ -112,13 +112,13 @@ def _build_mock_data():
 
 
 def _build_real_data():
-    """真实 HS300 数据：复用 ml_algorithm_compare 的数据加载。"""
+    """真实 HS300 数据：PIT 面板 + 经典因子。"""
+    from data.cache_helpers import load_pit_panels
     from factor.classic import compute_classic_features
     from model.labels import build_labels, forward_returns
-    from scripts.ml_algorithm_compare import BEGIN, _px_panels
-    from scripts.ml_synthesis_experiment import _eval_row  # noqa: F401
 
-    px = _px_panels(BEGIN, None)
+    begin = 20190102
+    px = load_pit_panels(begin, None)
     classic = compute_classic_features(px)
     labels, _ = build_labels(px["close"], horizon=1, mode="rank")
     fwd = forward_returns(px["close"], horizon=1)

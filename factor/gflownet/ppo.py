@@ -13,6 +13,8 @@ Actor-Critic + PPO + 熵奖励。预期现象：RL 训练初期收敛快，但�
 """
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -20,6 +22,8 @@ import torch.nn as nn
 from factor.gflownet.env import FactorMDP
 from factor.gflownet.net import PPONet, policy_logits
 from factor.gflownet.tb import RewardFn
+
+log = logging.getLogger(__name__)
 
 __all__ = ["train_ppo"]
 
@@ -83,6 +87,5 @@ def train_ppo(mdp: FactorMDP, reward_fn: RewardFn, net: PPONet,
             round_loss.append(float(loss.detach()))
         losses.append(float(np.mean(round_loss)))
         if log_every and (r + 1) % log_every == 0:
-            print(f"  [ppo] round {r + 1}/{n_rounds}  loss={losses[-1]:.4f}",
-                  flush=True)
+            log.info("[ppo] round %d/%d  loss=%.4f", r + 1, n_rounds, losses[-1])
     return losses

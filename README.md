@@ -347,6 +347,16 @@ mock 落 `reports/models_mock`，真实落 `reports/models`。
 pip install -e ".[dev]"
 ```
 
+**复现锁**：仓库提交 `uv.lock`（`uv lock` 生成的跨平台解析锁，覆盖全部可选依赖组，
+关键版本与实测兼容矩阵一致）。需要精确复现环境可用：
+
+```bash
+uv sync --frozen --extra dev --extra ml --extra gp --extra solver
+```
+
+CI 以 `uv lock --check` 守卫锁文件与 `pyproject.toml` 保持同步；`rl` 组含
+torch（CUDA 体积过大），CI 与本地默认不装，有需要时单独 `--extra rl`。
+
 **例外：AmazingData SDK 不在上述依赖里。** 它是银河证券私有分发的本地 wheel，
 不在 PyPI 上，需要按开发手册（`AmazingData开发手册.pdf` 3.3 节）单独安装：
 

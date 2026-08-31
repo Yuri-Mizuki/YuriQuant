@@ -38,33 +38,33 @@
 
 ### 3.1 结构性（应先做）
 
-- [ ] **实验脚本私有函数倒挂残余**：`cpcv_eval.py` / `cpcv_h1_eval.py` /
+- [x] **实验脚本私有函数倒挂残余**：`cpcv_eval.py` / `cpcv_h1_eval.py` /
   `ml_algorithm_compare.py` 仍 import `ml_synthesis_experiment` 的
   `_eval_row` / `_px_panels` / `_fit_predict_valid` / `_monthly_ic` 等私有函数
   （P3 仅解掉了 `_classic_features`）。公共函数应迁至 `e2e_common` 或独立模块。
-- [ ] **最小 CI**：无 `.github/workflows`。加最简 GitHub Actions
+- [x] **最小 CI**：无 `.github/workflows`。加最简 GitHub Actions
   （pytest + ruff check + tests/test_layering.py 门禁），
   把口径守卫和分层守卫变成强制约束（测试漂移到无法收集才被发现，
   根因就是无 CI）。
 
 ### 3.2 机械性（可批量清理）
 
-- [ ] **cli_common 推广**（骨架已建、采用率 <15%）：
+- [x] **cli_common 推广**（骨架已建、采用率 <15%）：
   - 53 处 `logging.basicConfig` 手写样板 → `setup_logging()`（仅 scripts 层）
   - 22 处手写 `--real`/`--mock` add_argument → `add_real_mock_args()`
-- [ ] **HTML 报告模板收编**：8 套各自内嵌的模板（`monitoring/runner.py` 的
+- [x] **HTML 报告模板收编**：8 套各自内嵌的模板（`monitoring/runner.py` 的
   317 行 `generate_html_report` 与 `research/html_report.py` 同名异构、
   `investment_report` / `factor_explorer_report` / `factor_library_full_report` /
   `risk_decomposition_report` / `run_etf_rotation` / `report_pipeline`）。
   以 `research/html_report.py` 为基座统一，顺带拆掉超长函数。
-- [ ] **超长文件/函数拆分**：
+- [x] **超长文件/函数拆分**：
   - `factor/genetic_mining.py` 1692 行（`run_gp_mining` 单函数 ~301 行）
   - `factor/alpha191.py` 1273 行（公式库，可辩护）
   - `scripts/mine_factors.py` 800 行、`scripts/factor_explorer_report.py` 的
     `build_factor_data` ~493 行
-- [ ] **核心包卫生**：25 处 `print(` → logging（factor 15、data 8）；
+- [x] **核心包卫生**：25 处 `print(` → logging（factor 15、data 8）；
   10 处 `except: pass` 静默吞异常逐个审查。
-- [ ] **依赖锁文件**：当前仅 `>=` 下界，加 lock（pip-tools / uv）保证可复现。
+- [x] **依赖锁文件**：当前仅 `>=` 下界，加 lock（pip-tools / uv）保证可复现。
 
 ## 四、低优先级（知情即可）
 

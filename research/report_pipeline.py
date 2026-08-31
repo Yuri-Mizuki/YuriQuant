@@ -40,6 +40,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from research.html_report import base_js, chart_js_line, page, render_table
+
 log = logging.getLogger("report_pipeline")
 
 # ===========================================================================
@@ -102,56 +104,12 @@ def _fmt_num(v, dp: int = 4) -> str:
 
 def _df_to_html_table(df: pd.DataFrame, max_rows: int = 30,
                       pct_cols: set | None = None) -> str:
-    """DataFrame → 可排序 HTML 表（精简版，复用 html_report CSS）。"""
+    """DataFrame → 可排序 HTML 表（委托 html_report.render_table，单一实现）。"""
     pct_cols = pct_cols or set()
-    if len(df) > max_rows:
-        df = df.head(max_rows)
-    head = "".join(f"<th data-k='{c}'>{c}</th>" for c in df.columns)
-    body = []
-    for _, r in df.iterrows():
-        cells = []
-        for c in df.columns:
-            v = r[c]
-            cls, txt = "", "-"
-            if isinstance(v, (int, float, np.integer, np.floating)) and not (
-                isinstance(v, float) and (np.isnan(v) or np.isinf(v))
-            ):
-                if c in pct_cols:
-                    txt = f"{float(v) * 100:.2f}%"
-                elif isinstance(v, (int, np.integer)):
-                    txt = f"{int(v):,}"
-                else:
-                    txt = f"{float(v):.4f}"
-            elif isinstance(v, str):
-                txt = v
-            cells.append(f"<td>{txt}</td>")
-        body.append(f"<tr>{''.join(cells)}</tr>")
-    n_more = f"<div class='note'>仅展示前 {max_rows} 行，共 {len(df)} 行</div>" if len(df) > max_rows else ""
-    return f"<table><thead><tr>{head}</tr></thead><tbody>{''.join(body)}</tbody></table>{n_more}"
-
-
-def _chart_js_line(canvas_id: str, labels: list, datasets: list,
-                   y_fmt: str = "value", title: str = "") -> str:
-    """生成一个 Chart.js 折线图初始化 JS 代码块。
-
-    datasets: [{label, data: [[x, y], ...], borderColor, ...}]
-    """
-    cfg = {
-        "type": "line",
-        "data": {"datasets": datasets},
-        "options": {
-            "responsive": True,
-            "maintainAspectRatio": False,
-            "plugins": {"legend": {"labels": {"boxWidth": 12, "font": {"size": 11}}}},
-            "scales": {
-                "x": {"type": "time", "time": {"unit": "month"},
-                      "grid": {"display": False}},
-                "y": {"ticks": {"callback": f"v=>v.toFixed(2)"}},
-            },
-        },
-    }
-    cfg_json = json.dumps(cfg, ensure_ascii=False, separators=(",", ":"))
-    return f"makeChart('{canvas_id}', {cfg_json});\n"
+    n = len(df)
+    body = render_table(df, pct_cols=sorted(pct_cols), max_rows=max_rows)
+    n_more = f"<div class='note'>仅展示前 {max_rows} 行，共 {n} 行</div>" if n > max_rows else ""
+    return body + n_more
 
 
 def _git_hash() -> str:
@@ -354,7 +312,7 @@ def collect_oos(ctx: ReportContext) -> Section | None:
         if datasets:
             parts.append(f"<h3>样本外净值曲线</h3><div style='position:relative;height:300px'>"
                          f"<canvas id='oos_curves' role='img' aria-label='OOS 净值曲线'></canvas></div>")
-            charts_js = _chart_js_line("oos_curves", [], datasets)
+            charts_js = chart_js_line("oos_curves", datasets)
     return Section("OOS 合成对比", "".join(parts), order=50, charts_js=charts_js)
 
 
@@ -398,59 +356,6 @@ COLLECTORS: OrderedDict[str, callable] = OrderedDict([
 # ===========================================================================
 # 组装器
 # ===========================================================================
-_CSS = """
-body{font-family:-apple-system,"Segoe UI","Microsoft YaHei",sans-serif;margin:0;padding:26px 30px;background:#f6f7f9;color:#1f2430}
-h1{font-size:21px;margin:0 0 4px;font-weight:600}
-.sub{color:#6b7280;font-size:13px;margin-bottom:18px}
-h2.section{font-size:17px;margin:28px 0 10px;font-weight:600;color:#111827;border-bottom:2px solid #e5e7eb;padding-bottom:6px}
-.card{background:#fff;border-radius:12px;padding:16px 20px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.05)}
-h3{font-size:13px;margin:14px 0 8px;font-weight:600;color:#374151}
-.stats{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:2px}
-.stat{background:#fff;border:1px solid #eef0f3;border-radius:10px;padding:10px 14px;min-width:96px}
-.stat b{font-size:18px;display:block;font-weight:600;margin-top:2px}
-.stat span{color:#8a8f98;font-size:12px}
-.pos{color:#c62828}.neg{color:#2e7d32}
-table{border-collapse:collapse;width:100%;font-size:13px}
-th{text-align:left;color:#6b7280;font-weight:500;padding:7px 10px;border-bottom:1px solid #e5e7eb;cursor:pointer;user-select:none;white-space:nowrap}
-th:hover{color:#111827}
-td{padding:6px 10px;border-bottom:1px solid #f3f4f6;font-variant-numeric:tabular-nums;white-space:nowrap}
-tr:hover td{background:#fafbfc}
-.note{color:#8a8f98;font-size:12px;margin-top:6px}
-canvas{max-height:300px}
-code{font-family:Consolas,monospace;font-size:12px;color:#555}
-"""
-
-_JS_TEMPLATE = r"""
-function makeChart(id, cfg) {
-  const el = document.getElementById(id);
-  if (!el) return;
-  new Chart(el, cfg);
-}
-document.addEventListener('DOMContentLoaded', () => {
-  __CHARTS_JS__
-  document.querySelectorAll('th').forEach(th => {
-    th.addEventListener('click', () => {
-      const tbody = th.closest('table').querySelector('tbody');
-      if (!tbody) return;
-      const rows = Array.from(tbody.rows);
-      const i = Array.from(th.parentNode.children).indexOf(th);
-      const asc = th.dataset.asc !== '1';
-      th.dataset.asc = asc ? '1' : '0';
-      rows.sort((a, b) => {
-        const va = a.cells[i].textContent.replace(/[%,]/g,'');
-        const vb = b.cells[i].textContent.replace(/[%,]/g,'');
-        let x = parseFloat(va), y = parseFloat(vb);
-        if (isNaN(x)) { x = va; } if (isNaN(y)) { y = vb; }
-        if (typeof x === 'number' && typeof y === 'number') return asc ? x - y : y - x;
-        return asc ? String(x).localeCompare(String(y)) : String(y).localeCompare(String(x));
-      });
-      rows.forEach(r => tbody.appendChild(r));
-    });
-  });
-});
-"""
-
-
 def generate_research_report(
     dataset: str = "hs300_2025",
     out: str | Path | None = None,
@@ -518,7 +423,7 @@ def generate_research_report(
             all_charts_js.append(sec.charts_js)
 
     charts_js_str = "\n  ".join(all_charts_js)
-    js = _JS_TEMPLATE.replace("__CHARTS_JS__", charts_js_str)
+    js = base_js(charts_js_str)
 
     # 输出路径
     if out is None:
@@ -527,22 +432,16 @@ def generate_research_report(
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
 
-    html = f"""<!DOCTYPE html>
-<html lang="zh-CN"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{title}</title>
-<style>{_CSS}</style>
-</head>
-<body>
-<h1>{title}</h1>
-<div class="sub">{meta}</div>
-{''.join(section_html)}
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
-<script>
-{js}
-</script>
-</body></html>"""
+    html = page(
+        title,
+        meta=meta,
+        body="".join(section_html),
+        head_extra=(
+            '<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>\n'
+            '<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns/dist/chartjs-adapter-date-fns.bundle.min.js"></script>'
+        ),
+        scripts=f"<script>\n{js}\n</script>",
+    )
     out.write_text(html, encoding="utf-8")
     log.info("研究报告已生成: %s (%d KB, %d 章节)", out, out.stat().st_size // 1024, len(sections))
     return out

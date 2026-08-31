@@ -21,18 +21,23 @@
 
 mock 模式：生成含已知因子溢价的合成数据，验证三条归因链路能正确恢复信号。
 """
+
 from __future__ import annotations
 
+import sys
 import argparse
-import logging
 from pathlib import Path
-
 import numpy as np
 import pandas as pd
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S")
-log = logging.getLogger("attribution")
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
+from scripts.cli_common import setup_logging  # noqa: E402
+
+
+log = setup_logging("attribution")
 
 # ---------------------------------------------------------------------------
 # Mock 数据：含已知因子溢价 + 行业结构，验证归因能恢复信号
@@ -93,7 +98,6 @@ def gen_mock_attribution_data(
         "size_premium_true": size_prem,
     }
 
-
 # ---------------------------------------------------------------------------
 # 面板 IO
 # ---------------------------------------------------------------------------
@@ -102,18 +106,15 @@ def _load_panel(path: str) -> pd.DataFrame:
     df.index = pd.to_datetime(df.index)
     return df
 
-
 def _load_series(path: str) -> pd.Series:
     df = pd.read_csv(path, index_col=0, parse_dates=True)
     return df.iloc[:, 0]
-
 
 def _load_category(path: str) -> dict:
     df = pd.read_csv(path)
     col_c = "code" if "code" in df.columns else df.columns[0]
     col_i = "industry" if "industry" in df.columns else df.columns[1]
     return dict(zip(df[col_c].astype(str), df[col_i].astype(str)))
-
 
 # ---------------------------------------------------------------------------
 # 子命令：Fama-MacBeth
@@ -151,7 +152,6 @@ def cmd_fm(args) -> int:
         log.info("结果已保存: %s", out)
     return 0
 
-
 # ---------------------------------------------------------------------------
 # 子命令：Brinson 归因
 # ---------------------------------------------------------------------------
@@ -186,7 +186,6 @@ def cmd_brinson(args) -> int:
         df.to_csv(out)
         log.info("结果已保存: %s", out)
     return 0
-
 
 # ---------------------------------------------------------------------------
 # 子命令：α/β 分解
@@ -230,7 +229,6 @@ def cmd_ab(args) -> int:
         rows.to_csv(out, index=False)
         log.info("结果已保存: %s", out)
     return 0
-
 
 # ---------------------------------------------------------------------------
 # 主入口
@@ -286,7 +284,6 @@ def main():
     except Exception:
         pass
     raise SystemExit(rc)
-
 
 if __name__ == "__main__":
     main()

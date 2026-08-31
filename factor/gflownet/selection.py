@@ -17,12 +17,15 @@
 """
 from __future__ import annotations
 
+import logging
 from typing import Callable, Optional
 
 import numpy as np
 import pandas as pd
 
 from factor.formula import formula_builder
+
+log = logging.getLogger(__name__)
 
 __all__ = ["select_low_corr", "panel_flat_corr"]
 
@@ -78,8 +81,8 @@ def select_low_corr(samples: list[tuple[str, float]],
             if not np.isfinite(ac) or ac < min_autocorr:
                 n_rre_dropped += 1
                 if progress:
-                    print(f"  [RRE] {i + 1}/{len(samples)} autocorr={ac:.3f} "
-                          f"< {min_autocorr:.2f} 剔除", flush=True)
+                    log.info("[RRE] %d/%d autocorr=%.3f < %.2f 剔除",
+                             i + 1, len(samples), ac, min_autocorr)
                 continue
         ok = True
         for _, _, prev_fp in selected:
@@ -89,8 +92,8 @@ def select_low_corr(samples: list[tuple[str, float]],
         if ok:
             selected.append((formula, r, fp))
         if progress and (i + 1) % 50 == 0:
-            print(f"  筛选 {i + 1}/{len(samples)} 已入选 {len(selected)}", flush=True)
+            log.info("筛选 %d/%d 已入选 %d", i + 1, len(samples), len(selected))
     if min_autocorr > 0.0 and n_rre_dropped:
-        print(f"RRE 秩稳定性门槛 min_autocorr={min_autocorr}: 共剔除 {n_rre_dropped} 个",
-              flush=True)
+        log.info("RRE 秩稳定性门槛 min_autocorr=%s: 共剔除 %d 个",
+                 min_autocorr, n_rre_dropped)
     return [(f, r) for f, r, _ in selected]

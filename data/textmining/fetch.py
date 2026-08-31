@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Iterable
 
@@ -29,6 +30,8 @@ from config import Config
 
 from data.textmining.source_ths import fetch_ths_reports, to_code6
 from data.textmining.source_cninfo import fetch_cninfo_announcements
+
+log = logging.getLogger(__name__)
 
 # 统一输出列（研报）
 THS_COLS = ["code", "date", "title", "summary", "rating", "org", "analyst", "source"]
@@ -85,7 +88,7 @@ class TextMiningCache:
                     if not df.empty:
                         frames.append(df)
                 except Exception as e:  # noqa: BLE001
-                    print(f"[textmining] ths {c} 失败: {type(e).__name__}: {str(e)[:80]}")
+                    log.warning("[textmining] ths %s 失败: %s: %s", c, type(e).__name__, str(e)[:80])
             if len(frames) > 1 or (frames and local.empty):
                 combined = pd.concat(frames, ignore_index=True)
                 combined = combined.drop_duplicates(subset=["code", "date", "title"], keep="last")

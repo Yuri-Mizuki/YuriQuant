@@ -20,24 +20,26 @@
     - 分钟K线默认按 config.minute.periods 拉取（默认 [5]），可用 --minute/--no-minute 覆盖。
     - 无 SDK 凭证时自动回退到 CSV 数据源（离线开发模式）。
 """
+
 from __future__ import annotations
 
+from pathlib import Path
 import argparse
-import logging
 import sys
 
-from config import Config
-from data.cache import DataCache
-from data.datasource import create_datasource
-from data.universe import Universe
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%H:%M:%S",
-)
-log = logging.getLogger("update_data")
+from scripts.cli_common import setup_logging  # noqa: E402
 
+
+from config import Config  # noqa: E402
+from data.cache import DataCache  # noqa: E402
+from data.datasource import create_datasource  # noqa: E402
+from data.universe import Universe  # noqa: E402
+
+log = setup_logging("update_data")
 
 def _parse_minute_arg(raw: str | None) -> list[int] | None:
     """解析 --minute "1,5,15" → [1, 5, 15]；None 表示未指定（走配置）。
@@ -50,11 +52,9 @@ def _parse_minute_arg(raw: str | None) -> list[int] | None:
     parts = [p.strip() for p in raw.split(",") if p.strip()]
     return [validate_minute_period(int(p)) for p in parts]
 
-
 # 股票池 -> 指数代码 / 池名（2026-08-26 池隔离扩展）
 _POOL_INDEX = {"hs300": "000300.SH", "zz500": "000905.SH", "zz1000": "000852.SH"}
 _VALID_POOLS = (*_POOL_INDEX.keys(), "all_a")
-
 
 def check_pool_consistency(cache: DataCache, index_code: str, pool: str) -> None:
     """拉取前校验：meta 中 daily/min5 的 pool 口径与本次拉取是否一致。
@@ -82,7 +82,6 @@ def check_pool_consistency(cache: DataCache, index_code: str, pool: str) -> None
                 "文件名不一致，可能产生重复/混合数据",
                 table, cur_pool, pool,
             )
-
 
 def main():
     parser = argparse.ArgumentParser(description="YuriQuant 数据更新")
@@ -230,7 +229,6 @@ def main():
         log.warning("实验记录写入失败（不影响数据更新）: %s", e)
 
     log.info("数据更新完成。缓存目录: %s", cache.root)
-
 
 if __name__ == "__main__":
     main()

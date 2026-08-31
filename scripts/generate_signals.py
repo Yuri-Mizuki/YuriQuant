@@ -15,26 +15,27 @@
     signals_{mode}_{freq}_{method}_{period}.csv  长表: 每调仓日×股票的目标股数/方向/受阻
     signals_{mode}_{freq}_{method}_{period}.txt  单日可读清单（最新调仓日）
 """
+
 from __future__ import annotations
 
+import sys
 import argparse
-import logging
 from pathlib import Path
-
 import pandas as pd
 
-from optimize.multi_period import RebalanceConfig, run_multi_period_backtest
-from optimize.signals import signals_from_rebalances
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%H:%M:%S",
-)
-log = logging.getLogger("generate_signals")
+from scripts.cli_common import add_real_mock_args, setup_logging  # noqa: E402
+
+
+from optimize.multi_period import RebalanceConfig, run_multi_period_backtest  # noqa: E402
+from optimize.signals import signals_from_rebalances  # noqa: E402
+
+log = setup_logging("generate_signals")
 
 OUT_DIR = Path("reports/signals")
-
 
 def build_rebalance_config(args, data) -> RebalanceConfig:
     kw = dict(rebalance_freq=args.freq, method=args.method, max_weight=args.max_weight)
@@ -43,7 +44,6 @@ def build_rebalance_config(args, data) -> RebalanceConfig:
     if data.get("style_panels"):
         kw["style_exposures"] = data["style_panels"]
     return RebalanceConfig(**kw)
-
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="每日交易信号生成（P3）")
@@ -57,7 +57,7 @@ def main() -> None:
     ap.add_argument("--n-codes", type=int, default=60)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", default=str(OUT_DIR))
-    ap.add_argument("--real", action="store_true")
+    add_real_mock_args(ap)
     ap.add_argument("--begin", type=int, default=None)
     ap.add_argument("--end", type=int, default=None)
     ap.add_argument("--index", default="000300.SH")
@@ -136,7 +136,6 @@ def main() -> None:
                   if not blocked.empty else "  (无受阻交易)")
     log.info("已输出: %s", csv_path)
 
-
 def _load_directional_masks(codes, begin, end, price):
     from data.cache import DataCache
     from data.datasource import create_datasource
@@ -151,7 +150,6 @@ def _load_directional_masks(codes, begin, end, price):
     log.info("方向校验就绪：不可买入 %d 例 / 不可卖出 %d 例", n_blocked_buy, n_blocked_sell)
     return buyable, sellable
 
-
 def _write_latest(txt_path, signals, latest, capital):
     rows = signals[signals["signal_date"] == latest]
     lines = [f"最新调仓日 {pd.Timestamp(latest).date()} 交易信号（资金 ${capital/1e6:.0f}M）",
@@ -161,7 +159,6 @@ def _write_latest(txt_path, signals, latest, capital):
                      f"{r['status']:<11}{r['note']}")
     txt_path.write_text("\n".join(lines), encoding="utf-8")
     log.info("最新清单: %s", txt_path)
-
 
 if __name__ == "__main__":
     main()

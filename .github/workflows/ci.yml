@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          # CPU 版 torch（GFlowNet 单测依赖；GPU/CUDA 版本过大，CI 用 CPU 即可）
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -e ".[dev,ml,gp,solver]"
+
+      - name: Check dependency lock in sync
+        # uv.lock 是跨平台解析锁（uv lock 生成），此处只守卫其与 pyproject.toml 同步，
+        # 安装仍走上方 pip（CPU torch 需要自定义 index，uv sync 不便表达）。
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - run: uv lock --check
+
+      - name: Ruff critical rules
+        # 只盯"真 bug"规则（未定义名/重复定义/format 占位符），风格类告警不入 CI 门禁
+        run: ruff check . --select F821,F811,F522,F523,F632 --output-format concise
+
+      - name: Layer & convention guards
+        run: pytest -q tests/test_layering.py tests/test_pipeline_layers.py tests/test_data_layer.py
+
+      - name: Full test suite
+        run: pytest -q

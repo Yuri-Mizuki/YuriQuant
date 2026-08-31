@@ -24,12 +24,15 @@
 from __future__ import annotations
 
 import io
+import logging
 import re
 import time
 from typing import Iterable
 
 import pandas as pd
 import requests
+
+log = logging.getLogger(__name__)
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/120.0 Safari/537.36")
@@ -237,7 +240,7 @@ def fetch_cninfo_announcements(
                     for a in anns:
                         rows.append(_row(a, cat_name, searchkey))
                     if progress:
-                        print(f"[cninfo] {cat_name or '全部'} {c6}: {len(anns)} 条")
+                        log.info("[cninfo] %s %s: %d 条", cat_name or "全部", c6, len(anns))
                     time.sleep(0.3)
             if codes6 is None:
                 anns = _query_announcements(
@@ -246,7 +249,7 @@ def fetch_cninfo_announcements(
                 for a in anns:
                     rows.append(_row(a, cat_name, searchkey))
                 if progress:
-                    print(f"[cninfo] {cat_name or '全部'}: {len(anns)} 条（第 1 页）")
+                    log.info("[cninfo] %s: %d 条（第 1 页）", cat_name or "全部", len(anns))
 
     df = pd.DataFrame(rows)
     if df.empty:

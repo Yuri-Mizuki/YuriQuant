@@ -19,29 +19,27 @@
     python -m scripts.extend_factor_library --offline --sets gp        # 只刷 GP
     python -m scripts.extend_factor_library --offline --verify-only    # 只校验不入库
 """
+
 from __future__ import annotations
 
+from pathlib import Path
 import argparse
-import logging
 import sys
-
-import numpy as np
 import pandas as pd
 
-from research.factor_extension import (
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from research.factor_extension import (  # noqa: E402
     extend_alpha_factors, extend_gp_factors, warmup_begin,
 )
-from scripts.cli_common import (
+from scripts.cli_common import (  # noqa: E402
     add_build_args, make_data_context, record_experiment_safe,
+    setup_logging,
 )
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%H:%M:%S",
-)
-log = logging.getLogger("extend_factor_library")
-
+log = setup_logging("extend_factor_library")
 
 def main():
     parser = argparse.ArgumentParser(description="因子库面板延长到最新交易日")
@@ -130,7 +128,6 @@ def main():
         note="因子库面板延长到最新交易日（alpha 重算覆盖 + GP 公式重算带历史校验）",
     )
     log.info("完成。数据集 %s 现有 %d 个因子", dataset, len(lib.list_all()))
-
 
 if __name__ == "__main__":
     main()

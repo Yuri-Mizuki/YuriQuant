@@ -28,7 +28,6 @@ from pathlib import Path
 import pandas as pd
 
 from data.cache import DataCache
-from data.datasource import create_datasource
 from data.textmining.fetch import TextMiningCache
 
 ROOT = Path(__file__).resolve().parents[2]

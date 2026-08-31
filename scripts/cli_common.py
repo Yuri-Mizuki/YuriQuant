@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -56,10 +57,24 @@ DEFAULT_RANGES = {
 }
 
 
-def setup_logging(name: str, level: int = logging.INFO) -> logging.Logger:
-    """统一日志配置（全 scripts 同一格式），返回以 ``name`` 命名的 logger。"""
-    logging.basicConfig(level=level, format=LOG_FORMAT, datefmt=LOG_DATEFMT)
-    return logging.getLogger(name)
+def setup_logging(name: str, level: int = logging.INFO,
+                  file: str | Path | None = None) -> logging.Logger:
+    """统一日志配置（全 scripts 同一格式），返回以 ``name`` 命名的 logger。
+
+    ``file`` 非空时把该 logger 的日志同时写入文件（textmining 训练日志等场景；
+    main() 解析参数后二次调用即可挂上文件句柄，重复调用不重复挂）。
+    """
+    if not logging.getLogger().handlers:
+        logging.basicConfig(level=level, format=LOG_FORMAT, datefmt=LOG_DATEFMT)
+    log = logging.getLogger(name)
+    if file is not None and not any(
+        isinstance(h, logging.FileHandler) and h.baseFilename == os.path.abspath(str(file))
+        for h in log.handlers
+    ):
+        fh = logging.FileHandler(file, encoding="utf-8")
+        fh.setFormatter(logging.Formatter(LOG_FORMAT, LOG_DATEFMT))
+        log.addHandler(fh)
+    return log
 
 
 def add_real_mock_args(
@@ -139,7 +154,7 @@ def returns_from_daily(daily: pd.DataFrame) -> pd.DataFrame:
 
 # register_panels 已下沉 research/factor_extension.py（2026-08-31 D3b），
 # 此处转出口保持既有导入面不变
-from research.factor_extension import register_panels  # noqa: E402
+from research.factor_extension import register_panels  # noqa: E402,F401
 
 
 def record_experiment_safe(kind, command, params, fingerprint, result_path,

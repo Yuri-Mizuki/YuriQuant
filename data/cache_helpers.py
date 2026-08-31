@@ -329,7 +329,7 @@ def _with_retry(fn, *args, retries: int = 3, wait: int = 20, **kw):
         except Exception:  # noqa: BLE001
             if i == retries - 1:
                 raise
-            print(f"  数据拉取失败，{wait}s 后重试 {i + 1}/{retries}", flush=True)
+            _log.warning("数据拉取失败，%ss 后重试 %d/%d", wait, i + 1, retries)
             time.sleep(wait)
 
 
@@ -383,7 +383,7 @@ def build_panel(
         if offline:
             from data.offline import OfflineQuietDataSource
             ds = OfflineQuietDataSource()
-            print("离线模式：仅用本地 parquet 缓存构建面板")
+            _log.info("离线模式：仅用本地 parquet 缓存构建面板")
         else:
             _cfg = Config.datasource()
             if sdk_cache:
@@ -517,4 +517,22 @@ def build_htai_neutral_panels(panel: dict[str, pd.DataFrame],
             out["turn20"] = turn.rolling(20).mean()
     except Exception as exc:
         _log.warning("华泰中性化协变量面板构建不完整（缺失项自动跳过）: %s", exc)
+    return out
+
+
+def load_pit_panels(begin: int, end: int | None) -> dict[str, pd.DataFrame]:
+    """日线缓存 → PIT mask 后的 OHLCV 宽表（date×code）。
+
+    2026-08-31 自 ml_algorithm_compare._px_panels 下沉（cpcv_eval 等共用）。
+    """
+    from data.cache import DataCache
+    from data.offline import OfflineDataSource
+    from data.universe import Universe
+
+    cache = DataCache(OfflineDataSource())
+    uni = Universe(cache)
+    _codes, _cal, daily = load_daily(cache, uni, "000300.SH", begin, end)
+    out = {}
+    for col in ("open", "high", "low", "close", "volume", "amount"):
+        out[col] = daily[col].unstack("code").sort_index()
     return out

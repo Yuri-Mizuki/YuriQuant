@@ -15,19 +15,18 @@ mock 模式注入 AR(1) 收益（动量有预测力），用于验证挖掘流�
 from __future__ import annotations
 
 import argparse
-import logging
 import sys
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+from scripts.cli_common import add_real_mock_args, setup_logging  # noqa: E402
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S")
-log = logging.getLogger("mine_factors")
+
+log = setup_logging("mine_factors")
 
 
 # ---------------------------------------------------------------------------
@@ -241,20 +240,18 @@ def _derive_dataset(args) -> str:
 
 
 # ---------------------------------------------------------------------------
-# 主流程
+# CLI 解析与主流程
 # ---------------------------------------------------------------------------
-def main():
+def _build_parser() -> argparse.Namespace:
+    """构建 CLI 参数解析器并解析（挖掘 / GP / GTJA / HTAI / 因子库集成全部参数）。"""
     parser = argparse.ArgumentParser(description="YuriQuant 因子挖掘")
-    parser.add_argument("--real", action="store_true", help="使用真实数据（默认 mock）")
+    add_real_mock_args(parser, offline=True, real_help="使用真实数据（默认 mock）")
     parser.add_argument("--begin", type=int, default=None)
     parser.add_argument("--end", type=int, default=None)
     parser.add_argument("--universe", default=None,
                         choices=["hs300", "zz500", "zz1000", "all_a"],
                         help="覆盖 config.universe.default 股票池（国君研报复现用 all_a；"
                              "不改全局配置，仅影响本次运行）")
-    parser.add_argument("--offline", action="store_true",
-                        help="只用本地 parquet 缓存构建面板，不触发 SDK 增量刷新"
-                             "（缓存已拉取后的复现场景推荐；全市场财务表 SDK 查询会挂死）")
     parser.add_argument("--windows", default=None,
                         help="窗口候选，逗号分隔（默认：gp-gtja 模式 1,5,10,20,40,60，否则 5,10,20,60）")
     parser.add_argument("--depth", type=int, default=2, choices=[1, 2], help="候选生成深度")
@@ -354,7 +351,11 @@ def main():
     parser.add_argument("--library-dataset", default=None,
                         help="因子库数据集名（按数据集分库根）。不填自动推导：真实→<指数>_<年>，mock→mock")
     parser.add_argument("--lib-top", type=int, default=20, help="--save-library 入库的因子数")
-    args = parser.parse_args()
+    return parser.parse_args()
+
+
+def main():
+    args = _build_parser()
 
     # windows 哨兵化：gtja 预设用研报时序参数集 {1,5,10,20,40,60}，否则沿用项目默认
     win_str = args.windows or ("1,5,10,20,40,60" if args.gp_gtja else "5,10,20,60")

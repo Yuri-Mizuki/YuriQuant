@@ -31,7 +31,6 @@ from __future__ import annotations
 import argparse
 import itertools
 import json
-import logging
 import sys
 import time
 from pathlib import Path
@@ -42,14 +41,16 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+from scripts.cli_common import setup_logging  # noqa: E402
 
-logging.basicConfig(level=logging.INFO,
-                    format="%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S")
-log = logging.getLogger("ml_synthesis_experiment")
+
+log = setup_logging("ml_synthesis_experiment")
 
 # 经典量价 12 因子：单一实现在 factor.classic.compute_classic_features
 # （2026-08-29 收敛逐字副本；保留本别名兼容历史 import 与内部调用）
 from factor.classic import compute_classic_features as _classic_features  # noqa: E402
+from model.evaluation import eval_row, fit_predict_valid_ic, monthly_ic  # noqa: E402
+from scripts.e2e_common import load_library_grid_panels  # noqa: E402
 
 DATASET = "hs300_2022_2025"
 HORIZON = 5
@@ -71,86 +72,19 @@ def run(horizon: int = HORIZON, out_dir: str | None = None,
 # ---------------------------------------------------------------------------
 # 数据：量价面板（离线缓存） + 因子库 GP 因子
 # ---------------------------------------------------------------------------
-def _px_panels() -> dict[str, pd.DataFrame]:
-    """从日线缓存读 OHLCV，对齐到因子库网格（300 股 × 969 日）。"""
-    from data.cache import DataCache
-    from data.offline import OfflineDataSource
-
-    cache = DataCache(OfflineDataSource())
-    d = pd.read_parquet(Path(cache.root) / "daily_hs300.parquet")
-
-    from research.factor_library import FactorLibrary
-    grid = next(iter(FactorLibrary(dataset=DATASET).load_library_features().values()))
-    codes, dates = grid.columns, grid.index
-
-    out = {}
-    for col in ("open", "high", "low", "close", "volume", "amount"):
-        w = (d.reset_index()
-             .pivot(index="date", columns="code", values=col).sort_index()
-             .reindex(index=dates, columns=codes))
-        out[col] = w
-    return out
-
-
-# ---------------------------------------------------------------------------
-# 评价工具
-# ---------------------------------------------------------------------------
-def _rank_ic(pred: pd.DataFrame, target: pd.DataFrame) -> pd.Series:
-    from research.factor_analysis import calc_ic_series
-    return calc_ic_series(pred, target)
-
-
-def _eval_row(tag: str, pred: pd.DataFrame, fwd: pd.DataFrame,
-              days: pd.DatetimeIndex) -> dict:
-    from model.evaluation import evaluate_model
-    from research.robust_stats import nw_tstat
-
-    pred = pred.loc[days]
-    tgt = fwd.loc[days]
-    ic = _rank_ic(pred, tgt).dropna()
-    t_nw, _, _ = nw_tstat(ic.values) if len(ic) > 1 else (0.0, 0.0, 0)
-    from scipy import stats as st
-    p = 2 * (1 - st.t.cdf(abs(t_nw), df=max(len(ic) - 1, 1)))
-    ev = evaluate_model(pred, tgt)
-    qb = ev["quantile_backtest"]
-    ls = None
-    if qb is not None and len(qb) > 1:
-        # Q5(预测最高组) - Q1(最低组) 的日均收益（组内日收益 = 净值日差）
-        ret = qb.diff().dropna(how="all")
-        if "Q5" in ret.columns and "Q1" in ret.columns:
-            ls = float((ret["Q5"] - ret["Q1"]).mean())
-    return {
-        "name": tag, "ic_mean": float(ic.mean()),
-        "ic_ir": float(ic.mean() / ic.std()) if len(ic) > 1 and ic.std() > 0 else np.nan,
-        "ic_t_nw": float(t_nw), "ic_p_nw": float(p),
-        "ic_win_rate": float((ic > 0).mean()),
-        "n_days": int(len(ic)),
-        "ls_daily": ls,
-    }
-
-
-def _monthly_ic(pred: pd.DataFrame, fwd: pd.DataFrame, days: pd.DatetimeIndex) -> pd.Series:
-    ic = _rank_ic(pred.loc[days], fwd.loc[days]).dropna()
-    return ic.groupby(ic.index.to_period("M")).mean()
+# 面板加载：load_library_grid_panels（scripts.e2e_common，2026-08-31 下沉）
+# 评价工具：eval_row / monthly_ic / fit_predict_valid_ic（model.evaluation，下沉）
 
 
 # ---------------------------------------------------------------------------
 # 调参：train 拟合 → valid rank IC 选优
 # ---------------------------------------------------------------------------
-def _fit_predict_valid(predictor, feats_tr, labels_tr, feats_va, labels_va) -> float:
-    p = predictor()
-    p.fit(feats_tr, labels_tr)
-    pred = p.predict(feats_va)
-    ic = _rank_ic(pred, labels_va).dropna()
-    return float(ic.mean()) if len(ic) else np.nan
-
-
 def tune_ridge(feats, labels, tr_days, va_days, alphas) -> pd.DataFrame:
     from model.predictor import RidgePredictor
 
     rows = []
     for a in alphas:
-        ic = _fit_predict_valid(
+        ic = fit_predict_valid_ic(
             lambda a=a: RidgePredictor(alpha=a),
             {k: v.loc[tr_days] for k, v in feats.items()}, labels.loc[tr_days],
             {k: v.loc[va_days] for k, v in feats.items()}, labels.loc[va_days])
@@ -167,7 +101,7 @@ def tune_gbdt(feats, labels, tr_days, va_days, grid: dict) -> pd.DataFrame:
     combos = list(itertools.product(*grid.values()))
     for i, combo in enumerate(combos, 1):
         kw = dict(zip(keys, combo))
-        ic = _fit_predict_valid(
+        ic = fit_predict_valid_ic(
             lambda kw=kw: LGBMPredictor(**kw, seed=42),
             {k: v.loc[tr_days] for k, v in feats.items()}, labels.loc[tr_days],
             {k: v.loc[va_days] for k, v in feats.items()}, labels.loc[va_days])
@@ -208,7 +142,7 @@ def _main_impl(H: int, out_dir: Path, skip_tune: bool, do_register: bool):
                 if str(r.get("source") or "").startswith("gp:")}
     gp_feats = {k: v for k, v in lib.load_library_features().items()
                 if k in gp_names}
-    px = _px_panels()
+    px = load_library_grid_panels(DATASET)
     classic = _classic_features(px)
     feats_all = {**{f"gp::{k}": v for k, v in gp_feats.items()}, **classic}
     all_days = px["close"].index
@@ -322,7 +256,7 @@ def _main_impl(H: int, out_dir: Path, skip_tune: bool, do_register: bool):
     # ---------------- 8. 评价 ----------------
     rows = []
     for tag, pred in preds.items():
-        rows.append(_eval_row(tag, pred, fwd, te_days))
+        rows.append(eval_row(tag, pred, fwd, te_days))
     table = pd.DataFrame(rows)
     print("\n===== test 段（2025 冻结）OOS 对照表 =====")
     with pd.option_context("display.width", 200, "display.float_format",
@@ -331,7 +265,7 @@ def _main_impl(H: int, out_dir: Path, skip_tune: bool, do_register: bool):
     table.to_csv(out_dir / "oos_results.csv", index=False)
 
     # 月度 IC 稳定性（test 段按月）
-    monthly = pd.DataFrame({tag: _monthly_ic(p, fwd, te_days)
+    monthly = pd.DataFrame({tag: monthly_ic(p, fwd, te_days)
                             for tag, p in preds.items()})
     monthly.to_csv(out_dir / "monthly_ic.csv")
     print("\n===== test 段月度 rank IC =====")

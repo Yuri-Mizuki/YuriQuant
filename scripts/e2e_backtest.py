@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import logging
 import sys
 import time
 from pathlib import Path
@@ -33,6 +32,7 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+from scripts.cli_common import add_real_mock_args, setup_logging  # noqa: E402
 
 from backtest.metrics import PERIODS_PER_YEAR  # noqa: E402
 from data.mock import load_mock_data  # noqa: E402
@@ -46,9 +46,8 @@ from scripts.e2e_common import (  # noqa: E402
     select_features,
 )
 
-logging.basicConfig(level=logging.INFO,
-                    format="%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S")
-log = logging.getLogger("e2e_backtest")
+
+log = setup_logging("e2e_backtest")
 
 OUT_DIR = Path("reports/e2e_backtest")
 BT_START = "2024-01-01"
@@ -344,7 +343,7 @@ def run(args) -> dict:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="端到端选股 walk-forward 回测")
-    ap.add_argument("--real", action="store_true")
+    add_real_mock_args(ap)
     ap.add_argument("--top", type=int, default=50)
     ap.add_argument("--freq", default="M", choices=["D", "W", "M"])
     ap.add_argument("--model", default="gbdt", choices=["gbdt", "ridge"])

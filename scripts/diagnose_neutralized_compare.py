@@ -13,19 +13,16 @@
 
 预期：若单因子中性化后大幅缩水 -> 风格假象确认，模型相对最优。
 """
+
 import argparse
 import json
-import logging
-import sys
 from pathlib import Path
-
 import numpy as np
 import pandas as pd
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from scripts.cli_common import add_real_mock_args, setup_logging  # noqa: E402
 
-logging.basicConfig(level=logging.WARNING)
-log = logging.getLogger("diagnose_neu")
+log = setup_logging("diagnose_neu")
 
 from data.cache_helpers import load_index_returns  # noqa: E402
 from factor.classic import compute_classic_features  # noqa: E402
@@ -48,7 +45,6 @@ from scripts.optimize_e2e import build_neutral_covariates, neutralize_prediction
 BT_START = "2024-01-01"
 TOP_N = 50
 
-
 def build_mock_data(n_days=400, n_codes=30, seed=1):
     rng = np.random.RandomState(seed)
     dates = pd.bdate_range("2023-01-02", periods=n_days)
@@ -65,7 +61,6 @@ def build_mock_data(n_days=400, n_codes=30, seed=1):
     px["vwap"] = px["close"] * (1 + rng.rand(n_days, n_codes) * 0.005)
     return px
 
-
 def monotonic_corr(layer_nav):
     """分层单调性：Q1~Q5 终点累计收益与组序的 Spearman 相关。"""
     ends = layer_nav.dropna(how="all").iloc[-1]
@@ -74,7 +69,6 @@ def monotonic_corr(layer_nav):
     diffs = np.diff(vals)
     monotonic = np.corrcoef(np.arange(5), vals)[0, 1] if len(vals) == 5 else np.nan
     return monotonic, diffs.mean(), vals
-
 
 def quantile_backtest_simple(factor: pd.DataFrame, fwd_ret: pd.DataFrame, n=5):
     """逐日分层净值（日频未来一期收益正确复利，与报告口径一致）。"""
@@ -98,10 +92,9 @@ def quantile_backtest_simple(factor: pd.DataFrame, fwd_ret: pd.DataFrame, n=5):
     nav = nav.cumprod() if False else nav  # 已逐日乘
     return nav
 
-
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--real", action="store_true")
+    add_real_mock_args(ap)
     ap.add_argument("--top", type=int, default=TOP_N)
     ap.add_argument("--out", default="reports/diagnose_neu")
     args = ap.parse_args()
@@ -221,7 +214,6 @@ def main():
                "n_rebalance": len(reb_days), "top_n": args.top,
                "n_features": len(feats)},
               open(out_dir / "meta.json", "w", encoding="utf-8"), ensure_ascii=False, indent=2)
-
 
 if __name__ == "__main__":
     main()

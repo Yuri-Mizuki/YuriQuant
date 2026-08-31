@@ -14,21 +14,24 @@ ETF 数据更新脚本
     - 增量更新：只拉本地缺失的日期段（复用 DataCache）。
 """
 from __future__ import annotations
+import sys
+from pathlib import Path
 
-import argparse
-import logging
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+from scripts.cli_common import setup_logging  # noqa: E402
 
-from config import Config
-from data.cache import DataCache
-from data.datasource import create_datasource
-from data.etf_universe import ETF_CANDIDATES, ETF_TABLE
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%H:%M:%S",
-)
-log = logging.getLogger("update_etf")
+import argparse  # noqa: E402
+
+from config import Config  # noqa: E402
+from data.cache import DataCache  # noqa: E402
+from data.datasource import create_datasource  # noqa: E402
+from data.etf_universe import ETF_CANDIDATES, ETF_TABLE  # noqa: E402
+
+
+log = setup_logging("update_etf")
 
 
 def main():

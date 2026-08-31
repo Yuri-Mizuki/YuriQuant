@@ -18,22 +18,26 @@
     # 只回测、跳过 walk-forward 训练（直接吃现有 OOS 面板——需先跑一次全流程）
     python -m scripts.run_model_portfolio --offline-panel reports/model_portfolio/gbdt_pred.parquet
 """
+
 from __future__ import annotations
 
+import sys
 import argparse
-import logging
 import time
 from pathlib import Path
-
-import numpy as np
 import pandas as pd
 
-from backtest.metrics import PERIODS_PER_YEAR
-from config import Config
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-log = logging.getLogger("model_portfolio")
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s",
-                    datefmt="%H:%M:%S")
+from scripts.cli_common import setup_logging  # noqa: E402
+
+
+from backtest.metrics import PERIODS_PER_YEAR  # noqa: E402
+from config import Config  # noqa: E402
+
+log = setup_logging("model_portfolio")
 
 DATASET = "hs300_2022_2025"
 DEFAULT_MODEL_PARAMS = {
@@ -46,7 +50,6 @@ DEFAULT_MODEL_PARAMS = {
 }
 OUT_DIR = Path("reports") / "model_portfolio"
 
-
 def _mp_cfg() -> dict:
     """合并 config 的 model_portfolio 段（默认数据回填）。"""
     cfg = Config.get().get("model_portfolio", {})
@@ -55,7 +58,6 @@ def _mp_cfg() -> dict:
                     cost_slippage_bp=10, cost_commission=0.0003, cost_stamp=0.001)
     defaults.update({k: v for k, v in cfg.items() if v is not None})
     return defaults
-
 
 def load_index_benchmark(test_days: pd.DatetimeIndex) -> pd.Series:
     """指数基准日收益（委托 data.cache_helpers.load_index_returns 单一实现）。
@@ -70,7 +72,6 @@ def load_index_benchmark(test_days: pd.DatetimeIndex) -> pd.Series:
         raise FileNotFoundError(
             f"指数 {code} 无缓存：请先运行 update_data 拉取指数日线（mock 模式不支持基准）")
     return ret
-
 
 def build_style_covariates_panel(panel):
     from factor.preprocessing import build_style_covariates
@@ -87,7 +88,6 @@ def build_style_covariates_panel(panel):
     return build_style_covariates(payload, market_cap_panel=panel["market_cap"],
                                   industry_panel=ind)
 
-
 def neutralize_panel(signal, cov):
     from factor.preprocessing import neutralize
     size = cov.get("size")
@@ -95,7 +95,6 @@ def neutralize_panel(signal, cov):
     extra = {k: v for k, v in cov.items() if k not in ("size", "industry")}
     return neutralize(signal, market_cap_panel=size, industry_panel=ind,
                       extra_covariates=extra)
-
 
 def build_model_panel(model: str, horizon: int, test_days: pd.DatetimeIndex):
     """walk-forward 训练 model，返回 (test 段 OOS 预测面板, panel)."""
@@ -134,10 +133,8 @@ def build_model_panel(model: str, horizon: int, test_days: pd.DatetimeIndex):
         else close.pct_change(horizon, fill_method=None).shift(-horizon)
     return pred, panel, fwd
 
-
 def _metrics(res, bench_daily) -> dict:
     return res.metrics(benchmark_returns=bench_daily)
-
 
 def default_costs(factor_cost: bool = True):
     """交易成本单一真源：从 config 的 model_portfolio 段构建。
@@ -153,7 +150,6 @@ def default_costs(factor_cost: bool = True):
                             stamp_duty=cfg["cost_stamp"],
                             slippage_bp=cfg["cost_slippage_bp"])
 
-
 def run_backtest(signal, fwd, bench_daily, frac, horizon, factor_cost: bool):
     from strategy.examples import TopFracLongOnly
     from backtest.engine import VectorBacktest
@@ -164,7 +160,6 @@ def run_backtest(signal, fwd, bench_daily, frac, horizon, factor_cost: bool):
                         initial_capital=1_000_000.0, costs=costs)
     res = bt.run(signal, fwd, horizon=horizon)
     return res, _metrics(res, bench_daily)
-
 
 def save_report(table, curves, bench_annual, out_dir):
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -180,7 +175,6 @@ def save_report(table, curves, bench_annual, out_dir):
             f"Sharpe={row['sharpe']:.2f} IR={row['ir']:.2f} MaxDD={row['max_dd']:.2%}")
     (out_dir / "summary.txt").write_text("\n".join(lines), encoding="utf-8")
     log.info("结果已保存到 %s", out_dir)
-
 
 def main():
     parser = argparse.ArgumentParser(description="模型增强组合回测（固化入口）")
@@ -241,7 +235,6 @@ def main():
     print(f"沪深300指数年化: {bench_annual:.2%} | 交易日 {len(bench_daily)} | 总耗时 {time.time()-t0:.0f}s")
 
     save_report(table, curves, bench_annual, OUT_DIR)
-
 
 if __name__ == "__main__":
     main()

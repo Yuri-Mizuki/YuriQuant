@@ -17,28 +17,31 @@ GP 评估预算 × 多 seed 调参实验（三段式，test 段受保护）
 
 输出: reports/gp_tune/overview.csv（全部配置×seed）+ chosen_test.csv（test 最终验证）
 """
+
 from __future__ import annotations
 
 import argparse
-import logging
 import sys
 from pathlib import Path
-
 import numpy as np
 import pandas as pd
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S")
-log = logging.getLogger("gp_tune_budget")
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from scripts.cli_common import setup_logging  # noqa: E402
+
+
+log = setup_logging("gp_tune_budget")
 
 OUT_DIR = Path("reports") / "gp_tune"
-
 
 def split_dates(index, train=(20220101, 20231231), valid=(20240101, 20241231),
                 test=(20250101, 20251231)):
     def rng(b, e):
         return index[(index >= pd.Timestamp(str(b))) & (index <= pd.Timestamp(str(e)))]
     return rng(*train), rng(*valid), rng(*test)
-
 
 def load_pit_core_panels(begin: int = 20220101, end: int = 20251231):
     """轻量加载：PIT 并集池 + 核心 OHLCV（调参专用，跳过技术/日内/基本面）。
@@ -71,7 +74,6 @@ def load_pit_core_panels(begin: int = 20220101, end: int = 20251231):
     panels["vwap"] = panels["amount"] / panels["volume"]
     returns_panel = panels["close"].pct_change().shift(-1)
     return panels, returns_panel
-
 
 def main():
     ap = argparse.ArgumentParser(description="GP 评估预算 × 多 seed 调参")
@@ -220,7 +222,6 @@ def main():
         print(summary.to_string(index=False))
     print(bt_note)
     log.info("结果: %s", OUT_DIR)
-
 
 if __name__ == "__main__":
     main()

@@ -9,19 +9,23 @@
     python scripts/generate_report.py --dataset hs300_2025
     python scripts/generate_report.py --out reports/my_report.html
 """
+
 from __future__ import annotations
 
 import argparse
-import logging
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+from scripts.cli_common import setup_logging  # noqa: E402
+
 
 from research.report_pipeline import generate_research_report  # noqa: E402
 
+log = setup_logging("generate_report")
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="一键端到端研究报告生成")
@@ -39,7 +43,6 @@ def main() -> None:
     )
     print(f"\n报告已生成: {out.resolve()}")
     print(f"浏览器打开: file:///{str(out.resolve()).replace(chr(92), '/')}")
-
 
 if __name__ == "__main__":
     main()

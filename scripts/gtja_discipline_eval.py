@@ -16,15 +16,22 @@ test 2025 起（冻结，只碰一次）。本脚本在挖掘完成后运行：
     python scripts/gtja_discipline_eval.py --pool reports/gtja_repro/pool.csv
 """
 from __future__ import annotations
+import sys
+from pathlib import Path
 
-import argparse
-import logging
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+from scripts.cli_common import setup_logging  # noqa: E402
 
-import numpy as np
-import pandas as pd
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S")
-log = logging.getLogger("gtja_discipline_eval")
+import argparse  # noqa: E402
+
+import numpy as np  # noqa: E402
+import pandas as pd  # noqa: E402
+
+
+log = setup_logging("gtja_discipline_eval")
 
 SIX = ["open", "high", "low", "close", "volume", "vwap"]
 TRAIN = (20220101, 20231231)

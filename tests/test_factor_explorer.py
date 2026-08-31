@@ -106,11 +106,8 @@ def test_html_generation_smoke(tmp_path):
         "m_full": {"ic": 0.04, "icir": 2.0, "t_nw": 1.5, "ls_ret": 0.02, "lo_ret": 0.01,
                    "ls_sharpe": 0.8, "win": 0.6, "turn": 0.05, "sig": True},
     }
-    html = mod.HTML_TEMPLATE.format(
-        dataset="mock", n_factors=1,
-        factor_data=json.dumps([fake], ensure_ascii=False),
-        months=json.dumps(["2024-01", "2024-02"]),
-        fam_colors=json.dumps({"alpha101": "#378ADD"}),
+    html = mod._render_report(
+        "mock", [fake], ["2024-01", "2024-02"], {"alpha101": "#378ADD"},
     )
     # 核心组件存在
     assert 'id="ftable"' in html

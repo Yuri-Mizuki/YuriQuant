@@ -32,30 +32,36 @@
     done
     真实因子默认用「滞后收益（动量代理）+ MAD 去极值」，可自行替换为因子库合成因子。
 """
+
 from __future__ import annotations
 
+import sys
 import argparse
-import logging
 import warnings
 from pathlib import Path
-
 import numpy as np
 import pandas as pd
 
-from backtest.metrics import calc_all_metrics
-from factor.preprocessing import winsorize_mad
-from optimize.portfolio import optimize_weights
-from optimize.solver import optimize_weights_hrp, optimize_weights_qp
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S")
-log = logging.getLogger("compare_portfolio_methods")
+from scripts.cli_common import add_real_mock_args, setup_logging  # noqa: E402
+
+
+from backtest.metrics import calc_all_metrics  # noqa: E402
+from factor.preprocessing import winsorize_mad  # noqa: E402
+from optimize.portfolio import optimize_weights  # noqa: E402
+from optimize.solver import optimize_weights_hrp, optimize_weights_qp  # noqa: E402
+
+log = setup_logging("compare_portfolio_methods")
+
 # OSQP/SCS 的 "Solution may be inaccurate" 是数值公差提示，对比脚本里属正常噪音
 warnings.filterwarnings("ignore", category=UserWarning, module="cvxpy")
 
 WINDOW = 120
 MIN_PERIODS = 60
 OUT_DEFAULT = Path("reports/portfolio_methods_compare.csv")
-
 
 # ---------------------------------------------------------------------------
 # Mock 数据：收益 = 行业因子 + 风格因子 + AR(1) 信号 + 噪声
@@ -92,7 +98,6 @@ def gen_mock_panel(n_days: int = 400, n_codes: int = 50, seed: int = 7) -> dict[
     close = 10.0 * (1.0 + returns).cumprod()
     return {"returns": returns, "factor": factor, "industry_map": ind_map,
             "style_panels": style_panels, "close": close}
-
 
 # ---------------------------------------------------------------------------
 # 真实数据（--real）：PIT 并集池 + 行业/市值面板（复用 run_backtest 口径）
@@ -173,7 +178,6 @@ def load_real_data(
         "close_raw": close_raw,
     }
 
-
 # ---------------------------------------------------------------------------
 # 各方法权重（统一面板输出 date×code）
 # ---------------------------------------------------------------------------
@@ -219,7 +223,6 @@ def run_methods(data: dict, methods: list[str]) -> dict[str, pd.DataFrame]:
         out[m] = w
     return out
 
-
 # ---------------------------------------------------------------------------
 # 评估（与回测口径一致：weights[t] 赚 returns[t]）
 # ---------------------------------------------------------------------------
@@ -244,7 +247,6 @@ def evaluate(weights: pd.DataFrame, data: dict) -> dict[str, float]:
         "rank_ic": ic,
     }
 
-
 # ---------------------------------------------------------------------------
 # 主流程
 # ---------------------------------------------------------------------------
@@ -256,7 +258,7 @@ def main() -> None:
     ap.add_argument("--n-codes", type=int, default=50)
     ap.add_argument("--seed", type=int, default=7)
     ap.add_argument("--out", default=str(OUT_DEFAULT))
-    ap.add_argument("--real", action="store_true", help="真实本地数据（需先 update_data）")
+    add_real_mock_args(ap, real_help="真实本地数据（需先 update_data）")
     ap.add_argument("--begin", type=int, default=None, help="真实数据起始日 YYYYMMDD")
     ap.add_argument("--end", type=int, default=None, help="真实数据结束日 YYYYMMDD")
     ap.add_argument("--index", default="000300.SH", help="指数代码（默认沪深300）")
@@ -307,7 +309,6 @@ def main() -> None:
     log.info("已输出: %s", out_path)
     print("\n组合优化方法对比（年化收益/波动/回撤单位 %%，IC 单位 %%）")
     print(df.round(2).to_string())
-
 
 if __name__ == "__main__":
     main()

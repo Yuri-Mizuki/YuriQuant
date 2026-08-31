@@ -6,20 +6,25 @@
 口径：test 2025，含成本（佣金3bp+印花0.1%+滑点10bp），Signal = 中性化 gbdt。
 复用 scripts/run_model_portfolio 的构建函数，避免重复实现。
 """
+
 from __future__ import annotations
 
-import logging
+import sys
 import time
 from pathlib import Path
-
 import pandas as pd
 
-from backtest.metrics import PERIODS_PER_YEAR
-from config import Config
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-log = logging.getLogger("freq_tune")
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s",
-                    datefmt="%H:%M:%S")
+from scripts.cli_common import setup_logging  # noqa: E402
+
+
+from backtest.metrics import PERIODS_PER_YEAR  # noqa: E402
+from config import Config  # noqa: E402
+
+log = setup_logging("freq_tune")
 
 HORIZONS = [1, 5]
 # 只有 调仓区间跨度 >= horizon 的组合合法（引擎守卫会拦截非法组合）：
@@ -27,11 +32,10 @@ HORIZONS = [1, 5]
 VALID = {(1, "D"), (1, "W"), (1, "M"), (5, "M")}
 OUT = Path("reports") / "freq_tune"
 
-
 def main():
     from scripts.run_model_portfolio import (
         load_index_benchmark, build_model_panel, build_style_covariates_panel,
-        neutralize_panel, DEFAULT_MODEL_PARAMS, default_costs,
+        neutralize_panel, default_costs,
     )
     from strategy.examples import TopFracLongOnly
     from backtest.engine import VectorBacktest
@@ -96,7 +100,6 @@ def main():
     OUT.mkdir(parents=True, exist_ok=True)
     table.to_csv(OUT / "freq_tune.csv", index=False, encoding="utf-8-sig")
     print(f"总耗时 {time.time()-t0:.0f}s | 保存 {OUT}")
-
 
 if __name__ == "__main__":
     main()

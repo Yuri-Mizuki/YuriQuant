@@ -27,30 +27,31 @@ TopK 多空 / TopK 纯多 / 分位多空，日/周/月调仓，输出：
     # 只输出选股清单，不画图
     python -m scripts.select_stocks --dataset hs300_2025 --factor composite2_orthogonal --list-only
 """
+
 from __future__ import annotations
 
 import argparse
-import logging
 import sys
 from pathlib import Path
-
-import numpy as np
 import pandas as pd
 
-from backtest import VectorBacktest
-from backtest.costs import ShortCostModel
-from config import Config
-from data.cache import DataCache
-from data.cache_helpers import returns_from_cache
-from data.offline import OfflineDataSource
-from research.factor_library import FactorLibrary
-from strategy import QuantileLongShort, TopKLongOnly, TopKLongShort
-from strategy.examples import build_strategy
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s",
-                    datefmt="%H:%M:%S")
-log = logging.getLogger("select_stocks")
+from scripts.cli_common import setup_logging  # noqa: E402
 
+
+from backtest import VectorBacktest  # noqa: E402
+from backtest.costs import ShortCostModel  # noqa: E402
+from config import Config  # noqa: E402
+from data.cache import DataCache  # noqa: E402
+from data.cache_helpers import returns_from_cache  # noqa: E402
+from data.offline import OfflineDataSource  # noqa: E402
+from research.factor_library import FactorLibrary  # noqa: E402
+from strategy.examples import build_strategy  # noqa: E402
+
+log = setup_logging("select_stocks")
 
 def extract_holdings(factor_panel: pd.DataFrame, strategy_name: str, k: int,
                      freq: str, returns_panel: pd.DataFrame) -> pd.DataFrame:
@@ -76,7 +77,6 @@ def extract_holdings(factor_panel: pd.DataFrame, strategy_name: str, k: int,
                          "side": "long" if weight > 0 else "short"})
     return pd.DataFrame(rows)
 
-
 def run_one(factor_name: str, panel: pd.DataFrame, returns_panel: pd.DataFrame,
             strategy_name: str, k: int, freq: str,
             short_costs=None, deleverage: bool = False) -> tuple[pd.DataFrame, object, pd.DataFrame]:
@@ -87,7 +87,6 @@ def run_one(factor_name: str, panel: pd.DataFrame, returns_panel: pd.DataFrame,
     holdings = extract_holdings(panel, strategy_name, k, freq, returns_panel)
     m = result.metrics()
     return holdings, result, m
-
 
 def main():
     parser = argparse.ArgumentParser(description="因子库选股回测演示")
@@ -109,7 +108,6 @@ def main():
     args = parser.parse_args()
 
     # 空头腿成本模型：默认从配置读并启用
-    from config import Config
     _cfg_bt = dict(Config.get().get("backtest", {}))
     short_costs = ShortCostModel(
         borrow_rate=0.0 if args.no_short_cost else (args.borrow_rate if args.borrow_rate is not None
@@ -212,7 +210,6 @@ def main():
             log.info("净值图: %s", fig_path)
         except Exception as e:
             log.warning("画图失败: %s", e)
-
 
 if __name__ == "__main__":
     main()

@@ -20,18 +20,25 @@
     python scripts/gtja_repro_eval.py --result reports/gtja_repro/baseline.csv
 """
 from __future__ import annotations
+import sys
+from pathlib import Path
 
-import argparse
-import logging
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+from scripts.cli_common import setup_logging  # noqa: E402
 
-import numpy as np
-import pandas as pd
 
-from backtest.metrics import PERIODS_PER_YEAR
-from config import Config
+import argparse  # noqa: E402
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S")
-log = logging.getLogger("gtja_repro_eval")
+import numpy as np  # noqa: E402
+import pandas as pd  # noqa: E402
+
+from backtest.metrics import PERIODS_PER_YEAR  # noqa: E402
+from config import Config  # noqa: E402
+
+
+log = setup_logging("gtja_repro_eval")
 
 TOP_FRAC = 0.1
 FEE_RT = 0.003          # 双边千三

@@ -15,28 +15,33 @@
     python -m scripts.factor_correlation --dataset hs300_2025
     python -m scripts.factor_correlation --dataset hs300_2025 --kind raw
 """
+
 from __future__ import annotations
 
+import sys
 import argparse
-import logging
 from pathlib import Path
-
 import matplotlib
-matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from scipy.cluster.hierarchy import fcluster, linkage
-from scipy.spatial.distance import squareform
 
-from research.factor_library import FactorLibrary
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s",
-                    datefmt="%H:%M:%S")
-log = logging.getLogger("factor_correlation")
+from scripts.cli_common import setup_logging  # noqa: E402
+
+
+matplotlib.use("Agg")
+from scipy.cluster.hierarchy import fcluster, linkage  # noqa: E402
+from scipy.spatial.distance import squareform  # noqa: E402
+
+from research.factor_library import FactorLibrary  # noqa: E402
+
+log = setup_logging("factor_correlation")
 
 plt.rcParams["axes.unicode_minus"] = False
-
 
 def mean_corr_matrix(panels: dict[str, pd.DataFrame], method: str = "spearman") -> pd.DataFrame:
     """逐日截面相关矩阵的时间平均。
@@ -69,7 +74,6 @@ def mean_corr_matrix(panels: dict[str, pd.DataFrame], method: str = "spearman") 
         avg = np.where(cnt > 0, acc / np.maximum(cnt, 1), np.nan)
     return pd.DataFrame(avg, index=names, columns=names)
 
-
 def cluster_groups(corr: pd.DataFrame, threshold: float = 0.5) -> dict[int, list[str]]:
     """层次聚类分组：距离 = 1 - |corr|，threshold 为合并阈值（corr >= 1-threshold 一组）。"""
     d = (1.0 - corr.abs().values)
@@ -82,7 +86,6 @@ def cluster_groups(corr: pd.DataFrame, threshold: float = 0.5) -> dict[int, list
     for name, lab in zip(corr.index, labels):
         groups.setdefault(int(lab), []).append(name)
     return groups
-
 
 def main():
     parser = argparse.ArgumentParser(description="因子相关性矩阵报告")
@@ -157,7 +160,6 @@ def main():
     log.info("===== |相关| >= 0.6 的因子对 (%d 对) =====", len(pairs))
     for v, a, b in pairs[:20]:
         log.info("  %.2f  %s  ~  %s", v, a, b)
-
 
 if __name__ == "__main__":
     main()

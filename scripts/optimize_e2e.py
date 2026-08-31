@@ -21,7 +21,6 @@
 from __future__ import annotations
 
 import argparse
-import logging
 import sys
 import time
 from pathlib import Path
@@ -31,6 +30,7 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+from scripts.cli_common import add_real_mock_args, setup_logging  # noqa: E402
 
 from data.cache_helpers import load_index_returns  # noqa: E402
 from factor.classic import compute_classic_features  # noqa: E402
@@ -49,9 +49,8 @@ from scripts.e2e_common import (  # noqa: E402
     select_features,
 )
 
-logging.basicConfig(level=logging.INFO,
-                    format="%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S")
-log = logging.getLogger("optimize_e2e")
+
+log = setup_logging("optimize_e2e")
 
 BT_START = "2024-01-01"
 
@@ -156,7 +155,7 @@ def run(args) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="端到端优化实验")
-    ap.add_argument("--real", action="store_true")
+    add_real_mock_args(ap)
     ap.add_argument("--top", type=int, default=50)
     ap.add_argument("--model", default="gbdt", choices=["gbdt", "ridge"])
     ap.add_argument("--max-features", type=int, default=30)

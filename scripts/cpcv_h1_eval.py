@@ -128,11 +128,11 @@ def _build_mock_data(horizon: int = 1):
 
 
 def _build_real_data(horizon: int = 1):
-    """真实 HS300 数据：复用 ml_synthesis_experiment 的数据加载 + 固定 10 特征。"""
+    """真实 HS300 数据：库网格面板 + 固定 10 特征。"""
     from factor.classic import compute_classic_features
-    from scripts.ml_synthesis_experiment import DATASET, _px_panels
+    from scripts.e2e_common import DATASET, load_library_grid_panels
 
-    px = _px_panels()
+    px = load_library_grid_panels(DATASET)
     classic = compute_classic_features(px)
 
     # GP 因子从因子库加载

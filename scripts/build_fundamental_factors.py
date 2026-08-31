@@ -55,30 +55,29 @@ TTM 口径：利润表为年初至今累计值，TTM(x) = 本期累计 + 上年�
     python -m scripts.build_fundamental_factors --mock             # mock 验证
     python -m scripts.build_fundamental_factors --offline --no-save  # 只算不入库
 """
+
 from __future__ import annotations
 
 import argparse
-import logging
 import sys
 from pathlib import Path
-
 import numpy as np
 import pandas as pd
 
-from data.cache_helpers import load_daily, load_financial_tables
-from data.financials import build_pit_panel
-from research.factor_library import FactorLibrary
-from scripts.cli_common import (
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from data.cache_helpers import load_daily, load_financial_tables  # noqa: E402
+from data.financials import build_pit_panel  # noqa: E402
+from research.factor_library import FactorLibrary  # noqa: E402
+from scripts.cli_common import (  # noqa: E402
     add_build_args, make_data_context, print_no_save, record_experiment_safe,
     register_panels, returns_from_daily,
+    setup_logging,
 )
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%H:%M:%S",
-)
-log = logging.getLogger("build_fundamental_factors")
+log = setup_logging("build_fundamental_factors")
 
 # 财务字段（真实缓存已验证存在）
 INCOME_FIELDS = {
@@ -140,9 +139,7 @@ FACTOR_DEFS: dict[str, str] = {
     "holder_dispersion": "十大股东持股占比分散度（比例标准差）",
 }
 
-
 # ---- TTM / 同比（长表维度，按 (code, report_period)）----
-
 
 def _add_ttm_yoy(df: pd.DataFrame, field: str, ttm_col: str, yoy_col: str | None) -> pd.DataFrame:
     """给财报长表加 TTM 列（和可选同比列）。
@@ -185,7 +182,6 @@ def _add_ttm_yoy(df: pd.DataFrame, field: str, ttm_col: str, yoy_col: str | None
     # 同一 (code, ann_date) 可能对应多个报告期，必须带 report_period 一起 merge
     return out.merge(extra, on=["code", "ann_date", "report_period"], how="left")
 
-
 def _add_single_quarter(df: pd.DataFrame, field: str, sq_col: str) -> pd.DataFrame:
     """利润表累计值 → 单季值（Q1=累计；Q2=半年报-一季报；Q3=三季报-半年报；Q4=年报-三季报）。
 
@@ -221,7 +217,6 @@ def _add_single_quarter(df: pd.DataFrame, field: str, sq_col: str) -> pd.DataFra
                     on=["code", "ann_date", "report_period"], how="left")
     return out
 
-
 def _add_sq_growth(df: pd.DataFrame, sq_col: str, yoy_col: str, qoq_col: str) -> pd.DataFrame:
     """单季同比（上年同季）与环比（上季）。已在长表含 sq_col。"""
     if sq_col not in df.columns:
@@ -248,9 +243,7 @@ def _add_sq_growth(df: pd.DataFrame, sq_col: str, yoy_col: str, qoq_col: str) ->
     out = out.merge(d[keep], on=["code", "ann_date", "report_period"], how="left")
     return out
 
-
 # ---- 主流程 ----
-
 
 def load_data(cache, uni, index_code, begin, end):
     codes, cal, daily = load_daily(cache, uni, index_code, begin, end)
@@ -261,7 +254,6 @@ def load_data(cache, uni, index_code, begin, end):
              len(fin["share_holder"]), len(fin["holder_num"]))
     return (codes, cal, daily, fin["income"], fin["balance_sheet"], fin["cash_flow"],
             fin["equity_structure"], fin["dividend"], fin["share_holder"], fin["holder_num"])
-
 
 def _equity_pit(equity: pd.DataFrame, cal, field: str) -> pd.DataFrame:
     """股本结构按 change_date 前向填充到交易日（日频因子用）。"""
@@ -285,7 +277,6 @@ def _equity_pit(equity: pd.DataFrame, cal, field: str) -> pd.DataFrame:
         panels.append(pd.Series(s.values, index=cal_idx, name=code))
     return pd.concat(panels, axis=1)
 
-
 def _event_pit(event_df: pd.DataFrame, cal, date_col: str, field: str) -> pd.DataFrame:
     """通用事件表 PIT：按 date_col（公告日/披露日）前向填充到交易日。"""
     if event_df is None or event_df.empty or field not in event_df.columns:
@@ -307,7 +298,6 @@ def _event_pit(event_df: pd.DataFrame, cal, date_col: str, field: str) -> pd.Dat
         s = s.reindex(cal_idx, method="ffill")
         panels.append(pd.Series(s.values, index=cal_idx, name=code))
     return pd.concat(panels, axis=1)
-
 
 def _dividend_factors(dividend, cal, close_panel, cap_panel, net_pro_panel) -> dict[str, pd.DataFrame]:
     """分红类因子（按实施公告日 PIT；TTM 口径按派息日落在过去 365 天汇总）。
@@ -390,7 +380,6 @@ def _dividend_factors(dividend, cal, close_panel, cap_panel, net_pro_panel) -> d
         out[k] = out[k].reindex(index=close_panel.index, columns=close_panel.columns)
     return out
 
-
 def _holder_factors(share_holder, holder_num, cal, close_panel) -> dict[str, pd.DataFrame]:
     """股东类因子（十大股东 + 股东户数）。
 
@@ -471,7 +460,6 @@ def _holder_factors(share_holder, holder_num, cal, close_panel) -> dict[str, pd.
         if k not in out:
             out[k] = empty[k]
     return out
-
 
 def build_factor_panels(daily, cal, income, balance, cashflow,
                         equity: pd.DataFrame | None = None,
@@ -648,7 +636,6 @@ def build_factor_panels(daily, cal, income, balance, cashflow,
         panels[name] = panels[name].reindex(index=close_panel.index, columns=close_panel.columns)
     return panels
 
-
 def main():
     parser = argparse.ArgumentParser(description="基本面因子（价值/质量/成长/规模）构建入库")
     add_build_args(parser)
@@ -690,7 +677,6 @@ def main():
     )
 
     log.info("完成。数据集 %s 现有 %d 个因子", dataset, len(lib.list_all()))
-
 
 if __name__ == "__main__":
     main()

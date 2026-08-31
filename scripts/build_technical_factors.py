@@ -29,31 +29,30 @@
     python -m scripts.build_technical_factors --mock               # mock 验证
     python -m scripts.build_technical_factors --offline --no-save  # 只算不入库
 """
+
 from __future__ import annotations
 
 import argparse
-import logging
 import sys
 from pathlib import Path
-
 import numpy as np
 import pandas as pd
 
-from data.cache_helpers import load_backward_factor, load_daily
-from factor.technical import calc_indicators
-from factor.technical_indicators import TechnicalIndicators as _TI
-from research.factor_library import FactorLibrary
-from scripts.cli_common import (
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from data.cache_helpers import load_backward_factor, load_daily  # noqa: E402
+from factor.technical import calc_indicators  # noqa: E402
+from factor.technical_indicators import TechnicalIndicators as _TI  # noqa: E402
+from research.factor_library import FactorLibrary  # noqa: E402
+from scripts.cli_common import (  # noqa: E402
     add_build_args, make_data_context, print_no_save, record_experiment_safe,
     register_panels, returns_from_daily,
+    setup_logging,
 )
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%H:%M:%S",
-)
-log = logging.getLogger("build_technical_factors")
+log = setup_logging("build_technical_factors")
 
 FACTOR_DEFS: dict[str, str] = {
     "macd_hist": "MACD柱 = 2*(DIF-DEA)，DIF=EMA12-EMA26, DEA=EMA(DIF,9)",
@@ -93,16 +92,13 @@ EXTRA_TECH: dict[str, tuple] = {
     "atr_14":   ("ATR",   "ATR",   ("close", "high", "low"),                  "真实波幅ATR(14)"),
 }
 
-
 # ===========================================================================
 # 面板级基础算子（作用于 date×code DataFrame，时间轴在 index）
 # ===========================================================================
 
-
 def _ema(x: pd.DataFrame, n: int) -> pd.DataFrame:
     """EMA：Y = (X*2 + Y'*(N-1))/(N+1)，与 ts_ema 一致。"""
     return x.ewm(span=n, adjust=False, min_periods=n).mean()
-
 
 def _sma_tdx(x: pd.DataFrame, n: int, m: int = 1) -> pd.DataFrame:
     """通达信 SMA(X,N,M) 递归：Y = (X*M + Y'*(N-M))/N。
@@ -112,27 +108,22 @@ def _sma_tdx(x: pd.DataFrame, n: int, m: int = 1) -> pd.DataFrame:
     alpha = m / n
     return x.ewm(alpha=alpha, adjust=False, min_periods=n).mean()
 
-
 def _sma_ma(x: pd.DataFrame, n: int) -> pd.DataFrame:
     """简单移动平均（右闭窗口，前 n-1 行为 NaN）。"""
     return x.rolling(n, min_periods=n).mean()
 
-
 def _sma_sum(x: pd.DataFrame, n: int) -> pd.DataFrame:
     return x.rolling(n, min_periods=n).sum()
-
 
 # ===========================================================================
 # 主流程
 # ===========================================================================
-
 
 def load_data(cache, uni, index_code, begin, end):
     codes, cal, daily = load_daily(cache, uni, index_code, begin, end)
     bf = load_backward_factor(cache, codes)
     log.info("日线 %d 行 / 复权因子 %d 列", len(daily), bf.shape[1] if not bf.empty else 0)
     return codes, cal, daily, bf
-
 
 def build_factor_panels(daily, bf) -> dict[str, pd.DataFrame]:
     """返回 {因子名: 原始面板(date×code)}，价格均为后复权。"""
@@ -161,7 +152,6 @@ def build_factor_panels(daily, bf) -> dict[str, pd.DataFrame]:
         for name, s in res.items():
             panels[name][code] = s
     return panels
-
 
 def calc_extra_panels(daily, codes) -> dict[str, pd.DataFrame]:
     """用星耀 TechnicalIndicators 类批量计算 date×code 技术指标面板（EXTRA_TECH）。
@@ -195,7 +185,6 @@ def calc_extra_panels(daily, codes) -> dict[str, pd.DataFrame]:
             except Exception:
                 continue
     return panels
-
 
 def main():
     parser = argparse.ArgumentParser(description="技术面迭代/累积类指标构建入库")
@@ -254,7 +243,6 @@ def main():
         log.warning("有 %d 个因子注册失败（环境文件锁，可稍后重跑补齐）: %s",
                     len(failed), [n for n, _ in failed])
     log.info("完成。数据集 %s 现有 %d 个因子", dataset, len(lib.list_all()))
-
 
 if __name__ == "__main__":
     main()

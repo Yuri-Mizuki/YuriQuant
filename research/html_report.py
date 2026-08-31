@@ -125,12 +125,15 @@ def _month_cell_style(v: float) -> str:
 # ===========================================================================
 # HTML 模板（CSS / JS）
 # ===========================================================================
-_CSS = """
+# 统一基础样式：多套报告（html_report / report_pipeline / 各脚本）共用，
+# 单一实现。特定报告的个性化主题在 page(css=...) 覆盖。
+BASE_CSS = """
 body{font-family:-apple-system,"Segoe UI","Microsoft YaHei",sans-serif;margin:0;padding:26px 30px;background:#f6f7f9;color:#1f2430}
 h1{font-size:21px;margin:0 0 4px;font-weight:600}
 .sub{color:#6b7280;font-size:13px;margin-bottom:18px}
 .card{background:#fff;border-radius:12px;padding:16px 20px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.05)}
 h2{font-size:15px;margin:0 0 12px;font-weight:600;color:#111827}
+h2.section{font-size:17px;margin:28px 0 10px;font-weight:600;color:#111827;border-bottom:2px solid #e5e7eb;padding-bottom:6px}
 h3{font-size:13px;margin:14px 0 8px;font-weight:600;color:#374151}
 .stats{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:2px}
 .stat{background:#fff;border:1px solid #eef0f3;border-radius:10px;padding:10px 14px;min-width:96px}
@@ -152,7 +155,11 @@ tr:hover td{background:#fafbfc}
 canvas{max-height:300px}
 .mono{font-family:Consolas,monospace;font-size:12px;color:#555}
 .note{color:#8a8f98;font-size:12px;margin-top:6px}
+code{font-family:Consolas,monospace;font-size:12px;color:#555}
 """
+
+# 兼容别名（旧版内部以 _CSS 引用）
+_CSS = BASE_CSS
 
 # 模板中的 __DATA__ 由 Python 注入；__EQ__/__DD__/__IC__/__LAYERS__ 为
 # 每因子动态 datasets 表达式（f = DATA.factors[idx]，由 renderFactor 传入）。
@@ -261,6 +268,190 @@ def _js_datasets_expressions() -> dict[str, str]:
             "borderWidth:1.3,pointRadius:0,fill:false,tension:.1}))"
         ),
     }
+
+
+# ===========================================================================
+# 公共基座：页面外壳 / 表格渲染 / Chart.js / SVG sparkline / 图片内嵌
+# （多套报告共享的底层原语，统一以本模块为唯一实现）
+# ===========================================================================
+def page(
+    title: str,
+    meta: str = "",
+    body: str = "",
+    css: str | None = None,
+    header: str | None = None,
+    head_extra: str = "",
+    scripts: str = "",
+    footer: str = "",
+) -> str:
+    """自包含 HTML 页面外壳（统一 doctype/head/标题/样式/脚本块）。
+
+    - css: 页面样式（默认 BASE_CSS；个性化主题可传入整段 CSS 覆盖）
+    - header: 页首 HTML（默认 ``<h1>标题 + <div class=sub>meta</div>``；可传自定义块或空串）
+    - head_extra: <head> 内追加标签（如 Chart.js CDN <script src>）
+    - scripts: </body> 前的原始 <script>...</script> 块（可多个）
+    """
+    css = css or BASE_CSS
+    header = header if header is not None else f"<h1>{title}</h1>\n<div class=\"sub\">{meta}</div>"
+    return f"""<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{title}</title>
+{head_extra}
+<style>{css}</style>
+</head>
+<body>
+{header}
+{body}
+{scripts}
+{footer}
+</body></html>"""
+
+
+# 统一的表头排序处理（thead/tbody 分离，JS 只排 tbody 行）
+_SORT_HANDLER = """
+  document.querySelectorAll('th').forEach(th => {
+    th.addEventListener('click', () => {
+      const tbody = th.closest('table').querySelector('tbody');
+      if (!tbody) return;
+      const rows = Array.from(tbody.rows);
+      const i = Array.from(th.parentNode.children).indexOf(th);
+      const asc = th.dataset.asc !== '1';
+      th.dataset.asc = asc ? '1' : '0';
+      rows.sort((a, b) => {
+        const va = a.cells[i].textContent.replace(/[%,]/g,'');
+        const vb = b.cells[i].textContent.replace(/[%,]/g,'');
+        let x = parseFloat(va), y = parseFloat(vb);
+        if (isNaN(x)) { x = va; } if (isNaN(y)) { y = vb; }
+        if (typeof x === 'number' && typeof y === 'number') return asc ? x - y : y - x;
+        return asc ? String(x).localeCompare(String(y)) : String(y).localeCompare(String(x));
+      });
+      rows.forEach(r => tbody.appendChild(r));
+    });
+  });
+"""
+
+SORT_JS = f"document.addEventListener('DOMContentLoaded', () => {{{_SORT_HANDLER}\n}});"
+
+
+def base_js(charts_js: str = "") -> str:
+    """统一页面 JS：定义 makeChart + 表头排序，并执行传入的图表初始化代码。"""
+    return (f"function makeChart(id, cfg) {{\n"
+            f"  const el = document.getElementById(id);\n"
+            f"  if (!el) return;\n"
+            f"  new Chart(el, cfg);\n"
+            f"}}\n"
+            f"document.addEventListener('DOMContentLoaded', () => {{{_SORT_HANDLER}\n"
+            f"  {charts_js}\n"
+            f"}});")
+
+
+def chart_js_line(canvas_id: str, datasets: list, y_fmt: str = "value", title: str = "") -> str:
+    """Chart.js 折线图初始化 JS 代码块（统一折线图配置，时间轴 x）。
+
+    datasets: [{label, data: [[x, y], ...], borderColor, ...}]
+    """
+    cfg = {
+        "type": "line",
+        "data": {"datasets": datasets},
+        "options": {
+            "responsive": True,
+            "maintainAspectRatio": False,
+            "plugins": {"legend": {"labels": {"boxWidth": 12, "font": {"size": 11}}}},
+            "scales": {
+                "x": {"type": "time", "time": {"unit": "month"}, "grid": {"display": False}},
+                "y": {"ticks": {"callback": f"v=>v.toFixed(2)"}},
+            },
+        },
+    }
+    cfg_json = json.dumps(cfg, ensure_ascii=False, separators=(",", ":"))
+    return f"makeChart('{canvas_id}', {cfg_json});\n"
+
+
+def render_table(
+    df: pd.DataFrame,
+    pct_cols: list[str] | None = None,
+    color_cols: list[str] | None = None,
+    max_rows: int | None = None,
+) -> str:
+    """DataFrame → 可排序 HTML 表（thead/tbody 分离 + 表头 data-k 供排序 JS）。
+
+    统一 render_sortable_table 与 report_pipeline._df_to_html_table 的渲染逻辑。
+    """
+    pct_cols = set(pct_cols or [])
+    color_cols = set(color_cols or [])
+    if max_rows is not None and len(df) > max_rows:
+        df = df.head(max_rows)
+    head = "".join(f"<th data-k='{c}'>{c}</th>" for c in df.columns)
+    body = []
+    for _, r in df.iterrows():
+        cells = []
+        for c in df.columns:
+            v = r[c]
+            cls, txt = "", "-"
+            if isinstance(v, (int, float, np.integer, np.floating)) and not (
+                isinstance(v, float) and (np.isnan(v) or np.isinf(v))
+            ):
+                if c in pct_cols:
+                    txt = f"{float(v) * 100:.2f}%"
+                elif isinstance(v, (np.integer, int)):
+                    txt = f"{int(v):,}"
+                else:
+                    txt = f"{float(v):.4f}"
+                if c in color_cols:
+                    cls = "pos" if float(v) >= 0 else "neg"
+            elif isinstance(v, str):
+                txt = v
+            cells.append(f"<td class='{cls}'>{txt}</td>")
+        body.append(f"<tr>{''.join(cells)}</tr>")
+    return f"<table><thead><tr>{head}</tr></thead><tbody>{''.join(body)}</tbody></table>"
+
+
+def svg_sparkline(series, width: int = 150, height: int = 28,
+                  up_color: str = "#0E6E5C", down_color: str = "#B3402A") -> str:
+    """inline SVG sparkline（自包含、无外部依赖；末值≥首值用升色，否则降色）。"""
+    if series is None or len(series) < 2:
+        return ""
+    vals = np.asarray(series.values if hasattr(series, "values") else series, dtype=float)
+    vmin, vmax = float(vals.min()), float(vals.max())
+    rng = (vmax - vmin) or 1.0
+    n = len(vals)
+    pts = []
+    for i, v in enumerate(vals):
+        x = i * (width - 2) / (n - 1) + 1
+        y = height - 2 - (v - vmin) / rng * (height - 4)
+        pts.append(f"{x:.1f},{y:.1f}")
+    zero_y = height - 2 - (0 - vmin) / rng * (height - 4)
+    zero_y = max(2, min(height - 2, zero_y))
+    up = vals[-1] >= vals[0]
+    color = up_color if up else down_color
+    return (
+        f'<svg class="spark" width="{width}" height="{height}">'
+        f'<line x1="0" y1="{zero_y:.1f}" x2="{width}" y2="{zero_y:.1f}" '
+        f'stroke="#D5D4CA" stroke-width="1" stroke-dasharray="2,2"/>'
+        f'<polyline points="{" ".join(pts)}" fill="none" stroke="{color}" '
+        f'stroke-width="1.4"/></svg>'
+    )
+
+
+def svg_sparkline_monthly(series, width: int = 150, height: int = 28) -> str:
+    """月频 IC 趋势 sparkline：先 resample 月均 IC 再画线（噪音更小、全库不膨胀）。"""
+    if series is None or len(series) < 2:
+        return ""
+    monthly = series.resample("ME").mean().dropna()
+    if len(monthly) < 2:
+        return svg_sparkline(series, width, height)
+    return svg_sparkline(monthly, width, height)
+
+
+def embed_image_b64(fig) -> str:
+    """matplotlib 图 → base64 PNG data URI（报告内嵌图统一入口）。
+
+    实现复用 research.factor_report._fig_to_b64（单一实现，避免复制）。
+    """
+    from research.factor_report import _fig_to_b64
+
+    return _fig_to_b64(fig)
 
 
 # ===========================================================================
@@ -423,26 +614,20 @@ def generate_html_report(
     for token, expr in _js_datasets_expressions().items():
         js = js.replace(token, expr)
 
-    html = f"""<!DOCTYPE html>
-<html lang="zh-CN"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{title}</title>
-<style>{_CSS}</style>
-</head>
-<body>
-<h1>{title}</h1>
-<div class="sub">{meta or '生成时间 ' + pd.Timestamp.now().strftime("%Y-%m-%d %H:%M")}</div>
-{_comparison_html(len(factors))}
+    body = f"""{_comparison_html(len(factors))}
 {tabs_html}
-{''.join(details)}
-<script>
-const DATA = {data_json};
-</script>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-<script>
-{js}
-</script>
-</body></html>"""
+{''.join(details)}"""
+    scripts = (
+        f"<script>const DATA = {data_json};</script>\n"
+        f'<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>\n'
+        f"<script>\n{js}\n</script>"
+    )
+    html = page(
+        title,
+        meta=meta or '生成时间 ' + pd.Timestamp.now().strftime("%Y-%m-%d %H:%M"),
+        body=body,
+        scripts=scripts,
+    )
     out = Path(output_path)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(html, encoding="utf-8")
@@ -461,64 +646,13 @@ def render_sortable_table(
 
     用于因子库全览 / walk-forward 汇总等"记录表"型报告。
     """
-    pct_cols = set(pct_cols or [])
-    color_cols = set(color_cols or [])
-    head = "".join(f"<th data-k='{c}'>{c}</th>" for c in records.columns)
-    body = []
-    for _, r in records.iterrows():
-        cells = []
-        for c in records.columns:
-            v = r[c]
-            cls, txt = "", "-"
-            if isinstance(v, (int, float, np.integer, np.floating)) and not (
-                isinstance(v, float) and (np.isnan(v) or np.isinf(v))
-            ):
-                if c in pct_cols:
-                    txt = f"{float(v) * 100:.2f}%"
-                elif isinstance(v, (np.integer, int)):
-                    txt = f"{int(v):,}"
-                else:
-                    txt = f"{float(v):.4f}"
-                if c in color_cols:
-                    cls = "pos" if float(v) >= 0 else "neg"
-            elif isinstance(v, str):
-                txt = v
-            cells.append(f"<td class='{cls}'>{txt}</td>")
-        body.append(f"<tr>{''.join(cells)}</tr>")
-    js = """
-document.addEventListener('DOMContentLoaded', () => {
-  document.querySelectorAll('th').forEach(th => {
-    th.addEventListener('click', () => {
-      const tbody = th.closest('table').querySelector('tbody');
-      const rows = Array.from(tbody.rows);
-      const i = Array.from(th.parentNode.children).indexOf(th);
-      const asc = th.dataset.asc !== '1';
-      th.dataset.asc = asc ? '1' : '0';
-      rows.sort((a, b) => {
-        const va = a.cells[i].textContent.replace(/[%,]/g,'');
-        const vb = b.cells[i].textContent.replace(/[%,]/g,'');
-        let x = parseFloat(va), y = parseFloat(vb);
-        if (isNaN(x)) { x = va; } if (isNaN(y)) { y = vb; }
-        if (typeof x === 'number' && typeof y === 'number') return asc ? x - y : y - x;
-        return asc ? String(x).localeCompare(String(y)) : String(y).localeCompare(String(x));
-      });
-      rows.forEach(r => tbody.appendChild(r));
-    });
-  });
-});
-"""
-    html = f"""<!DOCTYPE html>
-<html lang="zh-CN"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{title}</title>
-<style>{_CSS}</style>
-</head>
-<body>
-<h1>{title}</h1>
-<div class="sub">{meta or '共 ' + str(len(records)) + ' 行 · 点击表头排序'}</div>
-<div class="card"><table><thead><tr>{head}</tr></thead><tbody>{''.join(body)}</tbody></table></div>
-<script>{js}</script>
-</body></html>"""
+    body = render_table(records, pct_cols=pct_cols, color_cols=color_cols)
+    html = page(
+        title,
+        meta=meta or f"共 {len(records)} 行 · 点击表头排序",
+        body=f'<div class="card">{body}</div>',
+        scripts=f"<script>{SORT_JS}</script>",
+    )
     out = Path(output_path)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(html, encoding="utf-8")

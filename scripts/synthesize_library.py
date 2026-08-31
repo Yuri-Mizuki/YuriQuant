@@ -16,20 +16,26 @@ parents 记录全部参与合成的 raw 因子（血缘可追溯）。
     python -m scripts.synthesize_library --dataset hs300_2025 --methods ic_weighted,orthogonal
     python -m scripts.synthesize_library --dataset mock --begin 20230103 --end 20241231
 """
+
 from __future__ import annotations
 
 import argparse
-import logging
 import sys
 from pathlib import Path
-
 import pandas as pd
 
-from data.cache import DataCache
-from data.cache_helpers import returns_from_cache
-from data.offline import OfflineDataSource
-from factor.preprocessing import standardize_zscore
-from factor.synthesis import (
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from scripts.cli_common import setup_logging  # noqa: E402
+
+
+from data.cache import DataCache  # noqa: E402
+from data.cache_helpers import returns_from_cache  # noqa: E402
+from data.offline import OfflineDataSource  # noqa: E402
+from factor.preprocessing import standardize_zscore  # noqa: E402
+from factor.synthesis import (  # noqa: E402
     CompositeInput,
     rebuild_train_weights,
     synthesize_ic_weighted,
@@ -40,17 +46,14 @@ from factor.synthesis import (
     synthesize_stacking_gbdt_tuned,
     synthesize_stacking_lambdarank,
 )
-from research.factor_library import FactorLibrary
-from stats.ic import calc_ic_series, calc_ir
-from backtest.engine import VectorBacktest
-from strategy.examples import TopKLongShort
+from research.factor_library import FactorLibrary  # noqa: E402
+from stats.ic import calc_ic_series, calc_ir  # noqa: E402
+from backtest.engine import VectorBacktest  # noqa: E402
+from strategy.examples import TopKLongShort  # noqa: E402
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s",
-                    datefmt="%H:%M:%S")
-log = logging.getLogger("synthesize_library")
+log = setup_logging("synthesize_library")
 
 METHODS = ["ic_weighted", "pca", "orthogonal", "stacking", "stacking_gbdt", "lambdarank"]
-
 
 def main():
     parser = argparse.ArgumentParser(description="因子库内因子合并合成（离线）")
@@ -206,7 +209,6 @@ def main():
         )
         log.info("已入库 %s（库内 IC 基于训练段）", name)
     log.info("完成。数据集 %s 现有 %d 个因子", args.dataset, len(lib.list_all()))
-
 
 if __name__ == "__main__":
     main()

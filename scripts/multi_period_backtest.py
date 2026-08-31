@@ -19,34 +19,35 @@
     mp_backtest_{mode}_{freq}_{method}_{begin}_{end}.csv   绩效与换手汇总行
     mp_target_{mode}_{freq}_{method}_{begin}_{end}.csv     目标权重（调仓日 × code）
 """
+
 from __future__ import annotations
 
+import sys
 import argparse
-import logging
 import warnings
 from pathlib import Path
-
 import pandas as pd
 
-from factor.preprocessing import winsorize_mad
-from optimize.multi_period import RebalanceConfig, run_multi_period_backtest
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%H:%M:%S",
-)
-log = logging.getLogger("multi_period_backtest")
+from scripts.cli_common import add_real_mock_args, setup_logging  # noqa: E402
+
+
+from factor.preprocessing import winsorize_mad  # noqa: E402
+from optimize.multi_period import RebalanceConfig, run_multi_period_backtest  # noqa: E402
+
+log = setup_logging("multi_period_backtest")
+
 warnings.filterwarnings("ignore", category=UserWarning, module="cvxpy")
 
 OUT_DIR = Path("reports/multi_period")
-
 
 def build_mock(n_days: int = 500, n_codes: int = 60, seed: int = 0) -> dict[str, pd.DataFrame]:
     """生成含可预测 AR(1) 信号的面板（因子=滞后收益，与收益真实相关）。"""
     from scripts.compare_portfolio_methods import gen_mock_panel
     return gen_mock_panel(n_days=n_days, n_codes=n_codes, seed=seed)
-
 
 def build_real(begin: int, end: int, index: str = "000300.SH"):
     """真实 PIT 并集池：收益面板 + 行业/市值风格面板；因子=滞后收益动量代理。"""
@@ -58,7 +59,6 @@ def build_real(begin: int, end: int, index: str = "000300.SH"):
     data["industry_panel"] = data.get("industry_panel")
     data["style_panels"] = data.get("style_panels")
     return data
-
 
 def to_cfg(args, data) -> RebalanceConfig:
     kw = dict(
@@ -80,7 +80,6 @@ def to_cfg(args, data) -> RebalanceConfig:
         kw["benchmark_weights"] = pd.Series(1.0 / len(factor.columns), index=factor.columns)
     return RebalanceConfig(**kw)
 
-
 def main() -> None:
     ap = argparse.ArgumentParser(description="多期组合执行回测（P3）")
     ap.add_argument("--freq", default="M", choices=["D", "W", "M"], help="调仓频率")
@@ -95,7 +94,7 @@ def main() -> None:
     ap.add_argument("--n-codes", type=int, default=60)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", default=str(OUT_DIR))
-    ap.add_argument("--real", action="store_true", help="真实本地数据（需先 update_data）")
+    add_real_mock_args(ap, real_help="真实本地数据（需先 update_data）")
     ap.add_argument("--begin", type=int, default=None, help="真实数据起始日 YYYYMMDD")
     ap.add_argument("--end", type=int, default=None, help="真实数据结束日 YYYYMMDD")
     ap.add_argument("--index", default="000300.SH")
@@ -165,7 +164,6 @@ def main() -> None:
         else:
             print(f"  {k:<20} {m[k]:.4f}")
     log.info("已输出汇总: %s", meta_path)
-
 
 if __name__ == "__main__":
     main()

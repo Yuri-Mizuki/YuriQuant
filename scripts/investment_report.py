@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import logging
 import sys
 import time
 from pathlib import Path
@@ -34,6 +33,7 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+from scripts.cli_common import add_real_mock_args, setup_logging  # noqa: E402
 
 from backtest.metrics import PERIODS_PER_YEAR  # noqa: E402
 from data.mock import load_mock_data  # noqa: E402
@@ -45,6 +45,7 @@ from research.factor_report import (  # noqa: E402
     plot_layers,
     plot_monthly_ic,
 )
+from research.html_report import page  # noqa: E402
 from scripts.e2e_backtest import (  # noqa: E402
     perf_stats,
     run_equal_weight_backtest,
@@ -58,9 +59,8 @@ from scripts.e2e_common import (  # noqa: E402
     select_features,
 )
 
-logging.basicConfig(level=logging.INFO,
-                    format="%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S")
-log = logging.getLogger("investment_report")
+
+log = setup_logging("investment_report")
 
 OUT_DIR = Path("reports/investment_report")
 BT_START = "2024-01-01"
@@ -306,30 +306,7 @@ def run(args) -> dict:
                         for v in row)
         mrows += f"<tr><td>{d.strftime('%Y-%m')}</td>{cells}</tr>"
 
-    html = f"""<!DOCTYPE html>
-<html lang="zh-CN"><head><meta charset="utf-8">
-<title>YuriQuant 投资收益报告</title>
-<style>
-* {{ margin:0; padding:0; box-sizing:border-box; }}
-body {{ font-family:-apple-system,'PingFang SC',sans-serif; background:#f5f7fa; color:#1a1a2e; line-height:1.6; }}
-.container {{ max-width:1000px; margin:0 auto; padding:24px 16px; }}
-.header {{ background:linear-gradient(135deg,#1a1a2e,#16213e); color:#fff; padding:28px 24px; border-radius:12px; margin-bottom:20px; }}
-.header h1 {{ font-size:20px; margin-bottom:6px; }}
-.header .meta {{ font-size:13px; opacity:.85; }}
-.card {{ background:#fff; border-radius:10px; padding:18px; margin-bottom:14px; box-shadow:0 1px 4px rgba(0,0,0,.06); }}
-.card h2 {{ font-size:15px; color:#16213e; margin-bottom:12px; border-bottom:2px solid #e8e8e8; padding-bottom:6px; }}
-table {{ width:100%; border-collapse:collapse; font-size:13px; }}
-th {{ padding:8px 10px; background:#f8f9fa; text-align:right; border-bottom:2px solid #e0e0e0; }}
-th:first-child {{ text-align:left; }}
-td {{ padding:7px 10px; border-bottom:1px solid #f0f0f0; text-align:right; }}
-td:first-child {{ text-align:left; }}
-.pos {{ color:#c0392b; }} .neg {{ color:#27ae60; }}
-img {{ width:100%; height:auto; border-radius:8px; }}
-.kpi {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:10px; margin-bottom:12px; }}
-.kpi .item {{ background:#f8f9fa; border-radius:8px; padding:12px; }}
-.kpi .l {{ font-size:11px; color:#888; }} .kpi .v {{ font-size:17px; font-weight:700; }}
-.warning {{ background:#fff3cd; border:1px solid #ffe082; border-radius:8px; padding:14px; font-size:12px; color:#856404; }}
-</style></head><body><div class="container">
+    body = f"""<div class="container">
 
 <div class="header"><h1>YuriQuant 投资收益报告</h1>
 <div class="meta">回测区间 {bt_days[0].date()} ~ {bt_days[-1].date()} | 调仓 {args.freq} 频（{len(reb_days)} 次）| 基准 {bench_label} | top-{args.top} | 因子 {len(feats)}/候选 {len(all_feats)}</div></div>
@@ -366,8 +343,10 @@ img {{ width:100%; height:auto; border-radius:8px; }}
 4. 未过滤涨跌停/停牌可执行性；特征选择只用回测前窗口防前视；embargo=5<br>
 5. 模型预测仅月频重训，信号在调仓间衰减；更高频调仓（--freq W）可能改变结论<br>
 6. 非投资建议</div>
-</div></body></html>"""
-    (out_dir / "investment_report.html").write_text(html, encoding="utf-8")
+</div>"""
+    (out_dir / "investment_report.html").write_text(
+        page("YuriQuant 投资收益报告", header="", body=body, css=_CSS),
+        encoding="utf-8")
 
     meta = {
         "bt_start": str(bt_days[0].date()), "bt_end": str(bt_days[-1].date()),
@@ -392,9 +371,33 @@ img {{ width:100%; height:auto; border-radius:8px; }}
     return meta
 
 
+# 投资收益报告主题样式（page 外壳 + 自定义 CSS）
+_CSS = """
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family:-apple-system,'PingFang SC',sans-serif; background:#f5f7fa; color:#1a1a2e; line-height:1.6; }
+.container { max-width:1000px; margin:0 auto; padding:24px 16px; }
+.header { background:linear-gradient(135deg,#1a1a2e,#16213e); color:#fff; padding:28px 24px; border-radius:12px; margin-bottom:20px; }
+.header h1 { font-size:20px; margin-bottom:6px; }
+.header .meta { font-size:13px; opacity:.85; }
+.card { background:#fff; border-radius:10px; padding:18px; margin-bottom:14px; box-shadow:0 1px 4px rgba(0,0,0,.06); }
+.card h2 { font-size:15px; color:#16213e; margin-bottom:12px; border-bottom:2px solid #e8e8e8; padding-bottom:6px; }
+table { width:100%; border-collapse:collapse; font-size:13px; }
+th { padding:8px 10px; background:#f8f9fa; text-align:right; border-bottom:2px solid #e0e0e0; }
+th:first-child { text-align:left; }
+td { padding:7px 10px; border-bottom:1px solid #f0f0f0; text-align:right; }
+td:first-child { text-align:left; }
+.pos { color:#c0392b; } .neg { color:#27ae60; }
+img { width:100%; height:auto; border-radius:8px; }
+.kpi { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:10px; margin-bottom:12px; }
+.kpi .item { background:#f8f9fa; border-radius:8px; padding:12px; }
+.kpi .l { font-size:11px; color:#888; } .kpi .v { font-size:17px; font-weight:700; }
+.warning { background:#fff3cd; border:1px solid #ffe082; border-radius:8px; padding:14px; font-size:12px; color:#856404; }
+"""
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="投资收益报告")
-    ap.add_argument("--real", action="store_true")
+    add_real_mock_args(ap)
     ap.add_argument("--top", type=int, default=50)
     ap.add_argument("--freq", default="M", choices=["D", "W", "M"])
     ap.add_argument("--model", default="gbdt", choices=["gbdt", "ridge"])

@@ -58,8 +58,8 @@ def _load_pred_with_factor(task: str, model: str, pool: str) -> pd.DataFrame:
 def _recompute_sue0_sue(model: str, pool: str) -> pd.DataFrame:
     """重算 SUE.txt 逐轮事件级 sue0（复用训练时的滚动逻辑）。"""
     from scripts.textmining.train_sue_txt import (
-        SUEVectorizer, TITLE_TOP, SUMMARY_TOP, TRAIN_MONTHS, TEST_MONTHS,
-        _sue0_from_model, make_labels, tokenize_title, tokenize_summary,
+        SUEVectorizer, TRAIN_MONTHS, TEST_MONTHS,
+        _sue0_from_model, make_labels,
     )
     import joblib
 
@@ -157,11 +157,11 @@ def _recompute_sue0_bert(task: str, base_model: str, pool: str) -> pd.DataFrame:
     model 参数传 "bert_xgb"/"bert_logit"，base_model 取 xgb/logit。
     """
     from scripts.textmining.train_fadt_bert import (
-        _load_cls, BERT_XGB_GRID, train_bert_xgb,
+        _load_cls,
     )
     from scripts.textmining.train_fadt import TRAIN_MONTHS, TEST_MONTHS
     from scripts.textmining.train_sue_txt import (
-        _sue0_from_model, make_labels, train_logit,
+        _sue0_from_model, make_labels,
     )
     import joblib
     import numpy as np

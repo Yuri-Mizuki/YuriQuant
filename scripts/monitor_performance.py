@@ -32,8 +32,10 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+from scripts.cli_common import setup_logging  # noqa: E402
+setup_logging("monitor_performance")
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+
 
 
 def register_model_factors(dataset: str = "hs300_2022_2025") -> list[str]:

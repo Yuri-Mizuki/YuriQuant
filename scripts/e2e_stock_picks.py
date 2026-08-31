@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import logging
 import sys
 from pathlib import Path
 
@@ -30,6 +29,7 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+from scripts.cli_common import add_real_mock_args, setup_logging  # noqa: E402
 
 from data.mock import load_mock_data  # noqa: E402
 from factor.classic import compute_classic_features  # noqa: E402
@@ -42,9 +42,8 @@ from scripts.e2e_common import (  # noqa: E402
     select_features,
 )
 
-logging.basicConfig(level=logging.INFO,
-                    format="%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S")
-log = logging.getLogger("e2e_picks")
+
+log = setup_logging("e2e_picks")
 
 OUT_DIR = Path("reports/e2e_picks")
 
@@ -300,7 +299,7 @@ def run(args) -> dict:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="端到端选股流水线")
-    ap.add_argument("--real", action="store_true")
+    add_real_mock_args(ap)
     ap.add_argument("--begin", type=int, default=20190101)
     ap.add_argument("--model", default="gbdt", choices=["gbdt", "ridge"])
     ap.add_argument("--portfolio", default="risk_parity",

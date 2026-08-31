@@ -14,28 +14,31 @@
 用法:
     python scripts/factor_explorer_report.py [--dataset hs300_2022_2025] [--out ...]
 """
+
 from __future__ import annotations
 
 import argparse
 import json
-import logging
 import sys
 from pathlib import Path
-
 import numpy as np
 import pandas as pd
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
-log = logging.getLogger("factor_explorer")
+from scripts.cli_common import setup_logging  # noqa: E402
+
+
+log = setup_logging("factor_explorer")
 
 from research.factor_library import FactorLibrary  # noqa: E402
 from research.factor_report import (  # noqa: E402
     family_of, ic_decay_series, ic_heatmap, layer_avg_ret, layer_stats_from_nav,
     monthly_nav, monthly_series, qcut_rebal, weekly_ic_series,
 )
-
+from research.html_report import page  # noqa: E402
 
 def build_factor_data(lib: FactorLibrary, reg: pd.DataFrame,
                       returns: pd.DataFrame | None = None) -> list[dict]:
@@ -133,59 +136,59 @@ def build_factor_data(lib: FactorLibrary, reg: pd.DataFrame,
         out.append(item)
     return out
 
+# 交互式因子检测报告主题样式（page 外壳 + 自定义 CSS）
+_CSS = """
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family:-apple-system,'PingFang SC',sans-serif; background:#f5f7fa; color:#1a1a2e; line-height:1.55; }
+.container { max-width:1280px; margin:0 auto; padding:20px 16px; }
+.header { background:linear-gradient(135deg,#1a1a2e,#16213e); color:#fff; padding:24px; border-radius:12px; margin-bottom:16px; }
+.header h1 { font-size:19px; margin-bottom:4px; }
+.header .meta { font-size:12px; opacity:.85; }
+.controls { display:flex; flex-wrap:wrap; gap:10px; align-items:center; background:#fff; padding:14px 16px; border-radius:10px; margin-bottom:14px; box-shadow:0 1px 4px rgba(0,0,0,.06); }
+.controls label { font-size:13px; color:#555; }
+.controls select, .controls input { padding:6px 10px; border:1px solid #ddd; border-radius:6px; font-size:13px; background:#fff; }
+.btn { padding:7px 14px; border:1px solid #16213e; background:#16213e; color:#fff; border-radius:6px; font-size:13px; cursor:pointer; }
+.btn:hover { opacity:.9; }
+.card { background:#fff; border-radius:10px; padding:16px; margin-bottom:14px; box-shadow:0 1px 4px rgba(0,0,0,.06); }
+.card h2 { font-size:15px; color:#16213e; margin-bottom:10px; border-bottom:2px solid #e8e8e8; padding-bottom:6px; }
+table { width:100%; border-collapse:collapse; font-size:12.5px; }
+th { padding:7px 9px; background:#f0f2f5; text-align:right; border-bottom:2px solid #ddd; position:sticky; top:0; cursor:pointer; user-select:none; white-space:nowrap; }
+th:first-child, td:first-child { text-align:left; }
+td { padding:6px 9px; border-bottom:1px solid #f0f0f0; text-align:right; white-space:nowrap; }
+tr:hover { background:#f8f9ff; cursor:pointer; }
+.scroll { max-height:520px; overflow-y:auto; border:1px solid #eee; border-radius:8px; }
+.sig { color:#A32D2D; font-weight:600; }
+.mono-pos { color:#185FA5; font-weight:600; }
+.mono-neg { color:#0F6E56; font-weight:600; }
+.mono-weak { color:#854F0B; }
+.usable-ok { color:#A32D2D; font-weight:700; }
+.usable-q { color:#888; }
+.fam-badge { display:inline-block; padding:1px 8px; border-radius:10px; font-size:11px; color:#fff; }
+.chart-grid { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+.chart-grid2 { display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-top:14px; }
+.chart-box { position:relative; height:300px; }
+.dtabs { margin:10px 0 4px; display:flex; gap:6px; }
+.dtab { padding:5px 14px; border:1px solid #ddd; background:#fff; border-radius:6px; font-size:12.5px; cursor:pointer; color:#555; }
+.dtab.active { background:#16213e; color:#fff; border-color:#16213e; }
+.layer-tbl { width:100%; border-collapse:collapse; font-size:12px; margin-top:8px; }
+.layer-tbl th { padding:5px 8px; background:#f0f2f5; text-align:right; border-bottom:1px solid #ddd; }
+.layer-tbl td { padding:5px 8px; text-align:right; border-bottom:1px solid #f0f0f0; }
+.layer-tbl th:first-child, .layer-tbl td:first-child { text-align:left; }
+.heat-grid { display:grid; grid-template-columns:repeat(13, 1fr); gap:2px; font-size:10px; margin-top:10px; }
+.heat-cell { padding:4px 2px; text-align:center; border-radius:3px; color:#fff; }
+.heat-label { color:#888; padding:4px 2px; text-align:center; }
+.metrics { display:grid; grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); gap:8px; margin:12px 0; }
+.metric { background:#f8f9fa; border-radius:8px; padding:10px; }
+.metric .l { font-size:11px; color:#888; } .metric .v { font-size:17px; font-weight:600; }
+.formula { font-family:monospace; font-size:11.5px; color:#555; background:#f8f9fa; padding:8px 12px; border-radius:6px; margin-top:8px; overflow-x:auto; }
+.hidden { display:none; }
+#detail { position:sticky; top:8px; }
+.empty { padding:30px; text-align:center; color:#999; font-size:14px; }
+"""
 
-HTML_TEMPLATE = """<!DOCTYPE html>
-<html lang="zh-CN"><head><meta charset="utf-8">
-<title>YuriQuant 交互式因子检测报告 — {dataset}</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
-<style>
-* {{ margin:0; padding:0; box-sizing:border-box; }}
-body {{ font-family:-apple-system,'PingFang SC',sans-serif; background:#f5f7fa; color:#1a1a2e; line-height:1.55; }}
-.container {{ max-width:1280px; margin:0 auto; padding:20px 16px; }}
-.header {{ background:linear-gradient(135deg,#1a1a2e,#16213e); color:#fff; padding:24px; border-radius:12px; margin-bottom:16px; }}
-.header h1 {{ font-size:19px; margin-bottom:4px; }}
-.header .meta {{ font-size:12px; opacity:.85; }}
-.controls {{ display:flex; flex-wrap:wrap; gap:10px; align-items:center; background:#fff; padding:14px 16px; border-radius:10px; margin-bottom:14px; box-shadow:0 1px 4px rgba(0,0,0,.06); }}
-.controls label {{ font-size:13px; color:#555; }}
-.controls select, .controls input {{ padding:6px 10px; border:1px solid #ddd; border-radius:6px; font-size:13px; background:#fff; }}
-.btn {{ padding:7px 14px; border:1px solid #16213e; background:#16213e; color:#fff; border-radius:6px; font-size:13px; cursor:pointer; }}
-.btn:hover {{ opacity:.9; }}
-.card {{ background:#fff; border-radius:10px; padding:16px; margin-bottom:14px; box-shadow:0 1px 4px rgba(0,0,0,.06); }}
-.card h2 {{ font-size:15px; color:#16213e; margin-bottom:10px; border-bottom:2px solid #e8e8e8; padding-bottom:6px; }}
-table {{ width:100%; border-collapse:collapse; font-size:12.5px; }}
-th {{ padding:7px 9px; background:#f0f2f5; text-align:right; border-bottom:2px solid #ddd; position:sticky; top:0; cursor:pointer; user-select:none; white-space:nowrap; }}
-th:first-child, td:first-child {{ text-align:left; }}
-td {{ padding:6px 9px; border-bottom:1px solid #f0f0f0; text-align:right; white-space:nowrap; }}
-tr:hover {{ background:#f8f9ff; cursor:pointer; }}
-.scroll {{ max-height:520px; overflow-y:auto; border:1px solid #eee; border-radius:8px; }}
-.sig {{ color:#A32D2D; font-weight:600; }}
-.mono-pos {{ color:#185FA5; font-weight:600; }}
-.mono-neg {{ color:#0F6E56; font-weight:600; }}
-.mono-weak {{ color:#854F0B; }}
-.usable-ok {{ color:#A32D2D; font-weight:700; }}
-.usable-q {{ color:#888; }}
-.fam-badge {{ display:inline-block; padding:1px 8px; border-radius:10px; font-size:11px; color:#fff; }}
-.chart-grid {{ display:grid; grid-template-columns:1fr 1fr; gap:14px; }}
-.chart-grid2 {{ display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-top:14px; }}
-.chart-box {{ position:relative; height:300px; }}
-.dtabs {{ margin:10px 0 4px; display:flex; gap:6px; }}
-.dtab {{ padding:5px 14px; border:1px solid #ddd; background:#fff; border-radius:6px; font-size:12.5px; cursor:pointer; color:#555; }}
-.dtab.active {{ background:#16213e; color:#fff; border-color:#16213e; }}
-.layer-tbl {{ width:100%; border-collapse:collapse; font-size:12px; margin-top:8px; }}
-.layer-tbl th {{ padding:5px 8px; background:#f0f2f5; text-align:right; border-bottom:1px solid #ddd; }}
-.layer-tbl td {{ padding:5px 8px; text-align:right; border-bottom:1px solid #f0f0f0; }}
-.layer-tbl th:first-child, .layer-tbl td:first-child {{ text-align:left; }}
-.heat-grid {{ display:grid; grid-template-columns:repeat(13, 1fr); gap:2px; font-size:10px; margin-top:10px; }}
-.heat-cell {{ padding:4px 2px; text-align:center; border-radius:3px; color:#fff; }}
-.heat-label {{ color:#888; padding:4px 2px; text-align:center; }}
-.metrics {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); gap:8px; margin:12px 0; }}
-.metric {{ background:#f8f9fa; border-radius:8px; padding:10px; }}
-.metric .l {{ font-size:11px; color:#888; }} .metric .v {{ font-size:17px; font-weight:600; }}
-.formula {{ font-family:monospace; font-size:11.5px; color:#555; background:#f8f9fa; padding:8px 12px; border-radius:6px; margin-top:8px; overflow-x:auto; }}
-.hidden {{ display:none; }}
-#detail {{ position:sticky; top:8px; }}
-.empty {{ padding:30px; text-align:center; color:#999; font-size:14px; }}
-</style></head><body><div class="container">
+# 页面主体（头部 + 控制栏 + 因子表 + 详情面板）
+_BODY = """
+<div class="container">
 <div class="header">
 <h1>YuriQuant 交互式因子检测报告 — {dataset}</h1>
 <div class="meta">{n_factors} 个因子 | 面板 2022-01 ~ 2026-08 | 选择时间段后自动重算 IC/IR/收益，点击因子查看详情</div>
@@ -244,8 +247,10 @@ tr:hover {{ background:#f8f9ff; cursor:pointer; }}
 <div class="formula" id="dformula"></div>
 </div>
 </div>
+"""
 
-<script>
+# 前端交互 JS（Chart.js + 原生 JS）；{factor_data}/{months}/{fam_colors} 由 .format 注入
+_JS = """
 const DATA = {factor_data};
 const MONTHS = {months};
 const FAM_COLORS = {fam_colors};
@@ -527,8 +532,7 @@ document.getElementById('ffamily').value = 'all';
 document.getElementById('preset').value = 'all';
 render();
 </script>
-</body></html>"""
-
+"""
 
 def _build_one(args) -> list[dict] | None:
     """多进程 worker：构建单因子详情数据。args=(registry_row_dict, returns)。"""
@@ -541,6 +545,17 @@ def _build_one(args) -> list[dict] | None:
     except Exception as e:
         log.warning("因子 %s 失败: %s", args[0].get("name") if args else "?", e)
         return None
+
+def _render_report(dataset: str, data: list[dict], months: list[str], fam_colors: dict) -> str:
+    """用 page 基座组装自包含 HTML（数据内嵌 JSON，前端按时间段切片重算指标）。"""
+    return page(
+        f"YuriQuant 交互式因子检测报告 — {dataset}",
+        header="",
+        body=_BODY.format(dataset=dataset, n_factors=len(data)),
+        css=_CSS,
+        head_extra='<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>',
+        scripts=f"<script>\n{_JS.format(factor_data=json.dumps(data, ensure_ascii=False), months=json.dumps(months), fam_colors=json.dumps(fam_colors))}\n</script>",
+    )
 
 
 def main() -> None:
@@ -577,18 +592,11 @@ def main() -> None:
         "alpha101": "#378ADD", "alpha158": "#1D9E75", "alpha191": "#BA7517",
         "alpha360": "#534AB7", "gp": "#D85A30", "model": "#E24B4A", "unknown": "#888780",
     }
-    html = HTML_TEMPLATE.format(
-        dataset=args.dataset,
-        n_factors=len(data),
-        factor_data=json.dumps(data, ensure_ascii=False),
-        months=json.dumps(all_months),
-        fam_colors=json.dumps(fam_colors),
-    )
+    html = _render_report(args.dataset, data, all_months, fam_colors)
     out = Path(args.out) if args.out else Path("reports") / f"factor_explorer_{args.dataset}.html"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(html, encoding="utf-8")
     log.info("报告已生成: %s (%d KB, %d 因子)", out, len(html) // 1024, len(data))
-
 
 if __name__ == "__main__":
     main()

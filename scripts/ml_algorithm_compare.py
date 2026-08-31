@@ -36,7 +36,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import logging
 import sys
 import time
 from pathlib import Path
@@ -47,10 +46,10 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+from scripts.cli_common import setup_logging  # noqa: E402
 
-logging.basicConfig(level=logging.INFO,
-                    format="%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S")
-log = logging.getLogger("ml_algorithm_compare")
+
+log = setup_logging("ml_algorithm_compare")
 
 BEGIN = 20190102
 TRAIN_END = "2023-12-31"
@@ -59,32 +58,10 @@ HORIZON = 1
 N_FOLDS = 8
 OUT_DIR = Path("reports/ml_algorithm_compare")
 
-# 复用 ml_synthesis_experiment 的口径（纯函数：经典因子 / 评价 / valid 调参）
-from factor.classic import compute_classic_features
-from scripts.ml_synthesis_experiment import (  # noqa: E402
-    _eval_row,
-    _fit_predict_valid,
-    _monthly_ic,
-)
-
-
-# ---------------------------------------------------------------------------
-# 数据：PIT 量价面板（2019-2026）
-# ---------------------------------------------------------------------------
-def _px_panels(begin: int, end: int | None) -> dict[str, pd.DataFrame]:
-    """日线缓存 → PIT mask 后的 OHLCV 宽表（date×code）。"""
-    from data.cache import DataCache
-    from data.cache_helpers import load_daily
-    from data.offline import OfflineDataSource
-    from data.universe import Universe
-
-    cache = DataCache(OfflineDataSource())
-    uni = Universe(cache)
-    _codes, _cal, daily = load_daily(cache, uni, "000300.SH", begin, end)
-    out = {}
-    for col in ("open", "high", "low", "close", "volume", "amount"):
-        out[col] = daily[col].unstack("code").sort_index()
-    return out
+# 复用公共口径（纯函数：经典因子 / 评价 / valid 调参）
+from data.cache_helpers import load_pit_panels  # noqa: E402
+from factor.classic import compute_classic_features  # noqa: E402
+from model.evaluation import eval_row, fit_predict_valid_ic, monthly_ic  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -98,7 +75,7 @@ def main(skip_tune: bool = False, do_register: bool = True) -> None:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 
     # ---------------- 1. 数据与特征 ----------------
-    px = _px_panels(BEGIN, None)
+    px = load_pit_panels(BEGIN, None)
     all_days = px["close"].index
     log.info("PIT 量价面板: %d 日（%s ~ %s）× %d 股",
              len(all_days), all_days[0].date(), all_days[-1].date(),
@@ -140,7 +117,7 @@ def main(skip_tune: bool = False, do_register: bool = True) -> None:
         rows = []
         log.info("调参 ridge ...")
         for a in (1.0, 10.0, 30.0, 100.0, 300.0):
-            ic = _fit_predict_valid(
+            ic = fit_predict_valid_ic(
                 lambda a=a: RidgePredictor(alpha=a),
                 {k: v.loc[tr_days] for k, v in feats.items()}, labels.loc[tr_days],
                 {k: v.loc[va_days] for k, v in feats.items()}, labels.loc[va_days])
@@ -149,7 +126,7 @@ def main(skip_tune: bool = False, do_register: bool = True) -> None:
 
         log.info("调参 gbdt ...")
         for lr, leaves in ((0.03, 31), (0.05, 31), (0.05, 63), (0.03, 63)):
-            ic = _fit_predict_valid(
+            ic = fit_predict_valid_ic(
                 lambda lr=lr, leaves=leaves: LGBMPredictor(
                     learning_rate=lr, num_leaves=leaves, seed=42),
                 {k: v.loc[tr_days] for k, v in feats.items()}, labels.loc[tr_days],
@@ -160,7 +137,7 @@ def main(skip_tune: bool = False, do_register: bool = True) -> None:
 
         log.info("调参 tabicl（context 样本量；n_estimators=2）...")
         for ctx in (3000, 6000, 10000):
-            ic = _fit_predict_valid(
+            ic = fit_predict_valid_ic(
                 lambda ctx=ctx: TabICLPredictor(
                     max_context_samples=ctx, n_estimators=2),
                 {k: v.loc[tr_days] for k, v in feats.items()}, labels.loc[tr_days],
@@ -213,7 +190,7 @@ def main(skip_tune: bool = False, do_register: bool = True) -> None:
     preds["baseline_icw"] = synthesize_ic_weighted(ci).loc[te_days]
 
     # ---------------- 8. 评价 ----------------
-    rows = [_eval_row(tag, p, fwd, te_days) for tag, p in preds.items()]
+    rows = [eval_row(tag, p, fwd, te_days) for tag, p in preds.items()]
     table = pd.DataFrame(rows)
     print("\n===== test 段（2025-01 ~ 2026-08，~400 日）OOS 对照表 =====")
     with pd.option_context("display.width", 200, "display.float_format",
@@ -221,7 +198,7 @@ def main(skip_tune: bool = False, do_register: bool = True) -> None:
         print(table.to_string(index=False))
     table.to_csv(OUT_DIR / "oos_results.csv", index=False)
 
-    monthly = pd.DataFrame({tag: _monthly_ic(p, fwd, te_days) for tag, p in preds.items()})
+    monthly = pd.DataFrame({tag: monthly_ic(p, fwd, te_days) for tag, p in preds.items()})
     monthly.to_csv(OUT_DIR / "monthly_ic.csv")
 
     # 分年 IC（2025 vs 2026：2026 是模型完全未见过的年份）
@@ -230,7 +207,7 @@ def main(skip_tune: bool = False, do_register: bool = True) -> None:
         ic = pd.Series(dtype=float)
         for yr in sorted({d.year for d in te_days}):
             days = te_days[te_days.year == yr]
-            sub = _eval_row(f"{tag}_{yr}", p, fwd, days)
+            sub = eval_row(f"{tag}_{yr}", p, fwd, days)
             yearly[f"{tag}|{yr}"] = sub
     yearly_df = pd.DataFrame(yearly).T
     yearly_df.to_csv(OUT_DIR / "yearly_ic.csv")

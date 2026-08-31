@@ -22,20 +22,25 @@
 
 输出: reports/_htai_gp/ml_synthesis_<real|mock>.csv + 终端 2×2 对比表
 """
+
 from __future__ import annotations
 
+import sys
 import argparse
-import logging
 from pathlib import Path
-
 import numpy as np
 import pandas as pd
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S")
-log = logging.getLogger("compare_ml_synthesis")
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-from research.factor_analysis import calc_ic_series, calc_ir
+from scripts.cli_common import add_real_mock_args, setup_logging  # noqa: E402
 
+
+log = setup_logging("compare_ml_synthesis")
+
+from research.factor_analysis import calc_ic_series, calc_ir  # noqa: E402
 
 def _htai_features_from_formulas(formulas: list[str], panel: dict, neutral_panels: dict
                                  ) -> list:
@@ -56,7 +61,6 @@ def _htai_features_from_formulas(formulas: list[str], panel: dict, neutral_panel
         out.append(fp)
     return out
 
-
 def _noise_panel(panel: dict, seed: int = 0) -> pd.DataFrame:
     """随机噪声因子（截面 zscore），作对照组。"""
     rng = np.random.default_rng(seed)
@@ -64,7 +68,6 @@ def _noise_panel(panel: dict, seed: int = 0) -> pd.DataFrame:
     z = pd.DataFrame(rng.normal(size=close.shape), index=close.index, columns=close.columns)
     from factor.preprocessing import standardize_zscore
     return standardize_zscore(z)
-
 
 def seg_stats(comp: pd.DataFrame, rets: pd.DataFrame, frac_lo: float = 0.0,
               frac_hi: float = 1.0, method: str = "spearman") -> dict:
@@ -80,7 +83,6 @@ def seg_stats(comp: pd.DataFrame, rets: pd.DataFrame, frac_lo: float = 0.0,
         "t": m / (s / np.sqrt(len(seg))) if s > 0 else 0.0,
         "n": len(seg),
     }
-
 
 def top_bottom_excess(comp: pd.DataFrame, rets: pd.DataFrame,
                       top_frac: float = 0.1) -> dict:
@@ -105,10 +107,9 @@ def top_bottom_excess(comp: pd.DataFrame, rets: pd.DataFrame,
         return {"top_excess": float("nan"), "bot_excess": float("nan")}
     return {"top_excess": float(np.mean(tops)), "bot_excess": float(np.mean(bots))}
 
-
 def main():
     ap = argparse.ArgumentParser(description="MI 非线性因子 vs 线性因子 × ML stacking 端到端对比")
-    ap.add_argument("--real", action="store_true", help="真实数据（默认 mock）")
+    add_real_mock_args(ap)
     ap.add_argument("--begin", type=int, default=20250101, help="真实数据开始（须与挖因子的区间一致）")
     ap.add_argument("--end", type=int, default=20251231, help="真实数据结束（须与挖因子的区间一致）")
     ap.add_argument("--top", type=int, default=9, help="每组使用的因子数（对齐两组）")
@@ -122,7 +123,6 @@ def main():
     from data.mock import gen_mock_panel_with_signal
     from factor.synthesis import (CompositeInput, synthesize_stacking,
                                   synthesize_stacking_gbdt)
-    from factor.preprocessing import standardize_zscore
 
     # ---- 数据 ----
     if args.real:
@@ -212,11 +212,9 @@ def main():
     df.to_csv(out_path, index=False)
     log.info("结果已保存: %s", out_path)
 
-
 def _monthly_fwd(rets: pd.DataFrame):
     from factor.genetic_mining import _monthly_forward_returns
     return _monthly_forward_returns(rets)
-
 
 if __name__ == "__main__":
     main()

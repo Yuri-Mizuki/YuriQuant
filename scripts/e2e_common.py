@@ -75,6 +75,30 @@ def load_daily_data(begin: int = 20220101) -> tuple[dict, dict]:
     return px, lib_feats
 
 
+def load_library_grid_panels(dataset: str = DATASET) -> dict[str, pd.DataFrame]:
+    """读日线缓存，对齐到因子库全面板网格的 OHLCV 宽表（date×code）。
+
+    2026-08-31 自 ml_synthesis_experiment._px_panels 下沉（cpcv_h1_eval 等共用）。
+    """
+    from data.cache import DataCache
+    from data.offline import OfflineDataSource
+    from research.factor_library import FactorLibrary
+
+    cache = DataCache(OfflineDataSource())
+    d = pd.read_parquet(cache.root / "daily_hs300.parquet")
+
+    grid = next(iter(FactorLibrary(dataset=dataset).load_library_features().values()))
+    codes, dates = grid.columns, grid.index
+
+    out = {}
+    for col in ("open", "high", "low", "close", "volume", "amount"):
+        w = (d.reset_index()
+             .pivot(index="date", columns="code", values=col).sort_index()
+             .reindex(index=dates, columns=codes))
+        out[col] = w
+    return out
+
+
 # ---------------------------------------------------------------------------
 # 特征选择（防前视：质量分与漏斗都只在调用方指定的定型窗口上做）
 # ---------------------------------------------------------------------------

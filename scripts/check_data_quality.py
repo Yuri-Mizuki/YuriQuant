@@ -1,4 +1,4 @@
-﻿"""
+"""
 数据质量检查 CLI
 ================
 
@@ -16,20 +16,24 @@
 from __future__ import annotations
 
 import argparse
-import logging
+import sys
 from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
 
-from data.quality import (
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+from scripts.cli_common import setup_logging  # noqa: E402
+
+from data.quality import (  # noqa: E402
     ERROR_MISSING, WARN_ADJ_JUMP, WARN_COVERAGE, WARN_MISSING, WARN_NAN_RATE,
     WARN_PRICE_JUMP, check_adjust_factor_jumps, check_coverage,
     check_financial_nan, check_kline_missing, check_price_anomalies, flag,
 )
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S")
-log = logging.getLogger("check_data_quality")
+log = setup_logging("check_data_quality")
 
 
 def main():
@@ -135,7 +139,5 @@ def main():
     has_error = any(lvl == "ERROR" for lvl, _, _ in problems)
     return 1 if (args.strict and has_error) else 0
 
-
 if __name__ == "__main__":
     raise SystemExit(main())
-

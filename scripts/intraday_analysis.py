@@ -24,33 +24,33 @@
     python -m scripts.intraday_analysis                  # 真实 HS300 2025（默认）
     python -m scripts.intraday_analysis --begin 20250101 --end 20251231
 """
+
 from __future__ import annotations
 
 import argparse
-import logging
 import sys
 from pathlib import Path
-
 import matplotlib
-matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import numpy as np
 import pandas as pd
 
-from config import Config
-from data.cache import DataCache
-from data.cache_helpers import load_daily
-from data.datasource import create_datasource
-from data.offline import OfflineDataSource
-from data.universe import Universe
-from research.robust_stats import nw_tstat
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%H:%M:%S",
-)
-log = logging.getLogger("intraday_analysis")
+from scripts.cli_common import add_real_mock_args, setup_logging  # noqa: E402
+
+
+matplotlib.use("Agg")
+
+from data.cache import DataCache  # noqa: E402
+from data.cache_helpers import load_daily  # noqa: E402
+from data.datasource import create_datasource  # noqa: E402
+from data.offline import OfflineDataSource  # noqa: E402
+from data.universe import Universe  # noqa: E402
+from research.robust_stats import nw_tstat  # noqa: E402
+
+log = setup_logging("intraday_analysis")
 
 # 中文字体（Windows SimHei；macOS/linux 可改）
 plt.rcParams["font.sans-serif"] = ["SimHei", "Microsoft YaHei", "PingFang SC", "Arial Unicode MS"]
@@ -58,9 +58,7 @@ plt.rcParams["axes.unicode_minus"] = False
 
 DEFAULT_PERIOD = 5
 
-
 # ---- 时段切分：5 分钟档 48 根 ----
-
 
 def _seg_of(time_label: str) -> str:
     """把 5 分钟 bar 标签（HH:MM）映射到四段。"""
@@ -73,7 +71,6 @@ def _seg_of(time_label: str) -> str:
     if t < 870:      # 13:00-14:25
         return "mid_afternoon"
     return "close30"  # 14:30-14:55 尾盘 30 分钟
-
 
 def _filter_ex_dividend(df, status) -> pd.DataFrame:
     """剔除除权/除息日的样本（收益分解与时段效应共用）。
@@ -98,7 +95,6 @@ def _filter_ex_dividend(df, status) -> pd.DataFrame:
     )
     return df[mask]
 
-
 def load_data(cache, uni, index_code, begin, end, period):
     """拉取股票池、日线、5 分钟 K 线、状态表。返回各 DataFrame。"""
     codes, cal, daily = load_daily(cache, uni, index_code, begin, end)
@@ -112,9 +108,7 @@ def load_data(cache, uni, index_code, begin, end, period):
     log.info("历史状态: %d 行", len(status))
     return codes, daily, mk, status
 
-
 # ---- 1. 收益分解 ----
-
 
 def decompose_returns(daily, status, year: int) -> dict:
     """隔夜 vs 日内收益分解。
@@ -202,9 +196,7 @@ def decompose_returns(daily, status, year: int) -> dict:
     }
     return summary, ts
 
-
 # ---- 2. 时段效应 ----
-
 
 def time_of_day_effects(mk, status, year: int) -> dict:
     """5 分钟时段效应：成交量 U 型、时段波动率、开盘/尾盘、首根预测。
@@ -266,9 +258,7 @@ def time_of_day_effects(mk, status, year: int) -> dict:
         "first_bar": first_bar,
     }
 
-
 # ---- 输出 ----
-
 
 def make_plots(summary: dict, tod: dict, out_path: Path, period: int) -> None:
     """2x2 面板：收益分解、成交量 U 型、时段波动率、首根 bar 预测。"""
@@ -328,16 +318,12 @@ def make_plots(summary: dict, tod: dict, out_path: Path, period: int) -> None:
     plt.close(fig)
     log.info("图表已保存: %s", out_path)
 
-
 def _fmt(x: float, digits: int = 4) -> str:
     return f"{x:.{digits}f}"
 
-
 def main():
     parser = argparse.ArgumentParser(description="日内收益分解 + 时段效应分析")
-    parser.add_argument("--mock", action="store_true", help="用 mock 数据验证管线（2023-2024）")
-    parser.add_argument("--offline", action="store_true",
-                        help="离线模式：只读本地 Parquet 缓存，不连接 SDK（数据已缓存时最快）")
+    add_real_mock_args(parser, offline=True, mock_help="用 mock 数据验证管线（2023-2024）")
     parser.add_argument("--index", default="000300.SH", help="指数代码")
     parser.add_argument("--begin", type=int, default=None, help="起始日 YYYYMMDD")
     parser.add_argument("--end", type=int, default=None, help="结束日 YYYYMMDD")
@@ -454,7 +440,6 @@ def main():
         log.warning("实验记录写入失败: %s", e)
 
     log.info("完成。输出: %s, %s, %s", ts_path, sum_path, png)
-
 
 if __name__ == "__main__":
     main()

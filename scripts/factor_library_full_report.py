@@ -8,31 +8,29 @@
 用法:
     python scripts/factor_library_full_report.py [--dataset hs300_2022_2025]
 """
+
 from __future__ import annotations
 
 import argparse
-import base64
-import io
-import logging
 import sys
 from pathlib import Path
-
 import numpy as np
 import pandas as pd
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
-log = logging.getLogger("factor_library_report")
+from scripts.cli_common import setup_logging  # noqa: E402
+
+
+log = setup_logging("factor_library_report")
 
 from research.factor_library import FactorLibrary  # noqa: E402
-
-
-def _fig_to_b64(fig) -> str:
-    buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=110, bbox_inches="tight")
-    buf.seek(0)
-    return base64.b64encode(buf.read()).decode()
+from research.html_report import (  # noqa: E402
+    embed_image_b64 as _fig_to_b64,
+    page,
+)
 
 
 def plot_ls_equity(name: str, ev: pd.DataFrame) -> str:
@@ -58,7 +56,6 @@ def plot_ls_equity(name: str, ev: pd.DataFrame) -> str:
     plt.close(fig)
     return b64
 
-
 def plot_monthly_ic(name: str, ev: pd.DataFrame) -> str:
     import matplotlib
     matplotlib.use("Agg")
@@ -78,6 +75,62 @@ def plot_monthly_ic(name: str, ev: pd.DataFrame) -> str:
     b64 = _fig_to_b64(fig)
     plt.close(fig)
     return b64
+
+
+# 全因子库报告主题样式（page 外壳 + 自定义 CSS）
+_CSS = """
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family:-apple-system,'PingFang SC',sans-serif; background:#f5f7fa; color:#1a1a2e; line-height:1.6; }
+.container { max-width:1200px; margin:0 auto; padding:24px 16px; }
+.header { background:linear-gradient(135deg,#1a1a2e,#16213e); color:#fff; padding:28px 24px; border-radius:12px; margin-bottom:20px; }
+.header h1 { font-size:20px; margin-bottom:6px; }
+.header .meta { font-size:13px; opacity:.85; }
+.card { background:#fff; border-radius:10px; padding:18px; margin-bottom:14px; box-shadow:0 1px 4px rgba(0,0,0,.06); }
+.card h2 { font-size:15px; color:#16213e; margin-bottom:12px; border-bottom:2px solid #e8e8e8; padding-bottom:6px; }
+.card h3 { font-size:14px; color:#16213e; margin-bottom:6px; }
+.fam-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:10px; }
+.fam-card { background:#f8f9fa; border-radius:8px; padding:12px; border-left:3px solid #ccc; }
+.fam-dot { width:10px; height:10px; border-radius:50%; display:inline-block; margin-right:6px; }
+.fam-name { font-weight:600; font-size:14px; }
+.fam-name .cnt { color:#888; font-weight:400; font-size:12px; }
+.fam-metric { font-size:12px; color:#555; margin-top:2px; }
+.fam-note { font-size:11px; color:#999; margin-top:4px; }
+table { width:100%; border-collapse:collapse; font-size:12px; }
+th { padding:7px 8px; background:#f0f2f5; text-align:right; border-bottom:2px solid #ddd; position:sticky; top:0; cursor:pointer; user-select:none; }
+th:first-child, td:first-child { text-align:left; }
+td { padding:6px 8px; border-bottom:1px solid #f0f0f0; text-align:right; }
+tr:hover { background:#f8f9ff; }
+.sig { color:#A32D2D; font-weight:600; }
+.ic { color:#888; font-size:12px; font-weight:400; }
+.formula { font-family:monospace; font-size:11px; color:#666; background:#f8f9fa; padding:6px 10px; border-radius:6px; margin-bottom:8px; overflow-x:auto; }
+.img-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+.img-grid img { width:100%; height:auto; border-radius:6px; }
+.warning { background:#fff3cd; border:1px solid #ffe082; border-radius:8px; padding:14px; font-size:12px; color:#856404; margin-bottom:14px; }
+.search { width:100%; padding:8px 12px; border:1px solid #ddd; border-radius:8px; margin-bottom:10px; font-size:13px; }
+.scroll { max-height:600px; overflow-y:auto; border:1px solid #eee; border-radius:8px; }
+@media print { .scroll { max-height:none; overflow:visible; } }
+"""
+
+_JS = """
+const tb = document.getElementById('ftable');
+const tbody = tb.tBodies[0];
+const heads = tb.tHead.rows[0].cells;
+for (let i = 0; i < heads.length; i++) {
+  heads[i].onclick = () => {
+    const rows = [...tbody.rows].sort((a, b) => {
+      const av = a.cells[i].innerText, bv = b.cells[i].innerText;
+      const an = parseFloat(av), bn = parseFloat(bv);
+      if (!isNaN(an) && !isNaN(bn)) return an - bn;
+      return av.localeCompare(bv);
+    });
+    rows.forEach(r => tbody.appendChild(r));
+  };
+}
+document.getElementById('fsearch').oninput = (e) => {
+  const q = e.target.value.toLowerCase();
+  for (const r of tbody.rows) r.style.display = r.innerText.toLowerCase().includes(q) ? '' : 'none';
+};
+"""
 
 
 def main() -> None:
@@ -183,41 +236,7 @@ def main() -> None:
         for _, f in fam_df.iterrows())
 
     n_sig_total = int(reg["significant"].sum()) if "significant" in reg else 0
-    html = f"""<!DOCTYPE html>
-<html lang="zh-CN"><head><meta charset="utf-8">
-<title>YuriQuant 全因子库检验报告 — {args.dataset}</title>
-<style>
-* {{ margin:0; padding:0; box-sizing:border-box; }}
-body {{ font-family:-apple-system,'PingFang SC',sans-serif; background:#f5f7fa; color:#1a1a2e; line-height:1.6; }}
-.container {{ max-width:1200px; margin:0 auto; padding:24px 16px; }}
-.header {{ background:linear-gradient(135deg,#1a1a2e,#16213e); color:#fff; padding:28px 24px; border-radius:12px; margin-bottom:20px; }}
-.header h1 {{ font-size:20px; margin-bottom:6px; }}
-.header .meta {{ font-size:13px; opacity:.85; }}
-.card {{ background:#fff; border-radius:10px; padding:18px; margin-bottom:14px; box-shadow:0 1px 4px rgba(0,0,0,.06); }}
-.card h2 {{ font-size:15px; color:#16213e; margin-bottom:12px; border-bottom:2px solid #e8e8e8; padding-bottom:6px; }}
-.card h3 {{ font-size:14px; color:#16213e; margin-bottom:6px; }}
-.fam-grid {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:10px; }}
-.fam-card {{ background:#f8f9fa; border-radius:8px; padding:12px; border-left:3px solid #ccc; }}
-.fam-dot {{ width:10px; height:10px; border-radius:50%; display:inline-block; margin-right:6px; }}
-.fam-name {{ font-weight:600; font-size:14px; }}
-.fam-name .cnt {{ color:#888; font-weight:400; font-size:12px; }}
-.fam-metric {{ font-size:12px; color:#555; margin-top:2px; }}
-.fam-note {{ font-size:11px; color:#999; margin-top:4px; }}
-table {{ width:100%; border-collapse:collapse; font-size:12px; }}
-th {{ padding:7px 8px; background:#f0f2f5; text-align:right; border-bottom:2px solid #ddd; position:sticky; top:0; cursor:pointer; user-select:none; }}
-th:first-child, td:first-child {{ text-align:left; }}
-td {{ padding:6px 8px; border-bottom:1px solid #f0f0f0; text-align:right; }}
-tr:hover {{ background:#f8f9ff; }}
-.sig {{ color:#A32D2D; font-weight:600; }}
-.ic {{ color:#888; font-size:12px; font-weight:400; }}
-.formula {{ font-family:monospace; font-size:11px; color:#666; background:#f8f9fa; padding:6px 10px; border-radius:6px; margin-bottom:8px; overflow-x:auto; }}
-.img-grid {{ display:grid; grid-template-columns:1fr 1fr; gap:10px; }}
-.img-grid img {{ width:100%; height:auto; border-radius:6px; }}
-.warning {{ background:#fff3cd; border:1px solid #ffe082; border-radius:8px; padding:14px; font-size:12px; color:#856404; margin-bottom:14px; }}
-.search {{ width:100%; padding:8px 12px; border:1px solid #ddd; border-radius:8px; margin-bottom:10px; font-size:13px; }}
-.scroll {{ max-height:600px; overflow-y:auto; border:1px solid #eee; border-radius:8px; }}
-@media print {{ .scroll {{ max-height:none; overflow:visible; }} }}
-</style></head><body><div class="container">
+    body = f"""<div class="container">
 <div class="header">
 <h1>YuriQuant 全因子库检验报告 — {args.dataset}</h1>
 <div class="meta">{len(reg)} 个因子 | {n_sig_total} 个显著 | 面板 2022-01 ~ 2026-08 | 逐日 IC + 分层回测（多空/多头，月频+周频）</div>
@@ -240,29 +259,14 @@ GP 因子为遗传规划挖掘（同样样本内评估）。判断因子是否�
 <tbody>{''.join(rows)}</tbody></table></div></div>
 
 <div class="warning">生成时间：{pd.Timestamp.now().strftime('%Y-%m-%d %H:%M')} | 指标口径与 standard_factor_summary / quantile_backtest 一致（NW 自相关稳健 t、多空多头双口径）</div>
-</div>
-<script>
-const tb = document.getElementById('ftable');
-const tbody = tb.tBodies[0];
-const heads = tb.tHead.rows[0].cells;
-for (let i = 0; i < heads.length; i++) {{
-  heads[i].onclick = () => {{
-    const rows = [...tbody.rows].sort((a, b) => {{
-      const av = a.cells[i].innerText, bv = b.cells[i].innerText;
-      const an = parseFloat(av), bn = parseFloat(bv);
-      if (!isNaN(an) && !isNaN(bn)) return an - bn;
-      return av.localeCompare(bv);
-    }});
-    rows.forEach(r => tbody.appendChild(r));
-  }};
-}}
-document.getElementById('fsearch').oninput = (e) => {{
-  const q = e.target.value.toLowerCase();
-  for (const r of tbody.rows) r.style.display = r.innerText.toLowerCase().includes(q) ? '' : 'none';
-}};
-</script>
-</body></html>"""
-
+</div>"""
+    html = page(
+        f"YuriQuant 全因子库检验报告 — {args.dataset}",
+        header="",
+        body=body,
+        css=_CSS,
+        scripts=f"<script>\n{_JS}\n</script>",
+    )
     out = Path(args.out) if args.out else Path("reports") / f"factor_library_report_{args.dataset}.html"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(html, encoding="utf-8")
@@ -275,7 +279,6 @@ document.getElementById('fsearch').oninput = (e) => {{
             "avg_turnover_ls_M", "formula"]
     reg[cols].to_csv(csv_out, index=False, encoding="utf-8-sig")
     log.info("全表 CSV: %s", csv_out)
-
 
 if __name__ == "__main__":
     main()

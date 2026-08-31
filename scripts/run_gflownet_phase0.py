@@ -32,11 +32,11 @@ import pandas as pd
 # 常数因子行 std=0 产生的无害 RuntimeWarning（结果已 isfinite 过滤）
 warnings.filterwarnings("ignore", message="invalid value encountered in reduce")
 
-from factor.gflownet.env import FactorMDP
-from factor.gflownet.net import PPONet, TBPolicy
-from factor.gflownet.ppo import train_ppo
-from factor.gflownet.reward import RewardCache, make_reward_fn
-from factor.gflownet.tb import evaluate_samples, sample_formulas, sample_uniform, train_tb
+from factor.gflownet.env import FactorMDP  # noqa: E402
+from factor.gflownet.net import PPONet, TBPolicy  # noqa: E402
+from factor.gflownet.ppo import train_ppo  # noqa: E402
+from factor.gflownet.reward import RewardCache, make_reward_fn  # noqa: E402
+from factor.gflownet.tb import evaluate_samples, sample_formulas, sample_uniform, train_tb  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # mock 面板（对齐 tests/test_genetic_mining.py 的 AR(1) 惯例，加强信号）
