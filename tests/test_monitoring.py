@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -262,6 +263,7 @@ def test_next_run_time():
 # ---------------------------------------------------------------------------
 # Windows 计划任务（每日自动化）
 # ---------------------------------------------------------------------------
+@pytest.mark.skipif(sys.platform != "win32", reason="schtasks 计划任务注册仅适用于 Windows")
 def test_task_scheduler_command():
     from scripts.monitor_performance import (
         SCHEDULED_TASK,
