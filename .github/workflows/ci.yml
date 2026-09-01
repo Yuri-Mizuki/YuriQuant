@@ -41,4 +41,22 @@ jobs:
         run: pytest -q tests/test_layering.py tests/test_pipeline_layers.py tests/test_data_layer.py
 
       - name: Full test suite
-        run: pytest -q
+        # pipefail 保证 pytest 失败不因 tee 被吞掉；日志落盘供失败步骤提取
+        run: |
+          set -o pipefail
+          pytest -q --tb=short 2>&1 | tee /tmp/pytest.log
+
+      - name: Surface failures
+        # 失败时把 FAILED 行推到 check annotations、把日志尾部写进 job summary，
+        # 便于从 API/摘要页直接定位，无需翻原始日志
+        if: failure()
+        run: |
+          {
+            echo "## Pytest tail (last 120 lines)"
+            echo '```'
+            tail -n 120 /tmp/pytest.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          grep -E "^(FAILED|ERROR) " /tmp/pytest.log | head -30 | while IFS= read -r line; do
+            echo "::error ::$line"
+          done
