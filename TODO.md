@@ -11,11 +11,16 @@
 
 口径变更后，以下历史实验结论需重跑才能继续引用：
 
-- [ ] **重跑 `scripts/multiyear_oos.py`**：README 已标注"h>1 结论基于回测引擎
-  bug 下的伪结果，需重跑"；`reports/multiyear/` 至今为空。
-  "h1×M 唯一稳健解"这一核心结论目前只有 2025 单年支撑。
-- [ ] **重跑 `scripts/freq_tune.py`**：同上，h×freq 网格结论需在修复后引擎下
-  重新生成（`reports/freq_tune/` 为空）。
+- [x] **重跑 `scripts/multiyear_oos.py`**（2026-09-01 完成，620s）：README 已标注
+  "h>1 结论基于回测引擎 bug 下的伪结果"。修复后重跑结论：**h1×M 仍是唯一
+  三年一致稳健的频率解**（gbdt +5.5%±1.7%、ranker +5.4%±4.6%，均 3/3 年正超额；
+  h1×W/D 与 h5×M 全负，ridge 全负）。注意待查：脚本 `oos_ic` 为原始预测 vs
+  收益的 IC（h1 全模型为负 −0.1~−0.36），而策略交易中性化后信号——两口径
+  方向相反，需核对 IC 口径或将其并入"信号强度"研究问题。
+- [x] **重跑 `scripts/freq_tune.py`**（2026-09-01 完成）：修复后引擎下重新生成。
+  h=1 排名不变（M +6.1% > W −8.9% > D −40.6%），h5×M 从伪结果（Sharpe −3.1）
+  修正为超额 −16.6%/Sharpe 0.95——h1×M 仍最优但差幅可信。
+  修复前旧结果存档于 `reports/freq_tune/freq_tune_prefix_engine_fix_20260825.csv`。
 - [ ] **重跑 e2e 族报告对齐年化口径**：`perf_stats` 年化 244→252 后，
   `reports/e2e_backtest/`、`reports/investment_report/` 中 e2e 链路历史数字
   与现行口径存在 ~3% 系统性偏移。

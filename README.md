@@ -254,13 +254,17 @@ mock 落 `reports/models_mock`，真实落 `reports/models`。
   实例参数、默认 `labels_bins=2`（截面中位数二分）+`rank_xendcg` 后样本内 IC
   由负转正至 +0.207（434/484 天为正），现有调用方无需改动。
 - **调仓频率精修**（`scripts/freq_tune.py` → `reports/freq_tune/freq_tune.csv`）：
-  h=1 时 M 月度最优；频率越高换手越严重侵蚀 alpha。**注意：本实验的 h>1 组
-  在回测引擎 BUG（2026-08-27 修复，见下）下运行，h5 结论不可信，需重跑**。
+  h=1 时 M 月度最优（超额 +6.1%/Sharpe 1.55）；频率越高换手越严重侵蚀 alpha
+  （日频超额 −40.6%）。2026-09-01 已在修复后引擎下重跑：h5×M 从 BUG 下的伪结果
+  （Sharpe −3.1）修正为超额 −16.6%/Sharpe 0.95，h=5 仍显著劣于 h=1 但差幅可信。
+  修复前旧结果存档于 `reports/freq_tune/freq_tune_prefix_engine_fix_20260825.csv`。
+  注：turnover 列自 BUG-2 修复后为"按调仓事件平均"口径，与修复前的稀释口径不可比。
 - **多年度 OOS 稳健性**（`scripts/multiyear_oos.py` → `reports/multiyear/`）：
   gbdt/ridge/ranker × h1/h5 × D/W/M 在 2023/2024/2025 分年 walk-forward
-  （特征在定型期 fixed，防前视选择）。原结论"h1×M 是唯一三年一致稳健的解"
-  基于含 bug 的 h>1 结算口径，修复后需重新验证。
-  注：多年度结果需在真实数据下运行该脚本重新生成（`reports/multiyear/` 尚空）。
+  （特征在定型期 fixed，防前视选择）。2026-09-01 修复后引擎重跑：
+  **h1×M 仍是唯一三年一致稳健的频率解**——gbdt +5.5%±1.7%、ranker +5.4%±4.6%
+  （均 3/3 年正超额）；ridge 全负；h5×M 三年平均 ≈ −15%（与 freq_tune 2025
+  单年 −16.6% 互证）；日频 −33%~−46% 全灭。h>1 旧结论系 bug 伪结果的注记就此了结。
 
 ## scripts 目录索引
 
