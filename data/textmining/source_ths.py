@@ -91,7 +91,6 @@ def fetch_ths_reports(
     code6 = to_code6(code)
     url = BASE_URL.format(code6=code6)
     headers = {"User-Agent": UA}
-    own_session = session is None
     s = session or requests.Session()
 
     last_err: Exception | None = None

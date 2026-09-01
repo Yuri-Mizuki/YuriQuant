@@ -29,7 +29,7 @@ DPP（Determinantal Point Process）集合级因子筛选
 from __future__ import annotations
 
 import logging
-from typing import Iterable, Sequence
+from typing import Sequence
 
 import numpy as np
 import pandas as pd

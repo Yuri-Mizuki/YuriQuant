@@ -11,7 +11,7 @@ import pytest
 import torch
 
 from factor.gflownet.env import FactorMDP
-from factor.gflownet.expr import ExprBuilder, canonical_formula
+from factor.gflownet.expr import canonical_formula
 from factor.gflownet.net import TBPolicy
 from factor.gflownet.reward import RewardCache, make_reward_fn
 from factor.gflownet.tb import sample_formulas, train_tb

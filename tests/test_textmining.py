@@ -188,7 +188,7 @@ def test_cache_incremental_skips_existing_codes(tmp_path: Path):
     existing.to_parquet(tmp_path / "text_ths_report.parquet")
 
     with patch("data.textmining.fetch.fetch_ths_reports") as mfetch:
-        df = cache.get_ths_reports(["600519.SH", "000001.SZ"])
+        cache.get_ths_reports(["600519.SH", "000001.SZ"])
         # 600519 已缓存 → 跳过；只拉 000001
         mfetch.assert_called_once()
         assert mfetch.call_args[0][0] in ("000001.SZ", "000001")

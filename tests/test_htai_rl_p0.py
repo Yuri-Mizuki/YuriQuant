@@ -10,8 +10,7 @@ import pandas as pd
 import pytest
 
 from factor.rl.alphapool_env import (
-    AlphaPool, RPNParser, TOKEN_SPACE, legal_mask_for_tokens,
-    BEG, SEP, N_ACTIONS, MAX_EXPR_LENGTH,
+    AlphaPool, RPNParser, TOKEN_SPACE, BEG, SEP, MAX_EXPR_LENGTH,
 )
 from factor.rl.alphapool_gym import AlphaPoolGymEnv
 

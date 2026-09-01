@@ -16,9 +16,7 @@ masked 处理：合法动作掩码由 :class:`factor.gflownet.env.FactorMDP.lega
 """
 from __future__ import annotations
 
-from typing import Optional
 
-import numpy as np
 import torch
 import torch.nn as nn
 

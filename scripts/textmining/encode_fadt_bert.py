@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import argparse
 import sys
-import time
 from pathlib import Path
 
 import numpy as np
@@ -120,7 +119,6 @@ def run(task: str = "fadt", pool: str = "zz1000", max_len: int = 500,
         uni = uni.head(limit)
     log.info("待编码研报 %d 条", len(uni))
 
-    t0 = time.time()
     model, tok = load_model(max_len)
     # 分块编码：每 chunk 条存一次临时 parquet（断点续跑），最后合并。
     # 全量 2.7 万行长文本一次性编码会 OOM（CPU）。

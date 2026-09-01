@@ -10,7 +10,6 @@ from model import (
     ModelRegistry,
     evaluate_model,
     train_and_register,
-    train_stacking_model,
 )
 from optimize import monitor_report, optimize_weights, risk_attribution
 from research.benchmarks import equal_weight_returns

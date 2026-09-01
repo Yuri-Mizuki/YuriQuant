@@ -95,7 +95,6 @@ class MockDataSource(DataSource):
             return pd.DataFrame(
                 columns=["kline_time", "code", "open", "high", "low", "close", "volume", "amount"]
             )
-        bars_per_day = 240 // period
         rng = np.random.default_rng(42)
         rows = []
         for code in codes:

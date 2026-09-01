@@ -3,7 +3,6 @@ import argparse
 
 import numpy as np
 import pandas as pd
-import pytest
 
 from scripts.cli_common import (
     add_build_args, make_data_context, print_no_save, register_panels,

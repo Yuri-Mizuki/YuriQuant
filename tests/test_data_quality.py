@@ -1,8 +1,6 @@
 """数据质量检查 + 缓存数据指纹测试。"""
 from __future__ import annotations
 
-import numpy as np
-import pandas as pd
 import pytest
 
 from data.cache import DataCache
@@ -21,7 +19,7 @@ def _cache(tmp_path, mock_ds) -> DataCache:
 # ---------------------------------------------------------------------------
 def test_fingerprint_stable_and_sensitive(tmp_path, mock_ds):
     cache = _cache(tmp_path, mock_ds)
-    cal = cache.get_calendar(20230101, 20231231)
+    cache.get_calendar(20230101, 20231231)
     codes = mock_ds.get_index_constituent("000300.SH")["con_code"].tolist()[:10]
     cache.get_daily_kline(codes, 20230101, 20231231)
     fp1 = cache.get_fingerprint()

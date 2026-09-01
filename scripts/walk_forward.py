@@ -85,7 +85,7 @@ def load_full_panels(begin: int = 20220101, end: int = 20251231):
     amt = d.pivot(index="date", columns="code", values="amount").sort_index()
     bf = pd.read_parquet(CACHE_ROOT / "backward_factor.parquet")
     bf = bf.reindex(index=c.index).reindex(columns=c.columns).ffill()
-    oa, ha, la, ca = o * bf, h * bf, l * bf, c * bf
+    _oa, _ha, _la, _ca = o * bf, h * bf, l * bf, c * bf
 
     panels: dict[str, pd.DataFrame] = {}
     panels["close"] = c
@@ -328,7 +328,7 @@ def main():
 
     # ---- Step 3: test 段验证 ----
     test_returns = returns_panel.loc[test_dates]
-    test_panel = {k: p.loc[test_dates] for k, p in panels.items()}
+    {k: p.loc[test_dates] for k, p in panels.items()}
     if args.merge:
         valid_returns = train_returns   # 方案A valid 段 = train 段
     from factor.synthesis import CompositeInput, synthesize_ic_weighted

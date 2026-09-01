@@ -18,7 +18,7 @@ import pytest
 from factor.alpha101 import ALPHA101, SKIPPED_101, compute_alpha101
 from factor.alpha191 import ALPHA191, SKIPPED_191, compute_alpha191
 from factor.alpha_base import AlphaData
-from factor.operators import cs_rank, ts_corr, ts_delta
+from factor.operators import cs_rank
 
 CFG = {
     "window": 60,

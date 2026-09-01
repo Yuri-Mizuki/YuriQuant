@@ -21,14 +21,13 @@ import matplotlib.font_manager as fm
 import numpy as np
 import pandas as pd
 from openpyxl import Workbook
-from openpyxl.chart import LineChart, Reference
 from openpyxl.drawing.image import Image as XlImage
-from openpyxl.formatting.rule import CellIsRule, ColorScaleRule, DataBarRule
+from openpyxl.formatting.rule import ColorScaleRule, DataBarRule
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
 from backtest.engine import BacktestResult
-from backtest.metrics import METRIC_LABELS, calc_all_metrics
+from backtest.metrics import METRIC_LABELS
 from research.metrics_format import is_pos_neg, monthly_returns
 
 # 中文字体

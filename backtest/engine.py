@@ -229,7 +229,6 @@ class VectorBacktest:
 
         # 用 numpy 数组存储结果，避免 pandas 链式赋值问题
         rp_values = rp.values  # (n_days, n_codes)
-        fp_values = fp.values
 
         daily_ret_arr = np.zeros(n_days, dtype=np.float64)
         # 换手率仅调仓日有值（NaN 其余天）：avg_turnover 按"每次调仓"平均，

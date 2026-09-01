@@ -1,11 +1,8 @@
 """交互式因子检测报告的测试：数据端函数 + HTML 生成。"""
-import json
-import re
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import pytest
 
 
 def _mock_factor_panel(n_days=120, n_codes=30, seed=0):
@@ -89,7 +86,6 @@ def test_ic_decay_and_heatmap():
 
 def test_html_generation_smoke(tmp_path):
     """mock 模式下 HTML 能生成且包含核心组件。"""
-    from research.factor_library import FactorLibrary
     # 用临时库避免污染真实库：直接测 HTML 模板 + 一个假因子
     import scripts.factor_explorer_report as mod
     fake = {

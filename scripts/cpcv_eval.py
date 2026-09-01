@@ -89,13 +89,6 @@ def _build_mock_data():
     volume = pd.DataFrame(rng.lognormal(12, 0.5, (n_days, n_codes)), idx, codes)
     returns_panel = close.pct_change().shift(-1)
 
-    # 经典特征
-    panels = {
-        "close": close,
-        "returns": close.pct_change(),
-        "volume": volume,
-        "amount": close * volume,
-    }
     # 简单量价因子作为 ML 特征
     from factor.preprocessing import standardize_zscore
     feats = {

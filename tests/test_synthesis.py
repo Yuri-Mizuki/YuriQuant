@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from factor.operators import cs_rank, cs_zscore, ts_rank
+from factor.operators import cs_zscore, ts_rank
 from factor.preprocessing import standardize_zscore
 from factor.synthesis import (
     CompositeInput, build_components, composite_stats, orthogonalize,
@@ -16,7 +16,7 @@ from factor.synthesis import (
     synthesize_ic_weighted, synthesize_orthogonal, synthesize_pca,
     synthesize_stacking, synthesize_stacking_gbdt, synthesize_stacking_gbdt_tuned,
     synthesize_stacking_lambdarank,
-    _time_fold_masks, _inner_split_by_day,
+    _time_fold_masks,
 )
 
 

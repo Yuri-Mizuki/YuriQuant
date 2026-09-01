@@ -392,9 +392,9 @@ def build_panel(
         cache = DataCache(ds, cache_root=cache_root) if cache_root else DataCache(ds)
     uni = Universe(cache)
 
-    # 2) 区间历史在册并集池 + mask 日线（load_daily 内部已完成 mask）
+    # 2) 区间历史在册并集池 + mask 日线（load_daily 内部已完成 mask，
+    #    target=end or cal[-1] 由 load_daily 内部决定）
     cal = cache.get_calendar(begin, end)
-    target_date = end if end else cal[-1]
     # load_daily 内部已应用 membership mask，非在册行情为 NaN，无需重复处理。
     if retry:
         codes, cal, daily = _with_retry(load_daily, cache, uni, index_code, begin, end, pool=pool)

@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-import pytest
 
 from optimize.risk import risk_decomposition
 
@@ -52,7 +51,7 @@ def test_euler_decomposition_identity():
     assert "error" not in result, f"不应返回错误: {result.get('error')}"
 
     cr_df = result["risk_contributions"]
-    port_vol = result["summary"]["avg_portfolio_vol"]
+    result["summary"]["avg_portfolio_vol"]
     # CR 之和应近似等于最新截面的组合波动率
     latest_vol = result["exposure"]["portfolio_vol"].iloc[-1]
     assert abs(cr_df["CR"].sum() - latest_vol) < 1e-6, (

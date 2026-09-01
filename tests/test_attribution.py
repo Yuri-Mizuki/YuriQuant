@@ -9,7 +9,6 @@
 """
 import numpy as np
 import pandas as pd
-import pytest
 
 from research.attribution import alpha_beta, brinson_attribution, fama_macbeth
 

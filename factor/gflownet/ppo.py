@@ -17,7 +17,6 @@ import logging
 
 import numpy as np
 import torch
-import torch.nn as nn
 
 from factor.gflownet.env import FactorMDP
 from factor.gflownet.net import PPONet, policy_logits

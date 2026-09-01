@@ -13,7 +13,6 @@
 import numpy as np
 import pandas as pd
 import pytest
-from scipy import stats
 
 from backtest.metrics import sharpe_ratio
 from research.factor_analysis import calc_ic_decay, calc_ic_series, standard_factor_summary

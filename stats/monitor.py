@@ -16,7 +16,6 @@ from __future__ import annotations
 
 from typing import Any
 
-import numpy as np
 import pandas as pd
 
 from stats.ic import calc_ic_decay, calc_ic_series, calc_ir, factor_autocorr

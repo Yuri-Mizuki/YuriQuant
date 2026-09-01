@@ -40,7 +40,6 @@ def _covered_codes(df: pd.DataFrame, begin: int, end: int) -> set[str]:
     in_range = (dates >= pd.Timestamp(str(begin))) & (dates <= pd.Timestamp(str(end)))
     sub = df[in_range]
     per_code = sub.groupby(level="code").size()
-    n_days = pd.Timestamp(str(end)).dayofyear - pd.Timestamp(str(begin)).dayofyear
     approx_days = len(pd.bdate_range(str(begin), str(end)))
     ok = per_code[per_code >= approx_days * 0.8]
     return set(ok.index)

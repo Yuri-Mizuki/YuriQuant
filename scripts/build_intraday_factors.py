@@ -137,7 +137,6 @@ def build_features(mf: pd.DataFrame, daily: pd.DataFrame,
     返回 {name: 原始面板}。
     """
     daily_dates = pd.DatetimeIndex(sorted(daily.index.get_level_values("date").unique()))
-    codes = sorted(mf["code"].unique())
     out: dict[str, pd.DataFrame] = {}
 
     # ---- 日线口径 ----
@@ -158,14 +157,6 @@ def build_features(mf: pd.DataFrame, daily: pd.DataFrame,
 
     # ---- 分钟口径：按 (date, code) 分组聚合 ----
     g = mf.groupby(["date", "code"], sort=True)
-    bar_ret = mf.set_index(["date", "code"])["bar_ret"]
-    vol = mf.set_index(["date", "code"])["volume"]
-    amt = mf.set_index(["date", "code"])["amount"]
-    typ = mf.set_index(["date", "code"])["typical"]
-    hi = mf.set_index(["date", "code"])["high"]
-    lo = mf.set_index(["date", "code"])["low"]
-    op = mf.set_index(["date", "code"])["open"]
-    cl = mf.set_index(["date", "code"])["close"]
 
     # 已实现波动率
     rv = g["bar_ret"].apply(lambda s: float((s * s).sum()))

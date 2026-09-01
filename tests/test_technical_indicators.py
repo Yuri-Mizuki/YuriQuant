@@ -5,7 +5,6 @@ mock 数据，不依赖 SDK。
 """
 import numpy as np
 import pandas as pd
-import pytest
 
 from factor.operators import (
     TECH_OPS, adx, aroonosc, boll_pctb, ht_dcphase, kama, obv, rsi,
@@ -48,7 +47,7 @@ def test_rsi_bounded_and_directional():
 
 def test_obv_accumulates():
     p = _mock_ohlcv()
-    o = _shape_ok(obv(p["close"], p["volume"]), p["close"])
+    _shape_ok(obv(p["close"], p["volume"]), p["close"])
     # OBV 是累积量：全涨序列 OBV 单调不减
     up = pd.DataFrame(np.arange(100, 200, dtype=float).reshape(-1, 1),
                       index=pd.date_range("2023-01-01", periods=100, freq="B"),
@@ -60,7 +59,7 @@ def test_obv_accumulates():
 
 def test_kama_follows_trend():
     p = _mock_ohlcv()
-    k = _shape_ok(kama(p["close"], 10), p["close"])
+    _shape_ok(kama(p["close"], 10), p["close"])
     # 单调上涨序列：KAMA 应单调跟随（不完全相等但单调不减）
     up = pd.DataFrame(np.arange(100, 200, dtype=float).reshape(-1, 1),
                       index=pd.date_range("2023-01-01", periods=100, freq="B"),

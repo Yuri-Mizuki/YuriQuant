@@ -280,7 +280,6 @@ def run(args) -> dict:
     pct = lambda v, d=2: (v if isinstance(v, str) else "—"
                           if v is None or (isinstance(v, float) and np.isnan(v))
                           else f"{v * 100:.{d}f}%")
-    srow = lambda st, k: pct(st.get(k)) if st else "—"
 
     perf_html = ""
     for st in [stats_eq, stats_rp, stats_bm]:

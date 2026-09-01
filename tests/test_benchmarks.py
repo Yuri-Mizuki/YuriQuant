@@ -15,7 +15,6 @@ from research.benchmarks import (
 def price_panel():
     rng = np.random.default_rng(21)
     idx = pd.date_range("2023-01-01", periods=120, freq="B")
-    codes = ["A", "B", "C", "D"]
     # 确定性的价格：A 强趋势、B 弱趋势、C/D 横盘
     base = pd.DataFrame({
         "A": 10 * (1.0008 ** np.arange(120)),

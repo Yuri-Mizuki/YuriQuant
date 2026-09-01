@@ -265,7 +265,6 @@ def compute_factor_metrics(
             neutral_ic = neutral_ic.dropna()
             neutral_ic = neutral_ic[neutral_ic.index <= as_of]
             if len(neutral_ic) >= 2:
-                from factor.preprocessing import neutralize as _neutralize_fn
                 # 全期中性化 IC 均值
                 m.ic_neutral_mean_full = float(neutral_ic.mean())
                 # 近期窗口

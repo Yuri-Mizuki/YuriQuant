@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Callable, Optional
+from typing import Callable
 
 import numpy as np
 import torch
@@ -181,7 +181,6 @@ def evaluate_samples(mdp: FactorMDP, reward_fn: RewardFn, samples: list[tuple[st
     传 exp(1e-3/temp)）。
     """
     from factor.formula import formula_builder
-    rng = np.random.default_rng(seed)
     top = samples[:n_corr]
     panels = []
     for formula, _ in top:

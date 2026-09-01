@@ -275,10 +275,12 @@ def test_task_scheduler_command():
     assert "C:\\tools\\py.exe" in cmd
     assert "--dataset hs300_2022_2025" in cmd
 
-    # 默认解析：系统 Python 3.12 存在时固定指向它（真实数据链路依赖其 SDK/凭证）
+    # 默认解析：系统 Python 3.12 存在时固定指向它（真实数据链路依赖其 SDK/凭证）。
+    # Windows 路径大小写不敏感：resolve() 返回磁盘真实大小写，可能与 sys.executable
+    # 字面大小写不同，故按小写比较。
     default = task_scheduler_cmd("ds")
     if SYSTEM_PY.exists():
-        assert SYSTEM_PY.resolve().as_posix() in default.replace("\\", "/")
+        assert SYSTEM_PY.resolve().as_posix().lower() in default.replace("\\", "/").lower()
 
 
 # ---------------------------------------------------------------------------

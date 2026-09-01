@@ -8,7 +8,7 @@ import pytest
 from factor.operators import (
     ELEMENT_OPS, TS_OPS, CS_OPS, TECH_OPS, all_operators, op_registry,
     abs_, sign, log_, div, add, ts_mean, ts_ref, ts_delta, ts_arg_max,
-    ts_corr, ts_slope, ts_ema, cs_rank, cs_zscore, cs_normalize, cs_scale,
+    ts_corr, ts_slope, cs_rank, cs_zscore, cs_normalize, cs_scale,
     cs_rank_normalize, cs_demean, cs_winsorize, DEFAULT_WINDOWS,
 )
 

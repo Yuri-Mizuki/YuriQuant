@@ -562,7 +562,6 @@ def build_factor_panels(daily, cal, income, balance, cashflow,
             + all_pit["BONDS_PAYABLE"].fillna(0.0) + all_pit["NONCUR_LIAB_DUE_WITHIN_1Y"].fillna(0.0))
     invest_cap = all_pit["EQUITY"] + debt
     # EBIT_TTM×(1-税率)/投入资本；税率=所得税/利润总额 缺省 25%
-    ebit_ttm = _pit(inc, "EBIT") if "EBIT" in inc.columns else None
     # EBIT 是累计值，需 TTM（若存在）
     inc_ebit = _add_ttm_yoy(inc, "EBIT", "EBIT_TTM", None) if "EBIT" in inc.columns else inc
     ebit_ttm_panel = _pit(inc_ebit, "EBIT_TTM") if "EBIT_TTM" in inc_ebit.columns else None

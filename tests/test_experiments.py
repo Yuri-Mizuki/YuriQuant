@@ -1,7 +1,6 @@
 """实验管理（experiments.csv）单元测试。"""
 from __future__ import annotations
 
-import pandas as pd
 import pytest
 
 from research.experiments import Experiments, default_experiments_path

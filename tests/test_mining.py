@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-import pytest
 
 from factor.mining import (
     _benjamini_hochberg, evaluate_candidates, generate_candidates,
@@ -159,7 +158,7 @@ def test_rolling_no_cross_fold_never_flags():
 def test_rolling_embargo_no_train_future():
     """滚动切分不可泄漏：训练段 max 必须 < test 段 min。"""
     panel, returns = _mock_panel(n_days=120, n_codes=15, seed=11)
-    cands = generate_candidates(features=["close"], windows=(5,), depth=1)
+    generate_candidates(features=["close"], windows=(5,), depth=1)
     from factor.cv import forward_folds
     folds = forward_folds(returns.index, 4, embargo_days=5)
     for f in folds:

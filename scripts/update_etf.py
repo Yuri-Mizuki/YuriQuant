@@ -41,7 +41,7 @@ def main():
     args = parser.parse_args()
 
     cfg = Config.get()
-    fetch_cfg = cfg["fetch"]
+    cfg["fetch"]
     begin = args.begin or 20180101
     codes = list(ETF_CANDIDATES.keys())
 

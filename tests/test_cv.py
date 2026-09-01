@@ -7,13 +7,11 @@
 """
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
 import pytest
 
-from factor.cv import (split_three_periods, purged_kfold, cpcv, CPCVPath,
-                       Fold, forward_folds, forward_roll_folds,
-                       blocked_folds, make_folds)
+from factor.cv import (split_three_periods, purged_kfold, cpcv, Fold, forward_folds, forward_roll_folds,
+                       make_folds)
 
 
 # ---------------------------------------------------------------------------

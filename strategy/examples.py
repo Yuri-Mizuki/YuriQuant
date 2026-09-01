@@ -6,7 +6,6 @@
 """
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
 
 from strategy.base import Strategy
@@ -105,6 +104,58 @@ class TopFracLongOnly(Strategy):
 
     def get_weights_at(self, date: pd.Timestamp, factor_values: pd.Series) -> pd.Series:
         return self.get_weights(factor_values)
+
+
+class BufferedTopFracLongOnly(Strategy):
+    """带排名缓冲带的 Top-Frac 多头（低换手变体）。
+
+    指数式缓冲带规则（每期目标持仓数 N = round(frac_entry × 有效截面数)）：
+    - 现有持仓：排名仍在前 frac_exit × n 名以内则保留（[entry, exit) 缓冲带内不换出）；
+    - 空缺名额由排名最高的非持仓补足（仅考虑排名在 frac_entry × n 以内的候选）；
+    - 截面超量收缩导致保留数 > N 时，按排名裁到 N；
+    - 信号缺失（当日截面无值）的持仓卖出（无法排名；停牌场景由引擎
+      executable_mask 另行处理）；
+    - 等权 1/N。
+
+    目的：TopFracLongOnly 每期按分数硬切 TopN，截止线附近的排名噪声直接变成
+    交易（2025 实测月频单次单边换手 66%，其中大量无信息增量）。缓冲带把
+    "进出门槛"分离，换手随 (frac_exit − frac_entry) 带宽下降。
+
+    **有状态**：引擎按调仓日时序逐次调用 get_weights，实例内部维护上一期持仓。
+    每个 VectorBacktest 必须使用全新实例——跨回测复用同一实例会把上一次回测的
+    期末持仓泄漏为本次期初持仓（前视）。
+    """
+
+    def __init__(self, frac_entry: float = 0.20, frac_exit: float = 0.30):
+        if not 0 < frac_entry <= 1:
+            raise ValueError(f"frac_entry 必须在 (0,1]: {frac_entry}")
+        if not frac_entry <= frac_exit <= 1:
+            raise ValueError(
+                f"需要 0 < frac_entry <= frac_exit <= 1: entry={frac_entry}, exit={frac_exit}")
+        self.frac_entry = float(frac_entry)
+        self.frac_exit = float(frac_exit)
+        self.name = f"buffered_topfrac_lo_{frac_entry:.2f}_{frac_exit:.2f}"
+        self._prev: set = set()
+
+    def get_weights(self, factor_values: pd.Series) -> pd.Series:
+        vals = factor_values.dropna()
+        if len(vals) == 0:
+            self._prev = set()
+            return pd.Series(dtype=float)
+        n = len(vals)
+        n_entry = max(1, min(round(self.frac_entry * n), n))
+        n_exit = max(n_entry, min(round(self.frac_exit * n), n))
+        ranks = vals.rank(ascending=False, method="first")
+
+        keep = [c for c in self._prev if c in ranks.index and ranks[c] <= n_exit]
+        candidates = [c for c in ranks.sort_values().index
+                      if c not in set(keep) and c not in self._prev and ranks[c] <= n_entry]
+        portfolio = keep + candidates[:max(0, n_entry - len(keep))]
+        if len(portfolio) > n_entry:
+            portfolio = sorted(portfolio, key=lambda c: ranks[c])[:n_entry]
+
+        self._prev = set(portfolio)
+        return pd.Series(1.0 / len(portfolio), index=portfolio)
 
 
 class QuantileLongShort(Strategy):

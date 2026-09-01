@@ -200,7 +200,6 @@ def factor_test(pred_panel: pd.DataFrame, fwd: pd.DataFrame, close: pd.DataFrame
     # IC 口径（模型预测 horizon 累计收益）
     sum_sparse = standard_factor_summary(sparse, fwd_aligned)
     sum_hold = standard_factor_summary(hold, fwd_aligned)
-    ic_sparse = calc_ic_series(sparse, fwd_aligned)
 
     # 分层净值（持仓口径）：日频未来一期收益，避免 horizon 重叠放大
     ret_d = close.pct_change(fill_method=None).shift(-1).reindex(index=common)

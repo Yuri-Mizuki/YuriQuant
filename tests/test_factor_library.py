@@ -3,7 +3,6 @@
 """
 import numpy as np
 import pandas as pd
-import pytest
 
 from factor.synthesis import CompositeInput, synthesize_ic_weighted
 from research.factor_library import FactorLibrary, _coerce_date

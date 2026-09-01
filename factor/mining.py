@@ -469,7 +469,6 @@ def rolling_evaluate_candidates(
 
     names = list(dict.fromkeys(c.name for c in candidates))
     cand_map = {c.name: c for c in candidates}
-    n_cand = len(names)
 
     # 跨折累计矩阵：name x fold 的 test 段 IC 均值 / 显著标记
     fold_ic = {nm: [] for nm in names}

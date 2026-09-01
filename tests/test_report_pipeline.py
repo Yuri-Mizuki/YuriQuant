@@ -4,12 +4,9 @@
 覆盖：各 collect 函数容错（缺产物跳过）、Section 契约、组装器输出 HTML
 结构完整、增量收集器注入、空产物清单报错。mock 数据，不依赖 SDK。
 """
-import json
 from collections import OrderedDict
 from pathlib import Path
 
-import pandas as pd
-import pytest
 
 from research.report_pipeline import (
     COLLECTORS,
@@ -17,7 +14,6 @@ from research.report_pipeline import (
     Section,
     collect_dpp,
     collect_experiments,
-    collect_factor_library,
     collect_overview,
     collect_oos,
     collect_portfolio,

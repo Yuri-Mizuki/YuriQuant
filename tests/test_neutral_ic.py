@@ -9,9 +9,8 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-import pytest
 
-from factor.preprocessing import build_style_covariates, neutralize
+from factor.preprocessing import build_style_covariates
 from research.factor_analysis import calc_ic_series, calc_neutral_ic_series
 
 

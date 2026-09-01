@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import pandas as pd
 
-from config import Config
 from data.cache import DataCache
 
 # 候选池：code -> (名称, 类别)

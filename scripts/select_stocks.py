@@ -57,7 +57,7 @@ def extract_holdings(factor_panel: pd.DataFrame, strategy_name: str, k: int,
                      freq: str, returns_panel: pd.DataFrame) -> pd.DataFrame:
     """按调仓频率提取每个调仓日的选股清单（多头/空头代码 + 权重）。"""
     strat = build_strategy(strategy_name, k)
-    bt = VectorBacktest(strategy=strat, rebalance_freq=freq)
+    VectorBacktest(strategy=strat, rebalance_freq=freq)
     # 复用引擎内部 rebalance 日期（因子面板索引 = 交易日）
     freq_map = {"D": 1, "W": 5, "M": 21}
     step = freq_map.get(freq, 21)

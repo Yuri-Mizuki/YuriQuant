@@ -89,7 +89,6 @@ def estimate_covariance(
     X = returns_sub.dropna(how="any").values  # (T, N)
     if X.shape[0] < 2:
         raise ValueError(f"窗口有效样本不足（{X.shape[0]} < 2）")
-    n = X.shape[1]
     if method == "ledoit_wolf" and X.shape[0] >= X.shape[1] + 2:
         try:
             from sklearn.covariance import LedoitWolf
@@ -456,7 +455,7 @@ def optimize_weights_qp(
                 short_limit=short_limit, gross_limit=gross_limit,
                 views=views, market_weights=market_weights, tau=tau, delta=delta,
             )
-        except RuntimeError as e:  # 单截面求解失败 → 该期空仓，不中断面板
+        except RuntimeError:  # 单截面求解失败 → 该期空仓，不中断面板
             w = pd.Series(0.0, index=codes)
             prev_series = None
         rows.append(w.reindex(codes).fillna(0.0))

@@ -182,7 +182,6 @@ def cpcv(
     Returns:
         ``list[CPCVPath]``，长度 C(n_groups, k)。
     """
-    from math import comb
 
     days = pd.DatetimeIndex(sorted(index.unique()))
     n = len(days)
@@ -204,7 +203,6 @@ def cpcv(
                 f"组 {s} 为空（日期数 {n} 不足以切 {n_groups} 组）")
         groups.append(pd.DatetimeIndex(days[d0:d1]))
 
-    total_paths = comb(n_groups, k)
     paths: list[CPCVPath] = []
     for pid, combo in enumerate(combinations(range(n_groups), k)):
         test_set = set()

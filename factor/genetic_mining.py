@@ -28,7 +28,7 @@ import pandas as pd
 from deap import algorithms, base, creator, gp, tools
 
 from factor.operators import (
-    CS_OPS, TECH_OPS, TS_OPS, abs_, add, adx, aroonosc, boll_pctb, cs_demean,
+    abs_, add, adx, aroonosc, boll_pctb, cs_demean,
     cs_rank, cs_rank_normalize, cs_zscore, cs_normalize, cs_scale_abs, div, exp_,
     ht_dcphase, if_cond_then_else, if_then_else, clear_by_cond, inv, kama, log_,
     max_, min_, mul, obv, rank_div, rank_sub, reverse, rsi, sign, sigmoid, sqrt_,
@@ -1333,7 +1333,7 @@ def run_gp_mining(
             # 删除后实例属性查找回退到 creator 的类级默认，后续 `ind.fitness.values =
             # fit` 会写到 FitnessMaxGP **类**上，类级元组遮蔽属性协议 → varOr 崩溃。
             del ind.fitness.values
-    gen_done = _evolve_gp(
+    _evolve_gp(
         toolbox, pop, hof_track, hof_out,
         panel, prim_map, memo,
         generations, cx_prob, mut_prob,

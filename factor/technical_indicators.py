@@ -942,7 +942,6 @@ class TechnicalIndicators:
             x = (close - ref_c + (close - open_) / 2 + ref_c - ref_o)
             si = 16 * x / r * MathFunction.MAX(aa, bb)
             asi = TimeSeriesFunction.SUM(si, m1)
-            asit = TimeSeriesFunction.MA(asi, m2)
             return {'SI': si, 'ASI': asi}
 
     @staticmethod

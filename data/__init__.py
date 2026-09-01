@@ -1,5 +1,4 @@
 """数据层统一入口。"""
-from config import Config
 from data.cache import DataCache
 from data.datasource import DataSource, create_datasource
 from data.universe import Universe

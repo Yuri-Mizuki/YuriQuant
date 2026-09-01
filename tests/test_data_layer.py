@@ -417,7 +417,7 @@ def test_industry_classification_same_refresh_policy(tmp_path: Path, mock_ds):
 
     ds = _CountingIndustry()
     cache = DataCache(ds, cache_root=tmp_path)
-    first = cache.get_industry_classification(1)
+    cache.get_industry_classification(1)
     _mark_refreshed(cache, "industry_classification_level1", days_ago=1)
     cache.get_industry_classification(1)
     assert calls["n"] == 1, "水位新鲜不应回源"

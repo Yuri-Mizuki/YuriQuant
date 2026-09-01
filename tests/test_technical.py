@@ -6,7 +6,6 @@ factor/technical.py 自研技术指标库测试（2026-08-17 抽取自 build_tec
 """
 import numpy as np
 import pandas as pd
-import pytest
 
 from factor.technical import calc_indicators, calc_sar
 

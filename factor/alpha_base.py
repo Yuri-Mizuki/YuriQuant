@@ -37,14 +37,11 @@ from factor.operators import (
     ts_delay,
     ts_delta,
     ts_max,
-    ts_mean,
     ts_min,
     ts_product,
     ts_rank,
     ts_slope,
     ts_std,
-    ts_sum,
-    ts_wma,
 )
 
 log = logging.getLogger("alpha_base")

@@ -30,7 +30,6 @@ from monitoring.metrics import (
 from monitoring.state import confirm_rows
 from research.html_report import (
     page,
-    svg_sparkline as _sparkline,
     svg_sparkline_monthly as _sparkline_monthly,
 )
 
@@ -475,7 +474,7 @@ def generate_html_report(
             "<th class='num'>正常</th></tr></thead><tbody>"
         )
         for g, ms in sorted(groups_all.items(), key=lambda kv: -_med_abs(kv[1])):
-            ic252 = [m.ic_mean_recent_252 for m in ms
+            [m.ic_mean_recent_252 for m in ms
                      if m.ic_mean_recent_252 == m.ic_mean_recent_252]
             t252 = [m.ic_t_nw_recent_252 for m in ms
                     if m.ic_t_nw_recent_252 == m.ic_t_nw_recent_252]

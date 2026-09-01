@@ -114,7 +114,6 @@ def main():
 
     # 聚类 + 热力图（层次聚类重排）
     groups = cluster_groups(corr, args.cluster_threshold)
-    order = [g for _, g in sorted(groups.items())]
     ordered = [n for g in groups.values() for n in g]
     corr_ordered = corr.loc[ordered, ordered]
 

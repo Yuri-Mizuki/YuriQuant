@@ -143,7 +143,6 @@ def test_gp_dedup_by_correlation(signal_panel):
     """P1-6：hof 去相关聚类 —— 两个高度相关公式只保留一个。"""
     pytest.importorskip("deap")
     from factor.genetic_mining import _dedup_hof_by_correlation
-    from factor.formula import formula_builder
 
     panel, _ = signal_panel
     feats = ["close", "volume"]
@@ -242,7 +241,6 @@ def test_gp_sample_step_runs(signal_panel):
 # ---------------------------------------------------------------------------
 def _htai_neutral_panels(panel):
     """从 mock 面板构造中性化协变量（size/industry/mom20/vol20/turn20）。"""
-    rng = np.random.default_rng(0)
     close = panel["close"]
     codes = close.columns
     n = len(close)
@@ -578,7 +576,7 @@ def test_crowding_supplant_reduces_fitness_of_similar():
         pool.append(ind)
     saved = _adjust_crowding(pool, panel, prim_map, method="supplant",
                              corr_thr=0.7)
-    scores = {id(ind): float(ind.fitness.values[0]) for ind in pool}
+    {id(ind): float(ind.fitness.values[0]) for ind in pool}
     _restore_crowding(pool, saved)
     restored = {id(ind): float(ind.fitness.values[0]) for ind in pool}
     # 恢复后所有个体回到精确原值（排挤只影响选择，不污染 hof）
