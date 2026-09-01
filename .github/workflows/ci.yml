@@ -20,9 +20,10 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --upgrade pip
-          # CPU 版 torch（GFlowNet 单测依赖；GPU/CUDA 版本过大，CI 用 CPU 即可）
+          # CPU 版 torch（GFlowNet/RL 单测依赖；GPU/CUDA 版本过大，CI 用 CPU 即可）。
+          # 必须先于 -e 安装：rl extra 的 torch>=2.0 会因已满足而跳过，避免重拉 PyPI 的 CUDA 版
           pip install torch --index-url https://download.pytorch.org/whl/cpu
-          pip install -e ".[dev,ml,gp,solver]"
+          pip install -e ".[dev,ml,gp,solver,rl]"
 
       - name: Check dependency lock in sync
         # uv.lock 是跨平台解析锁（uv lock 生成），此处只守卫其与 pyproject.toml 同步，
