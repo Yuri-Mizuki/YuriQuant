@@ -1,19 +1,27 @@
-name: CI
+name: Fast checks (manual)
 
-# 2026-09-10 轻量化：push 只跑「快检查」（Ruff 真 bug 规则 + 分层守卫，约 40 秒）。
-# 原先每次 push 都跑的全量 pytest 有 7 分钟，且依赖 reports/ 等被 gitignore 的产物
-# （CI 上必然缺文件，只能靠 skip 兜住），本机数据齐全时跑更有意义，故移出 push 流程。
-# 需要全量时用 `.github/workflows/full-tests.yml`（Actions 页手动触发），
-# 或本机 `D:/python/Python312/python.exe -m pytest -q`。
+# 2026-09-10 二次调整：用户拍板「真·静音」——push 不再触发任何工作流。
+# 本文件原先的 push / pull_request 触发已移除，只保留手动 workflow_dispatch。
 #
-# 快检查 job 刻意不装 torch（不含 rl extra）：三个分层守卫均不 import torch
+# 为什么这么定：仓库 public + master 无分支保护，CI 从来不是门禁、拦不住 push，
+# 唯一产物就是页面上的红叉、失败邮件和等待时间。前两轮已把成本压到底
+# （全量 pytest 拆出：474s → 115s；快检查去掉 torch 安装：115s → 60s），
+# 本轮干脆断开自动触发，从源头消除噪声。
+#
+# 触发方式（三选一）：
+#   1. 仓库 Actions 页 → "Fast checks (manual)" → Run workflow
+#   2. 本机 `gh workflow run ci.yml`
+#   3. 本机 `D:/python/Python312/python.exe -m pytest -q`（数据齐全，最完整）
+# 全量套件见 full-tests.yml，同样是手动触发。
+#
+# 快检查刻意不装 torch（不含 rl extra）：三个分层守卫均不 import torch
 # （torch 只出现在 factor/gflownet/ 与 scripts/textmining/），省掉约 200MB 下载。
-# 若日后守卫测试要用 torch，需同时处理 CPU index（见 git 历史里被删掉的 install 步骤）。
+# 验证脚本见 scripts/oneoff/ci_torch_check.py。若日后守卫测试要用 torch，
+# 需同时处理 CPU index（--index-url https://download.pytorch.org/whl/cpu），
+# 否则 rl extra 里的 torch>=2.0 会从 PyPI 拉 CUDA 版（约 2.5GB）。
 
 on:
-  push:
-    branches: [master, main]
-  pull_request:
+  workflow_dispatch:
 
 jobs:
   test:
@@ -30,10 +38,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --upgrade pip
-          # 快检查不装 torch / rl extra：rl 会从 PyPI 拉 CUDA 版 torch（约 2.5GB），
-          # 而本 job 只跑 Ruff + 三个分层守卫，均不依赖 torch。若改回 rl extra，
-          # 必须先单独装 CPU 版 torch（--index-url https://download.pytorch.org/whl/cpu），
-          # 否则 rl 里的 torch>=2.0 会因"未满足"而重拉 CUDA 版。
+          # 不装 torch / rl extra：本 job 只跑 Ruff + 三个分层守卫，均不依赖 torch。
           pip install -e ".[dev,ml,gp,solver]"
 
       - name: Check dependency lock in sync
