@@ -26,7 +26,8 @@ from scripts.textmining.evaluate_sue_txt import (  # noqa: E402
     stratified_backtest,
 )
 
-OUT_DIR = ROOT / "reports" / "textmining"
+from scripts.textmining._paths import Out  # noqa: E402
+OUT_DIR = Out("fadt")
 
 
 def load_factor(model: str, pool: str = "zz1000") -> pd.DataFrame:

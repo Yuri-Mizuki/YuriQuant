@@ -24,7 +24,8 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
-OUT_DIR = ROOT / "reports" / "textmining"
+from scripts.textmining._paths import Out  # noqa: E402
+OUT_DIR = Out("sue")
 
 
 def load_factor(model: str, pool: str = "hs300") -> pd.DataFrame:

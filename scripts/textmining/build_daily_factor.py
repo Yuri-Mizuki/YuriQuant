@@ -37,7 +37,8 @@ from scripts.textmining.evaluate_short_window import (  # noqa: E402
     _load_pred_with_factor, _load_samples_ar,
 )
 
-OUT_DIR = ROOT / "reports" / "textmining"
+from scripts.textmining._paths import Out  # noqa: E402
+OUT_DIR = Out("fadt")
 
 
 def build_daily_panel(task: str, model: str, pool: str,

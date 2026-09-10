@@ -36,7 +36,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 from scripts.cli_common import setup_logging  # noqa: E402
 
-OUT_DIR = ROOT / "reports" / "textmining"
+from scripts.textmining._paths import Out  # noqa: E402
+OUT_DIR = Out("fadt")
 # 本地模型目录（hf-mirror 下载，沙箱无法用 huggingface_hub 缓存管理）；
 # 路径真源在 config/settings.yaml 的 textmining.bert_model_dir
 def _bert_model_dir() -> str:

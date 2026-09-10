@@ -38,7 +38,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 from scripts.cli_common import setup_logging  # noqa: E402
 
-OUT_DIR = ROOT / "reports" / "textmining"
+from scripts.textmining._paths import Out  # noqa: E402
+OUT_DIR = Out("fadt")
 log = setup_logging("word_importance")
 
 # 任务参数：sue(AI51: 词域100/500, 训练窗24月) vs fadt(AI57: 200/1000, 12月)

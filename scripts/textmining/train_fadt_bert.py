@@ -29,18 +29,25 @@ import numpy as np
 import pandas as pd
 
 from scripts.textmining.train_fadt import (
-    TRAIN_MONTHS, TEST_MONTHS, build_factor_from_pred,
+    SUMMARY_TOP,
+    TEST_MONTHS,
+    TITLE_TOP,
+    TRAIN_MONTHS,
+    build_factor_from_pred,
 )
 from scripts.textmining.train_sue_txt import (
-    _auc_ovr, _sue0_from_model, make_labels,
+    _auc_ovr,
+    _sue0_from_model,
+    make_labels,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 from scripts.cli_common import setup_logging  # noqa: E402
+from scripts.textmining._paths import Out  # noqa: E402
 
-OUT_DIR = ROOT / "reports" / "textmining"
+OUT_DIR = Out("fadt")
 log = setup_logging("fadt_bert")
 
 # 与词频版同款网格（研报 AI 63 图表29 学习率 [0.025,0.05,0.075,0.1] × depth
@@ -54,11 +61,15 @@ BERT_XGB_GRID = [
 ]
 
 
-def _load_cls(task: str, pool: str) -> pd.DataFrame:
-    """加载 CLS 编码（row_idx, code, event_date, cls_0..cls_767）。"""
-    p = OUT_DIR / f"{task}_cls_{pool}.parquet"
+def _load_cls(task: str, pool: str,
+              filename: str | None = None) -> pd.DataFrame:
+    """加载 CLS 编码（row_idx, code, event_date, cls_0..cls_767）。
+
+    filename 可指向消融变体编码（分段/ pooler），列名仍为 cls_*。
+    """
+    p = OUT_DIR / (filename or f"{task}_cls_{pool}.parquet")
     if not p.exists():
-        raise FileNotFoundError(f"{p} 不存在，先跑 encode_fadt_bert")
+        raise FileNotFoundError(f"{p} 不存在，先跑对应 encode 脚本")
     return pd.read_parquet(p)
 
 
@@ -79,7 +90,20 @@ def train_bert_xgb(X, y, groups=None, seed=42):
 
 def run(task: str = "fadt", model_name: str = "xgb",
         pool: str = "zz1000", begin: int = 20190101,
-        end: int = 20261231) -> pd.DataFrame:
+        end: int = 20261231,
+        cls_filename: str | None = None,
+        variant: str | None = None,
+        concat_wordfreq: bool = False) -> pd.DataFrame:
+    """训练 + 因子构建。
+
+    消融扩展（AI 63 五组扩展测试的本地复现，2026-09-09）：
+    - cls_filename: 编码文件名（默认 {task}_cls_{pool}.parquet），可指向
+      分段编码 fadt_cls_seg_{pool}.parquet 或 pooler 编码 fadt_cls_pooler_{pool}.parquet
+    - variant: 变体标签，决定输出因子名 {task}_factor_{variant}_{pool}.parquet
+      （默认 bert_{model_name}，与历史产出命名一致）
+    - concat_wordfreq: CLS 编码后拼接词频特征（AI 63 扩展测试 4：CLS+词频 concat）
+    """
+    label = variant or f"bert_{model_name}"
     sample_path = OUT_DIR / (f"{task}_samples_{pool}.parquet" if task == "fadt"
                              else f"sue_txt_samples_{pool}.parquet")
     samples = pd.read_parquet(sample_path)
@@ -89,12 +113,37 @@ def run(task: str = "fadt", model_name: str = "xgb",
     samples = samples.reset_index(names="row_idx")
     log.info("样本 %d 行 / %d 只", len(samples), samples["code"].nunique())
 
-    cls = _load_cls(task, pool)
+    cls = _load_cls(task, pool, filename=cls_filename)
     # 按原始行索引对齐（encode 保留 row_idx）
     samples = samples.merge(cls, on=["row_idx", "code", "event_date"], how="left")
     cls_cols = [c for c in samples.columns if c.startswith("cls_")]
     log.info("CLS 特征 %d 维, 覆盖 %d 行", len(cls_cols),
              samples[cls_cols[0]].notna().sum())
+
+    if concat_wordfreq:
+        # 词域特征（AI 57 词域 200/1000，与 train_fadt 一致；带分词缓存）
+        from scripts.textmining.train_sue_txt import (
+            SUEVectorizer,
+            tokenize_summary,
+            tokenize_title,
+        )
+        tok_path = OUT_DIR / f"fadt_samples_tokenized_{pool}.parquet"
+        if tok_path.exists():
+            tok = pd.read_parquet(tok_path)
+            samples = samples.drop(columns=["title_tok", "summary_tok"],
+                                   errors="ignore").merge(
+                tok[["row_idx", "title_tok", "summary_tok"]]
+                if "row_idx" in tok.columns
+                else tok[["code", "event_date", "title_tok", "summary_tok"]],
+                on=["row_idx"] if "row_idx" in tok.columns
+                else ["code", "event_date"], how="left")
+        else:
+            samples["title_tok"] = samples["title"].map(tokenize_title)
+            samples["summary_tok"] = samples["summary"].map(tokenize_summary)
+            samples[["row_idx", "code", "event_date", "title_tok",
+                     "summary_tok"]].to_parquet(tok_path, compression="snappy")
+        from scipy.sparse import csr_matrix
+        from scipy.sparse import hstack as sp_hstack
 
     # 滚动训练（12+12，与词频版一致）
     test_start = pd.Timestamp("20210101")
@@ -125,6 +174,12 @@ def run(task: str = "fadt", model_name: str = "xgb",
         y_tr = tr["label"].values
         groups_tr = tr[["code", "event_date"]].astype(str).agg("|".join, axis=1).values
 
+        if concat_wordfreq:
+            vec = SUEVectorizer(title_top=TITLE_TOP, summary_top=SUMMARY_TOP)
+            vec.fit(tr["title_tok"], tr["summary_tok"])
+            wf_tr = vec.transform(tr["title_tok"], tr["summary_tok"])
+            X_tr = sp_hstack([csr_matrix(X_tr), wf_tr]).tocsr()
+
         if model_name == "logit":
             from scripts.textmining.train_sue_txt import train_logit
             model, auc = train_logit(X_tr, y_tr, groups=groups_tr)
@@ -134,10 +189,14 @@ def run(task: str = "fadt", model_name: str = "xgb",
             _, auc_leak = train_bert_xgb(X_tr, y_tr, groups=None)
         log.info("  最佳模型 CV AUC(grouped)=%.4f | AUC(leak)=%.4f | Δ=%.4f",
                  auc, auc_leak, auc_leak - auc)
-        joblib.dump(model, OUT_DIR / f"{task}_bert_model_{model_name}_{pool}_r{round_no}.joblib")
+        joblib.dump(model, OUT_DIR / f"{task}_{label}_model_{pool}_r{round_no}.joblib")
 
         te = te.dropna(subset=["ar", cls_cols[0]]).copy()
         X_te = te[cls_cols].values.astype(np.float32)
+        if concat_wordfreq:
+            X_te = sp_hstack([csr_matrix(X_te),
+                              vec.transform(te["title_tok"],
+                                            te["summary_tok"])]).tocsr()
         te["sue0"] = _sue0_from_model(model, X_te)
         all_pred.append(te[["code", "event_date", "sue0"]])
 
@@ -149,13 +208,12 @@ def run(task: str = "fadt", model_name: str = "xgb",
         log.error("无测试样本")
         return pd.DataFrame()
     pred = pd.concat(all_pred, ignore_index=True)
-    # build_factor_from_pred 硬编码 fadt_ 前缀，且 model_name 传 "bert_xgb"
-    # 会存成 fadt_factor_bert_xgb_{pool}.parquet；这里统一改为 task 前缀保存
-    factor = build_factor_from_pred(pred, f"bert_{model_name}", pool)
-    out = OUT_DIR / f"{task}_factor_bert_{model_name}_{pool}.parquet"
+    # build_factor_from_pred 硬编码 fadt_ 前缀；sue 任务需改回 task 前缀
+    factor = build_factor_from_pred(pred, label, pool)
+    out = OUT_DIR / f"{task}_factor_{label}_{pool}.parquet"
     factor.to_parquet(out, compression="snappy")
     # 清理 build_factor_from_pred 误存的 fadt_ 前缀文件（存在则覆盖为正确名）
-    wrong = OUT_DIR / f"fadt_factor_bert_{model_name}_{pool}.parquet"
+    wrong = OUT_DIR / f"fadt_factor_{label}_{pool}.parquet"
     if wrong.exists() and wrong.resolve() != out.resolve():
         wrong.unlink(missing_ok=True)
     log.info("因子面板: %d 行, 覆盖 %d 只 → %s",
@@ -170,8 +228,18 @@ if __name__ == "__main__":
     ap.add_argument("--pool", default="zz1000", choices=["hs300", "zz1000"])
     ap.add_argument("--begin", type=int, default=20190101)
     ap.add_argument("--end", type=int, default=20261231)
+    ap.add_argument("--cls-file", default=None,
+                    help="编码文件名（默认 {task}_cls_{pool}.parquet），"
+                         "可指向分段/pooler 消融编码")
+    ap.add_argument("--variant", default=None,
+                    help="变体标签（决定输出因子名），默认 bert_{model}")
+    ap.add_argument("--concat-wordfreq", action="store_true",
+                    help="CLS 编码拼接词频特征（AI 63 扩展测试 4）")
     args = ap.parse_args()
 
+    log_tag = args.variant or f"bert_{args.model}"
     setup_logging("fadt_bert",
-                  file=OUT_DIR / f"{args.task}_train_bert_{args.model}_{args.pool}.log")
-    run(args.task, args.model, args.pool, args.begin, args.end)
+                  file=OUT_DIR / f"{args.task}_train_{log_tag}_{args.pool}.log")
+    run(args.task, args.model, args.pool, args.begin, args.end,
+        cls_filename=args.cls_file, variant=args.variant,
+        concat_wordfreq=args.concat_wordfreq)

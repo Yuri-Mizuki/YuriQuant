@@ -75,13 +75,23 @@ def _match_reports(events: pd.DataFrame, reports: pd.DataFrame,
     return m
 
 
-def _load_daily(cache: DataCache, codes: list[str], begin: int, end: int) -> pd.DataFrame:
+def _load_daily(cache: DataCache, codes: list[str], begin: int, end: int,
+                pool: str = "hs300") -> pd.DataFrame:
     """直接读 daily_{pool}.parquet 缓存（避免 DataCache.get_daily_kline 触发 calendar
-    增量写入 → PermissionError，沙箱对 e:/data 写锁）。数据已由 fetch 阶段拉齐。"""
+    增量写入 → PermissionError，沙箱对 e:/data 写锁）。数据已由 fetch 阶段拉齐。
+
+    pool 按池路由到对应日线缓存；zz1000 的日线缓存归档在 archive_zz1000/
+    子目录且文件名为 daily_zz1000_only（无根目录 daily_zz1000.parquet），特判
+    回退，避免把 hs300 行情误当 zz1000。"""
     from config import Config
-    daily = pd.read_parquet(
-        Path(str(Config.cache()["root"]).replace("//", "/")) / "daily_hs300.parquet")
-    return daily
+    root = Path(str(Config.cache()["root"]).replace("//", "/"))
+    fname = f"daily_{pool}.parquet"
+    p = root / fname
+    if not p.exists() and pool == "zz1000":
+        alt = root / "archive_zz1000" / "daily_zz1000_only.parquet"
+        if alt.exists():
+            p = alt
+    return pd.read_parquet(p)
 
 
 def _to_naive(s: pd.Series) -> pd.Series:
@@ -147,7 +157,7 @@ def _abnormal_return(events: pd.DataFrame, daily: pd.DataFrame) -> pd.DataFrame:
 
 def build_samples(begin: int = 20190101, end: int = 20261231,
                   pool: str = "hs300",
-                  out_dir: str = str(ROOT / "reports" / "textmining")) -> pd.DataFrame:
+                  out_dir: str = str(ROOT / "reports" / "textmining" / "sue" / "samples")) -> pd.DataFrame:
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
 
@@ -204,6 +214,6 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--begin", type=int, default=20190101)
     ap.add_argument("--end", type=int, default=20261231)
-    ap.add_argument("--pool", default="hs300", choices=["hs300", "zz1000"])
+    ap.add_argument("--pool", default="hs300", choices=["hs300", "zz1000", "all_a"])
     args = ap.parse_args()
     build_samples(args.begin, args.end, pool=args.pool)

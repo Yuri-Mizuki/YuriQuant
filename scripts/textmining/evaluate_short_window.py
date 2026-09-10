@@ -32,7 +32,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 from scripts.textmining.build_sue_txt_samples import _load_daily, _to_naive  # noqa: E402
 
-OUT_DIR = ROOT / "reports" / "textmining"
+from scripts.textmining._paths import Out  # noqa: E402
+OUT_DIR = Out("fadt")
 BENCH = "000905.SH"
 
 

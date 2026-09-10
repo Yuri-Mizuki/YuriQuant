@@ -42,7 +42,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 from scripts.cli_common import setup_logging  # noqa: E402
 
-OUT_DIR = ROOT / "reports" / "textmining"
+from scripts.textmining._paths import Out  # noqa: E402
+OUT_DIR = Out("fadt")
 # AI 57 基准参数
 TITLE_TOP = 200
 SUMMARY_TOP = 1000
@@ -96,7 +97,9 @@ def build_factor_from_pred(pred: pd.DataFrame, model_name: str,
             n_event=("event_date", "nunique")).reset_index()
         g["date"] = m + pd.offsets.MonthEnd(0)
         rows.append(g)
-    f = pd.concat(rows, ignore_index=True).set_index(["date", "code"]).sort_index()
+    f = pd.concat(rows, ignore_index=True).set_index(["date", "code"]).sort_index() \
+        if rows else pd.DataFrame(columns=["factor", "n_report", "n_event"]).set_index(
+            [pd.DatetimeIndex([], name="date"), pd.Index([], name="code")])
     f.to_parquet(OUT_DIR / f"fadt_factor_{model_name}_{pool}.parquet",
                  compression="snappy")
     return f

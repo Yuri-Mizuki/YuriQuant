@@ -41,7 +41,8 @@ from scripts.textmining.build_sue_txt_samples import (
 )
 
 ROOT = Path(__file__).resolve().parents[2]
-OUT_DIR = ROOT / "reports" / "textmining"
+from scripts.textmining._paths import Out  # noqa: E402
+OUT_DIR = Out("fadt")
 BENCH = "000905.SH"  # 中证500
 
 # AI 57：调整事件文本线索（近似"本次 vs 上次预测变化"）
@@ -86,7 +87,7 @@ def load_adjustment_reports(pool: str, begin: int, end: int) -> pd.DataFrame:
 
 def build_samples(pool: str = "zz1000", begin: int = 20190101,
                   end: int = 20261231,
-                  out_dir: str = str(ROOT / "reports" / "textmining")) -> pd.DataFrame:
+                  out_dir: str = str(ROOT / "reports" / "textmining" / "fadt" / "samples")) -> pd.DataFrame:
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
 
@@ -123,7 +124,7 @@ def build_samples(pool: str = "zz1000", begin: int = 20190101,
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--pool", default="zz1000", choices=["hs300", "zz1000"])
+    ap.add_argument("--pool", default="zz1000", choices=["hs300", "zz1000", "all_a"])
     ap.add_argument("--begin", type=int, default=20190101)
     ap.add_argument("--end", type=int, default=20261231)
     args = ap.parse_args()

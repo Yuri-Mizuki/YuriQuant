@@ -44,7 +44,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 from scripts.cli_common import setup_logging  # noqa: E402
 
-OUT_DIR = ROOT / "reports" / "textmining"
+from scripts.textmining._paths import Out  # noqa: E402
+OUT_DIR = Out("sue")
 SAMPLE_PATH = OUT_DIR / "sue_txt_samples.parquet"
 
 # AI 51：保留词性（普通名词/专有名词/动词/副动词/动名词/形容词/副词）
