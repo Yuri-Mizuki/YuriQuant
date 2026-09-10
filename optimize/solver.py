@@ -159,6 +159,57 @@ def _filter_min_weight(w: pd.Series, min_weight: float) -> pd.Series:
     return out
 
 
+def _risk_parity_ccd(
+    Sigma: np.ndarray,
+    risk_budget: np.ndarray,
+    w0: np.ndarray,
+    *,
+    max_sweeps: int = 500,
+    tol: float = 1e-10,
+) -> np.ndarray:
+    """等风险贡献（ERC）逐坐标解析精炼（Griveau-Billion et al. 2013）。
+
+    风险平价的最优性条件是 wᵢ(Σw)ᵢ = τ·bᵢ（b 为风险预算，Σb=1）。固定其他坐标时
+    该条件退化为 wᵢ 的二次方程 σᵢᵢwᵢ² + cᵢwᵢ − τbᵢ = 0（cᵢ = Σ_{j≠i}σᵢⱼwⱼ），正根即
+    该坐标的精确更新；每次全扫描后按 Σw=1 归一、刷新 τ = w'Σw。
+
+    为什么需要它：对数障碍配方（solve_portfolio 里的 cvxpy 形式）在日频协方差上
+    只是**近似** ERC——实测风险贡献比 max/min 常年在 1.5 附近，病态 Σ 下可达数十、
+    甚至出现负贡献（→ 比值 inf）。本迭代把该比值压到 1.0（实测 9~27 次扫描），且对
+    任意初值收敛（求解器解 / 等权 / 随机初值最终解一致），因此也顺带消除了「SCS 近似
+    解质量随环境波动」导致的不稳定。
+
+    Args:
+        Sigma: (n, n) 半正定协方差。
+        risk_budget: (n,) 风险预算，和为 1（等风险预算 = 全 1/n）。
+        w0: (n,) 迭代初值（需 > 0；非法初值自动退回等权）。
+    Returns:
+        (n,) 精炼后权重，和为 1、严格为正。
+    """
+    Sigma = np.asarray(Sigma, dtype=float)
+    b = np.asarray(risk_budget, dtype=float)
+    n = len(b)
+    diag = np.where(np.diag(Sigma) <= 0, 1e-18, np.diag(Sigma))
+    w = np.clip(np.asarray(w0, dtype=float).reshape(-1), 1e-14, None)
+    s = w.sum()
+    w = np.full(n, 1.0 / n) if (not np.isfinite(s) or s <= 0) else w / s
+    tau = float(w @ Sigma @ w)
+    for _ in range(max_sweeps):
+        for i in range(n):
+            c = float(Sigma[i] @ w) - diag[i] * w[i]
+            disc = max(c * c + 4.0 * diag[i] * tau * b[i], 0.0)
+            w[i] = max((-c + np.sqrt(disc)) / (2.0 * diag[i]), 1e-14)
+        s = w.sum()
+        if not np.isfinite(s) or s <= 0:
+            break
+        w /= s
+        tau = float(w @ Sigma @ w)
+        rc = w * (Sigma @ w)
+        if rc.min() > 0 and float(rc.max() / rc.min()) < 1.0 + tol:
+            break
+    return w
+
+
 def solve_portfolio(
     alpha: pd.Series,
     Sigma: np.ndarray,
@@ -184,6 +235,7 @@ def solve_portfolio(
     market_weights: pd.Series | None = None,
     tau: float = 0.05,
     delta: float = 2.5,
+    rp_refine: bool = True,
 ) -> pd.Series:
     """cvxpy QP 单截面求解（P2：BL 观点融合、多空、A-C 成本惩罚）。
 
@@ -210,6 +262,9 @@ def solve_portfolio(
         views: BL 观点 dict（见 bl_posterior）；method="bl" 时生效，None 则纯均衡。
         market_weights: BL 市场权重（反向优化均衡收益用，默认等权）。
         tau / delta: BL 先验标度 / 风险厌恶。
+        rp_refine: method="risk_parity" 时是否做 CCD 精炼（近似解 → 精确等风险贡献）。
+            目标函数里带成本惩罚、或存在个股上限 / 行业 / 风格 / 换手等额外约束时会
+            自动跳过——精炼只保持 Σw=1 与 w>0，无法保证其他约束仍可行。
     Returns:
         Series(index=code) 最优权重；不可持仓（alpha NaN）股票恒为 0。
     """
@@ -311,8 +366,8 @@ def solve_portfolio(
         # 数值关键：日频 Σ 元素 ~1e-4，而 -Σln(w) 量级 ~n·ln(n)。
         # 若 ln 项不缩放，风险项梯度（~Σw）被 ln 梯度（~1/w）淹没，求解器退化为等权。
         # rp_tau 取「等权处两项梯度同量级」：rp_tau = max|Σ·1|/n。最优解 wᵢ(Σw)ᵢ = rp_tau·bᵢ 仍等贡献。
-        # 注意：对数障碍配方的数值解风险贡献比通常 ~1.5（等权 ~4），
-        # 属近似风险平价；追求更高精度可用固定点迭代 wᵢ←bᵢ/(Σw)ᵢ（P3）。
+        # 注意：对数障碍配方的数值解风险贡献比通常 ~1.5（等权 ~4），只是近似风险平价；
+        # 精确解由求解后的 CCD 精炼给出（见 _risk_parity_ccd 与下方 rp_refine 分支）。
         rp_tau = float(np.abs(Sigma @ np.ones(n)).max() / max(n, 1))
         obj_parts.append(0.5 * cp.quad_form(w, Sigma))
         obj_parts.append(-rp_tau * cp.sum(cp.multiply(rb, cp.log(w))))
@@ -339,7 +394,37 @@ def solve_portfolio(
     if prob.status not in ("optimal", "optimal_inaccurate"):
         raise RuntimeError(f"QP 求解失败，status={prob.status}")
 
-    out = pd.Series(np.asarray(w.value).reshape(-1), index=codes)
+    vals = np.asarray(w.value, dtype=float).reshape(-1)
+
+    # ---- 风险平价：CCD 精炼（对数障碍解只是近似 ERC，见 _risk_parity_ccd）----
+    # 仅在「纯 ERC」时启用：目标里带成本惩罚、或存在个股上限/行业/风格/换手约束时，
+    # 精炼会破坏这些约束或既有的风险-成本权衡，故自动跳过（保持原有近似解）。
+    if method == "risk_parity" and rp_refine:
+        has_extra = (
+            (max_weight is not None and max_weight < 1.0)
+            or industry_map is not None
+            or (style_exposures is not None and np.asarray(style_exposures).shape[1] > 0)
+            or (
+                prev_weights is not None
+                and (
+                    (max_turnover is not None and max_turnover > 0)
+                    or turnover_penalty > 0
+                    or quadratic_cost > 0
+                )
+            )
+        )
+        investable = np.flatnonzero(~nan_mask)
+        if not has_extra and len(investable) >= 2:
+            sub_sigma = np.asarray(Sigma, dtype=float)[np.ix_(investable, investable)]
+            w_ref = _risk_parity_ccd(
+                sub_sigma,
+                np.full(len(investable), 1.0 / len(investable)),
+                vals[investable],
+            )
+            vals = np.zeros(n)
+            vals[investable] = w_ref * (budget if budget is not None else 1.0)
+
+    out = pd.Series(vals, index=codes)
     if nan_mask.any():
         out[nan_mask] = 0.0  # 不可持仓股票强制精确 0（OSQP 数值上仅近似满足）
     if min_weight is not None and min_weight > 0:
@@ -377,6 +462,7 @@ def optimize_weights_qp(
     market_weights: pd.Series | None = None,
     tau: float = 0.05,
     delta: float = 2.5,
+    rp_refine: bool = True,
     **kwargs: Any,
 ) -> pd.DataFrame:
     """面板级求解器组合优化（与 optimize_weights 同签名风格、同输出约定）。
@@ -454,6 +540,7 @@ def optimize_weights_qp(
                 budget=budget, allow_short=allow_short,
                 short_limit=short_limit, gross_limit=gross_limit,
                 views=views, market_weights=market_weights, tau=tau, delta=delta,
+                rp_refine=rp_refine,
             )
         except RuntimeError:  # 单截面求解失败 → 该期空仓，不中断面板
             w = pd.Series(0.0, index=codes)

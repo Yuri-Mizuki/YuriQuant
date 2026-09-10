@@ -15,6 +15,7 @@ import pandas as pd
 import pytest
 
 from optimize.solver import (
+    _risk_parity_ccd,
     bl_posterior,
     bl_views_from_factor,
     estimate_covariance,
@@ -324,10 +325,70 @@ def test_risk_parity_risk_contributions_equal():
     assert (w > 0).all()  # 风险平价要求严格正权重
     assert abs(w.sum() - 1.0) < 1e-6
     rc = w.values * (Sigma @ w.values)  # 边际风险贡献 w_i(Σw)_i
-    # 等风险预算 → 各贡献接近相等。注意：对数障碍配方数值解贡献比 ~1.5
-    #（等权退化时 ~4.4），阈值 2.5 证明「显著优于等权」且接近平价。
+    # 校准：对数障碍配方（cvxpy/SCS）的解只是近似 ERC，贡献比实测 ~1.55（等权 ~4.4），
+    # 且随求解器/平台波动——曾导致本测试在 CI 上偶发失败（出现 rc<0 → ratio=inf）。
+    # solve_portfolio 默认对无约束 ERC 做 CCD 精炼（_risk_parity_ccd），把比值压到
+    # 1.000（确定性迭代，与求解器精度无关），故此处可用 1.05 的紧阈值。
     ratio = rc.max() / rc.min() if rc.min() > 0 else float("inf")
-    assert ratio < 2.5
+    assert ratio < 1.05, f"风险贡献比 {ratio:.4f}，CCD 精炼后应 < 1.05"
+
+
+def test_risk_parity_rp_refine_off_is_looser():
+    """rp_refine=False 退回对数障碍近似解：仍可行，但贡献比明显更差。"""
+    f, rets = _mock_panel(seed=34)
+    Sigma = rolling_covariance(rets, f.index[100], window=90, min_periods=60)
+    w = solve_portfolio(f.iloc[100], Sigma, method="risk_parity", rp_refine=False)
+    assert (w > 0).all()
+    assert abs(w.sum() - 1.0) < 1e-6
+    rc = w.values * (Sigma @ w.values)
+    ratio = rc.max() / rc.min() if rc.min() > 0 else float("inf")
+    # 只断言「可行 + 不比精炼解更好」，不断言具体值（近似解质量随求解器变化）
+    assert ratio >= 1.0
+    w_ref = solve_portfolio(f.iloc[100], Sigma, method="risk_parity")
+    rc_ref = w_ref.values * (Sigma @ w_ref.values)
+    ratio_ref = rc_ref.max() / rc_ref.min()
+    if np.isfinite(ratio):
+        assert ratio_ref <= ratio + 1e-9
+
+
+def test_risk_parity_ccd_from_any_start():
+    """CCD 精炼对初值不敏感：等权 / 随机初值都收敛到同一等风险贡献解。"""
+    f, rets = _mock_panel(n_codes=12, seed=41)
+    Sigma = np.asarray(rolling_covariance(rets, f.index[100], window=90,
+                                          min_periods=60), dtype=float)
+    n = Sigma.shape[0]
+    b = np.full(n, 1.0 / n)
+
+    rng = np.random.default_rng(41)
+    starts = {
+        "equal": np.full(n, 1.0 / n),
+        "random": rng.random(n),
+        "skewed": np.geomspace(0.01, 1.0, n),
+    }
+    solved = {}
+    for name, w0 in starts.items():
+        w = _risk_parity_ccd(Sigma, b, w0)
+        assert abs(w.sum() - 1.0) < 1e-9
+        assert (w > 0).all()
+        rc = w * (Sigma @ w)
+        ratio = rc.max() / rc.min()
+        assert ratio < 1.05, f"{name} 初值 ratio={ratio:.4f}"
+        solved[name] = w
+    # 不同初值应收敛到同一解（顺序无关）
+    base = solved["equal"]
+    for name, w in solved.items():
+        assert np.allclose(w, base, atol=1e-4), f"{name} 初值与 equal 初值解不一致"
+
+
+def test_risk_parity_refine_skipped_under_weight_cap():
+    """有额外约束（个股上限）时不做 CCD 精炼，避免破坏可行性。"""
+    f, rets = _mock_panel(seed=42)
+    Sigma = rolling_covariance(rets, f.index[100], window=90, min_periods=60)
+    cap = 0.08
+    w = solve_portfolio(f.iloc[100], Sigma, method="risk_parity", max_weight=cap)
+    assert (w <= cap + 1e-6).all(), "个股上限被精炼破坏"
+    assert (w > 0).all()
+    assert abs(w.sum() - 1.0) < 1e-6
 
 
 def test_hrp_basic_properties():
