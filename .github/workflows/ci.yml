@@ -1,10 +1,14 @@
 name: CI
 
-# 2026-09-10 轻量化：push 只跑「快检查」（Ruff 真 bug 规则 + 分层守卫，约 1 分钟）。
+# 2026-09-10 轻量化：push 只跑「快检查」（Ruff 真 bug 规则 + 分层守卫，约 40 秒）。
 # 原先每次 push 都跑的全量 pytest 有 7 分钟，且依赖 reports/ 等被 gitignore 的产物
 # （CI 上必然缺文件，只能靠 skip 兜住），本机数据齐全时跑更有意义，故移出 push 流程。
 # 需要全量时用 `.github/workflows/full-tests.yml`（Actions 页手动触发），
 # 或本机 `D:/python/Python312/python.exe -m pytest -q`。
+#
+# 快检查 job 刻意不装 torch（不含 rl extra）：三个分层守卫均不 import torch
+# （torch 只出现在 factor/gflownet/ 与 scripts/textmining/），省掉约 200MB 下载。
+# 若日后守卫测试要用 torch，需同时处理 CPU index（见 git 历史里被删掉的 install 步骤）。
 
 on:
   push:
@@ -26,10 +30,11 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --upgrade pip
-          # CPU 版 torch（GFlowNet/RL 单测依赖；GPU/CUDA 版本过大，CI 用 CPU 即可）。
-          # 必须先于 -e 安装：rl extra 的 torch>=2.0 会因已满足而跳过，避免重拉 PyPI 的 CUDA 版
-          pip install torch --index-url https://download.pytorch.org/whl/cpu
-          pip install -e ".[dev,ml,gp,solver,rl]"
+          # 快检查不装 torch / rl extra：rl 会从 PyPI 拉 CUDA 版 torch（约 2.5GB），
+          # 而本 job 只跑 Ruff + 三个分层守卫，均不依赖 torch。若改回 rl extra，
+          # 必须先单独装 CPU 版 torch（--index-url https://download.pytorch.org/whl/cpu），
+          # 否则 rl 里的 torch>=2.0 会因"未满足"而重拉 CUDA 版。
+          pip install -e ".[dev,ml,gp,solver]"
 
       - name: Check dependency lock in sync
         # uv.lock 是跨平台解析锁（uv lock 生成），此处只守卫其与 pyproject.toml 同步，
