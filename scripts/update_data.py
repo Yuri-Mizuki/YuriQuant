@@ -23,21 +23,19 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 import argparse
 import sys
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.cli_common import setup_logging  # noqa: E402
-
-
 from config import Config  # noqa: E402
 from data.cache import DataCache  # noqa: E402
 from data.datasource import create_datasource  # noqa: E402
 from data.universe import Universe  # noqa: E402
+from scripts.cli_common import setup_logging  # noqa: E402
 
 log = setup_logging("update_data")
 
@@ -91,7 +89,10 @@ def main():
     parser.add_argument("--minute", default=None, help="拉取分钟K线档位，逗号分隔，如 5 或 1,5,15")
     parser.add_argument("--no-minute", action="store_true", help="跳过分钟K线拉取")
     parser.add_argument("--pool", default=None,
-                        help=f"股票池: {' | '.join(_VALID_POOLS)}（默认取 config.universe.default）")
+                        help=f"股票池: {' | '.join(_VALID_POOLS)}"
+                             "（默认取 config.universe.default）")
+    parser.add_argument("--allow-intraday", action="store_true",
+                        help="允许把拉取终点设为今天（盘中数据不完整，默认回退上一交易日）")
     args = parser.parse_args()
 
     # 1. 加载配置
@@ -120,7 +121,13 @@ def main():
     if not cal:
         log.warning("交易日历为空，请检查数据源配置。")
         return
-    target_date = end if end else cal[-1]
+    # 盘中守卫：target=今天且未到收盘确认时刻 → 回退上一交易日（防半拉日永久入缓存）
+    from scripts.cli_common import complete_day_target
+    target_date, rolled_back = complete_day_target(
+        cal, end if end else cal[-1], allow_intraday=args.allow_intraday)
+    if rolled_back:
+        log.info("盘中守卫: 拉取终点回退到 %s（今天数据未完整，--allow-intraday 可跳过守卫）",
+                 target_date)
     if pool == "all_a":
         # 全 A：优先用本地缓存的全 A 日线清单（增量维护）；首次拉取时
         # daily_all_a.parquet 尚不存在 → 回退数据源安全主档取全 A 代码
@@ -132,14 +139,20 @@ def main():
     else:
         from data.cache_helpers import _pit_universe_codes
         codes = _pit_universe_codes(uni, index_code, begin, target_date)
-        log.info("历史成分并集池: %d 只（%s~%s 期间在册，含调出/退市）", len(codes), begin, target_date)
+        log.info("历史成分并集池: %d 只（%s~%s 期间在册，含调出/退市）",
+                 len(codes), begin, target_date)
 
     # 4. 增量拉取日K线（按池落盘 daily_{pool}.parquet）
     log.info("增量拉取日K线: %s -> %s", begin, target_date)
     kline = cache.get_daily_kline(codes, begin, target_date, pool=pool)
     if len(kline) == 0:
         raise SystemExit("日K线拉取为空（代码清单或数据源可能不可用），中止后续步骤")
-    log.info("日K线行数: %d, 代码数: %d", len(kline), kline.index.get_level_values("code").nunique())
+    log.info("日K线行数: %d, 代码数: %d", len(kline),
+             kline.index.get_level_values("code").nunique())
+    if pool == "all_a":
+        log.info("提示: 因子面板不会自动延伸——需要新日期进实验时重算 "
+                 "scripts/oneoff/build_alla_alpha_panels.py --workers 6（全量 ~1h）"
+                 "及基本面/股东/质押/构造型构建脚本")
 
     # 4.5 增量拉取分钟K线（日内研究，按池落盘 min{period}_{pool}.parquet）
     minute_periods = []

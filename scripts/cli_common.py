@@ -17,6 +17,8 @@
                                   offline→OfflineDataSource / 默认 real）+
                                   默认区间/数据集名解析 + Universe
 - ``register_panels`` 等 build 助手：批量标准化入库 / 实验记录 / no-save 概览
+- ``complete_day_target``      : 盘中拉数守卫（target=今天且未到 cutoff 时回退上一
+                                  交易日，防 daily 水位被盘中半拉数据污染）
 
 用法::
 
@@ -32,6 +34,7 @@
 from __future__ import annotations
 
 import argparse
+import datetime
 import logging
 import os
 import sys
@@ -145,6 +148,46 @@ def make_data_context(args):
 # ---------------------------------------------------------------------------
 # build 家族专属助手（2026-08-31 自 _build_common 并入）
 # ---------------------------------------------------------------------------
+def complete_day_target(cal: list[int], target: int | None,
+                        cutoff: str = "17:00",
+                        allow_intraday: bool = False,
+                        now: datetime.datetime | None = None) -> tuple[int, bool]:
+    """盘中拉数守卫：target 是"今天"且未到收盘确认时刻时，回退到上一交易日。
+
+    daily 缓存的增量起点是 ``last+1``（``cache._refresh_long_table``）——水位
+    一旦在盘中被推进，当天半拉数据就永久留在缓存里（2026-09-02 全A 事故：
+    盘中拉取只回了 6 行，水位已到 0902，此后增量永远跳过该日）。本守卫在
+    拉取入口把"未收盘确认的今天"从 target 上摘掉，从源头杜绝。
+
+    Args:
+        cal: 交易日历（升序 int YYYYMMDD）。
+        target: 计划拉取终点日；None 时取 cal[-1]。
+        cutoff: 视为"当日数据已完整"的本地时刻（收盘 15:00 后留足供应商落库余量）。
+        allow_intraday: True 时跳过守卫（明确要盘中数据，如日内研究）。
+        now: 当前时刻注入（测试用；None 取本地现在）。
+    Returns:
+        (调整后的 target, 是否发生了回退)
+    """
+    import datetime as _dt
+
+    if target is None:
+        if not cal:
+            raise ValueError("cal 为空且 target 未指定")
+        target = cal[-1]
+    if allow_intraday or not cal:
+        return int(target), False
+    now = now or _dt.datetime.now()
+    today = int(now.strftime("%Y%m%d"))
+    if int(target) != today:
+        return int(target), False
+    if now.time() >= _dt.datetime.strptime(cutoff, "%H:%M").time():
+        return int(target), False
+    prev = [d for d in cal if int(d) < today]
+    if not prev:
+        return int(target), False
+    return int(prev[-1]), True
+
+
 def returns_from_daily(daily: pd.DataFrame) -> pd.DataFrame:
     """``(date, code)`` 长表 → 次日收益面板（与因子库 IC 口径一致）。"""
     d = daily.reset_index()
