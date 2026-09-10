@@ -11,9 +11,9 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
+from conftest import MockDataSource
 
 from config import Config
-from conftest import MockDataSource
 from data.cache import DataCache
 from data.universe import Universe
 
@@ -30,6 +30,41 @@ def test_calendar_not_empty(tmp_path: Path, mock_ds):
     assert len(cal) > 0
     assert cal[0] >= 20230101
     assert cal[-1] <= 20240131
+
+
+def test_calendar_end_none_covers_today(tmp_path: Path):
+    """end=None 语义 = 覆盖到今天（2026-09-08 修复回归测试）。
+
+    旧行为：end=None 永不回源，本地日历被历史某次显式 end 封顶后，
+    所有"更新到最新"的调用永远看不到新交易日。新行为：陈旧日历触发
+    回源、结果不泄漏未来交易日、已覆盖今天则不重复回源。
+    """
+    today = int(pd.Timestamp.now().strftime("%Y%m%d"))
+    future = int((pd.Timestamp.now() + pd.Timedelta(days=30))
+                 .strftime("%Y%m%d"))
+
+    class _CalDS(MockDataSource):
+        def __init__(self):
+            super().__init__()
+            self.fetches = 0
+            self._cal = self._gen_calendar(20220101, future)
+
+        def get_calendar(self, begin: int = 20100101, end: int | None = None):
+            self.fetches += 1
+            return [d for d in self._cal
+                    if d >= begin and (end is None or d <= end)]
+
+    ds = _CalDS()
+    # 本地陈旧日历（停在 20240101）
+    pd.DataFrame({"date": ds._gen_calendar(20220101, 20240101)}).to_parquet(
+        tmp_path / "calendar.parquet")
+    cache = DataCache(ds, cache_root=tmp_path)
+
+    cal = cache.get_calendar(20220101)
+    assert ds.fetches == 1                 # 陈旧 → 回源
+    assert len(cal) > 0 and max(cal) <= today   # 不泄漏未来交易日
+    cache.get_calendar(20220101)
+    assert ds.fetches == 1                 # 已覆盖今天 → 不再回源
 
 
 def test_code_info_schema(mock_ds):

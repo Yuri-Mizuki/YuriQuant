@@ -318,8 +318,13 @@ class DataCache:
         existing: list[int] = []
         if p.exists():
             existing = sorted(pd.read_parquet(p)["date"].tolist())
+        # end=None 的语义是"覆盖到今天"（2026-09-08 修复：此前 None 直接短路
+        # 不回源，日历被历史某次显式 end 调用封顶——如 20260902——之后所有
+        # "更新到最新"的调用永远看不到新交易日）。
+        end_eff = end if end is not None else int(
+            pd.Timestamp.now().strftime("%Y%m%d"))
         need_fetch = True
-        if existing and (end is None or existing[-1] >= end):
+        if existing and existing[-1] >= end_eff:
             need_fetch = False
         if need_fetch:
             fetched = self._ds.get_calendar(begin, end)
@@ -330,7 +335,7 @@ class DataCache:
             cal = merged
         else:
             cal = existing
-        return [d for d in cal if d >= begin and (end is None or d <= end)]
+        return [d for d in cal if d >= begin and d <= end_eff]
 
     # ---- 日K线（增量更新核心）----
     def read_daily(self, pool: str | None = None) -> pd.DataFrame | None:
@@ -341,6 +346,19 @@ class DataCache:
         """
         pool = pool or Config.universe().get("default", "hs300")
         p = self._root / f"daily_{pool}.parquet"
+        if not p.exists():
+            return None
+        return pd.read_parquet(p)
+
+    def read_minute_kline(self, pool: str | None = None, period: int = 5) -> pd.DataFrame | None:
+        """直接读分钟K线缓存文件（不做增量拉取），池名默认取 config。
+
+        供 data.intraday.MinutePanelStore.build 离线物化面板用——只读不拉，
+        无 SDK 凭证也能工作（get_minute_kline 在缓存完整覆盖时也会短路，
+        但 read 路径语义更明确、不会在节假日边界误触发回源）。
+        """
+        pool = pool or Config.universe().get("default", "hs300")
+        p = self._root / f"min{period}_{pool}.parquet"
         if not p.exists():
             return None
         return pd.read_parquet(p)
@@ -430,17 +448,51 @@ class DataCache:
         )
 
     # ---- 历史涨跌停/停牌/ST ----
+    #: SDK 对大代码清单的单次状态查询会硬崩宿主进程且无 traceback
+    #: （2026-08-28 实证：5550 只单查挂死，见 scripts/fetch_status_batched.py）。
+    #: 缓存层统一分批 + 重试，调用方（update_data 等）无需各自实现。
+    STATUS_BATCH = 200
+
+    def _batched_status_fetch(self, codes: list[str], begin_date: int,
+                              end_date: int) -> pd.DataFrame:
+        import time as _time
+
+        frames: list[pd.DataFrame] = []
+        for i in range(0, len(codes), self.STATUS_BATCH):
+            batch = codes[i:i + self.STATUS_BATCH]
+            df = None
+            for attempt in (1, 2, 3):
+                try:
+                    df = self._ds.get_history_stock_status(batch, begin_date, end_date)
+                    break
+                except Exception:
+                    if attempt == 3:
+                        raise
+                    _time.sleep(5 * attempt)
+            if df is not None and len(df):
+                frames.append(df)
+        if not frames:
+            return pd.DataFrame()
+        out = pd.concat(frames, axis=0)
+        return out.sort_index()
+
     def get_history_stock_status(
         self,
         code_list: Iterable[str],
         begin_date: int,
         end_date: int,
     ) -> pd.DataFrame:
-        """按日历史证券状态，增量更新模式同 get_daily_kline（长表 (date, code) 索引）。"""
+        """按日历史证券状态，增量更新模式同 get_daily_kline（长表 (date, code) 索引）。
+
+        数据源调用分批（``STATUS_BATCH``）+ 重试——SDK 大清单单查会挂死；
+        合并后仍走单次 ``_refresh_long_table`` 增量合并落盘。
+        """
         codes = list(code_list)
+        fetch = self._batched_status_fetch if len(codes) > self.STATUS_BATCH \
+            else self._ds.get_history_stock_status
         return self._refresh_long_table(
             "history_stock_status.parquet", "history_stock_status",
-            codes, begin_date, end_date, self._ds.get_history_stock_status,
+            codes, begin_date, end_date, fetch,
         )
 
     # ---- 指数成分 ----
@@ -617,7 +669,8 @@ class DataCache:
         return df
 
     def get_balance_sheet(self, code_list: Iterable[str],
-                          begin_date: int | None = None, end_date: int | None = None) -> pd.DataFrame:
+                          begin_date: int | None = None,
+                          end_date: int | None = None) -> pd.DataFrame:
         codes = list(code_list)
         return self._get_financial(
             "balance_sheet.parquet", "balance_sheet", codes, self._ds.get_balance_sheet
