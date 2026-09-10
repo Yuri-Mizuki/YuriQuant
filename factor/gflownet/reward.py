@@ -61,46 +61,37 @@ DEFAULT_TOP_Q = 0.2           # 多头桶分位（前 20%）
 
 def neutralize_market_cap(factor_panel: pd.DataFrame,
                           market_cap: pd.DataFrame) -> pd.DataFrame:
-    """**逐行向量化**的对数市值中性化（研报 §2.3 奖励用）。
+    """对数市值中性化（研报 §2.3 奖励用）。
 
-    等价于「因子 ~ 截距 + log(市值)」的逐日截面回归残差：行中心化后单变量
-    回归无截距项，beta = Σ(xa·fa)/Σ(xa²)，残差 = fa − β·xa。单次调用毫秒级
-    （vs 逐日 lstsq 的 ~1s/因子，是 Phase 1 训练可行性的关键）。
+    薄封装 :func:`factor.preprocessing.neutralize_single`（2026-09-10 收口：
+    此前本文件自实现一份向量化版本、preprocessing 另有逐日 lstsq 版，
+    同一件事两处维护）。保留本入口是因为 GFlowNet 训练热路径按语义命名调用。
     """
-    x = np.log(market_cap.reindex_like(factor_panel))
-    m = factor_panel.notna() & x.notna()
-    fp = factor_panel.where(m)
-    x = x.where(m)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        fa = fp.sub(fp.mean(axis=1), axis=0)      # 逐行中心化（axis=0 行向广播）
-        xa = x.sub(x.mean(axis=1), axis=0)
-        beta = (fa * xa).sum(axis=1) / (xa * xa).sum(axis=1)
-        resid = fa.sub(xa.mul(beta, axis=0), axis=0)
-    return resid
+    from factor.preprocessing import neutralize_single
+    return neutralize_single(factor_panel, market_cap, log_covariate=True)
 
 
 def rank_ic_series(factor_panel: pd.DataFrame, returns_panel: pd.DataFrame,
                    returns_rank: pd.DataFrame | None = None) -> pd.Series:
     """逐日截面 spearman IC（因子 t vs 收益面板同日起始，如次日/horizon 收益）。
 
-    向量化：先对齐 NaN 位置，再对两面板逐行 rank（axis=1），逐行 Pearson 相关
-    即等价于 spearman（rank 后 Pearson）。单次调用无 Python 级逐日循环。
+    薄封装 :func:`stats.ic.calc_ic_series`（全库唯一 IC 口径实现；2026-09-10
+    收口，此前本文件自实现一份逐行 rank + 归一化相关）。本入口只额外负责
+    **把索引对齐到 ``factor_panel.index``**——训练面板是主索引，而
+    ``calc_ic_series`` 按两面板交集返回。
 
-    ``returns_rank``：可传入**预计算的收益 rank 面板**（训练中收益固定，
-    省去每次重复 rank，可省约 40% IC 耗时）。
+    ⚠️ ``returns_rank``（预计算的收益 rank 面板，训练中省约 30% IC 耗时）**只在
+    因子不比收益多出任何 NaN 时**才与默认路径完全等价；因子整行缺失（窗口预热）
+    不受影响，行内散点缺失才有差异，详见 ``stats.ic.calc_ic_series`` 的 docstring。
     """
-    r = returns_panel.reindex_like(factor_panel)
-    m = factor_panel.notna() & r.notna()
-    cnt = m.sum(axis=1)
-    f = factor_panel.where(m).rank(axis=1)
-    y = returns_rank.reindex_like(factor_panel).where(m) if returns_rank is not None \
-        else r.where(m).rank(axis=1)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        fa = f.sub(f.mean(axis=1), axis=0).div(f.std(axis=1, ddof=0), axis=0)
-        ya = y.sub(y.mean(axis=1), axis=0).div(y.std(axis=1, ddof=0), axis=0)
-        ic = (fa * ya).mean(axis=1)
-    ic = ic.where((cnt >= 5) & np.isfinite(ic))
-    return ic
+    from stats.ic import calc_ic_series
+    ic = calc_ic_series(factor_panel, returns_panel, method="spearman",
+                        returns_rank=returns_rank)
+    ic = ic.reindex(factor_panel.index)
+    # 非有限值保护（收敛前本文件实现用行归一化数学，常数截面行天然给 NaN）：
+    # canonical 走 pandas corrwith，常数截面行可能返回 ±inf，而奖励端做
+    # abs(ic).mean()，inf 会直接毒化整个奖励。此处保留 NaN 语义。
+    return ic.where(np.isfinite(ic))
 
 
 def build_horizon_returns(close: pd.DataFrame, horizon: int = 10) -> pd.DataFrame:

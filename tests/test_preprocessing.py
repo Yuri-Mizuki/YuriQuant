@@ -13,6 +13,7 @@ import pytest
 
 from factor.preprocessing import (
     neutralize,
+    neutralize_single,
     preprocess_factor,
     standardize_rank,
     standardize_zscore,
@@ -234,3 +235,64 @@ def test_preprocess_factor_mock_mode_no_panels():
     for d in dates:
         assert out.loc[d].mean() == pytest.approx(0.0, abs=1e-6)
         assert out.loc[d].std() == pytest.approx(1.0, abs=1e-6)
+
+
+# ===========================================================================
+# 单协变量快速中性化（neutralize_single，2026-09-10 自 gflownet 收口）
+# ===========================================================================
+def _mc_case(n_days=6, n_codes=25, seed=11, nan_frac=0.0):
+    rng = np.random.default_rng(seed)
+    idx = pd.date_range("2024-01-01", periods=n_days, freq="B")
+    codes = [f"C{i}" for i in range(n_codes)]
+    panel = pd.DataFrame(rng.normal(0, 1, (n_days, n_codes)), idx, codes)
+    mc = pd.DataFrame(rng.lognormal(20, 1.0, (n_days, n_codes)), idx, codes)
+    if nan_frac:
+        panel = panel.mask(rng.random((n_days, n_codes)) < nan_frac)
+    return panel, mc
+
+
+def test_neutralize_single_matches_with_intercept_lstsq():
+    """向量化单协变量中性化 == 逐日**含截距** lstsq 残差（浮点精度）。
+
+    含截距（截面回归带常数项）是市值中性化的标准做法，GFlowNet 奖励走这条路径。
+    """
+    panel, mc = _mc_case()
+    got = neutralize_single(panel, mc)
+    exp = pd.DataFrame(np.nan, index=panel.index, columns=panel.columns)
+    for d in panel.index:
+        y = panel.loc[d].to_numpy(dtype=float)
+        x = np.log(mc.loc[d].to_numpy(dtype=float))
+        X = np.column_stack([np.ones_like(x), x])
+        beta, *_ = np.linalg.lstsq(X, y, rcond=None)
+        exp.loc[d] = y - X @ beta
+    assert float((got - exp).abs().max().max()) < 1e-10
+
+
+def test_neutralize_single_residual_is_mean_zero_and_nan_safe():
+    """含截距的直接推论：每日残差均值为 0；NaN 位置原样保留。"""
+    panel, mc = _mc_case(nan_frac=0.15)
+    got = neutralize_single(panel, mc)
+    assert int(got.notna().sum().sum()) == int(panel.notna().sum().sum())
+    assert np.allclose(got.mean(axis=1).dropna().to_numpy(), 0.0, atol=1e-12)
+
+
+def test_neutralize_size_only_lacks_intercept_known_gap():
+    """**characterization**：``neutralize`` 只传市值时是**过原点**回归。
+
+    它没有截距列——截距靠"全量行业哑变量的列和 = 全 1 向量"来 span，不传行业
+    就没有。所以纯市值情形它与含截距的 ``neutralize_single`` **差一个截距项**，
+    两者不是同一口径。
+
+    2026-09-10 审计把"是否给 size-only 路径补 ones 列"留作待定项：若将来统一到
+    含截距口径，本测试会红——那正是提醒你"这里的口径被有意识地改过了"。
+    """
+    panel, mc = _mc_case(n_days=1, n_codes=30)
+    size_only = neutralize(panel, market_cap_panel=mc)
+    with_intercept = neutralize_single(panel, mc)
+
+    # 现行为：size-only 残差均值不为 0（过原点回归不保证正交于常数）
+    assert abs(float(size_only.iloc[0].mean())) > 1e-3
+    # 含截距版均值恒为 0
+    assert abs(float(with_intercept.iloc[0].mean())) < 1e-12
+    # 两者确实不同
+    assert float((size_only - with_intercept).abs().max().max()) > 1e-3

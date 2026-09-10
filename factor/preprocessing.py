@@ -96,6 +96,9 @@ def neutralize(
     - 行业哑变量用全量哑变量（不 drop_first），不额外加截距列——全量哑变量
       的列和本身就是全1向量，已经span了截距的位置，不会漏掉任何一个
       行业的组均值。
+      ⚠️ 但**不传行业、只传市值时没有截距项**：``x_matrix`` 只有 ``[log(mc)]``
+      一列，等价于过原点回归。含截距的快速专化版见 :func:`neutralize_single`
+      （两者在纯市值情形**差一个截距项**，不是同一口径；2026-09-10 审计留作待办）。
     - 用 numpy.linalg.lstsq 而不是求逆/normal equation，遇到秩不足（比如
       当天截面里某个行业只有极少样本）时会自动退化到最小范数解而不报错。
     - 每天根据有效样本数 n_valid 相对参数数 n_params 的余量，分级降级：
@@ -177,6 +180,58 @@ def neutralize(
         result.loc[d, codes_valid] = resid
 
     return result
+
+
+def neutralize_single(
+    panel: pd.DataFrame,
+    covariate: pd.DataFrame,
+    log_covariate: bool = True,
+) -> pd.DataFrame:
+    """**逐行向量化**的单协变量截面中性化（「panel ~ 截距 + covariate」取残差）。
+
+    这是 :func:`neutralize` 在**单一连续协变量**情形下的快速专化版本：行中心化后
+    单变量回归无截距项，``beta = Σ(xa·ya)/Σ(xa²)``，残差 = ``ya − beta·xa``，
+    一次矩阵运算算完全部日期——毫秒级，而 :func:`neutralize` 的逐日 lstsq 约
+    ~1s/因子。GFlowNet 训练要在同一面板上反复评估成千上万个候选因子，用哪个是
+    可行性问题而不是风格问题。
+
+    Args:
+        panel: date×code 因子面板。
+        covariate: 同形状协变量面板（如市值）。
+        log_covariate: 是否先取对数（市值默认取 log）。
+
+    Returns:
+        残差面板；``panel`` 或 ``covariate`` 任一为 NaN 的位置为 NaN。
+
+    与 :func:`neutralize` 的关系（2026-09-10 收口，此前
+    ``factor.gflownet.reward.neutralize_market_cap`` 自实现一份、本模块另有
+    逐日 lstsq 版，同一件事两处维护）：
+
+    - 本函数 = **含截距**的单协变量回归残差（行中心化后单变量回归等效于带截距），
+      也是市值中性化的标准做法（截面回归含常数项）。回归热路径用它。
+    - :func:`neutralize` 是**多协变量**版（行业哑变量 + 市值 + 风格协变量），
+      逐日 lstsq，约 ~1s/因子。⚠️ **单独只传市值时它只有 ``[log(mc)]`` 一列、
+      不含截距**——截距靠"全量行业哑变量的列和 = 全 1 向量"来 span，不传行业
+      就没有。因此**纯市值情形两者不等价，差一个截距项**（见 2026-09-10 审计
+      待办：是否需要给 size-only 路径补 ones 列）。
+
+    选型：需要行业 / 多协变量 / 小样本降级 → ``neutralize``；
+    只有一个连续协变量且要跑成千上万次 → 本函数。
+    本函数与"含截距 lstsq"的等价性由 ``tests/test_gflownet_phase1`` 锁定。
+    """
+    x = covariate.reindex_like(panel)
+    if log_covariate:
+        with np.errstate(divide="ignore", invalid="ignore"):
+            x = np.log(x)
+    m = panel.notna() & x.notna()
+    fp = panel.where(m)
+    x = x.where(m)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        fa = fp.sub(fp.mean(axis=1), axis=0)      # 逐行中心化（axis=0 行向广播）
+        xa = x.sub(x.mean(axis=1), axis=0)
+        beta = (fa * xa).sum(axis=1) / (xa * xa).sum(axis=1)
+        resid = fa.sub(xa.mul(beta, axis=0), axis=0)
+    return resid
 
 
 # ===========================================================================

@@ -36,6 +36,7 @@ def calc_ic_series(
     factor_panel: pd.DataFrame,
     returns_panel: pd.DataFrame,
     method: str = "spearman",
+    returns_rank: pd.DataFrame | None = None,
 ) -> pd.Series:
     """计算每日 IC（因子值与未来收益的截面相关系数）。
 
@@ -43,6 +44,16 @@ def calc_ic_series(
         factor_panel: DataFrame(date, code), 因子值。
         returns_panel: DataFrame(date, code), 未来一期收益。
         method: 'pearson' 或 'spearman'（默认，Rank IC）。
+        returns_rank: **可选性能捷径**——预计算好的收益 rank 面板（训练中收益
+            面板固定，省掉每次重复 rank，GFlowNet 实测约省 30% IC 耗时）。
+            ⚠️ **只在"因子不比收益多出任何 NaN"时才与默认路径完全等价**：
+            IC 的有效掩码是 ``factor.notna() & returns.notna()``，依赖因子自身的
+            NaN 模式，rank 值随掩码变化，因此预计算的 rank 无法对任意因子都成立。
+            实测边界（2026-09-10）：
+            - 因子**整行缺失**（如窗口预热）→ 该行掩码全 False，两侧结果一致；
+            - 因子在收益有效处还有**行内散点缺失** → 出现差异，30% 散点缺失时
+              日均 IC 相差约 1.1e-2（IC 量级 3e-2~5e-2）。
+            **判显著 / 入库 / 出报告一律走默认路径**（见 2026-09-10 审计记录）。
     Returns:
         Series(index=date), 每日 IC。
 
@@ -50,6 +61,9 @@ def calc_ic_series(
     截面排名后再算 pearson 相关，因此用 ``rank(axis=1) + corrwith(axis=1)``
     一次向量化算出全部日期的 IC，替代原逐日 ``stats.spearmanr`` 循环
     （evaluate_candidates 全量评估 350 候选耗时 117s → 优化后大幅下降）。
+
+    **真源（2026-09-10）**：本函数是全库唯一的 IC 口径实现。
+    ``factor.gflownet.reward.rank_ic_series`` 已改为薄封装（此前自实现一份）。
     """
     common_dates = factor_panel.index.intersection(returns_panel.index)
     common_codes = factor_panel.columns.intersection(returns_panel.columns)
@@ -61,7 +75,12 @@ def calc_ic_series(
         # 严格一致，避免全截面排名带来的 rank 基准漂移），再 pearson = spearman。
         valid = fp.notna() & rp.notna()
         fr = fp.where(valid).rank(axis=1)
-        rr = rp.where(valid).rank(axis=1)
+        # 预计算路径同样要按本次掩码 where —— 否则 rank 值来自另一个掩码
+        if returns_rank is not None:
+            rr = returns_rank.reindex(index=common_dates,
+                                      columns=common_codes).where(valid)
+        else:
+            rr = rp.where(valid).rank(axis=1)
         ic = fr.corrwith(rr, axis=1, method="pearson")
     else:
         ic = fp.corrwith(rp, axis=1, method="pearson")
