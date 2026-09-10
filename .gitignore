@@ -59,6 +59,9 @@ etf-rotation-plan/
 .trae-html-share-packages/
 .test-tmp/
 
+# Agent session plans (local IDE state)
+.zcode/
+
 # One-off scratch dirs created by ad-hoc commands
 reports/.pytest_tmp*/
 

@@ -54,6 +54,7 @@ reports/    实验与交付物（模型/监控/因子库/设计文档/HTML报告
 | `dividend.parquet` | 分红送转 | 整表覆盖 | 长事件表 |
 | `share_holder.parquet` | 十大股东 | 整表覆盖 | 长事件表 |
 | `holder_num.parquet` | 股东户数 | 整表覆盖 | 长事件表 |
+| `intraday/min{period}_{pool}/` | **分钟稠密面板**（物化视图，供日内挖掘） | 整体重写 | 按年 `y{YYYY}/*.npy` [day,bar,code] float32 + meta.json，np.memmap 按需页调入 |
 | `_meta.json` | 各表增量水位 last_date + 数据指纹 | — | — |
 
 ### 数据层核心能力
@@ -63,6 +64,7 @@ reports/    实验与交付物（模型/监控/因子库/设计文档/HTML报告
 - **可执行性掩码** `data/tradability.py`：处理停牌、涨停封板、跌停封板等约束。
 - **离线模式** `data/offline.py`：`OfflineDataSource`（缺缓存抛错）/ `OfflineQuietDataSource`（缓存完整时建面板）。
 - **文本挖掘** `data/textmining/`：同花顺研报主源 + 巨潮公告辅源，统一 `fetch_docs()` 入口，parquet 增量缓存（ths/cninfo），PIT 日期过滤。
+- **分钟频数据层（日内挖掘底座）** `data/intraday.py` + `factor/intraday_features.py`：parquet 分钟长表 → 按年分区的内存映射稠密面板 `[日,bar,码]`（MemMap，全市场 GB 级数据不进内存；参照 Alpha掘金 24 的工程方案），之上是 tsfresh 风格的向量化"分钟→日频"统计特征层（42 个：动量/收益分布/波动/形态自相关/量价/蜡烛，与 Alpha掘金 22 的 40 指标降维路线一致）。入口 `scripts/build_minute_panel.py`（`--features` 提取特征长表，`--demo-ic` 次日 IC 快照）。
 
 ## 研发流程与完成度
 
@@ -168,6 +170,10 @@ mock 落 `reports/models_mock`，真实落 `reports/models`。
 | **模型增强组合（固化配置）** | `scripts/run_model_portfolio.py` | 模型信号 → 风格中性化 → TopFrac 重仓多头，`reports/model_portfolio/`；默认 gbdt+中性化+Top20%+月频，2025 test 段成本后超额沪深300 **+4.85%**（Sharpe 1.70） |
 | **调仓频率精修** | `scripts/freq_tune.py` | gbdt+中性化+Top20% 上放开 h×freq 网格，验证换手吞噬收益 → `reports/freq_tune/`；h1×M 最优，日频超额 −40% |
 | **多年度 OOS 稳健性** | `scripts/multiyear_oos.py` | gbdt/ridge/ranker × h1/h5 × D/W/M，2023/2024/2025 分年 walk-forward（特征定型期固定防前视）→ `reports/multiyear/`；h1×M 唯一三年一致稳健解 |
+| **全A多年度滚动训练** | `scripts/rolling_grid_alla.py` + `rolling_grid_report.py` | 全A 5549 股 × 798 公因子（all_a_2018_2026 数据集）2018~2026 分年 walk-forward 网格：horizon{1,5,10,20}×频率×模型/超参×中性化×集中度 = 120 组合 → `reports/alla_rolling/report.html`；h1+月/周频+gbdt 一致最优（Top10% raw 年化 14.0%、超额上证 +11.8%、正超额 7~8/9 年），日频成本全灭，风格中性化在全A上反而稀释 alpha（与 HS300 结论相反） |
+| **全A每日选股排名（生产化推理）** | `scripts/alla_daily_rank.py` | 上述最优方案（gbdt h1×M raw Top10%）的每日盘后推理：数据增量更新 → 尾部重算当年入选 50 因子（同一复权基准自洽）→ 500 日窗重训 → 全A排名 + Top10% 可交易候选 → `reports/alla_daily/`；与实验 OOS 面板末日截面 Spearman 0.92；`--install-task 17:30` 注册每日计划任务 |
+| **全A超额归因与显著性复核** | `scripts/alla_excess_attribution.py`（2026-09-08） | 复跑主策略取每日权重：对上证超额 +10.2%/年中约一半来自风格敞口（β=1.10、R²=0.61），对全A等权纯选股 α=+5.1%/年（t=2.14 显著）；Brinson（申万一级）：主动收益 +35.6% = 选择 +64.1% + 配置 −15.5% + 交互 −12.3%——超额全部来自行业内选股。回测指标同步新增 `sharpe_t_stat` / `years_to_prove`=(1.96/\|SR\|)² / `excess_t_stat`（主策略 8.35 年：Sharpe t=1.69、超额 t=1.947 压线）→ `reports/alla_attribution/`，网格报告已含 t 列 |
+| **论文复现因子族（awesome 21 式）** | `factor/paper_factors.py` + `scripts/build_paper_factors.py`（2026-09-08） | awesome-systematic-trading 复现库 61 策略中 21 个可在 A 股数据面实现者翻译入库（all_a_2018_2026 达 900 因子）：短期反转 IC=0.038/t=11.3、低波 t=8.2、价值 t=8.5、研发强度 t=5.6、质量/FSCORE t≈4.4 显著为正；月频动量族为负（A 股动量反转复现）→ registry `source=paper:awesome-systematic-trading:*` |
 | **日内研究** | `scripts/intraday_analysis.py` | 隔夜 vs 日内收益分解、成交量/波动率时段效应 → `reports/intraday_analysis_{year}.png`、`intraday_summary_{year}.csv` |
 | **自动因子挖掘** | `scripts/gp_tune_budget.py`、`run_gflownet_phase0/1.py`、`train_htai_rl_p0.py`、`gflownet_library_ingest.py` | GP 调参 / GFlowNet TB+PPO / AlphaPool RL 最小闭环 → `reports/gp_tune/`、`reports/_htai_gp/` |
 | **文本挖掘** | `scripts/fetch_textmining.py` + `scripts/textmining/` | 研报/公告抓取 → FADT/SUE-文本 样本、BERT 编码、训练评估 → `reports/textmining*/` |
@@ -179,7 +185,7 @@ mock 落 `reports/models_mock`，真实落 `reports/models`。
 - **完整生产级执行**：代客下单/撮合对接、实时行情驱动（当前为日频 + 盘后信号）。
 - **文本挖掘合规化**：当前依赖爬虫，如需稳定生产化建议对接 iFinD/Wind/Choice 等商业源。
 - **前端可视化 / 在线dashboard**：当前报告以静态 HTML/XLSX 为主。
-- **分钟频日内因子挖掘**：5 分钟数据已缓存（2022-2026）但缺分钟级挖掘 pipeline（现有日内因子本质是日频化）。
+- **分钟频日内因子挖掘**：数据层已就绪（`data/intraday.py` MemMap 面板 + `factor/intraday_features.py` 42 个统计特征，2026-09-09）；挖掘层待建——把特征面板接入 GP/GFlowNet 等日频挖掘框架（Alpha掘金 22 的降维复用路线）。
 
 ### 已完成（2026-08-25）
 
@@ -266,6 +272,78 @@ mock 落 `reports/models_mock`，真实落 `reports/models`。
   （均 3/3 年正超额）；ridge 全负；h5×M 三年平均 ≈ −15%（与 freq_tune 2025
   单年 −16.6% 互证）；日频 −33%~−46% 全灭。h>1 旧结论系 bug 伪结果的注记就此了结。
 
+### 已完成（2026-09-01）全A多年度滚动训练实验（最终交付物）
+
+- **数据回补**（`scripts/oneoff/fetch_alla_history.py` + `fetch_status_batched.py`）：
+  全A日线 2015-01~2026-09-01（1098 万行 × 5549 股，分批断点续拉，SDK 大清单
+  单查会挂死的对策）、状态表回补 2015-2018、交易日历/上证指数基准 000001.SH。
+  backward_factor / equity_structure / 行业分类原本已全A覆盖。
+- **全A公因子数据集 `all_a_2018_2026`**（`scripts/oneoff/build_alla_alpha_panels.py`，
+  54 分钟 4 进程）：alpha101/158/191/360 共 **798 因子 × 2471 日 × 5549 股**
+  （float32 面板，~24GB）。截面算子要求全截面在场——按因子分片并行而非按股票分块；
+  逐因子落盘 + 预计算 4 个 horizon 的日频 IC 缓存（特征漏斗零 IO 复用）。
+  工程教训两条：float64 巨值在 astype(float32) 时溢出成 inf（须转换后再
+  replace）；爆炸量级因子（alpha191_017 最大 ~3e38）必须加载时 zscore+clip。
+- **实验主链**（`scripts/rolling_grid_alla.py`，四阶段断点续跑，单测
+  `tests/test_rolling_grid_alla.py`）：每年特征选择（过去 500 日 horizon 匹配
+  IC + 覆盖率 + 项目正典 cross-spearman 去冗余）→ 季度（h≥10 半年）walk-forward
+  滚动训练（embargo=horizon，500 日滚动窗）→ **幽灵股守卫**（LightGBM 对全 NaN
+  特征照样输出预测，未上市股会占满信号顶部——预测面板按"当日有行情且 ≥1/4 特征
+  可用"掩码，2019 年实测可用截面 3393 只/日）→ 含成本与涨跌停/停牌过滤的
+  向量化回测。**120 组合**：horizon{1,5,10,20} × 频率{D,W,M,2M} ×
+  模型{ridge,gbdt,ranker,+h1 超参/窗口变体} × 中性化{on,off} × TopFrac{20%,10%}。
+- **报告**（`scripts/rolling_grid_report.py` → `reports/alla_rolling/report.html`）：
+  总览排序表 / 模型 IC 分年表 / 分年超额热力图（红涨绿跌）/ 五组维度对比净值
+  曲线（含上证与全A等权双基准）/ 分年超额柱状图 / 稳健性小结，六条诚实披露。
+- **核心结论**（全部含成本、样本外 2018-01~2026-09）：全A截面 OOS IC 显著强于
+  HS300（gbdt h1 全期 **IC=0.108**、9 年全正 0.078~0.157，ICIR 年化 14.6）；
+  **h=1 + 月频/周频 + gbdt 系 + Top10% raw 是一致稳健解**（gbdt h1×M 年化
+  14.0%、超额上证 +11.8%/年、超额全A等权 +5.2%/年、正超额 7/9 年；gbdt_deep
+  h1×W 正超额 8/9 年）；**日频调仓被成本全灭**（超额 −13%~−35%）；**风格中性化
+  在全A上稀释收益**（raw 14.0% vs neut 5.5%，与 HS300 上"中性化是变现关键"
+  结论相反——全A宽截面上 raw 信号本身即含可变现 alpha）；h5/h10/h20 组合偏弱
+  部分源于 0.7 去冗余下长 horizon 仅剩 3~16 个特征（披露⑥）。
+- **局限**：超参未在本数据重调（防二次窥探）。
+- **2026-09-07 数据修复（幸存者偏差消除 + 卫生清理）**：① 按 SDK 历史清单
+  （沪深A 2015 至今含退市 ∪ 当前全A，5810 只）回补退市股 K 线/股本/复权因子
+  （238 只退市类、237 只有完整历史；000562.SZ 2015-01 换股退市无窗口内行情），
+  面板与实验全链路重建后重跑（09-08 完成，156 组合）：头部配置超额较修复前
+  回落（gbdt h1×M raw Top10% +11.8% → +10.2%/年，量级合理）；**h1+h5 秩平均
+  集成（ens_h1h5）成为新头部**（年化 13.8%、超额上证 +11.5%/年、超额全A等权
+  +6.4%/年）；消融显示基本面/股东族带来 ~+0.7pp/年的一致增量（含族 +10.2% vs
+  纯量价 +9.5%，同口径对照）；
+  ② 状态表按完整历史清单全量重拉（分年覆盖 2814→5572 单调递增，修复
+  2019-2021 只有 ~500 只的锯齿，掩码全年份生效）；③ 基本面因子面板混入的
+  32 只 ETF 列已剔除并重算 IC；④ 样本末端 2026-09-02 盘中半拉数据已从全链路
+  裁剪（水位回退 20260901，下次 update_data 整日重拉）；⑤ 特征筛选升级为
+  DPP（`research.dpp_selection`）+ 基本面/股东族保留席位
+  （`RESERVED_FUNDAMENTAL_SLOTS`），并新增 smallcap/ensemble/ablation/ortho
+  子实验（`--stage smallcap/ensemble`、`--ablation`、`--preproc ortho`）。
+- **数据更新守卫（2026-09-07）**：① 盘中拉数守卫——`update_data` 默认把"未到
+  17:00 的今天"从拉取终点摘除（`--allow-intraday` 跳过），杜绝 daily 水位被
+  盘中半拉数据永久污染（daily 增量起点=last+1，不会自愈）；② 状态表拉取在
+  cache 层统一 200 只/批 + 3 次重试（SDK 大清单单查会挂死）。
+- **全A面板刷新流程**（日线有新日期后，按序）：① `update_data --pool all_a`；
+  ② `python scripts/oneoff/build_alla_alpha_panels.py --workers 6`（全量重算
+  ~1h，不加 --resume 才会覆盖延伸）；③ 基本面族按需重跑 `build_alla_fundamental_
+  factors / _holder / _pledge / _constructed`（源头已过滤非股票列）；
+  ④ `rolling_grid_alla --stage prep` 重建 _base；⑤ 实验各阶段按产物断点续跑。
+- **因子层正交化三臂对比（2026-09-09，`--preproc ortho/mixed`）**：zscore（不正交）
+  vs ortho（全因子中性化）vs mixed（仅基本面族中性化+量价 raw），120 同配置配对：
+  **全正交 +1.6pp/年 > 混合 +0.1pp ≈ 不正交**——正交化的增量几乎全部来自量价因子
+  （隐形小盘/流动性/波动暴露是大头），单独对基本面做 ≈ 零增量；40/42 个 h1 配置
+  全正交占优，牛市微让、2022 后震荡年份保护明显。结论：ortho 口径为全A管线默认。ortho 臂补跑 h1+h5 集成后复现集成增益
+  （单模型 +11.8% → 集成 +13.3%），且高于 zscore 臂同款集成的 +11.5%——
+  正交化与集成的收益叠加成立。stage_ensemble 回测窗口 bug 已修（原用 close
+  全索引，2016-2017 无信号空仓期稀释年化/超额：+9.9% → 修复后 +13.3%，
+  与主口径逐位一致）。
+- **生产化每日推理**（2026-09-08，`scripts/alla_daily_rank.py`，单测
+  `tests/test_alla_daily_rank.py`）：最优方案每天盘后自动产出全A选股排名——
+  与实验同代码路径尾部重算当年入选 50 因子 → gbdt 500 日窗重训预测最新截面 →
+  幽灵股守卫 + 信号日可交易性标注 → `reports/alla_daily/`。一致性验证：与实验
+  冻结 OOS 面板 2026-09-01 截面 Spearman 0.92（每日重训比实验季度折更新鲜，
+  非完全一致属预期）。
+
 ## scripts 目录索引
 
 脚本层按角色分类（2026-08-31 整理）。注意区分几组**名字相近但职责不同**的脚本：
@@ -277,6 +355,7 @@ mock 落 `reports/models_mock`，真实落 `reports/models`。
 | 脚本 | 职责 |
 |---|---|
 | `update_data` | 增量更新行情/财务缓存（`--pool` / `--no-minute`） |
+| `build_minute_panel` | 分钟长表 → MemMap 稠密面板 + 覆盖统计（`--features` 特征提取 / `--demo-ic` IC 快照） |
 | `fetch_status_batched` | 批量拉全A状态表（涨跌停/停牌/ST），断点续拉 |
 | `fetch_textmining` | 拉取文本挖掘数据（研报/公告） |
 | `update_etf` | ETF 行情更新（需系统 Python 3.12 + SDK） |
@@ -285,6 +364,7 @@ mock 落 `reports/models_mock`，真实落 `reports/models`。
 | `monitor_performance` | 生产化监控调度（Windows 计划任务 `YuriQuant Monitor` 每日 17:30 调用） |
 | `generate_signals` | 每日可执行交易信号导出（P3） |
 | `run_model_portfolio` | 模型增强组合正式入口（h=1 / gbdt / Top20% 月度调仓） |
+| `alla_daily_rank` | 全A每日模型选股排名（最优方案生产化推理，计划任务 `YuriQuant AllaDailyRank`） |
 
 ### 因子构建 / 合成 / 挖掘
 | 脚本 | 职责 |
@@ -292,6 +372,7 @@ mock 落 `reports/models_mock`，真实落 `reports/models`。
 | `build_alpha_factors` | Alpha101 / GTJA Alpha191 公开因子构建入库 |
 | `build_fundamental_factors` | 财务 PIT 因子（价值/质量/成长/规模） |
 | `build_technical_factors` | 技术迭代/累积类指标因子 |
+| `build_paper_factors` | 论文复现因子 21 式（awesome-systematic-trading 经典策略 → A 股截面因子） |
 | `build_intraday_factors` | 5 分钟 K 线 → 日频因子 |
 | `synthesize_factors` | 多因子合成 CLI（SDK 在线版） |
 | `synthesize_library` | 因子库合成（离线版，免 SDK，与 `synthesize_factors --from-library` 等价） |
@@ -314,6 +395,9 @@ mock 落 `reports/models_mock`，真实落 `reports/models`。
 | `select_stocks` | 因子库 → 选股回测演示入口 |
 | `multiyear_oos` | 多年度 OOS（2023/24/25 × h1/h5 × D/W/M） |
 | `freq_tune` | 调仓频率精修（h=1 时 M 月度最优） |
+| `rolling_grid_alla` | 全A多年度滚动训练实验（2018~now × horizon × 频率 × 模型网格） |
+| `rolling_grid_report` | 上述实验的收益曲线 + 分年绩效 HTML 报告 |
+| `jq_style_report` | 最佳策略聚宽风格收益曲线页（vs 国证A指≈中证全指，含回撤/分年绩效，`--run-id` 可选组合） |
 
 ### 报告
 | 脚本 | 职责 |
@@ -324,6 +408,7 @@ mock 落 `reports/models_mock`，真实落 `reports/models`。
 | `risk_decomposition_report` | 组合级风险分解报告 |
 | `generate_report` | 一键汇总 reports/ 产物为单个 HTML 报告 |
 | `attribution` | 收益归因 CLI（三大归因框架） |
+| `alla_excess_attribution` | 全A主策略超额归因（α/β + Brinson，复跑回测取权重）→ `reports/alla_attribution/` |
 | `factor_correlation` | 因子两两相关性矩阵报告 |
 | `intraday_analysis` | 日内收益分解 + 时段效应分析 |
 
@@ -412,14 +497,48 @@ python scripts/walk_forward_model.py --mock   # 无 SDK，mock 数据跑通管�
 python scripts/walk_forward_model.py --real --methods ridge,gbdt --horizon 5 --save-library
 ```
 
-### 模型增强组合（固化配置，正式投产入口）
+### 模型增强组合（固化配置，正式投产入口；2026-09-09 升级为全A正交化管线）
 
 ```bash
-python -m scripts.run_model_portfolio                  # 默认 gbdt+中性化+Top20%+月频
-python -m scripts.run_model_portfolio --model ranker --frac 0.25   # 覆盖模型/持仓
+python -m scripts.run_model_portfolio                  # 全A·ortho因子层·ens_h1h5集成·raw信号·月频Top10%
+python -m scripts.run_model_portfolio --frac 0.20      # 覆盖持仓比例
+python -m scripts.run_model_portfolio --refresh-base   # 日线更新后先重建基础面板
+python -m scripts.run_model_portfolio --no-train       # 复用上次预测缓存（快速回测/选股）
 python -m scripts.run_model_portfolio --pre-cost       # 同时输出成本前口径
 ```
-参数真源在 `config/settings.yaml` 的 `model_portfolio` 段；结果落 `reports/model_portfolio/`。
+2026 样本外实测（net）：年化 +8.6%、超额上证 +8.2%、Sharpe 0.33；同步导出当日
+Top10% 选股清单 `picks_YYYY-MM-DD.csv`。参数真源在 `config/settings.yaml` 的
+`model_portfolio` 段；结果落 `reports/model_portfolio/`。旧版 HS300 口径
+（单模型+信号层中性化）已退役，函数保留为 legacy 供 buffer_tune/freq_tune 复用。
+
+### 全A每日模型选股排名（最优方案生产化推理，2026-09-08）
+
+```bash
+python scripts/alla_daily_rank.py                    # 全流程：更新数据→重训→排名（~5分钟）
+python scripts/alla_daily_rank.py --skip-update      # 离线（数据已更新）
+python scripts/alla_daily_rank.py --window 750       # gbdt_w750 变体
+python scripts/alla_daily_rank.py --install-task 17:30   # 注册每日盘后 Windows 计划任务
+python scripts/alla_daily_rank.py --remove-task
+```
+
+把全A滚动实验的最优方案（gbdt h1 + 当年入选 50 因子 + 500 日窗 + raw Top10%）
+变成每日盘后一条命令：增量更新全A缓存（盘中运行由 update_data 的守卫自动把
+拉取终点回退到上一交易日，防当日半拉K线进缓存——2026-09-02 事故的对策；
+SDK 拉表瞬时失败自动重试 3 次）
+→ 尾部（训练窗+260 日预热）重算入选因子（量价走 alpha 注册表，B族财务/
+B+族商誉质押/B++族构造/A族股东复用 oneoff 构建器；训练窗与预测截面同一次
+重算、同一复权基准，不改写冻结的 `all_a_2018_2026` 数据集）→ gbdt 重训预测
+最新截面 → 幽灵股守卫 + 信号日停牌/ST/封板标注。输出
+`reports/alla_daily/ranking_YYYYMMDD.csv`（全A 排名）、`picks_YYYYMMDD.csv`
+（Top10% 可交易候选，等权参考）、`history.csv`（逐日漂移监控）、
+`latest_ranking.csv`（稳定路径副本）。口径披露：训练段用发布时点已知的全部
+标签（实时预测无未来可窥，实验的 embargo 是回测隔离）；可交易性为信号日
+状态估计（T+1 一字板不可预知）；跨年无当年选择文件时回退最近年份并告警。
+
+> 顺带修复数据层一个实际 bug（2026-09-08）：`DataCache.get_calendar` 在
+> `end=None` 时永不回源，本地日历被历史某次显式 end 调用封顶（实测卡在
+> 20260902）后，所有"更新到最新"的调用永远看不到新交易日——已改为 end=None
+> 语义 = "覆盖到今天"（`tests/test_data_layer.py::test_calendar_end_none_covers_today`）。
 
 ### 生产化监控
 
