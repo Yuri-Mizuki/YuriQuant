@@ -124,6 +124,11 @@
   （pytest + ruff check + tests/test_layering.py 门禁），
   把口径守卫和分层守卫变成强制约束（测试漂移到无法收集才被发现，
   根因就是无 CI）。
+  - 2026-09-10 收敛范围：push/PR 只留 Ruff 真 bug 规则 + 三个分层守卫
+    （约 1 分钟）；全量 pytest 移出 push 流程 → 仅手动触发的
+    `full-tests.yml`。原因：全量要 7 分钟、依赖 `reports/` 等不入库产物
+    （CI 上只能靠 skip 兜住），且含已知 flaky 的 risk_parity 数值测试
+    （`test_solver.py`，SCS 近似解波动），每次 push 都报红纯噪声。
 
 ### 3.2 机械性（可批量清理）
 

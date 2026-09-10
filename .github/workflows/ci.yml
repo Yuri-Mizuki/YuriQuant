@@ -1,5 +1,11 @@
 name: CI
 
+# 2026-09-10 轻量化：push 只跑「快检查」（Ruff 真 bug 规则 + 分层守卫，约 1 分钟）。
+# 原先每次 push 都跑的全量 pytest 有 7 分钟，且依赖 reports/ 等被 gitignore 的产物
+# （CI 上必然缺文件，只能靠 skip 兜住），本机数据齐全时跑更有意义，故移出 push 流程。
+# 需要全量时用 `.github/workflows/full-tests.yml`（Actions 页手动触发），
+# 或本机 `D:/python/Python312/python.exe -m pytest -q`。
+
 on:
   push:
     branches: [master, main]
@@ -8,7 +14,7 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -38,25 +44,27 @@ jobs:
         run: ruff check . --select F821,F811,F522,F523,F632 --output-format concise
 
       - name: Layer & convention guards
-        run: pytest -q tests/test_layering.py tests/test_pipeline_layers.py tests/test_data_layer.py
-
-      - name: Full test suite
-        # pipefail 保证 pytest 失败不因 tee 被吞掉；日志落盘供失败步骤提取
+        # tee 落盘供下方 Surface failures 提取失败行
         run: |
           set -o pipefail
-          pytest -q --tb=short 2>&1 | tee /tmp/pytest.log
+          pytest -q --tb=short \
+            tests/test_layering.py tests/test_pipeline_layers.py tests/test_data_layer.py \
+            2>&1 | tee /tmp/pytest.log
 
       - name: Surface failures
         # 失败时把 FAILED 行推到 check annotations、把日志尾部写进 job summary，
-        # 便于从 API/摘要页直接定位，无需翻原始日志
+        # 便于从 API/摘要页直接定位，无需翻原始日志。日志可能不存在（如 Ruff 先挂），
+        # 故整体做存在性守卫——否则本步自身会因 tail/grep 返回非零而报错，制造噪声。
         if: failure()
         run: |
-          {
-            echo "## Pytest tail (last 120 lines)"
-            echo '```'
-            tail -n 120 /tmp/pytest.log
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-          grep -E "^(FAILED|ERROR) " /tmp/pytest.log | head -30 | while IFS= read -r line; do
-            echo "::error ::$line"
-          done
+          if [ -s /tmp/pytest.log ]; then
+            {
+              echo "## Pytest tail (last 120 lines)"
+              echo '```'
+              tail -n 120 /tmp/pytest.log
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            grep -E "^(FAILED|ERROR) " /tmp/pytest.log | head -30 | while IFS= read -r line; do
+              echo "::error ::$line"
+            done
+          fi

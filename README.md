@@ -446,6 +446,13 @@ uv sync --frozen --extra dev --extra ml --extra gp --extra solver
 CI 以 `uv lock --check` 守卫锁文件与 `pyproject.toml` 保持同步；`rl` 组含
 torch（CUDA 体积过大），CI 与本地默认不装，有需要时单独 `--extra rl`。
 
+CI 分两层（2026-09-10 起）：push/PR 只跑**快检查**——`ruff check
+--select F821,F811,F522,F523,F632`（未定义名/重复定义这类真 bug）+
+三个分层守卫测试，约 1 分钟；**全量 pytest 移到仅手动触发**的
+`full-tests.yml`（Actions 页 → Run workflow）。原因是全量套件要 7 分钟，
+且依赖 `reports/` 等不入库的实验产物（CI 上必然缺文件，只能靠 skip 兜住），
+本机数据齐全时跑更有意义。
+
 **例外：AmazingData SDK 不在上述依赖里。** 它是银河证券私有分发的本地 wheel，
 不在 PyPI 上，需要按开发手册（`AmazingData开发手册.pdf` 3.3 节）单独安装：
 

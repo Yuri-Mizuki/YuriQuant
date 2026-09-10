@@ -1,0 +1,50 @@
+name: Full tests (manual)
+
+# 全量测试套件：仅手动触发，不进 push/PR 流程（见 ci.yml 顶部注释的取舍说明）。
+# 触发方式：仓库 Actions 页 → Full tests (manual) → Run workflow。
+#
+# 注意：reports/ 等实验产物被 gitignore，CI 上不存在，依赖它们的测试会自行 skip
+# （已按仓库惯例加了存在性守卫）。因此这里跑出的"全绿"只能证明代码可导入、
+# 逻辑自洽，不能替代本机数据齐全时的完整验证。
+
+on:
+  workflow_dispatch:
+
+jobs:
+  full-suite:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -e ".[dev,ml,gp,solver,rl]"
+
+      - name: Full test suite
+        # pipefail 保证 pytest 失败不因 tee 被吞掉；日志落盘供失败步骤提取
+        run: |
+          set -o pipefail
+          pytest -q --tb=short 2>&1 | tee /tmp/pytest.log
+
+      - name: Surface failures
+        if: failure()
+        run: |
+          if [ -s /tmp/pytest.log ]; then
+            {
+              echo "## Pytest tail (last 120 lines)"
+              echo '```'
+              tail -n 120 /tmp/pytest.log
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            grep -E "^(FAILED|ERROR) " /tmp/pytest.log | head -30 | while IFS= read -r line; do
+              echo "::error ::$line"
+            done
+          fi
