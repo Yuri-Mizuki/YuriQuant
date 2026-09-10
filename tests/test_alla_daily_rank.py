@@ -387,6 +387,10 @@ def test_glossary_covers_selection_2026():
     from scripts.alla_daily_rank import lookup_glossary
     p = (Path(__file__).resolve().parents[1] / "reports" / "alla_rolling"
          / "selection" / "y2026__h1.json")
+    if not p.exists():
+        # reports/ 不入库（实验产物），CI 上没有该文件——守卫的是本机漏表，
+        # 缺文件时跳过而非失败（与 test_e2e_pipeline / test_investment_report 同惯例）
+        pytest.skip("本机无 alla_rolling 当年选择文件")
     names = json.loads(p.read_text(encoding="utf-8"))
     assert len(names) == 50
     missing = [n for n in names if lookup_glossary(n)[1] == "未收录释义"]
