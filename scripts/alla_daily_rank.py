@@ -46,6 +46,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
@@ -55,6 +56,9 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.cli_common import setup_logging  # noqa: E402
+
+if TYPE_CHECKING:  # 仅用于类型标注；运行时在 train_and_predict 内延迟导入
+    from model.predictor import LGBMPredictor
 
 log = setup_logging("alla_daily_rank")
 
