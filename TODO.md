@@ -146,24 +146,54 @@
 - [ ] **口径统一第二批（2026-09-10 架构审计立项；与第一批不同，均需重跑实验
   验证后再定案）**：
 
-  - [ ] **显著性判定收口（最高优先——直接影响因子库结论）**：
-    `research/factor_library.py:247` 用 `abs(t_stat_nw) > 2.0`（**无多重检验
-    校正**），而 `factor/mining.py:235/:362` 用 BH-FDR（默认 q=0.05、基于 NW
-    p 值）。后果：库里 `significant=True` 的因子按挖掘端标准可能并不显著。
-    收口到 `stats/` 并明确取 FDR 还是 raw；若改 FDR，需重算已落盘 evals 的
-    `significant` 列（历史 evals 全部失效、因子库横向比较口径须同步声明）。
-  - [ ] **统计 / 预处理 / 指标原语收口**：
-    - rank IC 序列 **2 套**：全库走 `stats/ic.calc_ic_series`，唯
-      `factor/gflownet/reward.py:82 rank_ic_series` 自实现（GFlowNet 奖励用，
-      `returns_rank` 预计算是它的性能特权，收口时需保留该优化）；
-    - 市值中性化 **2 套**：`factor/gflownet/reward.py:62
-      neutralize_market_cap` vs `factor/preprocessing.py:77 neutralize`；
-    - 内联 t 统计量 **≥7 处**（`factor/mining.py:84/:335`、
-      `factor/genetic_mining.py:1125/:1663`、`factor/synthesis.py:725`、
-      `research/attribution.py:130`、`research/factor_analysis.py:62`）
-      应统一走 `stats/robust_stats.nw_tstat`；
-    - 绩效指标 **2 套**：`backtest/metrics.py` vs
-      `scripts/e2e_backtest.py:180 perf_stats`。
+  - [x] **显著性判定收口（2026-09-10 完成，`24837bb`）**：新增
+    `stats/significance.py` 作为"判定层"单一真源（与 `stats/robust_stats` 的
+    "估计层"分工）——`t_pvalue`（t→双侧 p）/ `benjamini_hochberg`（BH-FDR）/
+    `mean_inference`（一步式 OLS+NW 两套 t/p）。先前散落的实现全部改走它：
+    `factor/mining.py` 的私有 `_benjamini_hochberg` 与 worker/串行两条路径
+    各自内联的 p 值公式、`research/factor_analysis.py`、`research/attribution.py`、
+    `model/evaluation.py`（2 处）的内联 p 值公式。
+    **两处检验族本就不同**，故保留两种语义、但共用一个实现：批量挖掘族 =
+    这一批候选 → BH-FDR(q=0.05)；单因子入库无族 → 存原始 NW 显著性，
+    并**新增 `p_value_nw` 列**把原始 p 落盘 + 提供
+    `FactorLibrary.significance_table(q)` /
+    `load_significant_features(correction="fdr")` 在"整库"这个族上校正。
+    默认仍走 raw，**不改动已落盘结论**。
+    实测切换代价（hs300_2025 的 244 因子）：raw 显著 **84** → 整库 BH-FDR(q=0.05)
+    **62**（22 个会翻）；hs300_2022_2025 的 862 个：397 → 339。
+    ⚠️ **待拍板**：`significant` 默认取 raw 还是 FDR——它经
+    `load_significant_features` 喂 e2e 因子池，换口径会改下游回测数字。
+  - [x] **统计 / 预处理 / 绩效原语收口（2026-09-10，`859494e` + `1a83d77`）**：
+    - **rank IC**：`factor/gflownet/reward.rank_ic_series` 改为
+      `stats.ic.calc_ic_series` 的薄封装（此前自实现一份）。`calc_ic_series`
+      新增 `returns_rank` 参数承载原性能捷径，并把"**捷径不总是等价**"的边界
+      写进 docstring + 用测试钉住：因子**整行**缺失（窗口预热）不影响；
+      **行内散点**缺失才分叉，30% 散点缺失时日均 IC 差约 1.1e-2
+      （IC 量级 3e-2~5e-2，**同阶**）。
+      ⚠️ **待拍板**：训练是否改为始终走 canonical——代价是 IC 计算慢约 30%
+      且改训练行为（与既有 GFlowNet Phase 0/1 结果不再可比）。
+    - **市值中性化**：向量化版上移为 `factor/preprocessing.neutralize_single`
+      （含截距），`reward.neutralize_market_cap` 改为薄封装，新旧 max|Δ| = 0。
+      **新发现（待拍板）**：`preprocessing.neutralize` **只传市值时没有截距项**
+      （`x_matrix` 仅 `[log(mc)]` 一列——截距靠"全量行业哑变量的列和 = 全 1
+      向量"来 span，不传行业就没有），故与含截距的 `neutralize_single`
+      **差一个截距项**；`preprocess_factor` 在无行业数据时会走到这条路径。
+      按截面回归惯例（含截距）应给 size-only 路径补 ones 列，但会改变因子层
+      中性化结果，需拍板。已用 characterization 测试钉住现行为。
+    - **内联 t 统计量**：p 值公式 **4 处已收口**（见上）。仅算 t 的一行式
+      `m/(s/√n)` 尚有 5 处（`factor/synthesis.py:725`、
+      `factor/genetic_mining.py` 的 `_seg_ic_stats` / `:1125` / `:1663`、
+      `scripts/build_minute_panel.py:83`、`scripts/compare_htai_fitness.py:116`）
+      **刻意保留**：它们只要 t，且 n<2 的退化语义（旧代码返回 0.0）与
+      `mean_inference`（返回 NaN）不同，强行合并要么改这些路径输出、要么往
+      热路径塞用不上的 NW 计算。**真正的缺口**是这几处只报 OLS t、完全不做
+      NW，与 mining / 因子库"两列并报"不一致——是否补 NW 列（改 CSV schema）
+      另行决定。
+    - **绩效指标**：`scripts/e2e_backtest.perf_stats`（5 个脚本消费）的三个基础量
+      改调 `backtest.metrics` 原语，逐位一致；保留两处报告层独有约定
+      （短样本 <0.3 年不年化、月胜率——与 metrics 的日胜率不是同一指标）。
+      ⚠️ 唯一数字变化：`max_drawdown` 由负值改**正值**（全库其余口径均取正值），
+      报告渲染由 `-38.7%` 变 `38.7%`，幅度不变。
     - 收益面板构造 3 处（`cli_common.returns_from_daily` /
       `data/cache_helpers` / `build_panel` 内联）——**注意**：这不是"要统一成
       一套写法"，IC 口径与引擎口径是分层设计、数学等价（`A = B.shift(-1)`），
