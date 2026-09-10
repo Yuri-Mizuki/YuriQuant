@@ -107,8 +107,8 @@ def main():
                         help="1 倍资金约束：总保证金需求>1 时按比例降杠杆")
     args = parser.parse_args()
 
-    # 空头腿成本模型：默认从配置读并启用
-    _cfg_bt = dict(Config.get().get("backtest", {}))
+    # 空头腿成本模型：默认从配置读并启用（费率真源 = Config.costs()）
+    _cfg_bt = Config.costs()
     short_costs = ShortCostModel(
         borrow_rate=0.0 if args.no_short_cost else (args.borrow_rate if args.borrow_rate is not None
                                                     else _cfg_bt.get("short_borrow_rate", 0.08)),

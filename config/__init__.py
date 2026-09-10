@@ -93,6 +93,30 @@ class Config:
         }
 
     @classmethod
+    def costs(cls) -> dict:
+        """交易成本（全项目**唯一真源**，缺省值与 settings.yaml 的 `costs` 段一致）。
+
+        2026-09-10 收敛：此前费率分散在 `backtest` 段与 `model_portfolio` 段两处，
+        差 2~3 倍、互相不可比。现在引擎缺省费率（backtest/engine.py）与生产管线
+        （scripts/run_model_portfolio.default_costs）都经由本方法取值。
+
+        Returns:
+            {commission_rate, commission_min, stamp_duty, slippage_bp,
+             short_borrow_rate, short_margin_ratio}
+
+        新增消费方请走这里，不要在别处硬编码费率字面量——否则 config 改动后会漂移。
+        """
+        c = cls.get().get("costs") or {}
+        return {
+            "commission_rate": float(c.get("commission_rate", 0.0003)),
+            "commission_min": float(c.get("commission_min", 5.0)),
+            "stamp_duty": float(c.get("stamp_duty", 0.001)),
+            "slippage_bp": float(c.get("slippage_bp", 10.0)),
+            "short_borrow_rate": float(c.get("short_borrow_rate", 0.08)),
+            "short_margin_ratio": float(c.get("short_margin_ratio", 1.0)),
+        }
+
+    @classmethod
     def monitoring(cls) -> dict:
         """生产化监控阈值（monitoring/ 包单一真源，缺省值与 settings.yaml 一致）。"""
         m = cls.get().get("monitoring") or {}

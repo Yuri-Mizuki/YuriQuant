@@ -127,21 +127,23 @@ class VectorBacktest:
         self.rebalance_freq = rebalance_freq
         self.initial_capital = float(initial_capital)
         if costs is None:
-            cfg = Config.get().get("backtest", {})
+            # 费率唯一真源：Config.costs()（config/settings.yaml 顶层 `costs` 段）。
+            # 2026-09-10 由原先的 `backtest` 段收敛而来，勿再读回旧位置。
+            cfg = Config.costs()
             costs = TransactionCosts(
-                commission_rate=cfg.get("commission_rate", 0.0001),
-                commission_min=cfg.get("commission_min", 5.0),
-                stamp_duty=cfg.get("stamp_duty", 0.001),
-                slippage_bp=cfg.get("slippage_bp", 5.0),
+                commission_rate=cfg["commission_rate"],
+                commission_min=cfg["commission_min"],
+                stamp_duty=cfg["stamp_duty"],
+                slippage_bp=cfg["slippage_bp"],
             )
         self.costs = costs
         # 空头腿成本：默认从配置读取并【启用】（修正空头腿乐观偏差）。
         # 显式传 ShortCostModel 可自定义；borrow_rate=0 等价关闭借券费。
         if short_costs is None:
-            cfg = Config.get().get("backtest", {})
+            cfg = Config.costs()
             short_costs = ShortCostModel(
-                borrow_rate=cfg.get("short_borrow_rate", 0.08),
-                margin_ratio=cfg.get("short_margin_ratio", 1.0),
+                borrow_rate=cfg["short_borrow_rate"],
+                margin_ratio=cfg["short_margin_ratio"],
             )
         self.short_costs = short_costs
         # 1 倍资金约束：总保证金需求（多头+空头×保证金比例）> 1 时按比例降杠杆。

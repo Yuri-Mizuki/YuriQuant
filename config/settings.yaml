@@ -104,18 +104,30 @@ monitoring:
   min_t_nw_recent: 1.0       # 模型因子近期 Newey-West t 下限（显著性丢失 → warning）
   ledger_root: reports/monitoring   # 快照 / 告警账本与 HTML 报告输出目录
 
-# --- 回测默认参数（后续阶段用） ---
-backtest:
-  commission_rate: 0.0001    # 双边佣金万1
+# --- 交易成本（全项目唯一真源）---
+# 2026-09-10 收敛：此前费率分散在两处——`backtest` 段（佣金万1 / 滑点 5bp，引擎缺省值）
+# 与 `model_portfolio` 段（万3 / 10bp，生产管线 default_costs()），两套数字差 2~3 倍、
+# 互相不可比（网格实验选出的最优参数无法用引擎默认复跑）。
+# 现统一到本段：引擎缺省值、scripts/run_model_portfolio.default_costs()、
+# select_stocks 的空头成本一律读这里。取值口径 = 生产管线已验证的那套
+# （全A Top10% 含成本结论即基于此）。
+# ⚠️ 改这里 = 改全项目默认成本，会同步改变一切**未显式传 TransactionCosts** 的回测结果
+#    （backtest_two_periods / e2e_backtest / multiyear_oos / gp_tune_budget /
+#     optimize.multi_period / research.factor_library 的 canonical 回测等）。
+costs:
+  commission_rate: 0.0003    # 双边佣金万3
   commission_min: 5.0        # 单笔最低佣金5元
   stamp_duty: 0.001          # 印花税卖出千1
-  slippage_bp: 5             # 滑点 5bp
-  initial_capital: 100000   # 初始资金 10万
-  rebalance_freq: M          # D=日 / W=周 / M=月调仓
-  benchmark: "000300.SH"
+  slippage_bp: 10            # 滑点 10bp
   # 空头腿成本（修正空头腿乐观偏差：多空策略借券费按日计提、保证金占用报告）
   short_borrow_rate: 0.08    # 年化借券费率（A股融券常见 8%~10%；0=关闭）
   short_margin_ratio: 1.0    # 融券保证金比例（监管最低 100% = 1.0）
+
+# --- 回测默认参数（费率不在这里，见上面的 `costs` 段）---
+backtest:
+  initial_capital: 100000   # 初始资金 10万
+  rebalance_freq: M          # D=日 / W=周 / M=月调仓
+  benchmark: "000300.SH"
 
 # --- 模型增强组合默认配置（2026-09-09 升级：全A · 因子层正交化 · ens_h1h5 集成）---
 # 升级依据（reports/alla_rolling 三臂对比 + 消融 + 集成实验，2018-2026 样本外含成本）：
@@ -145,7 +157,6 @@ model_portfolio:
   n_folds: 4                  # 年内季度再训练
   quality_window: 500         # 特征选择 IC 质量窗
   # ---- 成本 ----
-  cost_slippage_bp: 10
-  cost_commission: 0.0003
-  cost_stamp: 0.001
+  # 费率不在这里：全项目唯一真源是顶层 `costs` 段（2026-09-10 收敛）。
+  # 生产管线通过 scripts/run_model_portfolio.default_costs() 读它，勿在别处写费率字面量。
   test_note: "全A正交化管线 ens_h1h5：2018-2026 样本外超额上证 +13.3%/年（Sharpe 0.63）"

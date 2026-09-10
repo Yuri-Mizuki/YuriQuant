@@ -68,25 +68,28 @@ def _mp_cfg() -> dict:
         rebalance_freq="M", neutralize=False,
         selection_cut="auto",
         train_window=500, n_folds=4, quality_window=500,
-        benchmark="000001.SH",
-        cost_slippage_bp=10, cost_commission=0.0003, cost_stamp=0.001)
+        benchmark="000001.SH")
     defaults.update({k: v for k, v in cfg.items() if v is not None})
     return defaults
 
 
 def default_costs(factor_cost: bool = True):
-    """交易成本单一真源：从 config 的 model_portfolio 段构建。
+    """交易成本单一真源：从 config 顶层 `costs` 段构建。
 
     factor_cost=False 置零（无成本对照）；消费方一律走本函数，
     禁止再硬编码费率字面量（防 config 改动后漂移）。
+
+    2026-09-10：真源由 `model_portfolio.cost_*` 上移到顶层 `costs` 段，
+    与 `backtest/engine.py` 的缺省费率共用同一份配置（原先两套差 2~3 倍，
+    网格实验选出的最优参数无法用引擎默认复跑）。
     """
     from backtest.costs import TransactionCosts
     if not factor_cost:
         return TransactionCosts(commission_rate=0.0, stamp_duty=0.0, slippage_bp=0.0)
-    cfg = _mp_cfg()
-    return TransactionCosts(commission_rate=cfg["cost_commission"],
-                            stamp_duty=cfg["cost_stamp"],
-                            slippage_bp=cfg["cost_slippage_bp"])
+    cfg = Config.costs()
+    return TransactionCosts(commission_rate=cfg["commission_rate"],
+                            stamp_duty=cfg["stamp_duty"],
+                            slippage_bp=cfg["slippage_bp"])
 
 
 def neutralize_panel(signal, cov):
