@@ -125,7 +125,10 @@ class RidgePredictor(BasePredictor):
         self._check_features(features)
         idx, cols = _grid(features)
         X = _long_matrix(features, self.feature_names_, idx, cols)
-        pred = ((X - self._mu) / self._sd) @ self._beta
+        # 缺失特征按截面均值（z=0 → 0 贡献），对齐 ICL「NaN 填 0 = 保守中性化」惯例。
+        # 否则单个特征在数据洞期整体 NaN 会把整块预测变 NaN（2026-09-03 全A桩外发现）。
+        Xz = (X - self._mu) / self._sd
+        pred = np.nan_to_num(Xz, nan=0.0, posinf=0.0, neginf=0.0) @ self._beta
         return standardize_zscore(_to_panel(pred, idx, cols))
 
 
@@ -179,6 +182,28 @@ class LGBMPredictor(BasePredictor):
         X = _long_matrix(features, self.feature_names_, idx, cols)
         pred = self._model.predict(X)
         return standardize_zscore(_to_panel(pred, idx, cols))
+
+    def feature_importance(self, importance_type: str = "gain") -> pd.Series:
+        """特征重要性（split=分裂次数 / gain=分裂增益），index=特征名降序。"""
+        if importance_type not in ("split", "gain"):
+            raise ValueError(f"importance_type 仅支持 split/gain，got {importance_type!r}")
+        imp = self._model.booster_.feature_importance(importance_type=importance_type)
+        return (pd.Series(imp, index=self.feature_names_, dtype=float)
+                .sort_values(ascending=False))
+
+    def predict_contrib(self, features: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
+        """SHAP 归因面板：行=(date, code)，列为各特征贡献 + bias。
+
+        与 ``predict`` 同一特征网格（NaN 由 LightGBM 树路径原生处理）；
+        每行各列之和 + bias ≈ 预测原始值（z-score 标准化前）。
+        """
+        self._check_features(features)
+        idx, cols = _grid(features)
+        X = _long_matrix(features, self.feature_names_, idx, cols)
+        contrib = self._model.predict(X, pred_contrib=True)  # (n, f+1)
+        rows = pd.MultiIndex.from_product([idx, cols], names=["date", "code"])
+        return pd.DataFrame(contrib, index=rows,
+                            columns=list(self.feature_names_) + ["bias"])
 
 
 class TabICLPredictor(BasePredictor):

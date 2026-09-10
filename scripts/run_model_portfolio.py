@@ -1,45 +1,52 @@
 """
-模型增强组合回测（正式固化入口）
-================================
+模型增强组合（正式固化入口，2026-09-09 升级为全A正交化管线）
+==========================================================
 
-把「模型信号 → 风格中性化 → TopFrac 重仓多头」整条链路固化为一个正式可复用入口，
-参数统一从 ``config/settings.yaml`` 的 ``model_portfolio`` 段读取（2026-08-25 精修固化）。
+固化为实验最优配方（三臂对比 + 消融 + 集成实验，2018-2026 样本外含成本，
+详见 reports/alla_rolling{,_ortho,_mixed}/ 与 README「已完成 2026-09-07」段）：
 
-默认配置（gbdt tuneda）：horizon=1, model=gbdt, strategy=topfrac_lo, frac=0.20,
-月度调仓。2025 test 段成本后超额沪深300 +4.85%（见 reports/gbdt_tune 网格）。
+    全A（含退市回补） → 因子层全正交（panels_neu）→ DPP 选择+基本面族保留席位
+    → gbdt h1+h5 秩平均集成 → raw 信号（信号层不再中性化）→ 月频 Top10% 等权
+
+头部实现 2018-2026 样本外：年化 15.5%、超额上证 +13.3%/年、Sharpe 0.63。
+旧版 HS300 口径（dataset=hs300_2022_2025 + 信号层风格中性化）已退役——
+其「信号层中性化」在全A上被实证为过度中性化（−5.4pp/年）。
+
+数据前置（_base 与因子面板由 rolling_grid_alla 管线维护，本入口直接消费）：
+    python scripts/rolling_grid_alla.py --stage prep        # _base 基础面板
+    python scripts/oneoff/build_alla_alpha_panels.py ...    # 因子面板（已存在则跳过）
 
 用法:
-    # 用配置默认跑（真实本地数据, 完整 walk-forward）
-    python -m scripts.run_model_portfolio
-
-    # 覆盖模型 / 持仓比例
-    python -m scripts.run_model_portfolio --model ranker --frac 0.25
-
-    # 只回测、跳过 walk-forward 训练（直接吃现有 OOS 面板——需先跑一次全流程）
-    python -m scripts.run_model_portfolio --offline-panel reports/model_portfolio/gbdt_pred.parquet
+    python -m scripts.run_model_portfolio                       # 全流程（当年预测+回测+今日选股）
+    python -m scripts.run_model_portfolio --frac 0.20           # 覆盖持仓比例
+    python -m scripts.run_model_portfolio --refresh-base        # 先重建 _base 再跑
+    python -m scripts.run_model_portfolio --no-train            # 复用上次预测面板（只回测/选股）
 """
 
 from __future__ import annotations
 
-import sys
 import argparse
+import sys
 import time
 from pathlib import Path
+
+import numpy as np
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.cli_common import setup_logging  # noqa: E402
-
-
+from backtest.engine import VectorBacktest  # noqa: E402
 from backtest.metrics import PERIODS_PER_YEAR  # noqa: E402
 from config import Config  # noqa: E402
+from scripts.cli_common import setup_logging  # noqa: E402
+from strategy.examples import TopFracLongOnly  # noqa: E402
 
 log = setup_logging("model_portfolio")
 
-DATASET = "hs300_2022_2025"
+OUT_DIR = Path("reports") / "model_portfolio"
+
 DEFAULT_MODEL_PARAMS = {
     "gbdt":   dict(n_estimators=150, learning_rate=0.03, num_leaves=15,
                    min_child_samples=50, seed=0),
@@ -48,36 +55,159 @@ DEFAULT_MODEL_PARAMS = {
                    min_child_samples=50, seed=0, labels_bins=2,
                    objective="rank_xendcg"),
 }
-OUT_DIR = Path("reports") / "model_portfolio"
+
 
 def _mp_cfg() -> dict:
     """合并 config 的 model_portfolio 段（默认数据回填）。"""
     cfg = Config.get().get("model_portfolio", {})
-    defaults = dict(horizon=1, strategy="topfrac_lo", frac=0.20,
-                    rebalance_freq="M", model="gbdt", neutralize=True,
-                    cost_slippage_bp=10, cost_commission=0.0003, cost_stamp=0.001)
+    defaults = dict(
+        pipeline="alla_ortho",
+        dataset="all_a_2018_2026",
+        ensemble_horizons=[1, 5],
+        model="gbdt", strategy="topfrac_lo", frac=0.10,
+        rebalance_freq="M", neutralize=False,
+        selection_cut="auto",
+        train_window=500, n_folds=4, quality_window=500,
+        benchmark="000001.SH",
+        cost_slippage_bp=10, cost_commission=0.0003, cost_stamp=0.001)
     defaults.update({k: v for k, v in cfg.items() if v is not None})
     return defaults
 
-def load_index_benchmark(test_days: pd.DatetimeIndex) -> pd.Series:
-    """指数基准日收益（委托 data.cache_helpers.load_index_returns 单一实现）。
 
-    与 test_days 精确对齐（缺失日 ffill）；无缓存时抛错（正式入口需基准）。
+def default_costs(factor_cost: bool = True):
+    """交易成本单一真源：从 config 的 model_portfolio 段构建。
+
+    factor_cost=False 置零（无成本对照）；消费方一律走本函数，
+    禁止再硬编码费率字面量（防 config 改动后漂移）。
     """
+    from backtest.costs import TransactionCosts
+    if not factor_cost:
+        return TransactionCosts(commission_rate=0.0, stamp_duty=0.0, slippage_bp=0.0)
+    cfg = _mp_cfg()
+    return TransactionCosts(commission_rate=cfg["cost_commission"],
+                            stamp_duty=cfg["cost_stamp"],
+                            slippage_bp=cfg["cost_slippage_bp"])
+
+
+def neutralize_panel(signal, cov):
+    """信号层风格中性化（保留给对照实验；主口径 neutralize=false 不走此路径）。"""
+    from factor.preprocessing import neutralize
+    size = cov.get("size")
+    ind = cov.get("industry")
+    extra = {k: v for k, v in cov.items() if k not in ("size", "industry")}
+    return neutralize(signal, market_cap_panel=size, industry_panel=ind,
+                      extra_covariates=extra)
+
+
+def load_benchmarks(test_days: pd.DatetimeIndex, base: dict) -> dict:
+    """基准组：配置指数（默认上证）+ 全A等权（_base 内置）。"""
+    from data.cache_helpers import load_index_returns
+    code = str(_mp_cfg()["benchmark"])
+    ret = load_index_returns(code, begin=int(test_days[0].strftime("%Y%m%d")),
+                             reindex_to=test_days)
+    if ret is None:
+        raise FileNotFoundError(
+            f"指数 {code} 无缓存：请先 update_data 拉取指数日线")
+    return {f"idx_{code[:6]}": ret.fillna(0.0),
+            "eqw_alla": base["bench_eqw"].reindex(test_days).fillna(0.0)}
+
+
+def build_ensemble_panel(cfg: dict, base: dict, force_retrain: bool):
+    """当年 walk-forward 训练集成成员（h1+h5 gbdt）→ 秩平均集成信号。
+
+    复用 rolling_grid_alla 的实验验证组件（单一真源）：
+    FeatureStore（ortho 加载 panels_neu）/ select_features_for_year（DPP+保留席位，
+    生产口径 cut=最新完整日）/ rolling_window_oos（500 日窗季度折）/ _existence_mask。
+    """
+    import scripts.rolling_grid_alla as RG
+    from model.labels import build_labels
+    from model.predictor import PREDICTORS
+
+    close = base["close"]
+    all_days = close.index
+    year = int(all_days[-1].year)
+    test_days = all_days[all_days >= pd.Timestamp(f"{year}-01-01")]
+    store = RG.FeatureStore(RG.ds_root() / "panels_neu")   # 因子层正交化口径
+
+    # 生产口径的特征选择：质量窗截止 = 最新完整交易日（selection_cut: auto）
+    cut = None
+    if str(cfg.get("selection_cut", "auto")) != "auto":
+        cut = pd.Timestamp(str(cfg["selection_cut"]))
+        test_days = test_days[test_days <= cut]
+
+    preds: dict[int, pd.DataFrame] = {}
+    for h in cfg["ensemble_horizons"]:
+        cache_path = OUT_DIR / f"pred_h{h}.parquet"
+        if force_retrain or not cache_path.exists():
+            registry = pd.read_csv(RG.ds_root() / "registry.csv")
+            ic_cache = pd.read_parquet(RG.ds_root() / f"ic_h{h}.parquet")
+            sel_cut = (cut if cut is not None
+                       else pd.Timestamp(f"{year}-12-31"))
+            names = RG.select_features_for_year(
+                year + 1, h, ic_cache, registry, store, all_days, cut=sel_cut)
+            feats = {k: v.reindex(index=all_days, columns=close.columns)
+                     for k, v in store.get_many(names).items()}
+            labels, _embargo = build_labels(close, horizon=h, mode="rank")
+            params = dict(DEFAULT_MODEL_PARAMS[cfg["model"]])
+            pred = RG.rolling_window_oos(
+                PREDICTORS["gbdt"], params, feats, labels,
+                test_days, all_days, h, cfg["train_window"])
+            valid = RG._existence_mask(feats, close, test_days)
+            pred = pred.where(valid)
+            OUT_DIR.mkdir(parents=True, exist_ok=True)
+            pred.astype(np.float32).to_parquet(cache_path)
+            log.info("[h%d] 预测完成并缓存: %s（%d 天 × %d 股）", h, cache_path.name,
+                     len(pred), pred.shape[1])
+        else:
+            pred = pd.read_parquet(cache_path)
+            log.info("[h%d] 复用缓存预测 %s（--no-train 关闭复用）", h, cache_path.name)
+        preds[h] = pred
+
+    ens = RG._rank_average(list(preds.values()), min_panels=len(preds))
+    return ens, preds
+
+
+def export_picks(signal: pd.DataFrame, mask: pd.DataFrame, frac: float) -> Path:
+    """最新完整交易日的 TopFrac 选股清单（信号×可交易掩码，等权 1/k）。"""
+    d = signal.index[-1]
+    vals = signal.loc[d].dropna()
+    executable = mask.loc[d]
+    vals = vals[vals.index.intersection(executable[executable].index)]
+    k = max(1, int(round(frac * len(vals))))
+    top = vals.sort_values(ascending=False).head(k)
+    out = OUT_DIR / f"picks_{d.date()}.csv"
+    pd.DataFrame({"rank": range(1, len(top) + 1), "score": top.values,
+                  "weight": 1.0 / len(top)},
+                 index=top.index.rename("code")).to_csv(out, encoding="utf-8-sig")
+    log.info("今日选股（%s）: Top%d（%.0f%% 截面）-> %s", d.date(), len(top),
+             frac * 100, out)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Legacy（HS300 口径，2026-08-25 固化版）：仅供 buffer_tune / freq_tune 等历史
+# 实验脚本复用；主口径已升级为上方全A正交化管线，勿用于新实验。
+# ---------------------------------------------------------------------------
+LEGACY_DATASET = "hs300_2022_2025"
+
+
+def load_index_benchmark(test_days: pd.DatetimeIndex) -> pd.Series:
+    """指数基准日收益（默认 config.backtest.benchmark，HS300 口径遗留）。"""
     from data.cache_helpers import load_index_returns
     code = str(Config.get()["backtest"]["benchmark"])
     begin = int(test_days[0].strftime("%Y%m%d"))
     ret = load_index_returns(code, begin=begin, end=None, reindex_to=test_days)
     if ret is None:
         raise FileNotFoundError(
-            f"指数 {code} 无缓存：请先运行 update_data 拉取指数日线（mock 模式不支持基准）")
+            f"指数 {code} 无缓存：请先运行 update_data 拉取指数日线")
     return ret
 
+
 def build_style_covariates_panel(panel):
-    from factor.preprocessing import build_style_covariates
+    from data.cache import DataCache
     from data.industry import IndustryClassification
     from data.offline import OfflineQuietDataSource
-    from data.cache import DataCache
+    from factor.preprocessing import build_style_covariates
     cache = DataCache(OfflineQuietDataSource())
     payload = {
         "close": panel["close"], "volume": panel["volume"],
@@ -88,24 +218,16 @@ def build_style_covariates_panel(panel):
     return build_style_covariates(payload, market_cap_panel=panel["market_cap"],
                                   industry_panel=ind)
 
-def neutralize_panel(signal, cov):
-    from factor.preprocessing import neutralize
-    size = cov.get("size")
-    ind = cov.get("industry")
-    extra = {k: v for k, v in cov.items() if k not in ("size", "industry")}
-    return neutralize(signal, market_cap_panel=size, industry_panel=ind,
-                      extra_covariates=extra)
 
 def build_model_panel(model: str, horizon: int, test_days: pd.DatetimeIndex):
-    """walk-forward 训练 model，返回 (test 段 OOS 预测面板, panel)."""
+    """HS300 口径 walk-forward（legacy）。返回 (test 段 OOS 预测, panel, fwd)。"""
     from data.cache_helpers import build_panel
     from factor.preprocessing import standardize_zscore
     from model.labels import build_labels
     from model.predictor import PREDICTORS, rolling_oos
 
     disc = Config.discipline()
-    cfg = Config.get()
-    panel, _ = build_panel(cfg, disc["begin"], 20261231, offline=True,
+    panel, _ = build_panel(Config.get(), disc["begin"], 20261231, offline=True,
                            include_market_cap=True)
     close = panel["close"]
     all_days = close.index
@@ -114,7 +236,7 @@ def build_model_panel(model: str, horizon: int, test_days: pd.DatetimeIndex):
     dev_days = all_days[: len(all_days) - len(test_days)]
 
     from research.factor_library import FactorLibrary
-    feats = FactorLibrary(dataset=DATASET).load_library_features()
+    feats = FactorLibrary(dataset=LEGACY_DATASET).load_library_features()
     feats = {k: v for k, v in feats.items() if v.index[0].year <= 2022}
     feats = {k: standardize_zscore(v.reindex(close.index)) for k, v in feats.items()}
 
@@ -127,114 +249,98 @@ def build_model_panel(model: str, horizon: int, test_days: pd.DatetimeIndex):
     params = DEFAULT_MODEL_PARAMS.get(model, {})
     pred = rolling_oos(PREDICTORS[model], sel, labels, test_days, all_days,
                        n_folds=12, embargo_days=embargo, min_train_days=120, **params)
-    # 回测收益口径（engine 约定）：h=1 传未 shift 的 pct_change()（第 i 行 =
-    # i-1→i 单日收益，与指数基准日标签对齐）；h>1 传 forward 段累计面板。
     fwd = close.pct_change(fill_method=None) if horizon == 1 \
         else close.pct_change(horizon, fill_method=None).shift(-horizon)
     return pred, panel, fwd
 
-def _metrics(res, bench_daily) -> dict:
-    return res.metrics(benchmark_returns=bench_daily)
-
-def default_costs(factor_cost: bool = True):
-    """交易成本单一真源：从 config 的 model_portfolio 段构建。
-
-    factor_cost=False 置零（无成本对照）；freq_tune / multiyear_oos 等
-    消费方一律走本函数，禁止再硬编码费率字面量（防 config 改动后漂移）。
-    """
-    from backtest.costs import TransactionCosts
-    if not factor_cost:
-        return TransactionCosts(commission_rate=0.0, stamp_duty=0.0, slippage_bp=0.0)
-    cfg = _mp_cfg()
-    return TransactionCosts(commission_rate=cfg["cost_commission"],
-                            stamp_duty=cfg["cost_stamp"],
-                            slippage_bp=cfg["cost_slippage_bp"])
-
-def run_backtest(signal, fwd, bench_daily, frac, horizon, factor_cost: bool):
-    from strategy.examples import TopFracLongOnly
-    from backtest.engine import VectorBacktest
-    cfg = _mp_cfg()
-    costs = default_costs(factor_cost)
-    strat = TopFracLongOnly(frac=frac, weight_mode="equal")
-    bt = VectorBacktest(strategy=strat, rebalance_freq=cfg["rebalance_freq"],
-                        initial_capital=1_000_000.0, costs=costs)
-    res = bt.run(signal, fwd, horizon=horizon)
-    return res, _metrics(res, bench_daily)
-
-def save_report(table, curves, bench_annual, out_dir):
-    out_dir.mkdir(parents=True, exist_ok=True)
-    table.to_csv(out_dir / "portfolio_result.csv", index=False, encoding="utf-8-sig")
-    for name, eq in curves.items():
-        eq.to_csv(out_dir / f"equity_{name}.csv", encoding="utf-8-sig")
-    # 精简 txt 摘要
-    lines = ["===== 模型增强组合（固化配置）=====",
-             f"沪深300指数年化: {bench_annual:.2%}"]
-    for _, row in table.iterrows():
-        lines.append(
-            f"{row['config']}: 年化={row['annual']:.2%} 超额={row['excess']:+.2%} "
-            f"Sharpe={row['sharpe']:.2f} IR={row['ir']:.2f} MaxDD={row['max_dd']:.2%}")
-    (out_dir / "summary.txt").write_text("\n".join(lines), encoding="utf-8")
-    log.info("结果已保存到 %s", out_dir)
 
 def main():
-    parser = argparse.ArgumentParser(description="模型增强组合回测（固化入口）")
-    parser.add_argument("--model", default=None, help="信号模型: gbdt/ridge/ranker")
-    parser.add_argument("--frac", type=float, default=None, help="持仓比例（默认读配置 0.20）")
-    parser.add_argument("--horizon", type=int, default=None, help="预测视野（默认读配置 1）")
+    parser = argparse.ArgumentParser(description="模型增强组合（全A正交化管线，固化入口）")
+    parser.add_argument("--frac", type=float, default=None,
+                        help="持仓比例（默认读配置 0.10）")
+    parser.add_argument("--freq", default=None, help="调仓频率（默认读配置 M）")
     parser.add_argument("--pre-cost", action="store_true", help="同时输出成本前口径")
+    parser.add_argument("--refresh-base", action="store_true",
+                        help="先重建 _base 基础面板（日线有更新后需要）")
+    parser.add_argument("--no-train", action="store_true",
+                        help="复用上次预测缓存（快速回测/选股）")
     args = parser.parse_args()
 
     cfg = _mp_cfg()
-    if args.model:
-        cfg["model"] = args.model
     if args.frac is not None:
         cfg["frac"] = args.frac
-    if args.horizon is not None:
-        cfg["horizon"] = args.horizon
-    log.info("模型组合配置: model=%s horizon=%d frac=%.2f strategy=%s 调仓=%s 中性化=%s",
-             cfg["model"], cfg["horizon"], cfg["frac"], cfg["strategy"],
-             cfg["rebalance_freq"], cfg["neutralize"])
+    if args.freq is not None:
+        cfg["rebalance_freq"] = args.freq
+    cfg["ensemble_horizons"] = [int(h) for h in cfg["ensemble_horizons"]]
+    log.info("管线配置: pipeline=%s 集成视野=%s frac=%.2f 调仓=%s 信号=%s",
+             cfg["pipeline"], cfg["ensemble_horizons"], cfg["frac"],
+             cfg["rebalance_freq"], "raw" if not cfg["neutralize"] else "neut")
 
     t0 = time.time()
-    disc = Config.discipline()
-    from data.cache_helpers import build_panel
-    close0, _ = build_panel(Config.get(), disc["begin"], 20261231, offline=True)
-    test_days = close0["close"].index[
-        close0["close"].index > pd.Timestamp(str(disc["valid_end"]))]
-    test_days = test_days[test_days <= pd.Timestamp("2025-12-31")]
-    bench_daily = load_index_benchmark(test_days).dropna()
-    bench_annual = (1 + bench_daily).prod() ** (PERIODS_PER_YEAR / len(bench_daily)) - 1
 
-    pred, panel, fwd_all = build_model_panel(cfg["model"], cfg["horizon"], test_days)
-    fwd = fwd_all.loc[test_days]
-    pred = pred.loc[test_days].reindex(columns=fwd.columns)
-    sig = pred
+    if args.refresh_base:
+        from scripts.rolling_grid_alla import stage_prep
+        stage_prep()
+
+    import scripts.rolling_grid_alla as RG
+    base = RG.load_base()
+    close = base["close"]
+    log.info("数据面板: %d 日 × %d 股（%s ~ %s）", len(close), close.shape[1],
+             close.index[0].date(), close.index[-1].date())
+
+    ens, _preds = build_ensemble_panel(cfg, base, force_retrain=not args.no_train)
+    test_days = ens.index
+    fwd = close.pct_change(fill_method=None).loc[test_days]
+    bench = load_benchmarks(test_days, base)
+    bench_main = list(bench.values())[0]
+
+    # 信号层口径：主配方 raw（neutralize=false）；如配置 true 则信号层风格中性化
+    sig = ens.reindex(columns=close.columns)
     if cfg["neutralize"]:
-        cov = build_style_covariates_panel(panel)
-        sig = neutralize_panel(pred, cov)
-        log.info("已做风格中性化协变量: %s", sorted(k for k in cov))
+        sig = neutralize_panel(sig, base["cov"])
+
+    mask = base["mask"].reindex(index=test_days, columns=close.columns).fillna(True)
 
     rows, curves = [], {}
-    for tag2, cost in (("net", True), ("pre", False)):
-        res, m = run_backtest(sig, fwd, bench_daily, cfg["frac"], cfg["horizon"],
-                              factor_cost=cost)
-        curves[f"{cfg['model']}_{tag2}"] = res.equity_curve
-        rows.append({"config": f"{cfg['model']}_{tag2}", "cost": tag2,
-                     "annual": m.get("annual_return", 0),
+    for tag, cost in (("net", True), ("pre", False)):
+        strat = TopFracLongOnly(frac=cfg["frac"], weight_mode="equal")
+        bt = VectorBacktest(strategy=strat, rebalance_freq=cfg["rebalance_freq"],
+                            initial_capital=1_000_000.0, costs=default_costs(cost))
+        res = bt.run(sig, fwd, executable_mask=mask, horizon=cfg["ensemble_horizons"][0])
+        m = res.metrics(benchmark_returns=bench_main)
+        curves[f"ens_h{'h'.join(str(h) for h in cfg['ensemble_horizons'])}_{tag}"] = \
+            res.equity_curve
+        rows.append({"config": f"ens_h{''.join(map(str, cfg['ensemble_horizons']))}_{tag}",
+                     "cost": tag, "annual": m.get("annual_return", 0),
                      "excess": m.get("excess_return", 0),
                      "sharpe": m.get("sharpe", 0),
                      "ir": m.get("information_ratio", 0),
                      "max_dd": m.get("max_drawdown", 0),
                      "turnover": m.get("avg_turnover", 0)})
-        if tag2 == "pre" and not args.pre_cost:
-            break  # 默认只保存成本后
-    table = pd.DataFrame(rows)
-    print(f"\n===== 模型增强组合（{cfg['model']}, h={cfg['horizon']}, frac={cfg['frac']}）=====")
-    with pd.option_context("display.width", 200, "display.float_format", lambda v: f"{v:.4f}"):
-        print(table.to_string(index=False))
-    print(f"沪深300指数年化: {bench_annual:.2%} | 交易日 {len(bench_daily)} | 总耗时 {time.time()-t0:.0f}s")
+        if tag == "pre" and not args.pre_cost:
+            break
 
-    save_report(table, curves, bench_annual, OUT_DIR)
+    table = pd.DataFrame(rows)
+    print(f"\n===== 模型增强组合（全A正交化管线 ens_h{'h'.join(map(str, cfg['ensemble_horizons']))}"
+          f"，frac={cfg['frac']}，{cfg['rebalance_freq']}）=====")
+    with pd.option_context("display.width", 200,
+                           "display.float_format", lambda v: f"{v:.4f}"):
+        print(table.to_string(index=False))
+    for name, s in bench.items():
+        b = s.dropna()
+        print(f"基准 {name} 年化: {(1 + b).prod() ** (PERIODS_PER_YEAR / max(1, len(b))) - 1:.2%}"
+              f"（{len(b)} 日）")
+    print(f"样本 {test_days[0].date()} ~ {test_days[-1].date()} | 总耗时 {time.time()-t0:.0f}s")
+
+    # 回测与选股落盘
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    table.to_csv(OUT_DIR / "portfolio_result.csv", index=False, encoding="utf-8-sig")
+    for name, eq in curves.items():
+        eq.to_csv(OUT_DIR / f"equity_{name}.csv", encoding="utf-8-sig")
+    ens.round(6).to_parquet(OUT_DIR / "ens_pred.parquet")
+    export_picks(sig, mask, cfg["frac"])
+    log.info("结果已保存到 %s", OUT_DIR)
+
 
 if __name__ == "__main__":
     main()

@@ -16,6 +16,9 @@
 - 平均换手率 Avg Turnover
 - 信息比率 Information Ratio（需基准）
 - 超额年化 Excess Return（需基准）
+- 夏普 t 统计量 Sharpe t-stat（Newey-West，H0: 日均值=0）
+- 证明所需年数 Years to Prove = (1.96/|SR|)²
+- 超额 t 统计量 Excess t-stat（需基准，H0: 超额均值=0）
 
 所有函数接收日频收益率 Series(index=date)。
 """
@@ -30,6 +33,7 @@ import pandas as pd
 # （2026-08-29 收敛：e2e_backtest.perf_stats 曾用 244，与引擎 252 分裂
 # 导致两族报告差 ~3%）。
 from stats import PERIODS_PER_YEAR  # noqa: F401
+from stats.robust_stats import nw_tstat
 
 
 def annual_return(daily_returns: pd.Series, periods_per_year: int = PERIODS_PER_YEAR) -> float:
@@ -195,6 +199,9 @@ METRIC_LABELS = {
     "total_return":        "累计收益 Total Return",
     "annual_volatility":   "年化波动率 Annual Volatility",
     "sharpe":              "夏普比率 Sharpe Ratio",
+    "sharpe_t_stat":       "夏普 t 统计量 Sharpe t-stat",
+    "years_to_prove":      "证明所需年数(1.96/|SR|)² Years to Prove",
+    "excess_t_stat":       "超额 t 统计量 Excess t-stat",
     "sortino":             "索提诺比率 Sortino Ratio",
     "max_drawdown":        "最大回撤 Max Drawdown",
     "calmar":              "卡玛比率 Calmar Ratio",
@@ -235,17 +242,25 @@ def calc_all_metrics(
         periods_per_year: 年化周期数（默认 PERIODS_PER_YEAR 交易日）。
         rf: 年化无风险利率（默认 0），用于 Sharpe / Sortino 的超额收益。
     """
+    sharpe = sharpe_ratio(daily_returns, rf=rf, periods_per_year=periods_per_year)
     m = {
         "annual_return": annual_return(daily_returns, periods_per_year),
         "total_return": (1 + daily_returns).prod() - 1,
         "annual_volatility": annual_volatility(daily_returns, periods_per_year),
-        "sharpe": sharpe_ratio(daily_returns, rf=rf, periods_per_year=periods_per_year),
+        "sharpe": sharpe,
         "sortino": sortino_ratio(daily_returns, rf=rf, periods_per_year=periods_per_year),
         "max_drawdown": max_drawdown(daily_returns),
         "calmar": calmar_ratio(daily_returns, periods_per_year),
         "win_rate": win_rate(daily_returns),
         "profit_loss_ratio": profit_loss_ratio(daily_returns),
         "avg_daily_return": daily_returns.mean(),
+        # 日收益均值的 Newey-West t 检验（H0: 均值=0）。i.i.d. 下与
+        # t = SR*sqrt(年数) 恒等；自相关极弱的日收益上两者几乎一致，
+        # 低频重采（周/月调仓）序列 NW 校正才有实质差异。
+        "sharpe_t_stat": nw_tstat(daily_returns.dropna())[0],
+        # 证明策略所需年数 (1.96/|SR|)^2（paperswithbacktest 复现口径）：
+        # t = SR*sqrt(T) 达到 1.96 所需的样本年限。
+        "years_to_prove": round((1.96 / abs(sharpe)) ** 2, 1) if sharpe != 0 else float("inf"),
         "n_days": len(daily_returns),
     }
     if benchmark_returns is not None:
@@ -254,6 +269,8 @@ def calc_all_metrics(
         m["benchmark_annual_return"] = annual_return(bench_aligned, periods_per_year)
         m["information_ratio"] = information_ratio(aligned, bench_aligned, periods_per_year)
         m["excess_return"] = m["annual_return"] - m["benchmark_annual_return"]
+        # 超额收益是否显著非零的直接检验（主动管理是否"真实存在"）。
+        m["excess_t_stat"] = nw_tstat((aligned - bench_aligned).dropna())[0]
     if weights_history is not None:
         m["avg_turnover"] = turnover_rate(weights_history)
     return m

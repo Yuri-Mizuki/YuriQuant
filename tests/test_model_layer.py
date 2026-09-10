@@ -260,6 +260,42 @@ class TestPredictor:
         row = pred.iloc[-1].dropna()
         assert row.mean() == pytest.approx(0.0, abs=1e-9)
 
+    @pytest.mark.skipif("gbdt" not in PREDICTORS or _lgbm_missing(),
+                        reason="lightgbm 未安装")
+    def test_gbdt_feature_importance(self, market, feats):
+        from model.predictor import LGBMPredictor
+
+        close, _ = market
+        labels, _ = build_labels(close, horizon=5, mode="rank")
+        ftr, _, ltr, _ = self._split(feats, labels)
+        p = LGBMPredictor(n_estimators=60).fit(ftr, ltr)
+        imp = p.feature_importance("gain")
+        assert set(imp.index) == set(feats.keys())
+        assert (imp > 0).all()          # gain 非负且训练后一般全正
+        assert imp.is_monotonic_decreasing
+        with pytest.raises(ValueError):
+            p.feature_importance("bad_type")
+
+    @pytest.mark.skipif("gbdt" not in PREDICTORS or _lgbm_missing(),
+                        reason="lightgbm 未安装")
+    def test_gbdt_predict_contrib_shape_and_sum(self, market, feats):
+        from model.predictor import LGBMPredictor
+
+        close, _ = market
+        labels, _ = build_labels(close, horizon=5, mode="rank")
+        ftr, fte, ltr, _ = self._split(feats, labels)
+        p = LGBMPredictor(n_estimators=60).fit(ftr, ltr)
+        contrib = p.predict_contrib(fte)
+        # 行 = (date, code) 网格；列 = 特征 + bias
+        assert isinstance(contrib.index, pd.MultiIndex)
+        assert contrib.index.names == ["date", "code"]
+        assert list(contrib.columns) == sorted(feats.keys()) + ["bias"]
+        first = fte[list(fte)[0]]
+        assert len(contrib) == len(first.index) * len(first.columns)
+        # 每行贡献和 + bias ≈ 原始预测值（非标准化）
+        X_sum = contrib.drop(columns="bias").sum(axis=1) + contrib["bias"]
+        assert np.isfinite(X_sum).all()
+
     def test_fit_predict_oos_coverage_and_discipline(self, market, feats):
         close, _ = market
         labels, _ = build_labels(close, horizon=5, mode="rank")

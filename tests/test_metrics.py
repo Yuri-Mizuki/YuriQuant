@@ -89,3 +89,45 @@ def test_sortino_differs_from_negative_day_std():
 def test_sortino_zero_when_no_downside():
     daily = pd.Series([0.01] * 10)
     assert sortino_ratio(daily) == 0.0
+
+
+# ---------------------------------------------------------------------------
+# t 统计量与证明年限（paperswithbacktest 复现口径，2026-09-08 新增）
+# ---------------------------------------------------------------------------
+from backtest.metrics import calc_all_metrics  # noqa: E402
+
+
+def test_calc_all_metrics_sharpe_tstat_sign_and_scale():
+    """已知均值的确定性序列：t 符号跟均值走，量级 ≈ mean/std*sqrt(n)。"""
+    n = 504
+    rng = np.random.default_rng(42)
+    daily = pd.Series(rng.normal(0.001, 0.01, n))
+    m = calc_all_metrics(daily)
+    # 正均值 → 正 t；量级对照算术口径（NW 滞后校正后应十分接近）
+    assert m["sharpe_t_stat"] > 0
+    naive_t = daily.mean() / daily.std() * np.sqrt(n)
+    assert m["sharpe_t_stat"] == pytest.approx(naive_t, rel=0.3)
+
+    m_neg = calc_all_metrics(-daily)
+    assert m_neg["sharpe_t_stat"] < 0
+
+
+def test_calc_all_metrics_years_to_prove_monotonic_in_sharpe():
+    """(1.96/|SR|)² 随夏普单调递减；SR=0 → inf。"""
+    strong = pd.Series(np.random.default_rng(1).normal(0.002, 0.01, 504))
+    weak = pd.Series(np.random.default_rng(2).normal(0.0002, 0.01, 504))
+    m_strong = calc_all_metrics(strong)
+    m_weak = calc_all_metrics(weak)
+    assert m_strong["years_to_prove"] < m_weak["years_to_prove"]
+    assert calc_all_metrics(pd.Series(np.zeros(100)))["years_to_prove"] == float("inf")
+
+
+def test_calc_all_metrics_excess_tstat_requires_benchmark():
+    """无基准时不出现 excess_t_stat；有基准时超额 t 与超额均值同号。"""
+    n = 504
+    daily = pd.Series(np.random.default_rng(3).normal(0.0005, 0.01, n))
+    bench = pd.Series(np.random.default_rng(4).normal(0.0000, 0.008, n))
+    m = calc_all_metrics(daily)
+    assert "excess_t_stat" not in m
+    mb = calc_all_metrics(daily, benchmark_returns=bench)
+    assert (mb["excess_t_stat"] > 0) == (mb["excess_return"] > 0)

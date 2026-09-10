@@ -51,7 +51,8 @@ _CARD_KEYS = [
     "ic_mean", "ir", "avg_margin_usage", "borrow_fee_drag_annual",
 ]
 _CMP_KEYS = [
-    "name", "annual_return", "sharpe", "sortino", "max_drawdown",
+    "name", "annual_return", "sharpe", "sharpe_t_stat", "years_to_prove",
+    "sortino", "max_drawdown",
     "calmar", "win_rate", "avg_turnover", "ic_mean", "ir",
     "avg_margin_usage", "borrow_fee_drag_annual",
 ]
@@ -60,6 +61,8 @@ _METRIC_ALIAS = {
     "annual_return": "年化收益", "total_return": "累计收益",
     "annual_volatility": "年化波动", "sharpe": "夏普", "sortino": "索提诺",
     "max_drawdown": "最大回撤", "calmar": "卡玛", "win_rate": "胜率",
+    "sharpe_t_stat": "夏普 t", "years_to_prove": "证明年数",
+    "excess_t_stat": "超额 t",
     "profit_loss_ratio": "盈亏比", "avg_daily_return": "日均收益",
     "avg_turnover": "平均换手", "avg_long_exposure": "平均多头敞口",
     "avg_short_exposure": "平均空头敞口", "avg_margin_usage": "保证金占用",

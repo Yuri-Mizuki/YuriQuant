@@ -117,22 +117,35 @@ backtest:
   short_borrow_rate: 0.08    # 年化借券费率（A股融券常见 8%~10%；0=关闭）
   short_margin_ratio: 1.0    # 融券保证金比例（监管最低 100% = 1.0）
 
-# --- 模型增强组合默认配置（gbdt 精修固化，2026-08-25）---
-# 组合形式：模型信号 -> 风格中性化(市值+行业+mom/vol/turn) -> TopFrac 重仓多头。
-# 由 gbdt horizon×持仓 网格精修得出（reports/gbdt_tune）：
-#   horizon=1, frac=0.20 于 2025 test 段成本后超额沪深300 +4.85%、Sharpe 1.70。
-# 关键规律：
-#   - horizon 必须 = 1（h=5 组合超额难变现，成本后 -24.9%）
-#   - Top20% 附近是 alpha 密度最集中区间，0.20 为风险/收益甜点
-#   - 中性化是 alpha 变现的关键（raw 信号 IC 高但跑输风格；neut 后 IC 略降、收益大增）
+# --- 模型增强组合默认配置（2026-09-09 升级：全A · 因子层正交化 · ens_h1h5 集成）---
+# 升级依据（reports/alla_rolling 三臂对比 + 消融 + 集成实验，2018-2026 样本外含成本）：
+#   - 股票池：全A（含退市回补，无幸存者偏差）
+#   - 因子层：全因子正交化（panels_neu：MAD 去极值→行业+市值中性化→zscore），
+#     三臂对比 +1.6pp/年（增量主要来自量价因子）；仅对基本面做被证伪（≈0）
+#   - 特征选择：DPP + 基本面/股东族保留席位 8（消融 +0.7pp/年）
+#   - 模型：gbdt，h1+h5 秩平均集成（集成增益 +1.5pp）
+#   - 信号层：raw 不做中性化（因子层已正交，信号层再剔 = 过度中性化 −5.4pp）
+#   - 组合：月频 Top10% 等权（日频被成本杀死 −52pp/年）
+#   - 头部实现 ens_h1h5·M·raw·Top10%：年化 15.5%、超额上证 +13.3%/年、Sharpe 0.63
+#     （reports/alla_rolling_ortho/metrics_ensemble.csv + metrics_overall.csv）
+# 前置：reports/alla_rolling/_base（rolling_grid_alla --stage prep 重建）
+#       + all_a_2018_2026 数据集（panels 与 panels_neu）
 model_portfolio:
-  horizon: 1                # 预测视野（h=1 最优，h=5 崩坏）
-  strategy: topfrac_lo      # TopFrac 重仓多头
-  frac: 0.20                # 持仓比例（Top20%）
-  rebalance_freq: M         # 月度调仓
-  model: gbdt               # 信号模型（gbdt 最优；ridge/ranker 备选）
-  neutralize: true          # 信号先做风格中性化再进组合
-  cost_slippage_bp: 10      # 精修采用的回测滑点假设（含成本口径）
-  cost_commission: 0.0003   # 双边佣金
-  cost_stamp: 0.001         # 印花税（卖出）
-  test_note: "test 2025 段，成本后 net 超额 +4.85% @frac=0.20,h=1"
+  # ---- 管线口径 ----
+  pipeline: alla_ortho        # all_a_2018_2026 数据集 + panels_neu 因子层正交化
+  ensemble_horizons: [1, 5]   # h1+h5 秩平均集成（成员模型均为 gbdt）
+  model: gbdt
+  strategy: topfrac_lo
+  frac: 0.10                  # Top10% 等权（Top20% 次优）
+  rebalance_freq: M
+  neutralize: false           # 信号层 raw——因子层已正交，勿再叠加
+  selection_cut: auto         # 特征选择质量窗截止=最新完整交易日（生产口径，较实验冻结口径更新）
+  # ---- 训练（沿用实验验证值，与 rolling_grid_alla 模块常量一致）----
+  train_window: 500           # 滚动训练窗
+  n_folds: 4                  # 年内季度再训练
+  quality_window: 500         # 特征选择 IC 质量窗
+  # ---- 成本 ----
+  cost_slippage_bp: 10
+  cost_commission: 0.0003
+  cost_stamp: 0.001
+  test_note: "全A正交化管线 ens_h1h5：2018-2026 样本外超额上证 +13.3%/年（Sharpe 0.63）"
