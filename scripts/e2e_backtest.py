@@ -10,7 +10,9 @@
 2. 特征选择：只用回测前窗口（默认 2022~2023）——干净 OOS
 3. Walk-forward：每个调仓日 t 重训 GBDT（expanding window + embargo=5）→ 预测截面
 4. 组合：等权 top-N（纯信号检验）+ risk_parity top-N（SCS 解做 _enforce_caps 后处理）
-5. 成本：佣金 0.01% + 印花税 0.1%(卖出) + 滑点 5bp（VectorBacktest 默认，已扣除）
+5. 成本：走引擎默认 = `config/settings.yaml` 顶层 `costs` 段
+   （佣金万3 + 印花税千1（卖出）+ 滑点 10bp；2026-09-10 由"单一真源"收敛而来，
+   此前这里的注释写的是万1/5bp——那是已废弃的 backtest 段旧值）
 6. 基准：股票池等权日收益（日度再平衡，与策略月频调仓有口径差异）
 
 用法：
@@ -34,7 +36,9 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 from scripts.cli_common import add_real_mock_args, setup_logging  # noqa: E402
 
-from backtest.metrics import PERIODS_PER_YEAR  # noqa: E402
+from backtest.metrics import (  # noqa: E402
+    PERIODS_PER_YEAR, annual_return, annual_volatility, max_drawdown,
+)
 from data.mock import load_mock_data  # noqa: E402
 from factor.classic import compute_classic_features  # noqa: E402
 from model.labels import build_label_pair  # noqa: E402
@@ -178,20 +182,38 @@ def run_risk_parity_backtest(pred_reb, returns, full_dates, top_n, max_weight):
 # 指标
 # ---------------------------------------------------------------------------
 def perf_stats(daily_ret: pd.Series, label: str) -> dict:
+    """单条净值曲线的**报告层**绩效摘要（本函数的 dict 结构供报告脚本消费）。
+
+    2026-09-10 口径收口：年化收益 / 年化波动 / 最大回撤**一律走
+    ``backtest.metrics`` 的公共实现**——此前本函数各自内联一套公式，
+    与 metrics 并行维护（同一件事两处漂移风险）。
+
+    仍有两处是**本函数独有的报告层约定**，不是重复实现：
+
+    - **短样本不年化**：样本不足 0.3 年时直接返回累计收益。年化会把短窗口的
+      噪声放大成离谱数字，对 mock / 短实验没有意义。
+    - **月胜率** ``win_rate_monthly``：按自然月聚合的盈亏比例；与 metrics 的
+      ``win_rate``（日胜率）不是同一指标，两者都有存在价值。
+
+    ⚠️ **行为变更**：``max_drawdown`` 自 2026-09-10 起取**正值**，与全库其余
+    口径（``backtest.metrics`` / 引擎 ``metrics()`` / 因子库 / README）一致。
+    此前本函数是全库唯一返回负值的地方；消费者用 ``pct()`` 渲染，报告里会由
+    ``-38.7%`` 变成 ``38.7%``。
+    """
     ret = daily_ret.dropna()
     if len(ret) == 0:
         return {"label": label}
     n_years = len(ret) / PERIODS_PER_YEAR
-    total = (1 + ret).prod() - 1
-    annual = (1 + total) ** (1 / max(n_years, 1e-9)) - 1 if n_years > 0.3 else total
-    vol = ret.std() * (PERIODS_PER_YEAR ** 0.5)
+    total = float((1 + ret).prod() - 1)
+    annual = float(annual_return(ret)) if n_years > 0.3 else total
+    vol = float(annual_volatility(ret))
     sharpe = annual / vol if vol > 0 else float("nan")
     eq = (1 + ret).cumprod()
-    dd = (eq / eq.cummax() - 1).min()
     monthly = ret.groupby(ret.index.to_period("M")).apply(lambda x: (1 + x).prod() - 1)
     return {
-        "label": label, "total_return": float(total), "annual_return": float(annual),
-        "annual_vol": float(vol), "sharpe": float(sharpe), "max_drawdown": float(dd),
+        "label": label, "total_return": total, "annual_return": annual,
+        "annual_vol": vol, "sharpe": float(sharpe),
+        "max_drawdown": float(max_drawdown(ret)),
         "win_rate_monthly": float((monthly > 0).mean()), "n_months": int(len(monthly)),
         "monthly": monthly, "equity": eq, "daily": ret,
     }
