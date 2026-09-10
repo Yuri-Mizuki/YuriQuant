@@ -78,7 +78,7 @@ reports/    实验与交付物（模型/监控/因子库/设计文档/HTML报告
 | 2 | 提出想法 | ✅ `scripts/mine_factors.py`（`--exhaustive`/`--gp`）、`factor/gflownet/`、`factor/rl/` | 穷举 + 遗传规划 + GFlowNet(TB/PPO) + AlphaPool RL 自动生成候选公式 |
 | 3 | 开发准备 | ✅ `scripts/update_data.py` | SDK → Parquet 缓存 + PIT 面板 + 股票池，增量水位正确、PIT 无未来函数 |
 | 4 | 开发实现 | ✅ `scripts/build_{technical,fundamental,intraday}_factors.py` | 技术面 9 因子 + 基本面 32 因子 + 日内 14 因子，面板 date×code 口径一致 |
-| 5 | 因子分析 | ✅ `scripts/run_backtest.py`、`scripts/factor_correlation.py`、`research/factor_analysis.py` | 因子面板 → IC/IR/衰减/分层/NW t/FDR，显著性基于 Newey-West t |
+| 5 | 因子分析 | ✅ `research/factor_analysis.py`、`scripts/factor_correlation.py`、`scripts/e2e_backtest.py` | 因子面板 → IC/IR/衰减/分层/NW t/FDR，显著性基于 Newey-West t |
 | 6 | 因子构建 | ✅ `scripts/synthesize_factors.py`、`scripts/synthesize_library.py` | IC 加权 / PCA / 正交 / ML Stacking(ridge/gbdt/lambdarank) 四种合成 |
 | 7 | 因子入库 | ✅ `scripts/factor_library.py` | registry + panels + evals 三件套，血缘可追溯、可选 `check_dup` 去冗余预检、六维标签、`set-tag`/`monitor`/`regime`/`select_diverse` |
 
@@ -354,7 +354,8 @@ mock 落 `reports/models_mock`，真实落 `reports/models`。
 脚本层按角色分类（2026-08-31 整理）。注意区分几组**名字相近但职责不同**的脚本：
 `walk_forward`（因子挖掘三段验证）≠ `walk_forward_model`（模型层滚动 OOS）；
 `synthesize_factors`（SDK 在线合成）≠ `synthesize_library`（离线合成）；
-`run_backtest`（一键入口）/ `backtest_two_periods`（两期面板回测）/ `multi_period_backtest`（多期执行）为三件不同的事。
+`e2e_backtest`（端到端选股 walk-forward）/ `backtest_two_periods`（两期面板回测）/
+`multi_period_backtest`（多期组合执行）为三件不同的事。
 
 ### 生产入口（正式 / 调度）
 | 脚本 | 职责 |
@@ -392,7 +393,6 @@ mock 落 `reports/models_mock`，真实落 `reports/models`。
 | `walk_forward_model` | 模型层滚动 OOS（`rolling_oos`，生产前推切分，唯一生产切分入口） |
 | `walk_forward` | 因子挖掘三段样本外：train 挖 → valid 选 → test 验 |
 | `e2e_backtest` / `e2e_stock_picks` | 端到端选股 walk-forward 回测 / 今日选股流水线 |
-| `run_backtest` | 一键回测入口（数据→因子→策略→回测→报告） |
 | `backtest_two_periods` | 两期（预热+研究）基本面/技术因子面板回测 |
 | `multi_period_backtest` | 多期组合执行回测（QP + 成本 + 约束，P3） |
 | `optimize_e2e` | 调仓频率 × 风格中性化端到端优化 |
@@ -403,6 +403,16 @@ mock 落 `reports/models_mock`，真实落 `reports/models`。
 | `rolling_grid_alla` | 全A多年度滚动训练实验（2018~now × horizon × 频率 × 模型网格） |
 | `rolling_grid_report` | 上述实验的收益曲线 + 分年绩效 HTML 报告 |
 | `jq_style_report` | 最佳策略聚宽风格收益曲线页（vs 国证A指≈中证全指，含回撤/分年绩效，`--run-id` 可选组合） |
+
+> **已退役（2026-09-10 删除 `scripts/run_backtest.py`）**：该"一键回测入口"给
+> `VectorBacktest` 传的是 `pct_change().shift(-1)` 收益面板，而引擎 canonical 口径是
+> **未 shift** 的 `close.pct_change()`（`run(horizon=1, check_convention=True)` 为默认值），
+> 口径守卫会直接抛 `ValueError`——即该入口在删除前已跑不起来，且全仓无代码/测试引用。
+> 需回测时请走：因子层面 `e2e_backtest`（端到端选股 walk-forward）或
+> `research/factor_library` 的 canonical 回测；整链可组合
+> `update_data` → `build_*_factors` → `factor_library` → `e2e_backtest`。
+> **别只按名字把它恢复回来**——项目里两套收益面板的 canonical 方向相反
+> （IC/因子库口径为 `shift(-1)`，引擎口径为未 shift），跨层传面板必须显式声明。
 
 ### 报告
 | 脚本 | 职责 |
@@ -470,23 +480,19 @@ pip install AmazingData-*.whl
 
 ## 快速开始
 
-跑一次 Mock 数据回测（不需要数据源凭证）：
+跑一次 Mock 数据端到端回测（不需要数据源凭证）：
 
 ```bash
-python scripts/run_backtest.py --factor momentum_20
-```
-
-多因子对比：
-
-```bash
-python scripts/run_backtest.py --factors momentum_20,volatility_20,turnover_20
+python scripts/e2e_backtest.py --top 20 --model ridge --n-days 400 --n-codes 30
 ```
 
 用真实数据（需要先在环境变量里配置好 `AMAZINGDATA_USER` / `AMAZINGDATA_PWD` /
 `AMAZINGDATA_HOST` / `AMAZINGDATA_PORT`）：
 
 ```bash
-python scripts/run_backtest.py --real --factors all
+python -m scripts.update_data                  # 先建/增量更新缓存
+python scripts/e2e_backtest.py --real          # 端到端选股 walk-forward 回测
+python -m scripts.run_model_portfolio          # 正式投产入口（全A 正交化管线）
 ```
 
 更新本地数据缓存：
@@ -520,7 +526,9 @@ python -m scripts.run_model_portfolio --pre-cost       # 同时输出成本前�
 ```
 2026 样本外实测（net）：年化 +8.6%、超额上证 +8.2%、Sharpe 0.33；同步导出当日
 Top10% 选股清单 `picks_YYYY-MM-DD.csv`。参数真源在 `config/settings.yaml` 的
-`model_portfolio` 段；结果落 `reports/model_portfolio/`。旧版 HS300 口径
+`model_portfolio` 段（**费率除外**——交易成本的唯一真源是顶层 `costs` 段，2026-09-10
+起引擎缺省与 `default_costs()` 共用它，全项目不再有第二份费率）；
+结果落 `reports/model_portfolio/`。旧版 HS300 口径
 （单模型+信号层中性化）已退役，函数保留为 legacy 供 buffer_tune/freq_tune 复用。
 
 ### 全A每日模型选股排名（最优方案生产化推理，2026-09-08）

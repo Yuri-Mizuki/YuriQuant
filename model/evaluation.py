@@ -8,8 +8,8 @@ IC 衰减、分层单调性。复用现有研究能力：
 - research.robust_stats：Newey-West t（防自相关伪显著，与因子库判定口径一致）
 
 口径约定：``returns_panel`` 为**未来一期收益**（与全项目 IC 口径一致）。
-组合级评价（净值/回撤/基准对比）请走 backtest（scripts/run_backtest、
-select_stocks），模型层评价聚焦预测能力的 IC 口径。
+组合级评价（净值/回撤/基准对比）请走 backtest（scripts/e2e_backtest、
+scripts/select_stocks），模型层评价聚焦预测能力的 IC 口径。
 """
 from __future__ import annotations
 
