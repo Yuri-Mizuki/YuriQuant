@@ -235,7 +235,8 @@ def signal_day_tradable(close_raw: pd.DataFrame, predict_date: pd.Timestamp,
                         cache_root: str | None = None) -> pd.Series:
     """信号日（T 日）已知状态的可交易性估计：非停牌/非ST/收盘未封板。
 
-    区别于回测用 build_tradable_mask（行 T 用 T+1 状态，T 日成交口径）：实时排名
+    区别于回测用的 ``data.tradability.build_tradable_mask``（行 T 取 T+1 状态，
+    「T 日信号 → T+1 成交」口径）：实时排名
     发布时 T+1 未知，只能用 T 日状态做保守标注——T 日收盘封板的股票 T+1 大概率
     一字板买不进；T+1 才停牌/封板的极端情形无法预知，如实披露。
 

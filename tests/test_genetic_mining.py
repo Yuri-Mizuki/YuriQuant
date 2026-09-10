@@ -687,7 +687,7 @@ def test_build_tradable_mask_rules(tmp_path):
     """mask 构建规则：次日停牌/封涨停/封跌停、当日 ST/停牌 → False；其余 True。"""
     import numpy as np
     import pandas as pd
-    from data.cache_helpers import build_tradable_mask
+    from data.tradability import build_tradable_mask
 
     idx = pd.date_range("2023-01-01", periods=6, freq="B")
     cols = ["A", "B", "C", "D", "E"]

@@ -60,7 +60,8 @@ def build_eval_env(begin: int, end: int, bwd: pd.DataFrame | None = None):
     ``bwd`` 复权因子只取一次并复用，保证样本内/外口径一致（SDK 登录抖动时
     不会出现一段复权一段未复权的混合链）。
     """
-    from data.cache_helpers import build_panel, build_tradable_mask
+    from data.cache_helpers import build_panel
+    from data.tradability import build_tradable_mask
     from factor.gtja import build_vwap_exec_returns
 
     cfg = Config.get()

@@ -174,7 +174,8 @@ def stage_prep():
     """构建回测所需基础面板：复权价、风格协变量、可执行掩码、基准。"""
     from config import Config
     from data.cache import DataCache
-    from data.cache_helpers import build_tradable_mask, load_index_returns
+    from data.cache_helpers import load_index_returns
+    from data.tradability import build_tradable_mask
     from data.industry import IndustryClassification
     from data.offline import OfflineQuietDataSource
     from factor.preprocessing import build_style_covariates

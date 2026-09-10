@@ -255,7 +255,7 @@ def _ls_net_stats(fp: pd.DataFrame, rets: pd.DataFrame, top_frac: float = 0.1,
     的因子隐含全截面可交易。
 
     **可交易性过滤**（2026-08-28）：``tradable`` 为 bool 宽表（True=可交易），
-    由 ``data.cache_helpers.build_tradable_mask`` 构建（剔除 T+1 停牌/封板、
+    由 ``data.tradability.build_tradable_mask`` 构建（T+1 成交口径：剔除 T+1 停牌/封板、
     当日 ST/停牌）。剔除不可成交股票后再构建多空腿——否则反转类因子在
     涨停板上赚取"买不进的收益"，适应度虚高（2022 全A 实证）。
 

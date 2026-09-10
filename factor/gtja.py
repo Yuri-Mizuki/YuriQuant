@@ -59,7 +59,8 @@ def build_gtja_tradable(panel_full: dict[str, pd.DataFrame]) -> pd.DataFrame | N
     """
     try:
         from data.cache import DataCache
-        from data.cache_helpers import build_tradable_mask, load_backward_factor
+        from data.cache_helpers import load_backward_factor
+        from data.tradability import build_tradable_mask
         from data.datasource import create_datasource
         close = panel_full["close"]
         bwd = load_backward_factor(DataCache(create_datasource()), list(close.columns))

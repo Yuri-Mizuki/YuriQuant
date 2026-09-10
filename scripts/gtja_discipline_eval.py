@@ -54,7 +54,8 @@ def main():
     args = ap.parse_args()
 
     from config import Config
-    from data.cache_helpers import build_panel, build_tradable_mask
+    from data.cache_helpers import build_panel
+    from data.tradability import build_tradable_mask
     from scripts.gtja_repro_eval import TOP_FRAC, FEE_RT, SIX, ls_metrics, load_backward_once
     from factor.gtja import build_vwap_exec_returns
     from factor.formula import formula_builder
