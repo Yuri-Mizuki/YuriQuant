@@ -129,6 +129,63 @@
     `full-tests.yml`。原因：全量要 7 分钟、依赖 `reports/` 等不入库产物
     （CI 上只能靠 skip 兜住），且含已知 flaky 的 risk_parity 数值测试
     （`test_solver.py`，SCS 近似解波动），每次 push 都报红纯噪声。
+  - 2026-09-10 后续（`7ea73c1`）：去掉 torch 后快检查降到 60 秒；随后两个
+    工作流**都改为仅 `workflow_dispatch`**（`Fast checks (manual)` /
+    `Full tests (manual)`），push 不再触发任何 CI —— 从源头消除红叉、失败
+    邮件与等待。代价：自动检查彻底消失，改为手动触发或本机全量 pytest。
+
+- [x] **口径分裂第一批（2026-09-10 完成）**：删 `scripts/run_backtest.py`
+  （跨层混用收益面板、已被口径守卫拦下跑不起来）；可交易性掩码收敛到
+  `data/tradability.py` 单模块（删死代码 `build_executable_mask`）；
+  交易成本真源上提到 `settings.yaml` 顶层 `costs` 段 + `Config.costs()`
+  （原 `backtest` 段万1/5bp 与 `model_portfolio` 段万3/10bp 差 2~3 倍、
+  不可比）。新增 `tests/test_tradability.py` / `tests/test_cost_config.py`
+  锁死两种口径的唯一语义差别。全量 629 passed（基线 618）。详见
+  `.workbuddy/memory/2026-09-10.md`。
+
+- [ ] **口径统一第二批（2026-09-10 架构审计立项；与第一批不同，均需重跑实验
+  验证后再定案）**：
+
+  - [ ] **显著性判定收口（最高优先——直接影响因子库结论）**：
+    `research/factor_library.py:247` 用 `abs(t_stat_nw) > 2.0`（**无多重检验
+    校正**），而 `factor/mining.py:235/:362` 用 BH-FDR（默认 q=0.05、基于 NW
+    p 值）。后果：库里 `significant=True` 的因子按挖掘端标准可能并不显著。
+    收口到 `stats/` 并明确取 FDR 还是 raw；若改 FDR，需重算已落盘 evals 的
+    `significant` 列（历史 evals 全部失效、因子库横向比较口径须同步声明）。
+  - [ ] **统计 / 预处理 / 指标原语收口**：
+    - rank IC 序列 **2 套**：全库走 `stats/ic.calc_ic_series`，唯
+      `factor/gflownet/reward.py:82 rank_ic_series` 自实现（GFlowNet 奖励用，
+      `returns_rank` 预计算是它的性能特权，收口时需保留该优化）；
+    - 市值中性化 **2 套**：`factor/gflownet/reward.py:62
+      neutralize_market_cap` vs `factor/preprocessing.py:77 neutralize`；
+    - 内联 t 统计量 **≥7 处**（`factor/mining.py:84/:335`、
+      `factor/genetic_mining.py:1125/:1663`、`factor/synthesis.py:725`、
+      `research/attribution.py:130`、`research/factor_analysis.py:62`）
+      应统一走 `stats/robust_stats.nw_tstat`；
+    - 绩效指标 **2 套**：`backtest/metrics.py` vs
+      `scripts/e2e_backtest.py:180 perf_stats`。
+    - 收益面板构造 3 处（`cli_common.returns_from_daily` /
+      `data/cache_helpers` / `build_panel` 内联）——**注意**：这不是"要统一成
+      一套写法"，IC 口径与引擎口径是分层设计、数学等价（`A = B.shift(-1)`），
+      只需保证"每个口径一份实现 + 跨层显式声明"，见 MEMORY.md 收益面板条。
+    - **反例（不要动）**：`optimize/portfolio._neutralize_industry` 是权重级
+      投影，与因子级残差中性化范畴不同，不算重复。
+  - [ ] **确定权重生产的唯一入口（需拍板）**：`strategy/`（启发式投影）与
+    `optimize/`（cvxpy 求解器 + HRP + Black-Litterman，1714 行）并存，信号→
+    权重实现分散在 `strategy/examples.py`（多个 `get_weights`）、
+    `optimize/portfolio.py:90 optimize_weights`、`optimize/solver.py:435
+    optimize_weights_qp`。生产链路 `rolling_grid_alla` **只走 `strategy/`**，
+    `optimize/` 目前只在对比脚本里被调用 → 定一个为生产入口，另一个降级为
+    研究代码并注明。这关系到"优化层是否接上主线"。
+  - [ ] **`factor/synthesis.py` 归属倒挂**：其内容是模型层的活（IC 加权 / PCA /
+    Gram-Schmidt 正交化 / ML stacking），却被 `model/training.py:20` import
+    （该文件自述为「薄封装 factor/synthesis」，`model/features.py:13` /
+    `model/predictor.py:42` 也按它对齐口径）——即依赖方向 model → factor。
+    需决定：把 synthesis 迁入 `model/`，或让 `model` 依赖改由调用方注入，
+    同时更新 `tests/test_layering.py` 的分层约束。
+  - 备注：第二批动的是**口径与依赖边界**，与本批"先跑全量测试定基线、
+    改完对比"的做法一致；建议一次只动一项并单独提交，便于定位是哪一项
+    改变了哪些数字。
 
 ### 3.2 机械性（可批量清理）
 
@@ -164,7 +221,10 @@
 ## 建议推进顺序
 
 1. 重跑 multiyear + freq_tune（补核心结论证据链，顺带验证整改后口径）
-2. 最小 CI（防回归，约一天）
-3. 分钟频挖掘 pipeline（现成数据的最大增量）
-4. cli_common 批量推广 + 报告模板收编（机械清理，可穿插）
-5. 攻"跑输基准"研究问题本身
+2. ~~最小 CI~~（09-10 完成：已转为手动触发；3.2 机械清理亦已批量收口）
+3. **口径统一第二批（见 3.1）**——先做**显著性判定收口**（唯一会直接改变因子库
+   `significant` 结论的一项，优先级高于其余三项）；其余三项按"一次一项 + 单独
+   提交 + 全量测试比对"推进，其中"权重生产唯一入口"需先拍板
+4. 分钟频挖掘 pipeline（现成数据的最大增量）
+5. cli_common 批量推广 + 报告模板收编（机械清理，可穿插）
+6. 攻"跑输基准"研究问题本身
