@@ -5,9 +5,10 @@ import numpy as np
 import pandas as pd
 
 from factor.mining import (
-    _benjamini_hochberg, evaluate_candidates, generate_candidates,
+    evaluate_candidates, generate_candidates,
     rolling_evaluate_candidates,
 )
+from stats.significance import benjamini_hochberg
 
 
 def _mock_panel(n_days=150, n_codes=20, seed=1):
@@ -66,11 +67,11 @@ def test_significant_based_on_nw_p_when_robust():
     """
     panel, returns = _mock_panel()
     df = evaluate_candidates(_cands(), panel, returns, detail_n=3)
-    expected = _benjamini_hochberg(df["p_value_nw"].fillna(df["p_value"]).values, 0.05)
+    expected = benjamini_hochberg(df["p_value_nw"].fillna(df["p_value"]).values, 0.05)
     assert df["significant"].tolist() == expected.tolist()
     # robust=False 时回退 OLS p
     df2 = evaluate_candidates(_cands(), panel, returns, detail_n=3, robust=False)
-    expected2 = _benjamini_hochberg(df2["p_value"].values, 0.05)
+    expected2 = benjamini_hochberg(df2["p_value"].values, 0.05)
     assert df2["significant"].tolist() == expected2.tolist()
     # NW 更保守：自相关 IC 下显著的因子数不增
     assert df["significant"].sum() <= df2["significant"].sum()

@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-from scipy import stats
 
 from factor.preprocessing import neutralize, build_style_covariates
 from stats.ic import (  # noqa: F401  re-export：保持历史 import 路径可用
@@ -60,11 +59,14 @@ def standard_factor_summary(
     ic_std = float(ic_valid.std()) if n else float("nan")
     ir = calc_ir(ic)
     t = ic_mean / (ic_std / np.sqrt(n)) if ic_std > 0 and n > 0 else 0.0
-    p = 2.0 * (1.0 - stats.t.cdf(abs(t), df=n - 1)) if n > 1 else float("nan")
+    # 双侧 p 值真源 = stats.significance.t_pvalue（2026-09-10 收口，
+    # 此前各处内联 2*(1-t.cdf(|t|, df))，公式漂移无从对照）
+    from stats.significance import t_pvalue
+    p = t_pvalue(t, df=n - 1) if n > 1 else float("nan")
     # Newey-West 自相关稳健推断（业界标准：Andrews 1991 带宽）
     from stats.robust_stats import nw_tstat
     t_nw, _se_nw, nw_lag = nw_tstat(ic_valid) if n > 1 else (0.0, 0.0, 0)
-    p_nw = 2.0 * (1.0 - stats.t.cdf(abs(t_nw), df=max(n - 1, 1))) if n > 1 else float("nan")
+    p_nw = t_pvalue(t_nw, df=max(n - 1, 1)) if n > 1 else float("nan")
     decay = calc_ic_decay(factor_panel, returns_panel, max_lag=max(decay_lags))
     return {
         "ic_mean": ic_mean,

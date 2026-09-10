@@ -20,6 +20,7 @@ import pandas as pd
 
 from stats.ic import calc_ic_decay, calc_ic_series, calc_ir, quantile_backtest
 from stats.robust_stats import nw_tstat
+from stats.significance import t_pvalue
 
 __all__ = ["evaluate_model", "eval_row", "monthly_ic", "fit_predict_valid_ic"]
 
@@ -45,12 +46,9 @@ def evaluate_model(
     ic_series = calc_ic_series(pred_panel, returns_panel)
     ic = ic_series.dropna()
     t_nw, _se_nw, _lag = nw_tstat(ic.values) if len(ic) > 1 else (0.0, 0.0, 0)
-    # p 值口径与 research/factor_analysis.standard_factor_summary 一致
-    from scipy import stats as _stats
-    if len(ic) > 1:
-        p_nw = 2.0 * (1.0 - _stats.t.cdf(abs(t_nw), df=max(len(ic) - 1, 1)))
-    else:
-        p_nw = float("nan")
+    # p 值真源 = stats.significance.t_pvalue（2026-09-10 收口；口径与
+    # research/factor_analysis.standard_factor_summary 一致）
+    p_nw = t_pvalue(t_nw, df=max(len(ic) - 1, 1)) if len(ic) > 1 else float("nan")
 
     return {
         "ic_series": ic_series,
@@ -73,8 +71,7 @@ def eval_row(tag: str, pred: pd.DataFrame, fwd: pd.DataFrame,
     tgt = fwd.loc[days]
     ic = calc_ic_series(pred, tgt).dropna()
     t_nw, _, _ = nw_tstat(ic.values) if len(ic) > 1 else (0.0, 0.0, 0)
-    from scipy import stats as st
-    p = 2 * (1 - st.t.cdf(abs(t_nw), df=max(len(ic) - 1, 1)))
+    p = t_pvalue(t_nw, df=max(len(ic) - 1, 1))
     ev = evaluate_model(pred, tgt)
     qb = ev["quantile_backtest"]
     ls = None

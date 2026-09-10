@@ -239,11 +239,22 @@ class FactorLibrary:
         n = len(ic_valid)
         ic_ir = calc_ir(ic) if n >= 2 else 0.0
         t_stat = ic_mean / (ic_std / np.sqrt(n)) if ic_std > 0 else 0.0
-        # Newey-West 自相关稳健显著性（IC 序列强自相关时 OLS t 会虚高；
-        # significant 判定基于 NW t，2026-08-03 修复，避免累积伪显著）
-        from stats.robust_stats import nw_tstat
-        t_stat_nw, _se_nw, _lag = nw_tstat(ic_valid) if n >= 2 else (0.0, 0.0, 0)
+        # 显著性：一步式给出 OLS 与 NW 两套 t/p（真源 = stats.significance；
+        # IC 序列强自相关时 OLS t 会虚高，判显著一律用 NW 那一列）。
+        from stats.significance import mean_inference
+        _inf = mean_inference(ic_valid) if n >= 2 else {
+            "t_stat": 0.0, "p_value": float("nan"),
+            "t_stat_nw": 0.0, "p_value_nw": float("nan"),
+        }
+        t_stat = _inf["t_stat"]
+        t_stat_nw = _inf["t_stat_nw"]
+        p_value_nw = _inf["p_value_nw"]
         ic_win_rate = float((ic_valid > 0).mean()) if n else float("nan")
+        # **原始** NW 显著性（双侧 α=0.05 的惯用等价写法 |t_nw| > 2）：
+        # 刻意不做多重检验校正——register() 一次只登记一个因子，调用内不存在
+        # 可言的"检验族"，假装存在会让 significant 依赖入库顺序/批次大小。
+        # 批量挖掘走 factor/mining 的 BH-FDR；若要在**整库**这个族上校正，用
+        # FactorLibrary.significance_table() / load_significant_features(correction="fdr")。
         significant = bool(abs(t_stat_nw) > 2.0)
 
         # 1b) IC 衰减 + 截面排名自相关（换手率代理）
@@ -307,6 +318,7 @@ class FactorLibrary:
             "ic_ir": ic_ir,
             "t_stat": t_stat,
             "t_stat_nw": t_stat_nw,
+            "p_value_nw": p_value_nw,
             "ic_win_rate": ic_win_rate,
             "ic_decay5": ic_decay5,
             "autocorr": autocorr,
@@ -374,22 +386,92 @@ class FactorLibrary:
                 out[r["name"]] = pd.read_parquet(p)
         return out
 
-    def load_significant_features(self, exclude_model: bool = True) -> dict:
+    def significance_table(self, q: float = 0.05, exclude_model: bool = True) -> pd.DataFrame:
+        """在**整库这个检验族**上做 BH-FDR 多重检验校正，返回逐因子判定表。
+
+        与 registry 里 ``significant`` 列的分工（**族不同，答案本就不同**）：
+
+        - ``significant`` 列 = **单因子原始** NW 显著性（|t_nw| > 2，双侧 α≈0.05），
+          刻意不校正——``register()`` 一次只登记一个因子，调用内不存在"检验族"。
+        - 本方法 = 把库里已登记的全部因子当作**一个族**做 BH-FDR，回答的是另一个
+          问题："把整库当成一个筛选池时，哪些因子值得信？"
+
+        两者都保留、都显式，不用一个去冒充另一个（真源同为 ``stats.significance``）。
+
+        Args:
+            q: 目标 FDR 水平（默认 0.05）。
+            exclude_model: 排除 model:* 来源（与 ``load_significant_features`` 一致）。
+        Returns:
+            DataFrame[name, source, t_stat_nw, p_value_nw, raw_significant,
+                      fdr_significant]，按 ``p_value_nw`` 升序；无可用 t 的行不参与族。
+        """
+        from stats.significance import benjamini_hochberg, t_pvalue
+
+        reg = self.list_all()
+        if reg.empty:
+            return pd.DataFrame(columns=["name", "source", "t_stat_nw", "p_value_nw",
+                                         "raw_significant", "fdr_significant"])
+
+        def _col(name, default):
+            return reg[name] if name in reg.columns else pd.Series([default] * len(reg),
+                                                                   index=reg.index)
+
+        if exclude_model:
+            reg = reg[~_col("source", "").fillna("").str.startswith("model:")]
+        d = pd.DataFrame({"name": reg["name"].values,
+                          "source": _col("source", "").values})
+        d["t_stat_nw"] = pd.to_numeric(_col("t_stat_nw", np.nan), errors="coerce").values
+        d["raw_significant"] = _col("significant", False).fillna(False).astype(bool).values
+        p = pd.to_numeric(_col("p_value_nw", np.nan), errors="coerce").values.astype(float)
+
+        # 旧行（本列引入前入库）没有 p 值：用 t 与 n_dates-1（IC 观测数的上界代理）
+        # 补算，并明确记录近似范围——不静默编数。
+        miss = ~np.isfinite(p) & np.isfinite(d["t_stat_nw"].values)
+        if miss.any():
+            nd = pd.to_numeric(reg.get("n_dates"), errors="coerce").fillna(250).values
+            p[miss] = np.asarray(t_pvalue(d["t_stat_nw"].values[miss],
+                                          df=np.maximum(nd[miss] - 1, 1)), dtype=float)
+            log.warning("significance_table: %d 行缺 p_value_nw，已用 t 与 n_dates-1 近似补算"
+                        "（重跑 register 可获得精确值）", int(miss.sum()))
+        d["p_value_nw"] = p
+        d["fdr_significant"] = benjamini_hochberg(p, q) if len(d) else np.array([], bool)
+        return d.sort_values("p_value_nw", na_position="last").reset_index(drop=True)
+
+    def load_significant_features(self, exclude_model: bool = True,
+                                  correction: str = "raw", q: float = 0.05) -> dict:
         """加载 significant 因子面板（2026-08-31 从 e2e_common 下沉）。
 
         Args:
             exclude_model: 排除 model:* 来源（模型预测回写因子，面板通常滞后，
                 且与预测/回测工作流自身循环引用）。默认 True——这是 e2e
                 预测日能到数据末端的关键（model:* 面板截至 2025-12-31）。
+            correction: 显著性口径。
+                - ``"raw"``（默认，行为与历史一致）：用 registry 的 ``significant``
+                  列（单因子原始 NW 显著性，未做多重检验校正）。
+                - ``"fdr"``：把**整库**当作一个族做 BH-FDR（见
+                  ``significance_table``），只留 q 水平下仍显著的因子。
+                切换口径会改变喂给下游的因子池，进而改变回测数字——要做横向
+                比较时两端口径须一致，别一半 raw 一半 fdr。
+            q: ``correction="fdr"`` 时的目标 FDR 水平。
         """
         reg = self.list_all()
         sig = reg["significant"].fillna(False).astype(bool)
-        mask = sig.copy()
-        if exclude_model:
-            mask &= ~reg["source"].fillna("").str.startswith("model:")
+        if correction == "fdr":
+            tbl = self.significance_table(q=q, exclude_model=exclude_model)
+            keep = set(tbl.loc[tbl["fdr_significant"], "name"])
+            mask = reg["name"].isin(keep)
+            log.info("因子库: %d 个因子, raw significant %d 个, BH-FDR(q=%.2f) %d 个",
+                     len(reg), int(sig.sum()), q, len(keep))
+        elif correction == "raw":
+            mask = sig.copy()
+            if exclude_model:
+                mask &= ~reg["source"].fillna("").str.startswith("model:")
+        else:
+            raise ValueError(f"未知 correction: {correction}（可选 'raw' | 'fdr'）")
         sig_names = set(reg[mask]["name"])
-        log.info("因子库: %d 个因子, significant %d 个（排除 model:* 后 %d）",
-                 len(reg), int(sig.sum()), len(sig_names))
+        if correction == "raw":
+            log.info("因子库: %d 个因子, significant %d 个（排除 model:* 后 %d）",
+                     len(reg), int(sig.sum()), len(sig_names))
 
         all_feats = self.load_library_features()
         feats = {k: v for k, v in all_feats.items() if k in sig_names}
@@ -484,7 +566,7 @@ class FactorLibrary:
             return reg
         # IC 类指标无 config 后缀（单一口径，不随回测配置变，2026-08-05 修复：
         # 原实现把 ic_mean 也拼成 ic_mean_ls_M 导致 KeyError）
-        _IC_COLS = {"ic_mean", "ic_std", "ic_ir", "t_stat", "t_stat_nw",
+        _IC_COLS = {"ic_mean", "ic_std", "ic_ir", "t_stat", "t_stat_nw", "p_value_nw",
                     "ic_win_rate", "ic_decay5", "autocorr", "significant"}
         if metric in ("ir", "ic_ir"):
             col = "ic_ir"

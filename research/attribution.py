@@ -34,10 +34,10 @@ from typing import Mapping
 
 import numpy as np
 import pandas as pd
-from scipy import stats
 
 from backtest.metrics import PERIODS_PER_YEAR
 from stats.robust_stats import nw_tstat, ols_newey_west
+from stats.significance import t_pvalue
 
 __all__ = ["fama_macbeth", "brinson_attribution", "alpha_beta"]
 
@@ -130,7 +130,7 @@ def fama_macbeth(
         t_ols = mean / (sd / np.sqrt(n)) if sd > 0 else 0.0
         se_ols = sd / np.sqrt(n) if n > 1 else 0.0
         t_nw, se_nw, _lag = nw_tstat(s, lag=lag)
-        p_nw = 2.0 * (1.0 - stats.t.cdf(abs(t_nw), df=max(n - 1, 1)))
+        p_nw = t_pvalue(t_nw, df=max(n - 1, 1))
         rows[nm] = {
             "premium": mean, "se_ols": se_ols, "t_ols": t_ols,
             "se_nw": se_nw, "t_nw": t_nw, "p_nw": p_nw,

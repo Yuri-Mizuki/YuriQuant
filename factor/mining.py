@@ -26,7 +26,6 @@ from typing import Callable, Sequence
 
 import numpy as np
 import pandas as pd
-from scipy import stats
 
 from factor.operators import (
     CS_OPS, DEFAULT_FEATURES, DEFAULT_WINDOWS, TS_OPS, cs_rank, op_registry,
@@ -61,7 +60,7 @@ def _init_eval_worker(panel, returns_panel, features):
 
 def _eval_candidate_worker(task: tuple) -> dict | None:
     """worker：按公式字符串重建求值器，计算 IC 摘要。返回 row dict 或 None（无效/异常）。"""
-    from stats.robust_stats import nw_tstat
+    from stats.significance import mean_inference
     from factor.formula import formula_builder
 
     name, method, min_obs, robust = task
@@ -78,23 +77,17 @@ def _eval_candidate_worker(task: tuple) -> dict | None:
     n = len(ic)
     if n < min_obs:
         return None
-    m = float(ic.mean())
-    s = float(ic.std())
-    ir = calc_ir(ic)
-    t = m / (s / np.sqrt(n)) if s > 0 else 0.0
-    p = 2.0 * (1.0 - stats.t.cdf(abs(t), df=n - 1))
-    t_nw, _se_nw, _lag = nw_tstat(ic) if robust else (np.nan, np.nan, 0)
-    p_nw = 2.0 * (1.0 - stats.t.cdf(abs(t_nw), df=n - 1)) if robust else np.nan
+    inf = mean_inference(ic, robust=robust)
     return {
         "name": name,
-        "ic_mean": m,
-        "ic_std": s,
-        "ir": ir,
+        "ic_mean": inf["mean"],
+        "ic_std": inf["std"],
+        "ir": calc_ir(ic),
         "ic_win_rate": float((ic > 0).mean()),
-        "t_stat": t,
-        "p_value": p,
-        "t_stat_nw": t_nw,
-        "p_value_nw": p_nw,
+        "t_stat": inf["t_stat"],
+        "p_value": inf["p_value"],
+        "t_stat_nw": inf["t_stat_nw"],
+        "p_value_nw": inf["p_value_nw"],
         "n": n,
     }
 
@@ -232,24 +225,6 @@ class EvalResult:
     significant: bool
 
 
-def _benjamini_hochberg(pvalues: np.ndarray, q: float) -> np.ndarray:
-    """BH 多重检验校正，返回每个假设是否拒绝（即因子是否显著）。"""
-    n = len(pvalues)
-    if n == 0:
-        return np.array([], dtype=bool)
-    order = np.argsort(pvalues)
-    sorted_p = pvalues[order]
-    # k* = max{k : p_(k) <= k*q/n}
-    k_max = 0
-    for i in range(n):
-        if sorted_p[i] <= (i + 1) * q / n:
-            k_max = i + 1
-    passed = np.zeros(n, dtype=bool)
-    if k_max > 0:
-        passed[order[:k_max]] = True
-    return passed
-
-
 def evaluate_candidates(
     candidates: list[Candidate],
     panel: dict[str, pd.DataFrame],
@@ -292,7 +267,7 @@ def evaluate_candidates(
         ic_decay5/ic_decay10/autocorr/t_stat/p_value/t_stat_nw/p_value_nw/
         significant。
     """
-    from stats.robust_stats import nw_tstat
+    from stats.significance import benjamini_hochberg, mean_inference
 
     cand_map = {c.name: c for c in candidates}
     rows: list[dict] = []
@@ -329,23 +304,17 @@ def evaluate_candidates(
             n = len(ic)
             if n < min_obs:
                 continue
-            m = float(ic.mean())
-            s = float(ic.std())
-            ir = calc_ir(ic)
-            t = m / (s / np.sqrt(n)) if s > 0 else 0.0
-            p = 2.0 * (1.0 - stats.t.cdf(abs(t), df=n - 1))
-            t_nw, _se_nw, _lag = nw_tstat(ic) if robust else (np.nan, np.nan, 0)
-            p_nw = 2.0 * (1.0 - stats.t.cdf(abs(t_nw), df=n - 1)) if robust else np.nan
+            inf = mean_inference(ic, robust=robust)
             rows.append({
                 "name": c.name,
-                "ic_mean": m,
-                "ic_std": s,
-                "ir": ir,
+                "ic_mean": inf["mean"],
+                "ic_std": inf["std"],
+                "ir": calc_ir(ic),
                 "ic_win_rate": float((ic > 0).mean()),
-                "t_stat": t,
-                "p_value": p,
-                "t_stat_nw": t_nw,
-                "p_value_nw": p_nw,
+                "t_stat": inf["t_stat"],
+                "p_value": inf["p_value"],
+                "t_stat_nw": inf["t_stat_nw"],
+                "p_value_nw": inf["p_value_nw"],
                 "n": n,
             })
             if verbose and (i + 1) % 50 == 0:
@@ -365,7 +334,7 @@ def evaluate_candidates(
         p_for_fdr = df["p_value_nw"].fillna(df["p_value"]).values
     else:
         p_for_fdr = df["p_value"].values
-    df["significant"] = _benjamini_hochberg(p_for_fdr, fdr_q)
+    df["significant"] = benjamini_hochberg(p_for_fdr, fdr_q)
 
     # 默认按 |IR| 降序（业界统一主轴）；|t| 与 |IR| 对固定样本单调等价，可切换。
     sort_col = "ir" if sort_by == "ir" else "t_stat"

@@ -10,6 +10,8 @@ monitoring/scripts）直接消费——核心包不得再反向 import research 
 
 模块清单：
 - ``stats.robust_stats`` : Newey-West HAC 稳健推断（nw_tstat / ols_newey_west / auto_lag）
+- ``stats.significance`` : 显著性判定（t_pvalue / benjamini_hochberg / mean_inference）
+                           —— 与 robust_stats 分工：那边管"估计"，这边管"判定"
 - ``stats.ic``           : 因子 IC 统计（calc_ic_series / calc_ir / calc_ic_decay /
                            quantile_backtest / factor_autocorr）
 - ``stats.monitor``      : IC 漂移监控统计（rolling_ic / monitor_ic_series / monitor_report）
