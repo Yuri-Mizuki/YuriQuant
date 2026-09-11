@@ -40,7 +40,7 @@ from data.mock import load_mock_data  # noqa: E402
 from factor.classic import compute_classic_features  # noqa: E402
 from model.labels import build_label_pair  # noqa: E402
 from research.factor_report import (  # noqa: E402
-    _fig_to_b64,
+    fig_to_b64,
     factor_test,
     plot_layers,
     plot_monthly_ic,
@@ -90,7 +90,7 @@ def plot_equity_curves(equity: pd.DataFrame) -> str:
     ax.set_ylabel("累计净值")
     ax.legend(fontsize=9)
     ax.grid(alpha=0.3)
-    return _fig_to_b64(fig)
+    return fig_to_b64(fig)
 
 
 def plot_drawdown(equity: pd.DataFrame) -> str:
@@ -104,7 +104,7 @@ def plot_drawdown(equity: pd.DataFrame) -> str:
     ax.set_ylabel("%")
     ax.legend(fontsize=9)
     ax.grid(alpha=0.3)
-    return _fig_to_b64(fig)
+    return fig_to_b64(fig)
 
 
 # ---------------------------------------------------------------------------

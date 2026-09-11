@@ -158,7 +158,7 @@ def quantile_monotonicity(
     return mono, ls
 
 
-def _pick_baseline(m: MonitorMetrics) -> float:
+def pick_baseline(m: MonitorMetrics) -> float:
     """选择保留率基线：注册时的**冻结基线**（|IC| 足够显著时）→ 否则全期基线。
 
     冻结基线 = 注册时入库的 ic_mean（上线时的 OOS 表现，天然不含近期，杜绝
@@ -226,7 +226,7 @@ def compute_factor_metrics(
     m.expected_ic = float(reg_ic) if reg_ic is not None and reg_ic == reg_ic else float("nan")
     if m.expected_ic == m.expected_ic and abs(m.expected_ic) >= _FROZEN_BASELINE_MIN_ABS:
         m.frozen_baseline = m.expected_ic
-    baseline = _pick_baseline(m)
+    baseline = pick_baseline(m)
     if baseline == baseline and abs(baseline) > 1e-12:
         if m.ic_mean_recent == m.ic_mean_recent:
             m.ic_retention = m.ic_mean_recent / baseline
@@ -286,7 +286,7 @@ def compute_factor_metrics(
                         m.ic_neutral_mean_full / m.ic_mean_full
                     )
                 # 中性化 IC 保留率
-                baseline = _pick_baseline(m)
+                baseline = pick_baseline(m)
                 if (baseline == baseline and abs(baseline) > 1e-12
                         and m.ic_neutral_mean_recent == m.ic_neutral_mean_recent):
                     m.ic_neutral_retention = (

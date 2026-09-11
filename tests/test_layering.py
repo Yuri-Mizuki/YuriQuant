@@ -17,6 +17,8 @@ optimize/strategy 边界）
 10. 实验入口脚本不得被其他 scripts 反向 import（2026-09-11 下沉）
 11. 跨模块引用的私有函数必须公开化：scripts 不得 import 带下划线前缀的名字
     （2026-09-11 P1#3 倒挂收口）
+12. 入库代码不得 import gitignored 目录（scripts/oneoff 等）——否则干净 clone /
+    生产环境必 ImportError（2026-09-11 P0+P1：全A 构建管线迁入 scripts/builders/）
 """
 from __future__ import annotations
 
@@ -239,34 +241,52 @@ def test_periods_per_year_single_source():
 
 
 # ---------------------------------------------------------------------------
-# 私有函数倒挂守卫（2026-09-11 P1#3 + 第四批扩展）
+# 私有名跨模块引用守卫（2026-09-11 P1#3 / 第四批 / P0+P1 收口）
 # ---------------------------------------------------------------------------
-#: 被跨模块引用的私有名已公开化（见 factor.genetic_mining 模块 docstring）
-#: —— 定义这些名字的模块，以及"只许测试白盒引用"的私有名白名单
-_PRIVATE_IMPORT_GUARDS = {
-    "factor.genetic_mining": {
-        # scripts 层一律不得引用私有名；tests 仅允许下列白盒用例
-        "tests_only": {"_adjust_crowding", "_restore_crowding",
-                       "_dedup_hof_by_correlation", "_ensure_creator",
-                       "_seg_ic_stats"},
-    },
-    "data.cache_helpers": {"tests_only": set()},
-    # 第四批扩展：scripts 层的生产/实验链（同样禁止跨模块 import 私有名）
-    "scripts.rolling_grid_alla": {
-        "tests_only": {"_yearly_metrics", "_rebalance_days_validated"},
-    },
-    "scripts.build_intraday_factors": {"tests_only": set()},
-    "scripts.build_fundamental_factors": {"tests_only": set()},
-    "scripts.alla_daily_rank": {
-        "tests_only": {"_limit_from_daily", "_ALPHA_PREFIXES", "_CONSTRUCTED_KEYS",
-                       "_HOLDER_NUM_KEYS", "_HOLDER_TOP_KEYS", "_PLEDGE_KEYS"},
-    },
-    "scripts.mine_factors": {"tests_only": {"_apply_gtja_preset"}},
-    "scripts.e2e_backtest": {"tests_only": {"_enforce_caps"}},
+#: 业务包根（这些包内的私有名不得被跨模块 import）
+_PRIV_GUARD_PKGS = {"config", "data", "factor", "model", "research", "stats",
+                    "strategy", "optimize", "backtest", "monitoring", "scripts"}
+
+#: tests 白盒例外：允许测试引用的 (模块, 私有名)。这些名**仍为私有**、未对外承诺，
+#: 只是测试需要直接驱动内部实现（构造边界输入、逐位对拍）。新增例外请写进这里并
+#: 注明理由——**生产代码一律不得引用**，这条由本守卫强制。
+_TESTS_ONLY_PRIVATE: set[tuple[str, str]] = {
+    # 私有名前两批收口时保留的"仅测试白盒"用例
+    ("factor.genetic_mining", "_adjust_crowding"),
+    ("factor.genetic_mining", "_restore_crowding"),
+    ("factor.genetic_mining", "_dedup_hof_by_correlation"),
+    ("factor.genetic_mining", "_ensure_creator"),
+    ("factor.genetic_mining", "_seg_ic_stats"),
+    ("scripts.rolling_grid_alla", "_yearly_metrics"),
+    ("scripts.rolling_grid_alla", "_rebalance_days_validated"),
+    ("scripts.alla_daily_rank", "_limit_from_daily"),
+    ("scripts.alla_daily_rank", "_ALPHA_PREFIXES"),
+    ("scripts.alla_daily_rank", "_CONSTRUCTED_KEYS"),
+    ("scripts.alla_daily_rank", "_HOLDER_NUM_KEYS"),
+    ("scripts.alla_daily_rank", "_HOLDER_TOP_KEYS"),
+    ("scripts.alla_daily_rank", "_PLEDGE_KEYS"),
+    ("scripts.mine_factors", "_apply_gtja_preset"),
+    ("scripts.e2e_backtest", "_enforce_caps"),
+    # 2026-09-11 把守卫改为**通用规则**后新暴露的测试白盒用例（生产侧已一并清干净）
+    ("backtest.engine", "_apply_executable_mask"),
+    ("research.factor_library", "_coerce_date"),
+    ("research.html_report", "_fmt"),
+    ("research.html_report", "_month_cell_style"),
+    ("research.html_report", "_monthly_html"),
+    ("research.html_report", "_monthly_table"),
+    ("optimize.multi_period", "_rebalance_days"),
+    ("optimize.solver", "_risk_parity_ccd"),
+    ("model.stacking", "_time_fold_masks"),
+    ("data.textmining.source_cninfo", "_fmt"),
+    ("data.textmining.source_cninfo", "_CATEGORY_MAP"),
+    ("data.textmining.source_cninfo", "_download_pdf_text"),
+    ("data.textmining.source_ths", "_parse_report_json"),
 }
-#: 已知暂不纳管：scripts/textmining/* 由另一会话在改（同目录 8 个文件未提交），
-#: 待其落地后再并入。scripts/oneoff/* 见 test_production_must_not_depend_on_oneoff。
-_PRIVATE_IMPORT_EXEMPT_PREFIXES = ("scripts.textmining",)
+
+#: 暂豁免的**被引用方**前缀：
+#: - ``scripts.textmining`` —— 另一会话正在改（同目录 8 个文件未提交），待其落地后并入；
+#: - ``scripts.oneoff`` —— 整目录 gitignored，属本地脚本、不是入库契约。
+_PRIVATE_IMPORT_EXEMPT_PREFIXES = ("scripts.textmining", "scripts.oneoff")
 
 
 def _private_names_from_imports(path: Path) -> set[tuple[str, str]]:
@@ -290,64 +310,91 @@ def _private_names_from_imports(path: Path) -> set[tuple[str, str]]:
     return out
 
 
-def test_no_private_import_from_factor_and_data():
-    """跨模块引用的私有函数必须公开化，不得靠下划线名互相 import。
+def test_no_private_names_cross_module():
+    """业务包内的私有名不得被**跨模块** import（下划线是"别用"的约定，不是 API）。
 
-    2026-09-11 收口：``data.cache_helpers`` 的 2 个 PIT 函数（被 6 个 scripts
-    引用）与 ``factor.genetic_mining`` 的 5 个适应度组件（被 4 个 scripts 引用）
-    原为下划线私有名却跨模块 import——私有前缀对调用方是"别用"的约定，跨模块
-    调用属归属倒挂。现全部公开化（pit_universe_codes / apply_membership_mask /
-    ls_net_stats / monthly_forward_returns / mutual_info_series /
-    top_excess_series / htai_preprocess）。
+    2026-09-11 三轮收口解决了 3 批同类倒挂：
+    - P1#3：`data.cache_helpers` 的 2 个 PIT 函数 + `factor.genetic_mining` 的
+      5 个适应度组件（被 10 个 scripts 引用）；
+    - 第四批：`scripts` 层生产链 8 处（`rolling_grid_alla.existence_mask` 被生产
+      `alla_daily_rank` 用等）；
+    - P0+P1：全A 构建管线 7 处（`scripts/builders/*` 内部的
+      `add_single_quarter` / `add_ttm_yoy` / `sq_growth_long` / `year_offset` /
+      `build_panels` / `pit_holder_num` / `pit_share_holder`）。
 
-    scripts 层不得再出现任何私有名 import；tests 层仅允许白名单内的白盒用例
-    （这些名仍为私有，未对外承诺）。
+    本守卫用**通用 AST 规则**（不再逐个模块列表）自动覆盖新增代码：
+    只要不是 tests 白名单、不在豁免前缀内，跨模块 import 私有名即失败。定义模块
+    自身内部的私有调用不受影响。
     """
     offenders: list[str] = []
     for f in sorted(ROOT.rglob("*.py")):
-        if {"oneoff", "archive", ".git"} & set(f.parts):
-            continue
         rel = str(f.relative_to(ROOT)).replace("\\", "/")
-        if rel.startswith("tests/") and f.name.startswith("_"):
+        if set(f.parts) & {".git", "__pycache__", ".venv", "venv", "node_modules"}:
             continue
+        if rel.startswith(("reports/", "scripts/oneoff/")) or f.name.startswith("_"):
+            continue
+        file_mod = rel[:-3].replace("/", ".")
+        if file_mod.endswith(".__init__"):
+            file_mod = file_mod[: -len(".__init__")]
         is_test = rel.startswith("tests/")
         for mod, name in _private_names_from_imports(f):
+            if mod.split(".")[0] not in _PRIV_GUARD_PKGS:
+                continue
+            if mod == file_mod:                      # 自身模块，非跨模块
+                continue
             if mod.startswith(_PRIVATE_IMPORT_EXEMPT_PREFIXES):
                 continue
-            guard = _PRIVATE_IMPORT_GUARDS.get(mod)
-            if guard is None:
-                continue
-            allowed = guard["tests_only"]
-            if is_test and name in allowed:
+            if is_test and (mod, name) in _TESTS_ONLY_PRIVATE:
                 continue
             offenders.append(f"{rel}: from {mod} import {name}")
     assert not offenders, (
         "跨模块 import 了私有名（请公开化后再引用）:\n" + "\n".join(offenders))
 
 
-@pytest.mark.xfail(strict=False, reason=(
-    "已知缺陷（2026-09-11 审计发现）：scripts/alla_daily_rank.py 等生产脚本依赖 "
-    "gitignored 的 scripts/oneoff/，归属待拍板。修好后本测试自然转绿。"))
-def test_production_scripts_do_not_depend_on_gitignored_oneoff():
-    """生产入口不得依赖 ``scripts/oneoff/``（该目录整目录 gitignored → 干净 clone 会 ImportError）。
+def test_no_tracked_code_imports_gitignored_dirs():
+    """入库代码不得 import **gitignored 目录**（否则干净 clone / 生产环境必 ImportError）。
 
-    ⚠️ **已知缺陷，暂标 xfail 记录在案**（2026-09-11 第四批审计发现）：
-    ``scripts/alla_daily_rank.py``（生产每日推理）有 6 处
-    ``from scripts.oneoff.* import ...``，而 ``.gitignore`` 第 41 行忽略整个
-    ``scripts/oneoff/``（本地 62 个文件、0 个被跟踪）。也就是说**在生产环境/
-    新 clone 上该脚本必然 ImportError**。
-    修法需要先拍板这些 build_all_* 面板构造函数该归哪一层（它们产出的基本面/
-    质押/股东面板是主实验的输入，候选：``factor/`` 或 ``scripts/`` 跟踪目录）。
-    决策前本测试保持 xfail，防止"看起来全绿"地把缺陷忘掉。
+    2026-09-11 修复：``scripts/alla_daily_rank.py``（生产每日推理，注册为 Windows
+    计划任务 ``YuriQuant AllaDailyRank``）原有 6 处 ``from scripts.oneoff.* import``，
+    而 ``.gitignore`` 第 41 行忽略整个 ``scripts/oneoff/``——生产入口在干净 clone 上
+    必然 ImportError。已把全A 数据集构建/回补管线 22 个模块迁入**受跟踪**的
+    ``scripts/builders/``（该目录的 ``__init__`` 写明了搬迁理由）。
+
+    本测试此后充当回归守卫：只要入库代码再出现 ``scripts.oneoff.*`` 的 import 即失败。
+    用 AST 取**真实 import**（而非 grep 文本），避免 docstring 里的路径提及误伤。
     """
-    offenders = []
-    for f in sorted((ROOT / "scripts").rglob("*.py")):
-        if "oneoff" in f.parts or "archive" in f.parts:
+    offenders: list[str] = []
+    for f in sorted(ROOT.rglob("*.py")):
+        rel = str(f.relative_to(ROOT)).replace("\\", "/")
+        if set(f.parts) & {".git", "__pycache__", ".venv", "venv", "node_modules"}:
             continue
-        if "scripts.oneoff" in f.read_text(encoding="utf-8"):
-            offenders.append(str(f.relative_to(ROOT)))
+        if rel.startswith(("reports/", "scripts/oneoff/")):
+            continue
+        for mod, _name in _all_imported_modules(f):
+            if mod.startswith("scripts.oneoff"):
+                offenders.append(f"{rel}: import {mod}")
     assert not offenders, (
-        "生产/实验脚本依赖了 gitignored 的 scripts/oneoff/:\n" + "\n".join(offenders))
+        "入库代码依赖了 gitignored 的 scripts/oneoff/（请迁入 scripts/builders/）:\n"
+        + "\n".join(offenders))
+
+
+def _all_imported_modules(path: Path) -> set[tuple[str, str]]:
+    """模块的全部 import（含非私有名），返回 (module, name) 集合。"""
+    import ast
+
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except SyntaxError:  # pragma: no cover
+        return set()
+    out: set[tuple[str, str]] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module:
+            for a in node.names:
+                out.add((node.module, a.name))
+        elif isinstance(node, ast.Import):
+            for a in node.names:
+                out.add((a.name, a.name.rsplit(".", 1)[-1]))
+    return out
 
 
 def test_frozen_recipe_stays_consistent_across_layers():

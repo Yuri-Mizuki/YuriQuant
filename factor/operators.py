@@ -29,7 +29,7 @@ from typing import Callable
 # ===========================================================================
 # 内部工具
 # ===========================================================================
-def _safe_div(a: pd.DataFrame, b: pd.DataFrame) -> pd.DataFrame:
+def safe_div(a: pd.DataFrame, b: pd.DataFrame) -> pd.DataFrame:
     """逐元素除法，分母为 0 返回 NaN（不产生 inf）。"""
     out = a / b
     return out.replace([np.inf, -np.inf], np.nan)
@@ -107,7 +107,7 @@ def mul(a: pd.DataFrame, b: pd.DataFrame) -> pd.DataFrame:
 
 
 def div(a: pd.DataFrame, b: pd.DataFrame) -> pd.DataFrame:
-    return _safe_div(a, b)
+    return safe_div(a, b)
 
 
 def max_(a: pd.DataFrame, b: pd.DataFrame) -> pd.DataFrame:
@@ -189,7 +189,7 @@ def ts_delta(x: pd.DataFrame, n: int) -> pd.DataFrame:
 
 def ts_diff(x: pd.DataFrame, n: int) -> pd.DataFrame:
     """N 期收益率: x / ts_ref(x, n) - 1。"""
-    return _safe_div(x, x.shift(n)) - 1.0
+    return safe_div(x, x.shift(n)) - 1.0
 
 
 def ts_mean(x: pd.DataFrame, n: int) -> pd.DataFrame:
@@ -224,13 +224,13 @@ def ts_min(x: pd.DataFrame, n: int) -> pd.DataFrame:
 def ts_arg_max(x: pd.DataFrame, n: int) -> pd.DataFrame:
     """N 周期内最高值距当期的周期数 (AmazingData HHVBARS)。归一化到 [0,1]。"""
     raw = x.rolling(n, min_periods=n).apply(np.argmax, raw=True)
-    return _safe_div(raw.astype(float), float(n - 1))
+    return safe_div(raw.astype(float), float(n - 1))
 
 
 def ts_arg_min(x: pd.DataFrame, n: int) -> pd.DataFrame:
     """N 周期内最低值距当期的周期数 (AmazingData LLVBARS)。归一化到 [0,1]。"""
     raw = x.rolling(n, min_periods=n).apply(np.argmin, raw=True)
-    return _safe_div(raw.astype(float), float(n - 1))
+    return safe_div(raw.astype(float), float(n - 1))
 
 
 def ts_rank(x: pd.DataFrame, n: int) -> pd.DataFrame:
@@ -271,7 +271,7 @@ def ts_zscore(x: pd.DataFrame, n: int) -> pd.DataFrame:
     """N 周期 z-score（华泰报告23新增 ts_zscore）：(X - ts_mean) / ts_std。"""
     mean = x.rolling(n, min_periods=n).mean()
     std = x.rolling(n, min_periods=n).std(ddof=1)
-    return _safe_div(x - mean, std)
+    return safe_div(x - mean, std)
 
 
 def ts_slope(x: pd.DataFrame, n: int) -> pd.DataFrame:
@@ -282,7 +282,7 @@ def ts_slope(x: pd.DataFrame, n: int) -> pd.DataFrame:
     sum_x = x.rolling(n, min_periods=n).sum()
     sum_tx = x.rolling(n, min_periods=n).apply(lambda v: np.dot(v, t), raw=True)
     denom = n * sum_t2 - sum_t * sum_t
-    return _safe_div(n * sum_tx - sum_t * sum_x, denom)
+    return safe_div(n * sum_tx - sum_t * sum_x, denom)
 
 
 def _ts_reg_stats(x: pd.DataFrame, n: int) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
@@ -293,11 +293,11 @@ def _ts_reg_stats(x: pd.DataFrame, n: int) -> tuple[pd.DataFrame, pd.DataFrame, 
     sum_x = x.rolling(n, min_periods=n).sum()
     sum_tx = x.rolling(n, min_periods=n).apply(lambda v: np.dot(v, t), raw=True)
     sum_x2 = x.rolling(n, min_periods=n).apply(lambda v: np.dot(v, v), raw=True)
-    slope = _safe_div(n * sum_tx - sum_t * sum_x, denom)
-    intercept = _safe_div(sum_x - slope * sum_t, n)
-    sst = sum_x2 - _safe_div(sum_x * sum_x, n)
+    slope = safe_div(n * sum_tx - sum_t * sum_x, denom)
+    intercept = safe_div(sum_x - slope * sum_t, n)
+    sst = sum_x2 - safe_div(sum_x * sum_x, n)
     ssr = slope * (n * sum_tx - sum_t * sum_x)
-    r2 = _safe_div(ssr, sst)
+    r2 = safe_div(ssr, sst)
     return slope, intercept, r2
 
 
@@ -314,7 +314,7 @@ def ts_residual(x: pd.DataFrame, n: int) -> pd.DataFrame:
 
 def ts_pct_change(x: pd.DataFrame, n: int) -> pd.DataFrame:
     """N 周期百分比变化：x/ref(x,n) − 1（研报图表6 一元时序算子）。"""
-    return _safe_div(x, x.shift(n)) - 1.0
+    return safe_div(x, x.shift(n)) - 1.0
 
 
 def ts_beta(x: pd.DataFrame, y: pd.DataFrame, n: int) -> pd.DataFrame:
@@ -324,7 +324,7 @@ def ts_beta(x: pd.DataFrame, y: pd.DataFrame, n: int) -> pd.DataFrame:
     sum_xy = (x * y).rolling(n, min_periods=n).sum()
     sum_x2 = (x * x).rolling(n, min_periods=n).sum()
     denom = n * sum_x2 - sum_x * sum_x
-    return _safe_div(n * sum_xy - sum_x * sum_y, denom)
+    return safe_div(n * sum_xy - sum_x * sum_y, denom)
 
 
 def ts_orth(x: pd.DataFrame, y: pd.DataFrame, n: int) -> pd.DataFrame:
@@ -332,7 +332,7 @@ def ts_orth(x: pd.DataFrame, y: pd.DataFrame, n: int) -> pd.DataFrame:
     beta = ts_beta(x, y, n)
     sum_x = x.rolling(n, min_periods=n).sum()
     sum_y = y.rolling(n, min_periods=n).sum()
-    intercept = _safe_div(sum_y - beta * sum_x, n)
+    intercept = safe_div(sum_y - beta * sum_x, n)
     return y - (intercept + beta * x)
 
 
@@ -473,7 +473,7 @@ def kama(x: pd.DataFrame, n: int, fast: int = 2, slow: int = 30) -> pd.DataFrame
     x = x.astype(float)
     er_num = (x - x.shift(n)).abs()
     er_den = x.diff().abs().rolling(n, min_periods=n).sum()
-    er = _safe_div(er_num, er_den)
+    er = safe_div(er_num, er_den)
     sc = (er * (2.0 / (fast + 1) - 2.0 / (slow + 1)) + 2.0 / (slow + 1)) ** 2
     vals, scv = x.values, sc.values
     out = np.full_like(vals, np.nan, dtype=float)
@@ -546,7 +546,7 @@ def boll_pctb(x: pd.DataFrame, n: int, k: float = 2.0) -> pd.DataFrame:
     """
     mid = x.rolling(n, min_periods=n).mean()
     std = x.rolling(n, min_periods=n).std(ddof=0)
-    return _safe_div(x - mid, k * std)
+    return safe_div(x - mid, k * std)
 
 
 def obv(close: pd.DataFrame, volume: pd.DataFrame) -> pd.DataFrame:
@@ -573,7 +573,7 @@ def rsi(x: pd.DataFrame, n: int) -> pd.DataFrame:
     alpha = 1.0 / n
     avg_gain = gain.ewm(alpha=alpha, min_periods=n, adjust=False).mean()
     avg_loss = loss.ewm(alpha=alpha, min_periods=n, adjust=False).mean()
-    rs = _safe_div(avg_gain, avg_loss)
+    rs = safe_div(avg_gain, avg_loss)
     out = 100.0 - 100.0 / (1.0 + rs)
     # 边界：横盘（无涨无跌）→ 50；有涨无跌 → RS=∞ → 100（div0 的 NaN 落这里）
     out = out.where((avg_loss > 0) | (avg_gain > 0), 50.0)

@@ -234,7 +234,7 @@ def _plt():
     return plt
 
 
-def _fig_to_b64(fig) -> str:
+def fig_to_b64(fig) -> str:
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=110, bbox_inches="tight")
     _plt().close(fig)
@@ -258,7 +258,7 @@ def plot_layers(layer_nav: pd.DataFrame) -> str:
     ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v * 100:.0f}%"))
     ax.legend(ncol=3, fontsize=9)
     ax.grid(alpha=0.3)
-    return _fig_to_b64(fig)
+    return fig_to_b64(fig)
 
 
 def plot_monthly_ic(monthly_ic: pd.Series) -> str:
@@ -270,4 +270,4 @@ def plot_monthly_ic(monthly_ic: pd.Series) -> str:
     ax.set_title("模型预测因子月度 IC（持仓口径）")
     ax.tick_params(axis="x", rotation=60, labelsize=8)
     ax.grid(alpha=0.3, axis="y")
-    return _fig_to_b64(fig)
+    return fig_to_b64(fig)

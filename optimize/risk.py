@@ -25,7 +25,7 @@ from typing import Any, Mapping
 import numpy as np
 import pandas as pd
 
-from optimize.solver import _to_psd, estimate_covariance
+from optimize.solver import to_psd, estimate_covariance
 from research.attribution import alpha_beta, brinson_attribution
 from research.benchmarks import compare_to_benchmark
 
@@ -220,7 +220,7 @@ def risk_decomposition(
             Sigma = estimate_covariance(hist, method=cov_method, shrinkage=shrinkage)
         except (ValueError, np.linalg.LinAlgError):
             continue
-        Sigma = _to_psd(Sigma, eps=1e-6)
+        Sigma = to_psd(Sigma, eps=1e-6)
 
         # ── Euler 分解 ──
         port_var = float(w_vec @ Sigma @ w_vec)

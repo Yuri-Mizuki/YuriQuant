@@ -24,7 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 #: 允许自拼 HTML 外壳的唯一模块（外壳真源）
 SHELL_SOURCE = ROOT / "research" / "html_report.py"
 _SKIP_DIRS = {".venv", "venv", ".git", "oneoff", "archive", "node_modules",
-              "tests", "__pycache__"}
+              "tests", "__pycache__", "reports"}
 _SHELL_RE = re.compile(r"<!DOCTYPE|<html\b", re.I)
 
 

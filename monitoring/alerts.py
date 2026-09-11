@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from monitoring.metrics import MonitorMetrics, _pick_baseline
+from monitoring.metrics import MonitorMetrics, pick_baseline
 
 _LEVELS = {"normal": 0, "warning": 1, "critical": 2}
 
@@ -53,7 +53,7 @@ def evaluate_alerts(m: MonitorMetrics, cfg: dict[str, Any]) -> list[dict]:
         )
 
     if _ok(m.ic_mean_recent) and _ok(m.ic_mean_full) and m.recent_n_days >= 20:
-        baseline = _pick_baseline(m)
+        baseline = pick_baseline(m)
         if _ok(baseline) and abs(baseline) > 1e-12:
             retention = m.ic_mean_recent / baseline
             thr = float(cfg.get("warn_ic_retention", 0.5))

@@ -33,7 +33,7 @@ import pandas as pd
 
 from factor.alpha_base import AlphaData
 from factor.operators import (
-    _safe_div,
+    safe_div,
     ts_arg_max,
     ts_arg_min,
     ts_corr,
@@ -76,59 +76,59 @@ def _a158(name: str):
 @_a158("alpha158_KMID")
 def _(d: AlphaData):
     """($close-$open)/$open — 收盘相对开盘的相对位置。"""
-    return _safe_div(d.close - d.open, d.open)
+    return safe_div(d.close - d.open, d.open)
 
 
 @_a158("alpha158_KLEN")
 def _(d: AlphaData):
     """($high-$low)/$open — K 线长度相对开盘价。"""
-    return _safe_div(d.high - d.low, d.open)
+    return safe_div(d.high - d.low, d.open)
 
 
 @_a158("alpha158_KMID2")
 def _(d: AlphaData):
     """($close-$open)/($high-$low) — 收盘在 K 线振幅中的位置。"""
-    return _safe_div(d.close - d.open, d.high - d.low + _EPS)
+    return safe_div(d.close - d.open, d.high - d.low + _EPS)
 
 
 @_a158("alpha158_KUP")
 def _(d: AlphaData):
     """($high-Greater($open,$close))/$open — 上影线相对开盘价。"""
     upper_shadow = d.high - np.maximum(d.open, d.close)
-    return _safe_div(upper_shadow, d.open)
+    return safe_div(upper_shadow, d.open)
 
 
 @_a158("alpha158_KUP2")
 def _(d: AlphaData):
     """($high-Greater($open,$close))/($high-$low) — 上影线占振幅比。"""
     upper_shadow = d.high - np.maximum(d.open, d.close)
-    return _safe_div(upper_shadow, d.high - d.low + _EPS)
+    return safe_div(upper_shadow, d.high - d.low + _EPS)
 
 
 @_a158("alpha158_KLOW")
 def _(d: AlphaData):
     """(Less($open,$close)-$low)/$open — 下影线相对开盘价。"""
     lower_shadow = np.minimum(d.open, d.close) - d.low
-    return _safe_div(lower_shadow, d.open)
+    return safe_div(lower_shadow, d.open)
 
 
 @_a158("alpha158_KLOW2")
 def _(d: AlphaData):
     """(Less($open,$close)-$low)/($high-$low) — 下影线占振幅比。"""
     lower_shadow = np.minimum(d.open, d.close) - d.low
-    return _safe_div(lower_shadow, d.high - d.low + _EPS)
+    return safe_div(lower_shadow, d.high - d.low + _EPS)
 
 
 @_a158("alpha158_KSFT")
 def _(d: AlphaData):
     """(2*$close-$high-$low)/$open — 收盘偏离 K 线中点。"""
-    return _safe_div(2 * d.close - d.high - d.low, d.open)
+    return safe_div(2 * d.close - d.high - d.low, d.open)
 
 
 @_a158("alpha158_KSFT2")
 def _(d: AlphaData):
     """(2*$close-$high-$low)/($high-$low) — 收盘偏离中点占振幅比。"""
-    return _safe_div(2 * d.close - d.high - d.low, d.high - d.low + _EPS)
+    return safe_div(2 * d.close - d.high - d.low, d.high - d.low + _EPS)
 
 
 # ---- 价格相对因子（4 个，windows=[0] 的 OPEN/HIGH/LOW/VWAP）----
@@ -136,25 +136,25 @@ def _(d: AlphaData):
 @_a158("alpha158_OPEN0")
 def _(d: AlphaData):
     """$open/$close — 开盘价相对收盘价。"""
-    return _safe_div(d.open, d.close)
+    return safe_div(d.open, d.close)
 
 
 @_a158("alpha158_HIGH0")
 def _(d: AlphaData):
     """$high/$close — 最高价相对收盘价。"""
-    return _safe_div(d.high, d.close)
+    return safe_div(d.high, d.close)
 
 
 @_a158("alpha158_LOW0")
 def _(d: AlphaData):
     """$low/$close — 最低价相对收盘价。"""
-    return _safe_div(d.low, d.close)
+    return safe_div(d.low, d.close)
 
 
 @_a158("alpha158_VWAP0")
 def _(d: AlphaData):
     """$vwap/$close — VWAP 相对收盘价。"""
-    return _safe_div(d.vwap, d.close)
+    return safe_div(d.vwap, d.close)
 
 
 # ---- Rolling 统计因子（20 类 × 5 窗口 = 100 个）----
@@ -175,34 +175,34 @@ def _register_rolling():
             ALPHA158[name] = fn_factory(w)
 
     # ROC: Ref($close, d)/$close — 过去 d 日收盘价 / 最新收盘价
-    _reg("ROC", lambda w: lambda d: _safe_div(d.close.shift(w), d.close))
+    _reg("ROC", lambda w: lambda d: safe_div(d.close.shift(w), d.close))
 
     # MA: Mean($close, d)/$close — d 日均值 / 最新收盘价
-    _reg("MA", lambda w: lambda d: _safe_div(ts_mean(d.close, w), d.close))
+    _reg("MA", lambda w: lambda d: safe_div(ts_mean(d.close, w), d.close))
 
     # STD: Std($close, d)/$close — d 日标准差 / 最新收盘价
-    _reg("STD", lambda w: lambda d: _safe_div(ts_std(d.close, w), d.close))
+    _reg("STD", lambda w: lambda d: safe_div(ts_std(d.close, w), d.close))
 
     # BETA: Slope($close, d)/$close — 回归斜率 / 最新收盘价
-    _reg("BETA", lambda w: lambda d: _safe_div(ts_slope(d.close, w), d.close))
+    _reg("BETA", lambda w: lambda d: safe_div(ts_slope(d.close, w), d.close))
 
     # RSQR: Rsquare($close, d) — 回归 R²
     _reg("RSQR", lambda w: lambda d: ts_rsquare(d.close, w))
 
     # RESI: Resi($close, d)/$close — 回归残差 / 最新收盘价
-    _reg("RESI", lambda w: lambda d: _safe_div(ts_residual(d.close, w), d.close))
+    _reg("RESI", lambda w: lambda d: safe_div(ts_residual(d.close, w), d.close))
 
     # MAX: Max($high, d)/$close — d 日最高价 / 最新收盘价
-    _reg("MAX", lambda w: lambda d: _safe_div(ts_max(d.high, w), d.close))
+    _reg("MAX", lambda w: lambda d: safe_div(ts_max(d.high, w), d.close))
 
     # MIN: Min($low, d)/$close — d 日最低价 / 最新收盘价
-    _reg("MIN", lambda w: lambda d: _safe_div(ts_min(d.low, w), d.close))
+    _reg("MIN", lambda w: lambda d: safe_div(ts_min(d.low, w), d.close))
 
     # QTLU: Quantile($close, d, 0.8)/$close — 80% 分位 / 最新收盘价
-    _reg("QTLU", lambda w: lambda d: _safe_div(ts_quantile(d.close, w, 0.8), d.close))
+    _reg("QTLU", lambda w: lambda d: safe_div(ts_quantile(d.close, w, 0.8), d.close))
 
     # QTLD: Quantile($close, d, 0.2)/$close — 20% 分位 / 最新收盘价
-    _reg("QTLD", lambda w: lambda d: _safe_div(ts_quantile(d.close, w, 0.2), d.close))
+    _reg("QTLD", lambda w: lambda d: safe_div(ts_quantile(d.close, w, 0.2), d.close))
 
     # RANK: Rank($close, d) — 当期收盘价在过去 d 日的百分位
     # （Qlib 默认 exclude RANK，但本项目实现它——不排除任何因子）
@@ -213,7 +213,7 @@ def _register_rolling():
         def fn(d: AlphaData):
             lo = ts_min(d.low, w)
             hi = ts_max(d.high, w)
-            return _safe_div(d.close - lo, hi - lo + _EPS)
+            return safe_div(d.close - lo, hi - lo + _EPS)
         return fn
     _reg("RSV", _rsv)
 
@@ -241,8 +241,8 @@ def _register_rolling():
     # CORD: Corr($close/Ref($close,1), Log($volume/Ref($volume,1)+1), d) — 量价变化相关性
     def _cord(w):
         def fn(d: AlphaData):
-            price_chg = _safe_div(d.close, d.close.shift(1)) - 1
-            vol_chg = np.log(_safe_div(d.volume, d.volume.shift(1)) + 1)
+            price_chg = safe_div(d.close, d.close.shift(1)) - 1
+            vol_chg = np.log(safe_div(d.volume, d.volume.shift(1)) + 1)
             return ts_corr(price_chg, vol_chg, w)
         return fn
     _reg("CORD", _cord)
@@ -278,7 +278,7 @@ def _register_rolling():
             chg = d.close - d.close.shift(1)
             gain = chg.clip(lower=0.0)
             abs_chg = chg.abs()
-            return _safe_div(ts_sum(gain, w), ts_sum(abs_chg, w) + _EPS)
+            return safe_div(ts_sum(gain, w), ts_sum(abs_chg, w) + _EPS)
         return fn
     _reg("SUMP", _sump)
 
@@ -288,7 +288,7 @@ def _register_rolling():
             chg = d.close - d.close.shift(1)
             loss = (-chg).clip(lower=0.0)
             abs_chg = chg.abs()
-            return _safe_div(ts_sum(loss, w), ts_sum(abs_chg, w) + _EPS)
+            return safe_div(ts_sum(loss, w), ts_sum(abs_chg, w) + _EPS)
         return fn
     _reg("SUMN", _sumn)
 
@@ -299,7 +299,7 @@ def _register_rolling():
             gain = chg.clip(lower=0.0)
             loss = (-chg).clip(lower=0.0)
             abs_chg = chg.abs()
-            return _safe_div(
+            return safe_div(
                 ts_sum(gain, w) - ts_sum(loss, w),
                 ts_sum(abs_chg, w) + _EPS,
             )
@@ -307,16 +307,16 @@ def _register_rolling():
     _reg("SUMD", _sumd)
 
     # VMA: Mean($volume, d)/($volume) — 成交量均值 / 最新成交量
-    _reg("VMA", lambda w: lambda d: _safe_div(ts_mean(d.volume, w), d.volume + _EPS))
+    _reg("VMA", lambda w: lambda d: safe_div(ts_mean(d.volume, w), d.volume + _EPS))
 
     # VSTD: Std($volume, d)/($volume) — 成交量标准差 / 最新成交量
-    _reg("VSTD", lambda w: lambda d: _safe_div(ts_std(d.volume, w), d.volume + _EPS))
+    _reg("VSTD", lambda w: lambda d: safe_div(ts_std(d.volume, w), d.volume + _EPS))
 
     # WVMA: Std(Abs($close/Ref($close,1)-1)*$volume, d)/(Mean(Abs(...)*$volume, d)) — 加权价格波动率
     def _wvma(w):
         def fn(d: AlphaData):
-            ret = (_safe_div(d.close, d.close.shift(1)) - 1).abs() * d.volume
-            return _safe_div(ts_std(ret, w), ts_mean(ret, w) + _EPS)
+            ret = (safe_div(d.close, d.close.shift(1)) - 1).abs() * d.volume
+            return safe_div(ts_std(ret, w), ts_mean(ret, w) + _EPS)
         return fn
     _reg("WVMA", _wvma)
 
@@ -326,7 +326,7 @@ def _register_rolling():
             chg = d.volume - d.volume.shift(1)
             gain = chg.clip(lower=0.0)
             abs_chg = chg.abs()
-            return _safe_div(ts_sum(gain, w), ts_sum(abs_chg, w) + _EPS)
+            return safe_div(ts_sum(gain, w), ts_sum(abs_chg, w) + _EPS)
         return fn
     _reg("VSUMP", _vsump)
 
@@ -336,7 +336,7 @@ def _register_rolling():
             chg = d.volume - d.volume.shift(1)
             loss = (-chg).clip(lower=0.0)
             abs_chg = chg.abs()
-            return _safe_div(ts_sum(loss, w), ts_sum(abs_chg, w) + _EPS)
+            return safe_div(ts_sum(loss, w), ts_sum(abs_chg, w) + _EPS)
         return fn
     _reg("VSUMN", _vsumn)
 
@@ -347,7 +347,7 @@ def _register_rolling():
             gain = chg.clip(lower=0.0)
             loss = (-chg).clip(lower=0.0)
             abs_chg = chg.abs()
-            return _safe_div(
+            return safe_div(
                 ts_sum(gain, w) - ts_sum(loss, w),
                 ts_sum(abs_chg, w) + _EPS,
             )
@@ -395,22 +395,22 @@ def _register_alpha360():
 
     def _close_ref(d: AlphaData, i: int):
         """Ref($close, i)/$close — i 日前收盘价 / 最新收盘价。"""
-        return _safe_div(d.close.shift(i), d.close) if i > 0 else _safe_div(d.close, d.close)
+        return safe_div(d.close.shift(i), d.close) if i > 0 else safe_div(d.close, d.close)
 
     def _open_ref(d: AlphaData, i: int):
-        return _safe_div(d.open.shift(i), d.close) if i > 0 else _safe_div(d.open, d.close)
+        return safe_div(d.open.shift(i), d.close) if i > 0 else safe_div(d.open, d.close)
 
     def _high_ref(d: AlphaData, i: int):
-        return _safe_div(d.high.shift(i), d.close) if i > 0 else _safe_div(d.high, d.close)
+        return safe_div(d.high.shift(i), d.close) if i > 0 else safe_div(d.high, d.close)
 
     def _low_ref(d: AlphaData, i: int):
-        return _safe_div(d.low.shift(i), d.close) if i > 0 else _safe_div(d.low, d.close)
+        return safe_div(d.low.shift(i), d.close) if i > 0 else safe_div(d.low, d.close)
 
     def _vwap_ref(d: AlphaData, i: int):
-        return _safe_div(d.vwap.shift(i), d.close) if i > 0 else _safe_div(d.vwap, d.close)
+        return safe_div(d.vwap.shift(i), d.close) if i > 0 else safe_div(d.vwap, d.close)
 
     def _volume_ref(d: AlphaData, i: int):
-        return _safe_div(d.volume.shift(i), d.volume + _EPS) if i > 0 else _safe_div(d.volume, d.volume + _EPS)
+        return safe_div(d.volume.shift(i), d.volume + _EPS) if i > 0 else safe_div(d.volume, d.volume + _EPS)
 
     # Qlib 顺序：CLOSE59..1,0 → OPEN59..1,0 → HIGH.. → LOW.. → VWAP.. → VOLUME..
     field_specs = [

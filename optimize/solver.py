@@ -77,7 +77,7 @@ __all__ = [
 # ===========================================================================
 # 协方差估计
 # ===========================================================================
-def _to_psd(S: np.ndarray, eps: float = 1e-6) -> np.ndarray:
+def to_psd(S: np.ndarray, eps: float = 1e-6) -> np.ndarray:
     """对称化 + 对角正则，保证 cvxpy quad_form 可用的半正定矩阵。
 
     eps 用 1e-6（绝对）：日频 Σ 元素 ~1e-4，若正则过小（如 1e-10），
@@ -110,12 +110,12 @@ def estimate_covariance(
         try:
             from sklearn.covariance import LedoitWolf
 
-            return _to_psd(LedoitWolf().fit(X).covariance_)
+            return to_psd(LedoitWolf().fit(X).covariance_)
         except Exception:
             pass  # 高维/数值问题 → 走手动收缩兜底
     S = np.nan_to_num(np.cov(X, rowvar=False), nan=0.0)
     target = np.diag(np.diag(S))  # 对角目标（保留各自波动，抹掉联动噪声）
-    return _to_psd(shrinkage * target + (1.0 - shrinkage) * S)
+    return to_psd(shrinkage * target + (1.0 - shrinkage) * S)
 
 
 def rolling_covariance(

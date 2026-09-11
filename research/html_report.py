@@ -464,11 +464,11 @@ def svg_sparkline_monthly(series, width: int = 150, height: int = 28) -> str:
 def embed_image_b64(fig) -> str:
     """matplotlib 图 → base64 PNG data URI（报告内嵌图统一入口）。
 
-    实现复用 research.factor_report._fig_to_b64（单一实现，避免复制）。
+    实现复用 research.factor_report.fig_to_b64（单一实现，避免复制）。
     """
-    from research.factor_report import _fig_to_b64
+    from research.factor_report import fig_to_b64
 
-    return _fig_to_b64(fig)
+    return fig_to_b64(fig)
 
 
 # ===========================================================================
