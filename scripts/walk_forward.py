@@ -53,7 +53,7 @@ def load_full_panels(begin: int = 20220101, end: int = 20251231):
     from data.cache import DataCache
     from data.offline import OfflineDataSource
     from data.universe import Universe
-    from data.cache_helpers import _pit_universe_codes, _apply_membership_mask
+    from data.cache_helpers import pit_universe_codes, apply_membership_mask
     cache = DataCache(OfflineDataSource())
     uni = Universe(cache)
     # 日历直接读缓存文件（避免依赖 meta 状态）
@@ -63,7 +63,7 @@ def load_full_panels(begin: int = 20220101, end: int = 20251231):
     if not cal:
         raise RuntimeError("日历为空")
     # PIT 口径（2026-08-13 统一）：历史在册并集池，非在册期间由 mask 剔除
-    codes = _pit_universe_codes(uni, "000300.SH", begin, end)
+    codes = pit_universe_codes(uni, "000300.SH", begin, end)
 
     # 纯离线读 parquet（不走 _refresh_long_table 的增量判断/回源）
     def _read_daily(b, e):
@@ -71,7 +71,7 @@ def load_full_panels(begin: int = 20220101, end: int = 20251231):
         df["date"] = df["date"].dt.normalize()
         df = df[(df["date"] >= pd.Timestamp(str(b))) & (df["date"] <= pd.Timestamp(str(e)))]
         df = df[df["code"].isin(codes)]
-        df = _apply_membership_mask(
+        df = apply_membership_mask(
             df.set_index(["date", "code"]), uni, "000300.SH"
         ).reset_index()
         return df

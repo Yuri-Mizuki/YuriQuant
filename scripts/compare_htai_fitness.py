@@ -68,8 +68,8 @@ def layer_excess_profile(fp: pd.DataFrame, rets: pd.DataFrame,
     华泰报告23 分层测试口径：因子值从大到小排序等分 N 层、层内等权，
     基准为全池等权。这里用月频收益近似（不跑完整净值回测）。
     """
-    from factor.genetic_mining import _monthly_forward_returns
-    r_forward = _monthly_forward_returns(rets)
+    from factor.genetic_mining import monthly_forward_returns
+    r_forward = monthly_forward_returns(rets)
     prof = []
     for d in fp.index:
         f = fp.loc[d]
@@ -100,15 +100,15 @@ def evaluate_factor(formula: str, panel: dict, returns_panel: pd.DataFrame,
                     neutral_panels: dict) -> dict:
     """单个因子的四维评估（华泰环内预处理后）。"""
     from factor.formula import formula_builder
-    from factor.genetic_mining import (_htai_preprocess, _monthly_forward_returns,
-                                       _mutual_info_series, _top_excess_series,
+    from factor.genetic_mining import (htai_preprocess, monthly_forward_returns,
+                                       mutual_info_series, top_excess_series,
                                        polynomial_transform)
     from research.factor_analysis import calc_ic_series
 
     feats = list(panel.keys())
     fp = formula_builder(formula, features=feats)(panel)
-    fpp = _htai_preprocess(fp, neutral_panels=neutral_panels)
-    r_month = _monthly_forward_returns(returns_panel)
+    fpp = htai_preprocess(fp, neutral_panels=neutral_panels)
+    r_month = monthly_forward_returns(returns_panel)
     ic = calc_ic_series(fpp, r_month, method="spearman").dropna()
     if len(ic) == 0:
         return {"formula": formula}
@@ -116,8 +116,8 @@ def evaluate_factor(formula: str, panel: dict, returns_panel: pd.DataFrame,
     from stats.significance import mean_inference
     _inf = mean_inference(ic, robust=False)          # OLS t 统一实现（2026-09-11 口径统一）
     lin_t = float(_inf["t_stat"] if _inf["n"] >= 2 else 0.0)
-    mi = _mutual_info_series(fpp, r_month).dropna()
-    t_ex, b_ex, _ = _top_excess_series(fpp, r_month, top_frac=0.1)
+    mi = mutual_info_series(fpp, r_month).dropna()
+    t_ex, b_ex, _ = top_excess_series(fpp, r_month, top_frac=0.1)
     prof = layer_excess_profile(fpp, returns_panel)
     convex = float("nan")
     mono = float("nan")

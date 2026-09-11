@@ -15,6 +15,23 @@
 - 原语集来自 factor.operators，与「候选生成 + 批量 IC」流程共用同一算子空间。
 
 与 exhaustive 挖掘的关系：exhaustive 覆盖浅层组合，GP 探索更深、更稀疏的公式结构。
+
+公共 API（跨模块复用，2026-09-11 公开化）
+------------------------------------------
+下列函数被 ``scripts/compare_htai_fitness`` / ``compare_ml_synthesis`` /
+``gtja_discipline_eval`` / ``gtja_repro_eval`` 等实验脚本直接调用，属**公开
+适应度组件**（此前为下划线私有名，跨模块 import 私有名属倒挂，已公开化）：
+
+- :func:`ls_net_stats` —— 费后多空组合统计（国君研报基准 fitness）
+- :func:`monthly_forward_returns` —— 未来 window 日累计收益面板（多 horizon）
+- :func:`mutual_info_series` —— 逐截面离散化互信息（华泰报告23）
+- :func:`top_excess_series` —— Top/Bottom 组超额收益（华泰报告23）
+- :func:`htai_preprocess` —— 华泰口径环内预处理（MAD + 中性化 + zscore）
+
+仍为私有（**仅测试**白盒引用，非跨模块调用，勿在 scripts 中 import）：
+``_adjust_crowding`` / ``_restore_crowding`` / ``_dedup_hof_by_correlation`` /
+``_ensure_creator`` / ``_seg_ic_stats``。守卫见
+``tests/test_layering.py::test_no_private_import_from_factor_and_data``。
 """
 from __future__ import annotations
 
@@ -231,7 +248,7 @@ def eval_tree(expr, panel: dict[str, pd.DataFrame], prim_map: dict | None = None
     return val
 
 
-def _ls_net_stats(fp: pd.DataFrame, rets: pd.DataFrame, top_frac: float = 0.1,
+def ls_net_stats(fp: pd.DataFrame, rets: pd.DataFrame, top_frac: float = 0.1,
                   fee_rt: float = 0.003, min_counts: int = 10,
                   min_cov_frac: float = 0.5,
                   tradable: pd.DataFrame | None = None) -> dict:
@@ -261,7 +278,7 @@ def _ls_net_stats(fp: pd.DataFrame, rets: pd.DataFrame, top_frac: float = 0.1,
     涨停板上赚取"买不进的收益"，适应度虚高（2022 全A 实证）。
 
     收益方向自适应：若全期费前均值 < 0 则整体翻转序列（负向因子等价正向，
-    与 ``_top_excess_series`` 取 max 的方向中性一致），返回值恒为正取向。
+    与 ``top_excess_series`` 取 max 的方向中性一致），返回值恒为正取向。
     无有效截面 / 全常数的因子返回 NaN 字段（调用方据此给 0 分）。
     """
     valid = fp.notna() & rets.notna()
@@ -319,7 +336,7 @@ def _ls_net_stats(fp: pd.DataFrame, rets: pd.DataFrame, top_frac: float = 0.1,
             "coverage": float(n_col[ok_days].mean() / max(fp.shape[1], 1))}
 
 
-def _monthly_forward_returns(returns_panel: pd.DataFrame, window: int = 20) -> pd.DataFrame:
+def monthly_forward_returns(returns_panel: pd.DataFrame, window: int = 20) -> pd.DataFrame:
     """未来 ``window`` 个交易日的累计收益面板（多 horizon 适应度用）。
 
     ``returns_panel`` 约定为已前移一期的未来收益（returns[t]=r_{t→t+1}），
@@ -329,7 +346,7 @@ def _monthly_forward_returns(returns_panel: pd.DataFrame, window: int = 20) -> p
     return returns_panel.rolling(window, min_periods=1).sum().shift(-(window - 1))
 
 
-def _mutual_info_series(fp: pd.DataFrame, rets: pd.DataFrame,
+def mutual_info_series(fp: pd.DataFrame, rets: pd.DataFrame,
                         n_bins: int = 10) -> pd.Series:
     """逐截面离散化互信息序列（华泰报告23 适应度指标）。
 
@@ -376,7 +393,7 @@ def _mutual_info_series(fp: pd.DataFrame, rets: pd.DataFrame,
     return pd.Series(out, index=fp.index)
 
 
-def _top_excess_series(fp: pd.DataFrame, rets: pd.DataFrame,
+def top_excess_series(fp: pd.DataFrame, rets: pd.DataFrame,
                        top_frac: float = 0.1) -> tuple[float, float, int]:
     """多头超额收益适应度（华泰报告23）。
 
@@ -412,7 +429,7 @@ def _top_excess_series(fp: pd.DataFrame, rets: pd.DataFrame,
     return float(np.mean(tops)), float(np.mean(bots)), len(tops)
 
 
-def _htai_preprocess(fp: pd.DataFrame, neutral_panels: dict | None = None,
+def htai_preprocess(fp: pd.DataFrame, neutral_panels: dict | None = None,
                      mad_n: float = 5.0) -> pd.DataFrame:
     """华泰研报口径的**环内因子预处理**（报告21 适应度计算流程 a/b/c 三步）：
 
@@ -642,7 +659,7 @@ def _fitness(individual, panel, returns_fit, min_obs, parsimony, prim_map,
         return (0.0,)
     if htai:
         try:
-            fp = _htai_preprocess(fp, neutral_panels=neutral_panels)
+            fp = htai_preprocess(fp, neutral_panels=neutral_panels)
         except Exception:
             return (0.0,)
     if sample_step > 1:
@@ -658,7 +675,7 @@ def _fitness(individual, panel, returns_fit, min_obs, parsimony, prim_map,
     # annual_return / ret_minus_dd：单指标与多指标组合变体。方向中立，
     # 负向因子整体翻转后同权参与进化。
     if fitness_mode in ("sharpe", "annual_return", "ret_minus_dd"):
-        st = _ls_net_stats(fp, rfit, tradable=tradable)
+        st = ls_net_stats(fp, rfit, tradable=tradable)
         if (st["n"] < min_obs or not np.isfinite(st["sharpe"])
                 or not np.isfinite(st["ann_ret"]) or not np.isfinite(st["max_dd"])):
             return (0.0,)
@@ -687,7 +704,7 @@ def _fitness(individual, panel, returns_fit, min_obs, parsimony, prim_map,
         # ---- 报告23 改进1：互信息适应度（挖非线性因子）----
         if fitness_mode == "mutual_info":
             try:
-                mi = _mutual_info_series(fp, rmonth).dropna()
+                mi = mutual_info_series(fp, rmonth).dropna()
             except Exception:
                 return (0.0,)
             if len(mi) < min_obs or not np.isfinite(mi.mean()):
@@ -698,7 +715,7 @@ def _fitness(individual, panel, returns_fit, min_obs, parsimony, prim_map,
         # ---- 报告23 改进1：多头超额收益适应度 ----
         if fitness_mode == "top_excess":
             try:
-                t_ex, b_ex, n_days = _top_excess_series(fp, rmonth, top_frac=0.1)
+                t_ex, b_ex, n_days = top_excess_series(fp, rmonth, top_frac=0.1)
             except Exception:
                 return (0.0,)
             # min_obs 门槛：防止深树/财务平滑因子在极少截面上的偶然超额被当高分
@@ -1108,8 +1125,8 @@ def _summarize_gp_results(
     """
     # htai 口径：IC 目标 = 未来 20 日收益，且因子先做环内预处理（与适应度同口径）
     if htai:
-        returns_summary = _monthly_forward_returns(returns_panel)
-        returns_oos_seg = (_monthly_forward_returns(returns_oos)
+        returns_summary = monthly_forward_returns(returns_panel)
+        returns_oos_seg = (monthly_forward_returns(returns_oos)
                            if train_frac is not None and 0.0 < train_frac < 1.0 else None)
     else:
         returns_summary = returns_panel
@@ -1120,7 +1137,7 @@ def _summarize_gp_results(
     for ind in hof_items:
         try:
             fp = eval_tree(ind, panel, prim_map)
-            fp_s = _htai_preprocess(fp, neutral_panels=neutral_panels) if htai else fp
+            fp_s = htai_preprocess(fp, neutral_panels=neutral_panels) if htai else fp
             ic = calc_ic_series(fp_s, returns_summary, method="spearman").dropna()
             n = len(ic)
             m, s = float(ic.mean()), float(ic.std())
@@ -1147,12 +1164,12 @@ def _summarize_gp_results(
             # 报告23 指标（htai 口径）：互信息 / 多头超额（Top、Bottom 层）
             if htai:
                 try:
-                    mi = _mutual_info_series(fp_s, returns_summary).dropna()
+                    mi = mutual_info_series(fp_s, returns_summary).dropna()
                     row["mi_mean"] = float(mi.mean()) if len(mi) else float("nan")
                 except Exception:
                     row["mi_mean"] = float("nan")
                 try:
-                    t_ex, b_ex, _ = _top_excess_series(fp_s, returns_summary, top_frac=0.1)
+                    t_ex, b_ex, _ = top_excess_series(fp_s, returns_summary, top_frac=0.1)
                     row["top_excess"] = t_ex
                     row["bot_excess"] = b_ex
                 except Exception:
@@ -1263,7 +1280,7 @@ def run_gp_mining(
     n_train = min(n_train, n_total)
     returns_fit = returns_panel.iloc[:n_train]
     returns_oos = returns_panel.iloc[n_train:]
-    returns_month_fit = _monthly_forward_returns(returns_fit) if (monthly_weight > 0 or htai) else None
+    returns_month_fit = monthly_forward_returns(returns_fit) if (monthly_weight > 0 or htai) else None
     lib_ranked: list | None = None
     if library_penalty > 0 and library_panels:
         lib_ranked = []
@@ -1599,7 +1616,7 @@ def run_gp_nsga2(
     n_train = min(n_train, n_total)
     returns_fit = returns_panel.iloc[:n_train]
     returns_oos = returns_panel.iloc[n_train:]
-    returns_month_fit = _monthly_forward_returns(returns_fit) if monthly_weight > 0 else None
+    returns_month_fit = monthly_forward_returns(returns_fit) if monthly_weight > 0 else None
 
     toolbox = base.Toolbox()
     toolbox.register("expr", gp.genHalfAndHalf, pset=pset, min_=min_depth, max_=max_depth)
@@ -1732,7 +1749,7 @@ def polynomial_transform(fp: pd.DataFrame, returns_panel: pd.DataFrame,
     Returns:
         线性化后的因子面板（拟合值），无未来函数（只用历史样本拟合）。
     """
-    r_forward = _monthly_forward_returns(returns_panel, window=window)
+    r_forward = monthly_forward_returns(returns_panel, window=window)
     idx = fp.index
     n = len(idx)
     out = pd.DataFrame(np.nan, index=idx, columns=fp.columns)

@@ -118,11 +118,11 @@ def load_daily(cache, uni, index_code: str, begin: int, end: int | None,
     if pool == "all_a":
         codes = uni.get_all_a(target)
     else:
-        codes = _pit_universe_codes(uni, index_code, begin, target)
+        codes = pit_universe_codes(uni, index_code, begin, target)
     daily = _read_daily_offline(cache, codes, begin, target, pool) if _is_offline(cache) \
         else cache.get_daily_kline(codes, begin, target, pool=pool)
     if pool != "all_a":
-        daily = _apply_membership_mask(daily, uni, index_code)
+        daily = apply_membership_mask(daily, uni, index_code)
     return codes, cal, daily
 
 
@@ -151,7 +151,7 @@ def _read_daily_offline(cache, codes, begin: int, end: int,
     return d[mask]
 
 
-def _pit_universe_codes(uni, index_code: str, begin: int, end: int) -> list[str]:
+def pit_universe_codes(uni, index_code: str, begin: int, end: int) -> list[str]:
     """区间历史在册成分并集池（in_date <= end 且 (out_date 空 或 out_date > begin)）。"""
     import pandas as pd
 
@@ -165,7 +165,7 @@ def _pit_universe_codes(uni, index_code: str, begin: int, end: int) -> list[str]
     return cons.loc[m, "con_code"].dropna().unique().tolist()
 
 
-def _apply_membership_mask(daily: pd.DataFrame, uni, index_code: str) -> pd.DataFrame:
+def apply_membership_mask(daily: pd.DataFrame, uni, index_code: str) -> pd.DataFrame:
     """把 (date, code) 长表按 PIT 成分归属置 NaN（非在册期间的行情不可用）。
 
     实现：长表 pivot 成宽表 → 与 mask 对齐按元素 where → 还原为长表。

@@ -103,7 +103,7 @@ def ls_metrics(fp: pd.DataFrame, rets: pd.DataFrame,
     与适应度同口径：剔除因子覆盖 < 截面最大覆盖 50% 的退化日（防止几乎
     全 NaN 的树用个别股票的极端多空制造假夏普），并报告平均覆盖率。
     """
-    from factor.genetic_mining import _ls_net_stats
+    from factor.genetic_mining import ls_net_stats
     from research.factor_analysis import calc_ic_series
 
     valid0 = fp.notna() & rets.notna()
@@ -122,7 +122,7 @@ def ls_metrics(fp: pd.DataFrame, rets: pd.DataFrame,
         fp = fp.where(tr)
         rets = rets.where(tr)
 
-    st = _ls_net_stats(fp, rets, top_frac=TOP_FRAC, fee_rt=FEE_RT, tradable=tradable)
+    st = ls_net_stats(fp, rets, top_frac=TOP_FRAC, fee_rt=FEE_RT, tradable=tradable)
     valid = fp.notna() & rets.notna()
     ic = calc_ic_series(fp, rets, method="spearman").dropna()
     # 多头超额（Top 组 - 全池等权），费前（与研报多头超额口径一致）
@@ -163,7 +163,7 @@ def eval_factors(formulas: list[str], is_env, oos_env) -> pd.DataFrame:
         try:
             build = formula_builder(f, features=feats)
             fp_is = build(is_panel)
-            st = _ls_net_stats_sign(fp_is, is_rets)
+            st = ls_net_stats_sign(fp_is, is_rets)
             if st is None or not np.isfinite(st):
                 log.warning("样本内无有效多空收益，跳过: %s", f)
                 continue
@@ -187,9 +187,9 @@ def eval_factors(formulas: list[str], is_env, oos_env) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def _ls_net_stats_sign(fp, rets) -> float | None:
-    from factor.genetic_mining import _ls_net_stats
-    st = _ls_net_stats(fp, rets, top_frac=TOP_FRAC, fee_rt=FEE_RT)
+def ls_net_stats_sign(fp, rets) -> float | None:
+    from factor.genetic_mining import ls_net_stats
+    st = ls_net_stats(fp, rets, top_frac=TOP_FRAC, fee_rt=FEE_RT)
     if st["n"] < 20 or not np.isfinite(st["ann_ret"]):
         return None
     return st["ann_ret"]

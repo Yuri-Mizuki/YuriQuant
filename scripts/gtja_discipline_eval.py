@@ -59,7 +59,7 @@ def main():
     from scripts.gtja_repro_eval import TOP_FRAC, FEE_RT, SIX, ls_metrics, load_backward_once
     from factor.gtja import build_vwap_exec_returns
     from factor.formula import formula_builder
-    from factor.genetic_mining import _ls_net_stats
+    from factor.genetic_mining import ls_net_stats
 
     pool = pd.read_csv(args.pool)
     log.info("池内因子 %d 个", len(pool))
@@ -85,7 +85,7 @@ def main():
         try:
             build = formula_builder(f, features=feats)
             fp = build(panel)
-            st_tr = _ls_net_stats(_slice(fp, TRAIN), rets_tr,
+            st_tr = ls_net_stats(_slice(fp, TRAIN), rets_tr,
                                   top_frac=TOP_FRAC, fee_rt=FEE_RT, tradable=mask_tr)
             if st_tr["n"] < 60 or not np.isfinite(st_tr["ann_ret"]):
                 log.warning("train 段无效，跳过: %s", f)

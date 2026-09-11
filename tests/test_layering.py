@@ -14,6 +14,9 @@ optimize/strategy 边界）
 7. strategy/ 是回测引擎的基础件：不得 import 上层包，也不得引入 cvxpy 等重依赖
 8. 组合构建约束（无需风险模型）真源在 strategy.constraints，optimize 只做编排
 9. 模型超参真源在 model.params，scripts 层不得持第二份定义（2026-09-11 下沉）
+10. 实验入口脚本不得被其他 scripts 反向 import（2026-09-11 下沉）
+11. 跨模块引用的私有函数必须公开化：scripts 不得 import 带下划线前缀的名字
+    （2026-09-11 P1#3 倒挂收口）
 """
 from __future__ import annotations
 
@@ -233,6 +236,76 @@ def test_periods_per_year_single_source():
     from backtest import metrics
 
     assert stats.PERIODS_PER_YEAR == metrics.PERIODS_PER_YEAR == 252
+
+
+# ---------------------------------------------------------------------------
+# 私有函数倒挂守卫（2026-09-11 P1#3）
+# ---------------------------------------------------------------------------
+#: 被跨模块引用的私有名已公开化（见 factor.genetic_mining 模块 docstring）
+#: —— 定义这些名字的模块，以及"只许测试白盒引用"的私有名白名单
+_PRIVATE_IMPORT_GUARDS = {
+    "factor.genetic_mining": {
+        # scripts 层一律不得引用私有名；tests 仅允许下列白盒用例
+        "tests_only": {"_adjust_crowding", "_restore_crowding",
+                       "_dedup_hof_by_correlation", "_ensure_creator",
+                       "_seg_ic_stats"},
+    },
+    "data.cache_helpers": {"tests_only": set()},
+}
+
+
+def _private_names_from_imports(path: Path) -> set[tuple[str, str]]:
+    """提取 ``from <mod> import _x, _y`` 形式的 (mod, 私有名) 对。"""
+    import ast
+
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except SyntaxError:  # pragma: no cover - 语法错误由别处覆盖
+        return set()
+    out: set[tuple[str, str]] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module:
+            for a in node.names:
+                if a.name.startswith("_"):
+                    out.add((node.module, a.name))
+        elif isinstance(node, ast.Import):
+            for a in node.names:
+                if a.name.startswith("_"):
+                    out.add((a.name.rsplit(".", 1)[0], a.name.rsplit(".", 1)[-1]))
+    return out
+
+
+def test_no_private_import_from_factor_and_data():
+    """跨模块引用的私有函数必须公开化，不得靠下划线名互相 import。
+
+    2026-09-11 收口：``data.cache_helpers`` 的 2 个 PIT 函数（被 6 个 scripts
+    引用）与 ``factor.genetic_mining`` 的 5 个适应度组件（被 4 个 scripts 引用）
+    原为下划线私有名却跨模块 import——私有前缀对调用方是"别用"的约定，跨模块
+    调用属归属倒挂。现全部公开化（pit_universe_codes / apply_membership_mask /
+    ls_net_stats / monthly_forward_returns / mutual_info_series /
+    top_excess_series / htai_preprocess）。
+
+    scripts 层不得再出现任何私有名 import；tests 层仅允许白名单内的白盒用例
+    （这些名仍为私有，未对外承诺）。
+    """
+    offenders: list[str] = []
+    for f in sorted(ROOT.rglob("*.py")):
+        if {"oneoff", "archive", ".git"} & set(f.parts):
+            continue
+        rel = str(f.relative_to(ROOT)).replace("\\", "/")
+        if rel.startswith("tests/") and f.name.startswith("_"):
+            continue
+        is_test = rel.startswith("tests/")
+        for mod, name in _private_names_from_imports(f):
+            guard = _PRIVATE_IMPORT_GUARDS.get(mod)
+            if guard is None:
+                continue
+            allowed = guard["tests_only"]
+            if is_test and name in allowed:
+                continue
+            offenders.append(f"{rel}: from {mod} import {name}")
+    assert not offenders, (
+        "跨模块 import 了私有名（请公开化后再引用）:\n" + "\n".join(offenders))
 
 
 if __name__ == "__main__":

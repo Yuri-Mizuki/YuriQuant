@@ -258,18 +258,18 @@ def _htai_neutral_panels(panel):
     return out
 
 
-def test_htai_preprocess_pipeline(signal_panel):
+def testhtai_preprocess_pipeline(signal_panel):
     """华泰环内预处理：MAD(±5×MAD) → 五因子中性化 → zscore，形状保持。"""
-    from factor.genetic_mining import _htai_preprocess
+    from factor.genetic_mining import htai_preprocess
 
     panel, _ = signal_panel
     fp = panel["close"] * 1000 + 5.0  # 引入量纲与水平
     # 无协变量：只做 MAD + 标准化（mock 下限）
-    out1 = _htai_preprocess(fp, neutral_panels=None)
+    out1 = htai_preprocess(fp, neutral_panels=None)
     assert out1.shape == fp.shape
     assert np.isfinite(out1).sum().sum() > 0
     # 有协变量：中性化路径
-    out2 = _htai_preprocess(fp, neutral_panels=_htai_neutral_panels(panel))
+    out2 = htai_preprocess(fp, neutral_panels=_htai_neutral_panels(panel))
     assert out2.shape == fp.shape
     assert np.isfinite(out2).sum().sum() > 0
 
@@ -340,9 +340,9 @@ def test_winsorize_mad_htai_scale(signal_panel):
 # ---------------------------------------------------------------------------
 # 报告23：互信息 / 多头超额适应度 / 非线性因子线性化（2026-08-10）
 # ---------------------------------------------------------------------------
-def test_mutual_info_series_ranges(signal_panel):
+def testmutual_info_series_ranges(signal_panel):
     """互信息序列：独立时≈0、强相关时>0，且序列长度与面板一致。"""
-    from factor.genetic_mining import _mutual_info_series, _monthly_forward_returns
+    from factor.genetic_mining import mutual_info_series, monthly_forward_returns
 
     # 用小面板扩大股数（20 股太稀，MI 小样本偏差大）
     rng = np.random.default_rng(0)
@@ -352,27 +352,27 @@ def test_mutual_info_series_ranges(signal_panel):
     rets_mat = rng.normal(0.02, 0.02, (n_days, n_codes))
     close = pd.DataFrame(np.exp(np.cumsum(rets_mat, axis=0)), idx, codes)
     rets = close.pct_change().shift(-1)
-    rm = _monthly_forward_returns(rets)
+    rm = monthly_forward_returns(rets)
     # 强相关：因子=未来收益的 rank
     fp = rets.rank(axis=1, pct=True)
-    mi_strong = _mutual_info_series(fp, rm).dropna()
+    mi_strong = mutual_info_series(fp, rm).dropna()
     # 独立：随机面板
     fp_noise = pd.DataFrame(rng.normal(size=close.shape), index=idx, columns=codes)
-    mi_noise = _mutual_info_series(fp_noise, rm).dropna()
+    mi_noise = mutual_info_series(fp_noise, rm).dropna()
     assert mi_strong.mean() > mi_noise.mean(), "强相关因子的 MI 应高于噪声因子"
     assert mi_noise.mean() < 0.3, "独立变量 MI 应接近 0（小样本保护后偏差应小）"
     assert 0 < mi_strong.mean() < 2.0
 
 
-def test_top_excess_series_direction(signal_panel):
+def testtop_excess_series_direction(signal_panel):
     """多头超额：正向因子 top_excess>0，负向因子 bot_excess>0，取 max 无偏。"""
-    from factor.genetic_mining import _top_excess_series, _monthly_forward_returns
+    from factor.genetic_mining import top_excess_series, monthly_forward_returns
 
     panel, rets = signal_panel
-    rm = _monthly_forward_returns(rets)
+    rm = monthly_forward_returns(rets)
     fp = panel["close"].pct_change().shift(-1)   # 与未来收益正相关（mock AR(1)）
-    t_pos, b_pos, nd_pos = _top_excess_series(fp, rm, top_frac=0.1)
-    t_neg, b_neg, nd_neg = _top_excess_series(-fp, rm, top_frac=0.1)
+    t_pos, b_pos, nd_pos = top_excess_series(fp, rm, top_frac=0.1)
+    t_neg, b_neg, nd_neg = top_excess_series(-fp, rm, top_frac=0.1)
     assert nd_pos > 10 and nd_neg > 10
     assert t_pos > 0 and b_neg > 0, "正/负向因子应各有一侧超额为正"
     assert abs(t_pos - b_neg) < 1e-6, "符号翻转后 Top/Bottom 应互换"
@@ -407,7 +407,7 @@ def test_top_excess_fitness_runs(signal_panel):
 
 def test_cubic_and_polynomial_transform(signal_panel):
     """三次方残差法（中间凸）与多项式拟合法（形状保持）跑通。"""
-    from factor.genetic_mining import (_monthly_forward_returns,
+    from factor.genetic_mining import (monthly_forward_returns,
                                        cubic_residual_transform,
                                        polynomial_transform)
     from research.factor_analysis import calc_ic_series
@@ -422,24 +422,24 @@ def test_cubic_and_polynomial_transform(signal_panel):
     fp_poly = polynomial_transform(fp, rets, fit_window=60, refit=20)
     assert fp_poly.shape == fp.shape
     assert fp_poly.notna().sum().sum() > 0
-    ic_p = calc_ic_series(fp_poly, _monthly_forward_returns(rets)).dropna()
+    ic_p = calc_ic_series(fp_poly, monthly_forward_returns(rets)).dropna()
     assert len(ic_p) > 10
 
 
 # ---------------------------------------------------------------------------
 # 国君研报（2023 解构系列之一）对齐（2026-08-27）
 # ---------------------------------------------------------------------------
-def test_ls_net_stats_direction_and_cost(signal_panel):
+def testls_net_stats_direction_and_cost(signal_panel):
     """费后多空统计：正向因子 sharpe>0；方向中立（负向因子同值）；费用降低夏普。"""
-    from factor.genetic_mining import _ls_net_stats
+    from factor.genetic_mining import ls_net_stats
 
     panel, rets = signal_panel
     fp = panel["close"].pct_change()  # AR(1) 动量 mock，与未来收益正相关
-    a = _ls_net_stats(fp, rets, fee_rt=0.0)
-    b = _ls_net_stats(fp, rets, fee_rt=0.003)
+    a = ls_net_stats(fp, rets, fee_rt=0.0)
+    b = ls_net_stats(fp, rets, fee_rt=0.003)
     assert np.isfinite(a["sharpe"]) and a["sharpe"] > 0
     assert b["sharpe"] < a["sharpe"], "收费后夏普应低于免费"
-    neg = _ls_net_stats(-fp, rets, fee_rt=0.0)
+    neg = ls_net_stats(-fp, rets, fee_rt=0.0)
     assert abs(neg["sharpe"] - a["sharpe"]) < 1e-8, "方向翻转后 sharpe 应一致（方向中立）"
     assert a["n"] > 50
 
@@ -732,11 +732,11 @@ def test_build_tradable_mask_rules(tmp_path):
     assert bool(mask.loc[idx[3]].all())
 
 
-def test_ls_net_stats_tradable_filter():
+def testls_net_stats_tradable_filter():
     """适应度可交易过滤：被 mask 掉的"假收益王"不得进入多空腿。"""
     import numpy as np
     import pandas as pd
-    from factor.genetic_mining import _ls_net_stats
+    from factor.genetic_mining import ls_net_stats
 
     rng = np.random.default_rng(0)
     n_days, n_codes = 80, 40
@@ -750,8 +750,8 @@ def test_ls_net_stats_tradable_filter():
     tradable = pd.DataFrame(True, index=idx, columns=cols)
     tradable["S000"] = False    # mask 剔除
 
-    with_fake = _ls_net_stats(fp, rets, min_cov_frac=0.9)
-    filtered = _ls_net_stats(fp, rets, min_cov_frac=0.9, tradable=tradable)
+    with_fake = ls_net_stats(fp, rets, min_cov_frac=0.9)
+    filtered = ls_net_stats(fp, rets, min_cov_frac=0.9, tradable=tradable)
     assert with_fake["sharpe"] > filtered["sharpe"], "过滤涨停王后夏普应大幅下降"
     assert abs(filtered["ann_ret"]) < abs(with_fake["ann_ret"]) / 10, \
         "过滤后剩余应为噪声级收益，而非涨停王贡献"

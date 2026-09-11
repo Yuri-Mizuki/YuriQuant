@@ -54,20 +54,20 @@ def _load_daily(cache, codes, begin, end):
 
 def build_panels(begin: int, end: int) -> tuple[dict[str, pd.DataFrame], pd.DataFrame]:
     from data.universe import Universe
-    from data.cache_helpers import _pit_universe_codes, _apply_membership_mask
+    from data.cache_helpers import pit_universe_codes, apply_membership_mask
     cache = DataCache(OfflineDataSource())
     uni = Universe(cache)
     cal = cache.get_calendar(begin, end)
     if not cal:
         raise RuntimeError(f"日历为空 {begin}-{end}")
     # PIT 口径（2026-08-13 统一）：历史在册并集池
-    codes = _pit_universe_codes(uni, "000300.SH", begin, end)
+    codes = pit_universe_codes(uni, "000300.SH", begin, end)
 
     # 技术面 warmup：从 begin-400 天起拉日线算指标，截取研究区间
     warm_begin = int((pd.Timestamp(str(begin)) - pd.Timedelta(days=WARMUP_DAYS)).strftime("%Y%m%d"))
     _, dailyw, _, _, _, _, _ = _load_daily(cache, codes, warm_begin, end)
     # warmup 区间也应用 PIT mask（非在册期间行情剔除）
-    dailyw = _apply_membership_mask(dailyw, uni, "000300.SH")
+    dailyw = apply_membership_mask(dailyw, uni, "000300.SH")
     dw = dailyw.reset_index()
     dw["date"] = dw["date"].dt.normalize()
     ow = dw.pivot(index="date", columns="code", values="open").sort_index()

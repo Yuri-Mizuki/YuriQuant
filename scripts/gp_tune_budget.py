@@ -52,15 +52,15 @@ def load_pit_core_panels(begin: int = 20220101, end: int = 20251231):
     from data.cache import DataCache
     from data.offline import OfflineDataSource
     from data.universe import Universe
-    from data.cache_helpers import _pit_universe_codes, _apply_membership_mask
+    from data.cache_helpers import pit_universe_codes, apply_membership_mask
     cache = DataCache(OfflineDataSource())
     uni = Universe(cache)
-    codes = _pit_universe_codes(uni, "000300.SH", begin, end)
+    codes = pit_universe_codes(uni, "000300.SH", begin, end)
     df = pd.read_parquet(Path(str(cache.root)) / "daily_hs300.parquet").reset_index()
     df["date"] = df["date"].dt.normalize()
     df = df[(df["date"] >= pd.Timestamp(str(begin))) & (df["date"] <= pd.Timestamp(str(end)))]
     df = df[df["code"].isin(codes)]
-    df = _apply_membership_mask(df.set_index(["date", "code"]), uni, "000300.SH").reset_index()
+    df = apply_membership_mask(df.set_index(["date", "code"]), uni, "000300.SH").reset_index()
 
     def piv(col):
         return df.pivot(index="date", columns="code", values=col).sort_index()

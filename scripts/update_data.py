@@ -137,8 +137,8 @@ def main():
             codes = ds.get_code_list("EXTRA_STOCK_A")
         log.info("全A池代码: %d 只", len(codes))
     else:
-        from data.cache_helpers import _pit_universe_codes
-        codes = _pit_universe_codes(uni, index_code, begin, target_date)
+        from data.cache_helpers import pit_universe_codes
+        codes = pit_universe_codes(uni, index_code, begin, target_date)
         log.info("历史成分并集池: %d 只（%s~%s 期间在册，含调出/退市）",
                  len(codes), begin, target_date)
 

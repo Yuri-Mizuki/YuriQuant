@@ -46,13 +46,13 @@ def _htai_features_from_formulas(formulas: list[str], panel: dict, neutral_panel
                                  ) -> list:
     """重建公式面板并做华泰环内预处理（MAD→五因子中性化→zscore），作为合成特征。"""
     from factor.formula import formula_builder
-    from factor.genetic_mining import _htai_preprocess
+    from factor.genetic_mining import htai_preprocess
 
     feats = list(panel.keys())
     out = []
     for f in formulas:
         try:
-            fp = _htai_preprocess(formula_builder(f, features=feats)(panel),
+            fp = htai_preprocess(formula_builder(f, features=feats)(panel),
                                   neutral_panels=neutral_panels)
         except Exception:
             continue
@@ -89,8 +89,8 @@ def seg_stats(comp: pd.DataFrame, rets: pd.DataFrame, frac_lo: float = 0.0,
 def top_bottom_excess(comp: pd.DataFrame, rets: pd.DataFrame,
                       top_frac: float = 0.1) -> dict:
     """Top/Bottom 层相对全池等权的平均未来 20 日超额（月频持有口径）。"""
-    from factor.genetic_mining import _monthly_forward_returns
-    r_forward = _monthly_forward_returns(rets)
+    from factor.genetic_mining import monthly_forward_returns
+    r_forward = monthly_forward_returns(rets)
     tops, bots = [], []
     for d in comp.index:
         f = comp.loc[d]
@@ -215,8 +215,8 @@ def main():
     log.info("结果已保存: %s", out_path)
 
 def _monthly_fwd(rets: pd.DataFrame):
-    from factor.genetic_mining import _monthly_forward_returns
-    return _monthly_forward_returns(rets)
+    from factor.genetic_mining import monthly_forward_returns
+    return monthly_forward_returns(rets)
 
 if __name__ == "__main__":
     main()

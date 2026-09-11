@@ -118,7 +118,7 @@ def load_real_data(
     """
     from config import Config
     from data.cache import DataCache
-    from data.cache_helpers import _apply_membership_mask, _pit_universe_codes
+    from data.cache_helpers import apply_membership_mask, pit_universe_codes
     from data.datasource import create_datasource
     from data.industry import IndustryClassification
     from data.market_cap import build_market_cap_panel
@@ -131,10 +131,10 @@ def load_real_data(
     ds = create_datasource(ds_cfg)
     cache = DataCache(ds, cache_root=cache_root) if cache_root else DataCache(ds)
     uni = Universe(cache)
-    codes = _pit_universe_codes(uni, index_code, begin, end)
+    codes = pit_universe_codes(uni, index_code, begin, end)
     log.info("PIT 并集池: %d 只（%s~%s）", len(codes), begin, end)
     kline = cache.get_daily_kline(codes, begin, end)
-    kline = _apply_membership_mask(kline, uni, index_code)
+    kline = apply_membership_mask(kline, uni, index_code)
     close_raw = kline["close"].unstack("code").sort_index()
     # 对比脚本用【未复权】收盘价算收益：目的在方法差异，复权与否影响极小；
     # 且 get_backward_factor 会触发 SDK 写 sdk_cache h5（e:\data 在 workspace 外，
