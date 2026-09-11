@@ -33,8 +33,9 @@ from factor.preprocessing import standardize_zscore  # noqa: E402
 from factor.synthesis import (  # noqa: E402
     CompositeInput, build_components, composite_stats,
     rebuild_train_weights,
-    synthesize_ic_weighted, synthesize_orthogonal, synthesize_pca, synthesize_stacking,
+    synthesize_ic_weighted, synthesize_orthogonal, synthesize_pca,
 )
+from model.stacking import synthesize_stacking  # noqa: E402
 from research.factor_library import FactorLibrary  # noqa: E402
 
 log = setup_logging("synthesize_factors")

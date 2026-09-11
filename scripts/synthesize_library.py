@@ -41,6 +41,8 @@ from factor.synthesis import (  # noqa: E402
     synthesize_ic_weighted,
     synthesize_orthogonal,
     synthesize_pca,
+)
+from model.stacking import (  # noqa: E402
     synthesize_stacking,
     synthesize_stacking_gbdt,
     synthesize_stacking_gbdt_tuned,

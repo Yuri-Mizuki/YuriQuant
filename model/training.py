@@ -1,11 +1,12 @@
 """
 模型训练 —— 02 模型层「模型训练」。
 
-当前系统内 ML 能力集中在因子合成（ML stacking），位于 ``factor/synthesis.py``
-的 ``synthesize_stacking`` 系列。这里做薄封装 + 自动注册，把「训练一次模型」
-变成可追踪、可迭代的流程对象：
+当前系统内 ML 能力集中在因子合成（ML stacking），位于 ``model/stacking.py``
+的 ``synthesize_stacking`` 系列（2026-09-11 自 ``factor/synthesis.py`` 迁入，
+修复「模型层能力寄居因子层」的归属倒挂）。这里做薄封装 + 自动注册，把
+「训练一次模型」变成可追踪、可迭代的流程对象：
 
-- ``train_stacking_model``：调 factor/synthesis 的 stacking 方法，返回预测面板与描述
+- ``train_stacking_model``：调 model/stacking 的 stacking 方法，返回预测面板与描述
 - ``train_predictor_model``：独立截面预测模型（模型层 ③ Predictor），CV 产出 OOS 面板
 - ``train_and_register``：训练 + 评价 + 注册进 ModelRegistry（血缘/指纹/区间齐全）；
   ``kind="ml_stacking"``（默认）走因子合成，``kind="predictor"`` 走独立预测模型
@@ -17,14 +18,14 @@ from typing import Any, Mapping, Sequence
 
 import pandas as pd
 
-from factor.synthesis import (
-    CompositeInput,
+from factor.synthesis import CompositeInput
+from model.registry import ModelRegistry, default_model_root
+from model.stacking import (
     synthesize_stacking,
     synthesize_stacking_gbdt,
     synthesize_stacking_gbdt_tuned,
     synthesize_stacking_lambdarank,
 )
-from model.registry import ModelRegistry, default_model_root
 from stats.ic import calc_ic_series, calc_ir
 from stats.robust_stats import nw_tstat
 
@@ -58,7 +59,7 @@ def train_stacking_model(
     target_mode: str = "raw",
     **kwargs: Any,
 ) -> dict:
-    """训练一个 ML stacking 合成模型（薄封装 factor/synthesis）。
+    """训练一个 ML stacking 合成模型（薄封装 model/stacking）。
 
     Args:
         components: 参与合成的因子（CompositeInput 或 date×code 面板）。

@@ -10,7 +10,7 @@
 4. 上限截断（max_features；有质量分时按质量降序保留，否则按独立性顺序）
 
 对齐约定：特征对齐到所有面板的**交集网格**（date×code），与
-``factor.synthesis._long_matrix`` 同口径；面板间不重叠的格子为 NaN，
+``factor.synthesis.long_matrix`` 同口径；面板间不重叠的格子为 NaN，
 由 Predictor 按各自算法处理（GBDT 原生容忍 / ridge 剔行）。
 
 输入面板应已截面标准化（因子库 panels 即此约定；mock/原始特征请先过

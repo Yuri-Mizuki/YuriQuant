@@ -6,7 +6,7 @@
     predict(features: {name: 面板}) -> date×code 预测面板（已截面标准化）
 
 - ``RidgePredictor``：线性基线（闭式解，无三方依赖；any-NaN 行剔除，
-  训练段统计量标准化——纪律与 ``synthesize_stacking`` 一致）
+  训练段统计量标准化——纪律与 ``model.stacking.synthesize_stacking`` 一致）
 - ``LGBMPredictor``：LightGBM 回归（原生容忍 NaN 特征；排序目标由
   LabelBuilder 的 rank/zscore 标签实现，与 rank IC 评价口径对齐）
 - ``TabICLPredictor``：TabICL 表格基础模型（in-context learning，零显式
@@ -39,7 +39,7 @@ __all__ = [
 
 
 # ---------------------------------------------------------------------------
-# 网格与长矩阵（口径对齐 factor.synthesis._long_matrix：日期优先行序）
+# 网格与长矩阵（口径对齐 factor.synthesis.long_matrix：日期优先行序）
 # ---------------------------------------------------------------------------
 def _grid(features: Mapping[str, pd.DataFrame],
           target: pd.DataFrame | None = None) -> tuple[pd.Index, pd.Index]:

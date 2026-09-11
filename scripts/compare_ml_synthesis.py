@@ -121,8 +121,8 @@ def main():
 
     from data.cache_helpers import build_htai_neutral_panels, build_real_panel
     from data.mock import gen_mock_panel_with_signal
-    from factor.synthesis import (CompositeInput, synthesize_stacking,
-                                  synthesize_stacking_gbdt)
+    from factor.synthesis import CompositeInput
+    from model.stacking import synthesize_stacking, synthesize_stacking_gbdt
 
     # ---- 数据 ----
     if args.real:

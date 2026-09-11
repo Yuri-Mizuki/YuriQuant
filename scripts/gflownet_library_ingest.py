@@ -26,7 +26,8 @@ from factor.gflownet.reward import make_reward_fn, rank_ic_series
 from factor.gflownet.selection import select_low_corr
 from factor.gflownet.tb import sample_formulas
 from factor.synthesis import CompositeInput, synthesize_ic_weighted, synthesize_pca, \
-    synthesize_orthogonal, synthesize_stacking_gbdt
+    synthesize_orthogonal
+from model.stacking import synthesize_stacking_gbdt
 from research.factor_library import FactorLibrary
 
 # 与 run_gflownet_phase1.py 保持同一口径

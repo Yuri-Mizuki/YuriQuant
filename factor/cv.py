@@ -114,8 +114,8 @@ def purged_kfold(
 ) -> list[Fold]:
     """时序 Purged K-Fold：测试折可在中间，训练集取两侧 + purge + embargo。
 
-    与 ``factor.synthesis._time_folds`` 的区别：
-    - ``_time_folds``：expanding window，测试折只在末尾（forward-chaining）。
+    与 ``model.stacking._time_fold_masks``（本函数的行级 mask 封装）的区别：
+    - ``_time_fold_masks``：expanding window，测试折只在末尾（forward-chaining）。
     - 本函数：每个折的测试段可在任意位置，训练集取其**两侧**剩余日期，
       边界处 purge 掉标签重叠 + embargo 隔离。
 
@@ -242,9 +242,10 @@ def forward_folds(
     n_splits: int = 5,
     embargo_days: int = 5,
 ) -> list[Fold]:
-    """时序 expanding 前推，测试折只在末尾，训练为前缀+embargo 隔离。
+    """    时序 expanding 前推，测试折只在末尾，训练为前缀+embargo 隔离。
 
-    等价于 ``factor.synthesis._time_folds`` 语义，但返回统一 ``list[Fold]``，
+    等价于 ``model.stacking._time_fold_masks`` 的语义（后者是本函数的行级 mask
+    封装，供 stacking 训练使用），但返回统一 ``list[Fold]``，
     便于跟 ``purged_kfold`` 等做横向对比。关键改进继承自原实现：
     - 按**交易日边界**切分，绝不把同一天劈开
     - 训练段尾部剔除与测试段相邻的 ``embargo_days`` 天，防标签前视

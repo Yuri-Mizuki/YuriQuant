@@ -34,5 +34,6 @@ __all__ = [
     "ELEMENT_OPS", "TS_OPS", "CS_OPS", "OpSpec",
     "all_operators", "op_registry", "DEFAULT_WINDOWS", "DEFAULT_FEATURES",
 ]
-# 注意：factor.mining / factor.genetic_mining / factor.synthesis 不在此导出，
-# 避免引入 scipy/deap 等重依赖到所有调用方；按需 `from factor.synthesis import ...`。
+# 注意：factor.mining / factor.genetic_mining 不在此导出，避免引入 scipy/deap 等
+# 重依赖到所有调用方；factor.synthesis 同样按需 `from factor.synthesis import ...`
+# （其 ML stacking 部分已于 2026-09-11 迁往 model/stacking.py，本模块只做确定性组合）。
