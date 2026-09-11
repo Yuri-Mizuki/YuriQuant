@@ -123,7 +123,7 @@ def make_data_context(args):
     from data.universe import Universe
 
     if args.mock:
-        from tests.conftest import MockDataSource
+        from data.mock import MockDataSource
         ds = MockDataSource()
         cache = DataCache(ds, cache_root=tempfile.mkdtemp(prefix="mock_cache_"))
         mode = "mock"

@@ -29,6 +29,8 @@ import time
 from typing import Iterable
 
 import pandas as pd
+
+from data.textmining.source_ths import to_code6, to_code_std  # noqa: F401  （2026-09-11 删逐字拷贝，委托 ths 真源）
 import requests
 
 log = logging.getLogger(__name__)
@@ -89,19 +91,6 @@ def _get_stock_ids() -> dict[str, str]:
     return _STOCK_ID_CACHE
 
 
-def to_code6(code: str) -> str:
-    return str(code).split(".")[0].zfill(6)
-
-
-def to_code_std(code6: str) -> str:
-    c = str(code6).zfill(6)
-    if c[0] in ("6", "9", "5"):
-        return f"{c}.SH"
-    if c[0] in ("0", "2", "3"):
-        return f"{c}.SZ"
-    if c[0] in ("4", "8"):
-        return f"{c}.BJ"
-    return c
 
 
 def _headers() -> dict:

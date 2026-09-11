@@ -333,7 +333,7 @@ def main():
 
     if args.mock:
         import tempfile
-        from tests.conftest import MockDataSource
+        from data.mock import MockDataSource
         ds = MockDataSource()
         begin = args.begin or 20230103
         end = args.end or 20241231
