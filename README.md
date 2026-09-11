@@ -79,7 +79,7 @@ reports/    实验与交付物（模型/监控/因子库/设计文档/HTML报告
 | 1 | 研究分析 | ✅ `data/`、`scripts/evaluation/intraday_analysis.py`、`scripts/ingest/check_data_quality.py` | SDK → 行情/财务/日内结构画像，数据质量检查无 ERROR |
 | 2 | 提出想法 | ✅ `scripts/factors/mine_factors.py`（`--exhaustive`/`--gp`）、`factor/gflownet/`、`factor/rl/` | 穷举 + 遗传规划 + GFlowNet(TB/PPO) + AlphaPool RL 自动生成候选公式 |
 | 3 | 开发准备 | ✅ `scripts/ingest/update_data.py` | SDK → Parquet 缓存 + PIT 面板 + 股票池，增量水位正确、PIT 无未来函数 |
-| 4 | 开发实现 | ✅ `scripts/build_{technical,fundamental,intraday}_factors.py` | 技术面 9 因子 + 基本面 32 因子 + 日内 14 因子，面板 date×code 口径一致 |
+| 4 | 开发实现 | ✅ `scripts/factors/build_{technical,fundamental,intraday}_factors.py` | 技术面 9 因子 + 基本面 32 因子 + 日内 14 因子，面板 date×code 口径一致 |
 | 5 | 因子分析 | ✅ `research/factor_analysis.py`、`scripts/reporting/factor_correlation.py`、`scripts/pipelines/e2e_backtest.py` | 因子面板 → IC/IR/衰减/分层/NW t/FDR，显著性基于 Newey-West t |
 | 6 | 因子构建 | ✅ `scripts/factors/synthesize_factors.py`、`scripts/factors/synthesize_library.py` | IC 加权 / PCA / 正交 / ML Stacking(ridge/gbdt/lambdarank) 四种合成 |
 | 7 | 因子入库 | ✅ `scripts/factors/factor_library.py` | registry + panels + evals 三件套，血缘可追溯、可选 `check_dup` 去冗余预检、六维标签、`set-tag`/`monitor`/`regime`/`select_diverse` |
@@ -162,7 +162,7 @@ mock 落 `reports/models_mock`，真实落 `reports/models`。
 | **算法对比** | `scripts/archive/ml_algorithm_compare.py` | 2019-2026 长时段 Ridge/GBDT/TabICL + 窗口/再训频率对比 → `reports/ml_algorithm_compare/` |
 | **模型 walk-forward** | `scripts/evaluation/walk_forward_model.py` | mock/real 滚动再训练，模型因子回写因子库 → `reports/models(_mock)/` |
 | **组合方法对比** | `scripts/portfolio/compare_portfolio_methods.py` | projection/min_var/tev/risk_parity/hrp 五法对比 → `reports/portfolio_methods_compare.csv` |
-| **多期执行** | `scripts/portfolio/multi_period_backtest.py`、`backtest_two_periods.py` | 2025 与 2026H1 两段样本外回测 → `reports/multi_period/`、`reports/two_periods/` |
+| **多期执行** | `scripts/portfolio/multi_period_backtest.py`、`scripts/evaluation/backtest_two_periods.py` | 2025 与 2026H1 两段样本外回测 → `reports/multi_period/`、`reports/two_periods/` |
 | **选股与信号** | `scripts/portfolio/select_stocks.py`、`generate_signals.py` | 每日选股明细 + 可执行交易信号 → `reports/select_hs300_2025/`、`reports/signals/` |
 | **端到端选股（今日信号）** | `scripts/pipelines/e2e_stock_picks.py` | 因子筛选 → GBDT 预测 → risk_parity 组合 → 选股清单 → `reports/e2e_picks/` |
 | **端到端策略回测** | `scripts/pipelines/e2e_backtest.py` | walk-forward 月频回测（2024-01~2026-08 跑输全池基准，见报告）→ `reports/e2e_backtest/` |
@@ -177,7 +177,7 @@ mock 落 `reports/models_mock`，真实落 `reports/models`。
 | **全A超额归因与显著性复核** | `scripts/pipelines/alla_excess_attribution.py`（2026-09-08） | 复跑主策略取每日权重：对上证超额 +10.2%/年中约一半来自风格敞口（β=1.10、R²=0.61），对全A等权纯选股 α=+5.1%/年（t=2.14 显著）；Brinson（申万一级）：主动收益 +35.6% = 选择 +64.1% + 配置 −15.5% + 交互 −12.3%——超额全部来自行业内选股。回测指标同步新增 `sharpe_t_stat` / `years_to_prove`=(1.96/\|SR\|)² / `excess_t_stat`（主策略 8.35 年：Sharpe t=1.69、超额 t=1.947 压线）→ `reports/alla_attribution/`，网格报告已含 t 列 |
 | **论文复现因子族（awesome 21 式）** | `factor/paper_factors.py` + `scripts/factors/build_paper_factors.py`（2026-09-08） | awesome-systematic-trading 复现库 61 策略中 21 个可在 A 股数据面实现者翻译入库（all_a_2018_2026 达 900 因子）：短期反转 IC=0.038/t=11.3、低波 t=8.2、价值 t=8.5、研发强度 t=5.6、质量/FSCORE t≈4.4 显著为正；月频动量族为负（A 股动量反转复现）→ registry `source=paper:awesome-systematic-trading:*` |
 | **日内研究** | `scripts/evaluation/intraday_analysis.py` | 隔夜 vs 日内收益分解、成交量/波动率时段效应 → `reports/intraday_analysis_{year}.png`、`intraday_summary_{year}.csv` |
-| **自动因子挖掘** | `scripts/evaluation/gp_tune_budget.py`、`run_gflownet_phase0/1.py`、`train_htai_rl_p0.py`、`gflownet_library_ingest.py` | GP 调参 / GFlowNet TB+PPO / AlphaPool RL 最小闭环 → `reports/gp_tune/`、`reports/_htai_gp/` |
+| **自动因子挖掘** | `scripts/evaluation/gp_tune_budget.py`、`run_gflownet_phase0/1.py`、`gflownet_library_ingest.py` | GP 调参 / GFlowNet TB+PPO / AlphaPool RL 最小闭环 → `reports/gp_tune/`、`reports/_htai_gp/` |
 | **文本挖掘** | `scripts/factors/fetch_textmining.py` + `scripts/textmining/` | 研报/公告抓取 → FADT/SUE-文本 样本、BERT 编码、训练评估 → `reports/textmining*/` |
 | **生产化监控** | `scripts/reporting/monitor_performance.py` | 因子与模型预测性能监控 → `reports/monitoring/` |
 | **设计文档** | — | 模型层/训练纪律/项目总览 → `reports/docs/design/yuriquant_{model_layer_design,training_discipline,project_overview}/` |

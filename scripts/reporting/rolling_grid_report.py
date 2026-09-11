@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -219,7 +220,9 @@ def group_chart_html(title: str, run_ids: list[str], bench_idx_pts,
     datasets.append({"label": "全A等权", "data": bench_eqw_pts,
                      "borderColor": "#999", "borderDash": [2, 2],
                      "borderWidth": 1.2, "pointRadius": 0, "fill": False})
-    cid = "chart_" + str(abs(hash(title)) % 10**8)
+    # hashlib 摘要替代 Python 字符串 hash（后者每进程随机，PYTHONHASHSEED
+    # 不同则同输入两次产物不可字节复现——2026-09-11 修复）
+    cid = "chart_" + hashlib.md5(title.encode("utf-8")).hexdigest()[:8]
     ds_json = json.dumps(datasets, ensure_ascii=False, default=str)
     return f"""
 <h3>{title}</h3><div class="chartwrap"><canvas id="{cid}"></canvas></div>

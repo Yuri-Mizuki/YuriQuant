@@ -5,7 +5,7 @@ model —— 02 模型层（对齐聚宽 AI 投研流程）。
 → 模型评价（evaluation.evaluate_model）→ 模型迭代（同名再注册 = 新版本，
 experiments.py 记录实验）。
 
-五组件（2026-08-19 模型层建设，详见 reports/yuriquant_model_layer_design）：
+五组件（2026-08-19 模型层建设，详见 reports/docs/design/yuriquant_model_layer_design）：
 - ① FeatureStore  ``features.build_feature_set``   因子面板 → 对齐特征集
 - ② LabelBuilder  ``labels.build_labels``          horizon × mode 标签 + embargo
 - ③ Predictor     ``predictor.PREDICTORS``         ridge / gbdt 截面预测器

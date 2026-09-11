@@ -1,7 +1,7 @@
 """
 模型层五组件单元测试（合成数据，不依赖 SDK）。
 
-覆盖（对齐模型层蓝图 reports/yuriquant_model_layer_design）：
+覆盖（对齐模型层蓝图 reports/docs/design/yuriquant_model_layer_design）：
 - ② LabelBuilder  : forward_returns 无未来函数 / rank-zscore-raw 三模式 / embargo
 - ① FeatureStore  : 白黑名单 → 覆盖率 → 去冗余 → 截断 四级选择漏斗
 - ③ Predictor     : ridge/gbdt fit-predict、截面标准化、fit_predict_oos 折纪律
