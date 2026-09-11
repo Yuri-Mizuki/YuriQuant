@@ -143,8 +143,8 @@
   锁死两种口径的唯一语义差别。全量 629 passed（基线 618）。详见
   `.workbuddy/memory/2026-09-10.md`。
 
-- [ ] **口径统一第二批（2026-09-10 架构审计立项；与第一批不同，均需重跑实验
-  验证后再定案）**：
+- [ ] **口径统一第二批（2026-09-10 架构审计立项；四项待拍板决策已于
+  2026-09-11 全部落定，仅剩"权重生产唯一入口"）**：
 
   - [x] **显著性判定收口（2026-09-10 完成，`24837bb`）**：新增
     `stats/significance.py` 作为"判定层"单一真源（与 `stats/robust_stats` 的
@@ -161,8 +161,18 @@
     默认仍走 raw，**不改动已落盘结论**。
     实测切换代价（hs300_2025 的 244 因子）：raw 显著 **84** → 整库 BH-FDR(q=0.05)
     **62**（22 个会翻）；hs300_2022_2025 的 862 个：397 → 339。
-    ⚠️ **待拍板**：`significant` 默认取 raw 还是 FDR——它经
-    `load_significant_features` 喂 e2e 因子池，换口径会改下游回测数字。
+    **决策（2026-09-11）：默认保持 raw，FDR 降到报告层并排展示**。
+    `research/report_pipeline.collect_factor_library` 与
+    `scripts/factor_library_full_report.py` 已接入 `significance_table`，
+    同时显示 raw / 整库 FDR 两个计数。理由：
+    ① 全仓 `load_significant_features` 只有 3 个消费点（`e2e_common` /
+    `diagnose_neutralized_compare` / 一个测试），**主实验（全A滚动主线
+    `rolling_grid_alla` → `alla_daily_rank`）不读因子库**——它用预构建的
+    alpha panels，换默认只会静默改 e2e 家族数字、破坏可比性；
+    ② 因子库是**累积库**（GP / GFlowNet / exhaustive / 论文复现 / 手工因子
+    多轮混入），不是同一次多重检验的"族"，整库 BH-FDR 的族语义本身不严谨；
+    ③ raw 与 FDR 回答不同问题（单因子自身有无 alpha vs 这批候选里有多少是
+    真的），并排展示即可，不该互相替代。
   - [x] **统计 / 预处理 / 绩效原语收口（2026-09-10，`859494e` + `1a83d77`）**：
     - **rank IC**：`factor/gflownet/reward.rank_ic_series` 改为
       `stats.ic.calc_ic_series` 的薄封装（此前自实现一份）。`calc_ic_series`
@@ -170,25 +180,59 @@
       写进 docstring + 用测试钉住：因子**整行**缺失（窗口预热）不影响；
       **行内散点**缺失才分叉，30% 散点缺失时日均 IC 差约 1.1e-2
       （IC 量级 3e-2~5e-2，**同阶**）。
-      ⚠️ **待拍板**：训练是否改为始终走 canonical——代价是 IC 计算慢约 30%
-      且改训练行为（与既有 GFlowNet Phase 0/1 结果不再可比）。
+      **决策（2026-09-11）：维持现状**——训练走捷径、入库/评估走 canonical，
+      并把该分层**显式声明**（`factor/gflownet/reward.py` 模块 docstring 新增
+      「IC 口径分层」段，`parallel.py` 模块头与 `run_gflownet_phase1.py` 调用处
+      各加一处指引）。理由：训练奖励只是 batch 内的**相对排序**信号（决定哪些
+      公式进 hof），1e-2 偏差不改变公式间相对次序，而重跑 Phase 0/1 代价大且
+      破坏既有结论可比性；写进因子库的 IC 本来就是 canonical
+      （`FactorLibrary.register` → `calc_ic_series` 不传 `returns_rank`）。
+      **两处数字不可直接对比**，已写进 docstring。
     - **市值中性化**：向量化版上移为 `factor/preprocessing.neutralize_single`
       （含截距），`reward.neutralize_market_cap` 改为薄封装，新旧 max|Δ| = 0。
-      **新发现（待拍板）**：`preprocessing.neutralize` **只传市值时没有截距项**
-      （`x_matrix` 仅 `[log(mc)]` 一列——截距靠"全量行业哑变量的列和 = 全 1
-      向量"来 span，不传行业就没有），故与含截距的 `neutralize_single`
-      **差一个截距项**；`preprocess_factor` 在无行业数据时会走到这条路径。
-      按截面回归惯例（含截距）应给 size-only 路径补 ones 列，但会改变因子层
-      中性化结果，需拍板。已用 characterization 测试钉住现行为。
-    - **内联 t 统计量**：p 值公式 **4 处已收口**（见上）。仅算 t 的一行式
-      `m/(s/√n)` 尚有 5 处（`factor/synthesis.py:375`、
-      `factor/genetic_mining.py` 的 `_seg_ic_stats` / `:1125` / `:1663`、
-      `scripts/build_minute_panel.py:83`、`scripts/compare_htai_fitness.py:116`）
-      **刻意保留**：它们只要 t，且 n<2 的退化语义（旧代码返回 0.0）与
-      `mean_inference`（返回 NaN）不同，强行合并要么改这些路径输出、要么往
-      热路径塞用不上的 NW 计算。**真正的缺口**是这几处只报 OLS t、完全不做
-      NW，与 mining / 因子库"两列并报"不一致——是否补 NW 列（改 CSV schema）
-      另行决定。
+      **决策（2026-09-11）：补 ones 列**。`neutralize` 在**无行业哑变量**时
+      （未传行业，或当天样本不足以容纳行业哑变量而被丢弃）补一列 `_intercept`；
+      含行业哑变量时**不补**（其列和已是全 1 向量、已 span 截距，重复加列会共线）。
+      至此与含截距的 `neutralize_single` 口径一致，消除了"同名市值中性化存在
+      两个口径"的分裂。
+      **影响面实测**（`scripts/oneoff/probe_size_only_exposure.py`，真实 HS300
+      1853 个交易日 × 520 股）：因样本不足而降级到 size-only 的天数 **= 0**
+      （行业面板 100% 交易日覆盖、93.2% 非 NaN），故只有"完全没传行业"的调用方
+      受影响，**主实验不受影响**（主线信号层主口径 `raw`、对照 `neut` 传市值+行业、
+      因子层 `panels_neu` 走 `preprocess_factor(mc, ind)` 两者同传）。
+      原 characterization 测试已改写为 `test_neutralize_size_only_matches_with_intercept_version`。
+    - **内联 t 统计量（2026-09-11 决策：全部收口）**：此前记的"5 处"是**漏数**
+      ——搜索模式用了 `np.sqrt(n)`，而真实写法多为 `np.sqrt(len(ic))`。以宽模式
+      复查后实际 **13 处**：`factor/synthesis.py`（`composite_stats`）、
+      `factor/genetic_mining.py`（`_seg_ic_stats` / `:1129` / `:1669`）、
+      `research/factor_analysis.py`（`standard_factor_summary`）、
+      `research/attribution.py`（`fama_macbeth` 的 `t_ols`）、
+      `scripts/compare_htai_fitness.py`、`scripts/compare_ml_synthesis.py`、
+      `scripts/gp_tune_budget.py`（2 处）、`scripts/walk_forward.py`（2 处）、
+      `scripts/build_minute_panel.py`。全部改走 `mean_inference(robust=False)`，
+      并保住旧的 `n < 2 → 0.0` 边界（`mean_inference` 该情况返回 NaN）。
+      等价性探针 `scripts/oneoff/probe_ols_t_unify.py`：A 型（调用方均已 dropna）
+      **9/10 逐位一致**，唯一分叉是**常数序列**——旧写法因 pandas `Series.std()`
+      对全等值返回 7e-18（`s > 0` 保护失效）给出 ~2e16 的荒谬值，统一实现走
+      `np.std(ddof=1)` 给精确 0.0，属**修复**（IC 序列逐日截面相关，几乎不可能恒定）。
+      两个例外：① `build_minute_panel.py` 旧写法**分子 skipna、分母却用含 NaN 的
+      `len(ic)`**，两者本就不匹配，收口必然改数（已在代码注释中标注）；
+      ② `attribution` 的 `se_ols` 是标准误、不是 t，保留。
+      **是否补 NW 列 → 决策：不补**。这 13 处的 t 只用于报告 / 诊断输出，不参与
+      因子库显著判定、不进任何回测收益；补 NW 只改 CSV schema 而无实际收益。
+      新增静态守卫 `tests/test_significance.py::test_no_inline_ols_t_left_in_repo`
+      防回潮（只匹配 `X / (Y / np.sqrt(n))` 的除法嵌套，标准误 `sd / np.sqrt(n)`
+      不算），并有 5 个函数级测试锁定各入口 == `mean_inference`。
+    - **顺带修复（2026-09-11，a 项实跑真实因子库时暴露）**：
+      `stats.significance.t_pvalue` 只支持标量 `df`，而 `significance_table` 对
+      缺 `p_value_nw` 的旧行用 `df = n_dates - 1`（**数组**）补算 →
+      `not np.isfinite(df)` 对数组直接抛 ValueError。构造出的临时库每个因子都带
+      p 值，该分支一直没被测到，**真实库一跑就炸**（hs300_2025 有 244 行旧数据）。
+      已支持数组 `df`（语义与标量一致：有限且 >0 → t 分布；有限但 <=0 → NaN；
+      非有限 → 正态近似），并加回归测试 `test_t_pvalue_supports_array_df` /
+      `test_missing_pvalue_nw_is_backfilled`；顺手加固 `n_dates` 缺列时的回退。
+      修复后实测 raw→FDR：**hs300_2025 244 个 84→62**、
+      **hs300_2022_2025 863 个 397→337**。
     - **绩效指标**：`scripts/e2e_backtest.perf_stats`（5 个脚本消费）的三个基础量
       改调 `backtest.metrics` 原语，逐位一致；保留两处报告层独有约定
       （短样本 <0.3 年不年化、月胜率——与 metrics 的日胜率不是同一指标）。
@@ -272,7 +316,9 @@
 1. 重跑 multiyear + freq_tune（补核心结论证据链，顺带验证整改后口径）
 2. ~~最小 CI~~（09-10 完成：已转为手动触发；3.2 机械清理亦已批量收口）
 3. **口径统一第二批（见 3.1）**——已完成：显著性判定收口、统计/预处理/绩效原语
-   收口、`factor/synthesis.py` 归属倒挂拆分（三项各自独立提交 + 全量测试比对）；
+   收口、`factor/synthesis.py` 归属倒挂拆分、**四项待拍板决策全部落定**
+   （a 保持 raw + FDR 降报告层 / b GFlowNet 训练捷径 + 入库 canonical 并显式声明 /
+   c size-only 补截距 / d 13 处内联 t 收口且不补 NW 列），各自独立提交 + 全量测试比对；
    仅剩**"权重生产唯一入口"**一项需先拍板。其余三项按"一次一项 + 单独提交 +
    全量测试比对"推进
 4. 分钟频挖掘 pipeline（现成数据的最大增量）
