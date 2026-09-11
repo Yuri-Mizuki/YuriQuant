@@ -459,9 +459,8 @@
   `optimize/solver.to_psd` / `research/factor_report.fig_to_b64`），
   全部公开化；13 处 tests 白盒登记进白名单。改名前核过 `op_registry()` 走
   `OpSpec.name`（显式字符串）、因子库 registry 无该字符串 → 对公式解析零影响。
-- [ ] **报告 HTML 不可字节复现**：`rolling_grid_report` 用
-  `abs(hash(title)) % 10**8` 生成 canvas id，Python 字符串 hash 每进程随机
-  （`PYTHONHASHSEED`）→ 同输入两次运行产物不同。改用 `hashlib` 摘要即可。
+- [x] **报告 HTML 不可字节复现**（2026-09-11 第七批③修复）：`rolling_grid_report`
+  的 canvas id 改用 `hashlib.md5(title)` 摘要，同输入产物字节可复现。
 - [ ] **其余 scripts 层私有名跨模块 import**：仅剩 `scripts/textmining/*`
   内部互引（另一会话在改，守卫已按前缀豁免）。待其落地后把豁免项清零。
 - [x] **根目录 5 个 `_probe_*.py`（已清理）**（`_probe_cols` / `_probe_pledge` /
@@ -474,11 +473,12 @@
   `etf-rotation-plan/`（8-26 HTML 方案产物）。
   **保守保留**：`scripts/oneoff/` 里的 12 个 `probe_*.py` 与历史实验脚本
   —— 它们背后的数字进了 memory/报告，是结论的可复现场景。
-- [ ] **`strategy/enhanced.py` 零 import**（2533 字符）：确认无人引用，
-  删或补文档说明归属待定。
-- [ ] **疑似双实现**：`scripts/factors/build_fundamental_factors._add_single_quarter`
+- [x] **`strategy/enhanced.py` 零 import**（2026-09-11 删除）：复核全仓零引用后
+  删除（git 历史保留，`IndexEnhancedLongOnly` 如需复活可从历史找回）。
+- [x] **疑似双实现**：`scripts/factors/build_fundamental_factors._add_single_quarter`
   （HS300 单池）与 `scripts/builders/build_alla_fundamental_factors.add_single_quarter`
-  （全A）同名同职，疑为两份拷贝；是否合并需先写等价性探针。
+  （全A）——**2026-09-11 第七批已收敛**（等价性探针证实逐位一致后合一，
+  见第七批②）。
 
 - [x] **口径统一第五批 —— scripts/ 全量重排（2026-09-11 完成，已推送）**：
 
@@ -523,6 +523,84 @@
     （本 agent 的 shell 被安全策略禁用 `schtasks.exe`）：
     `python -m scripts.pipelines.alla_daily_rank --install-task <HH:MM>`，
     以及 `python -m scripts.reporting.monitor_performance ...`（`YuriQuant Monitor`）。
+
+- [x] **口径统一第六批 —— 报告/评估层"同名指标不同公式"对齐（2026-09-11 完成，
+  四项 + 守卫扩面）**。审计发现残留的口径分裂集中在报告与评估脚本（既有守卫
+  只匹配 OLS-t 的除法形状，管不到年化常数与相关口径）：
+
+  - [x] **`scripts/reporting/factor_explorer_report`**：`icir` / `ls_sharpe`
+    自算误用 ×√12（月频年化因子）于**日频** IC 与日收益，比 registry 落盘值
+    （`calc_ir` / `backtest.metrics`，×√252）系统性低 ~4.6 倍。改为优先读
+    registry（`ic_ir` / `sharpe_ls_M`），缺列时按同口径现算。因子浏览器数字
+    大幅上修属修复。前端 JS 的 ×√12（rangeMetrics）作用于**月度** IC 序列，
+    口径正确，刻意不动。
+  - [x] **`scripts/evaluation/cpcv_h1_eval`**：`ic_ir` 由未年化 mean/std 改
+    `calc_ir`（此前同名字段与 rolling_grid 差 √252 倍）；手搓 `2*(1-t.cdf)` 与
+    `ttest_1samp` 改走 `t_pvalue` / `mean_inference(robust=False)`（数学逐位
+    等价，无数字变化）。⚠️ **存量 `reports/cpcv_h1/` 产物为旧口径（ic_ir 未
+    年化），下次重跑覆盖**。
+  - [x] **`scripts/reporting/jq_style_report`**：Sharpe 由算术口径
+    （mean/sd·√252）改 `backtest.metrics.sharpe_ratio`（几何超额，与 §一引用的
+    0.515 同口径，数值有变）；α 由几何恒等式 `ann − β·b_ann` 改
+    `research.attribution.alpha_beta` 的 OLS 回归年化截距（附 NW t，数值有变）；
+    IR / vol / ann / calmar 改走 metrics（逐位等价）。头部配置重生成实测：
+    Sharpe 0.57、α +9.99%/年、β 0.96——与 alla_attribution（β≈0.97）可互相对照。
+  - [x] **`research/factor_library._residual_ic`**：冗余预检的残差 IC 由原始
+    Pearson 改 **Rank IC**（对齐 `calc_ic_series` 的 spearman 全库口径）。
+    存量 registry 行的 `resid_ic` / `resid_t_nw` 为旧口径，重新注册后按新口径
+    覆盖。`test_factor_library_mgmt`（同面板 → 残差≈0 断言）不受影响。
+  - [x] **守卫扩面**：`test_no_inline_ols_t_left_in_repo` 扫描包扩至
+    backtest / optimize / data / strategy（先核查无存量命中）。相关测试
+    60 passed + ruff F/E 全绿。
+
+- [x] **口径统一第七批 —— 分层收口 + 重复实现收敛（2026-09-11 完成）**。
+  架构审计（三路并行：包依赖矩阵 / scripts 层一致性 / 重复实现与口径）定位
+  三类守卫空白，逐项收口：
+
+  - [x] **① 上层包对 research 的模块级依赖清零 + 守卫**：`optimize/risk`
+    （α/β + Brinson + 基准对照）、`monitoring/metrics`（中性化 IC）、
+    `monitoring/runner`（HTML 报告）原为**模块级** import research——生产入口
+    `import monitoring` 被连带拖起 matplotlib/openpyxl/scipy。全部降为函数级
+    按需引用；`monitoring/runner` 的 `PERIODS_PER_YEAR` 改从真源 `stats` 取
+    （原经 backtest.metrics 绕行）；`monitoring/metrics` 的 scipy 也降函数级。
+    实测：`import research` 重依赖链清零（~0.0s）、`import monitoring` 1.9s
+    → 0.0s（首次触达监控计算时才付 scipy）。新守卫
+    `test_no_module_level_research_import_in_lower_layers`（AST 区分模块级
+    与函数级，规则 13）防回潮。`model→research` 两处本就是函数级，纳入守卫面。
+  - [x] **② 基本面双实现收敛（探针先行）**：`add_single_quarter` / `add_ttm_yoy`
+    在 HS300 与全A builder 各一份拷贝。按纪律先写**等价性探针**（合成 2 码 ×
+    8 季报长表、含缺失值）：两版逐位一致（max|Δ|=0）→ 合一到新真源
+    `scripts/common/fundamental_common.py`（取 factors 版：含缺字段告警 +
+    完整 docstring），两个入口脚本改引用；探针固化为
+    `tests/test_fundamental_common.py`（4 例：Q1 不扣减 / 跨年 Q2 扣减 /
+    TTM+YoY / 缺字段容错）。`_dividend_factors` 两版**机制不同**
+    （build_pit_panel vs _event_pit）语义相同 → 刻意不合并。
+  - [x] **③ builders/ 家族去重（11 文件手术）**：`merge_outputs` / 
+    `fuse_horizon_ic` 各 11 份拷贝（差异仅 stats jsonl 文件名与两个开关）、
+    `ffill_pit_multi` 4 份、`KEEP_FROM`/`HORIZONS`/`IC_CODE_STRIDE` 常量
+    11 份 → 收敛到新真源 `scripts/builders/common.py`（含 `load_close_adj`
+    单一构建入口，走 Config 缓存根）。status 版的漂移（内联重建 close_adj、
+    硬编码 `e:/data/parquet`）就此消灭。全 F-class（F401/F811/F821）回到
+    基线、12 模块全部可 import。
+  - [x] **④ 生产脚本反向依赖测试包**：`scripts/common/cli_common` 与
+    `intraday_analysis` 的 `--mock` 分支经 `from tests.conftest import
+    MockDataSource` 依赖测试夹具 → **MockDataSource 整体下沉
+    `data/mock.py`**（数据源 mock 属数据层能力），conftest 保留同名转发，
+    `scripts/` 对 `tests` 的引用清零。
+  - [x] **⑤ 零碎**：`gp_tune_budget` 删自引用 import；`research/__init__`
+    改 PEP 562 惰性加载（与 optimize 同配方，`import research` 不再付
+    matplotlib/openpyxl/scipy 全款）；`data/textmining/source_cninfo` 删
+    `to_code6/to_code_std` 逐字拷贝、委托 `source_ths` 真源（fetch.py 本就是
+    该模式）；`rolling_grid_report` canvas id `abs(hash(title))` →
+    `hashlib.md5`（HTML 字节可复现，④ 报告渲染收口遗留项）；README 3 处
+    失效/误导引用（build_* 旧路径、backtest_two_periods 归属、不存在的
+    train_htai_rl_p0）；`strategy/enhanced.py` 零引用删除。
+  - [x] **刻意不动（记录在案）**：`builders/*` 的 `load_panels` 8 份模板
+    （各返回元组形状不同，统一签名后再合）；`dedup_corr=0.7` 5 处字面量与
+    discipline 日期字面量（分散于 model/research/rl/实验入口，语义同但收口
+    需动函数默认值求值序，低收益）；`_dividend_factors` 双机制；builders/
+    gflownet/data_tools 的 print 输出（控制台工具定位，TODO 3.2 已有
+    cli_common 推广总条目）。
 
 ### 3.2 机械性（可批量清理）
 - [x] **cli_common 推广**（骨架已建、采用率 <15%）：
