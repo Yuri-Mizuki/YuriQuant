@@ -99,29 +99,6 @@ def build_components(
 # ===========================================================================
 # 符号对齐（让「因子值高 ⇒ 未来收益高」）
 # ===========================================================================
-def _align_sign(panel: pd.DataFrame, ref: pd.DataFrame) -> pd.DataFrame:
-    """把 panel 的全局符号翻转到与 ref 同向（基于两者逐日截面相关均值）。
-
-    ref 通常是未来一期收益面板：翻转后复合因子指向「高值=高收益」方向。
-    """
-    common = panel.index.intersection(ref.index)
-    codes = panel.columns.intersection(ref.columns)
-    corr_sum = 0.0
-    n = 0
-    for d in common:
-        a = panel.loc[d, codes].dropna()
-        b = ref.loc[d, a.index].dropna()
-        if len(b) < 5:
-            continue
-        c = np.corrcoef(a.values, b.values)[0, 1] if len(b) >= 2 else 0.0
-        if not np.isnan(c):
-            corr_sum += c
-            n += 1
-    if n == 0 or corr_sum < 0:
-        return -panel
-    return panel
-
-
 def _align_sign_by_ic(comp: CompositeInput) -> CompositeInput:
     """按因子自身 IC 符号翻转，使其指向「高值=高收益」。
 

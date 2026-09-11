@@ -37,13 +37,30 @@ from typing import Any, Mapping
 import numpy as np
 import pandas as pd
 
-try:  # 延迟导入：mock venv 3.13 无 cvxpy，真实模式（系统 python 3.12）已装
-    import cvxpy as cp
+# cvxpy 采用**真·惰性导入**（2026-09-11）：只在 solve_portfolio 首次被调用时 import。
+# 此前是模块级 try/except —— 名为"延迟导入"实则仍在 `import optimize` 时执行，
+# 实测把包导入从 ~0.2s 拖到 ~11.7s（cvxpy 连带 scipy 全家桶）。宿主引擎只依赖
+# strategy.base，但任何 `import optimize`（含 mock venv 无 cvxpy 的环境）都要付这笔
+# 静态开销。改为函数内按需加载后，`import optimize` 不再拉起 cvxpy。
+_cp_cache: Any = None
+_cp_loaded = False
 
-    _HAS_CVXPY = True
-except Exception:  # pragma: no cover - 环境探测
-    cp = None
-    _HAS_CVXPY = False
+
+def _require_cvxpy():
+    """按需 import cvxpy；缺失时给出可操作的报错（真实模式用系统 python 3.12）。"""
+    global _cp_cache, _cp_loaded
+    if not _cp_loaded:
+        try:
+            import cvxpy as _cp
+        except Exception as exc:  # pragma: no cover - 环境探测
+            raise RuntimeError(
+                "需要 cvxpy：真实模式请用系统 python 3.12（已装 1.9.2），"
+                "mock venv 3.13 未安装 cvxpy"
+            ) from exc
+        _cp_cache = _cp
+        _cp_loaded = True
+    return _cp_cache
+
 
 __all__ = [
     "estimate_covariance",
@@ -268,11 +285,7 @@ def solve_portfolio(
     Returns:
         Series(index=code) 最优权重；不可持仓（alpha NaN）股票恒为 0。
     """
-    if not _HAS_CVXPY:
-        raise RuntimeError(
-            "需要 cvxpy：真实模式请用系统 python 3.12（已装 1.9.2），"
-            "mock venv 3.13 未安装 cvxpy"
-        )
+    cp = _require_cvxpy()   # 惰性加载（模块导入不再拉起 cvxpy）
     if method not in ("min_var", "tev", "mvo", "risk_parity", "bl"):
         raise ValueError(f"未知求解方法 {method!r}，可选: min_var / tev / mvo / risk_parity / bl")
     if method == "tev" and benchmark is None:

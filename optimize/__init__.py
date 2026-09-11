@@ -29,20 +29,38 @@ Almgren-Chriss 成本惩罚（``turnover_penalty`` 线性 + ``quadratic_cost`` �
 Black-Litterman（``bl_posterior`` / ``bl_views_from_factor``）。
 对比脚本 ``scripts/compare_portfolio_methods.py``（--mock / --real PIT 并集池四窗口）。
 待建（P3）：风险预算非等权、真实四窗口结论分析。
+
+**惰性导入（2026-09-11 P2）**：本包的子模块各有重依赖（solver→cvxpy 7.3s 冷启、
+monitor→stats.ic→scipy.stats 4.0s、risk→research.xlsx_report→openpyxl 2.4s），
+此前 ``__init__`` 静态 import 全部子模块，导致 ``import optimize`` 实测 10.2s
+（**与 cvxpy 有关但不全是它**）。现改为 PEP 562 模块级 ``__getattr__`` 按需加载：
+``import optimize`` 本身不再拉起 scipy/cvxpy/openpyxl，访问 ``optimize.<name>``
+（或 ``from optimize import <name>``）时才加载对应子模块并缓存。
+公开名字与对象身份不变（见 ``tests/test_optimize_lazy_import.py``）。
 """
-from optimize.monitor import monitor_report, rolling_ic
-from optimize.multi_period import PrecomputedWeightsStrategy
-from optimize.portfolio import optimize_weights
-from optimize.risk import risk_attribution, risk_decomposition
-from optimize.solver import (
-    bl_posterior,
-    bl_views_from_factor,
-    hrp_weights,
-    optimize_weights_hrp,
-    optimize_weights_qp,
-    rolling_covariance,
-    solve_portfolio,
-)
+from __future__ import annotations
+
+import importlib
+
+#: 公开 API 名 → 所在子模块（首次访问时加载并缓存到 globals）
+_LAZY_API: dict[str, str] = {
+    "monitor_report": "optimize.monitor",
+    "rolling_ic": "optimize.monitor",
+    "PrecomputedWeightsStrategy": "optimize.multi_period",
+    "optimize_weights": "optimize.portfolio",
+    "risk_attribution": "optimize.risk",
+    "risk_decomposition": "optimize.risk",
+    "bl_posterior": "optimize.solver",
+    "bl_views_from_factor": "optimize.solver",
+    "hrp_weights": "optimize.solver",
+    "optimize_weights_hrp": "optimize.solver",
+    "optimize_weights_qp": "optimize.solver",
+    "rolling_covariance": "optimize.solver",
+    "solve_portfolio": "optimize.solver",
+}
+
+#: 子模块本身也惰性加载（`optimize.solver` 这类属性访问不报 AttributeError）
+_LAZY_SUBMODULES = ("monitor", "multi_period", "portfolio", "risk", "solver")
 
 __all__ = [
     "optimize_weights",
@@ -59,3 +77,21 @@ __all__ = [
     "monitor_report",
     "PrecomputedWeightsStrategy",
 ]
+
+
+def __getattr__(name: str):
+    """PEP 562：按需加载公开名 / 子模块（避免 import optimize 付重依赖代价）。"""
+    if name in _LAZY_SUBMODULES:
+        mod = importlib.import_module(f"optimize.{name}")
+        globals()[name] = mod
+        return mod
+    if name in _LAZY_API:
+        mod = importlib.import_module(_LAZY_API[name])
+        val = getattr(mod, name)
+        globals()[name] = val
+        return val
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(_LAZY_API) | set(_LAZY_SUBMODULES))
