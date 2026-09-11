@@ -46,17 +46,19 @@ if str(ROOT) not in sys.path:
 from scripts.common.cli_common import setup_logging  # noqa: E402
 
 log = setup_logging("build_alla_status")
+from scripts.builders import common  # noqa: E402
+from scripts.builders.common import KEEP_FROM, HORIZONS, IC_CODE_STRIDE  # noqa: E402
 
 DATASET = "all_a_2018_2026"
-KEEP_FROM = "2016-07-01"
-HORIZONS = (1, 5, 10, 20)
-IC_CODE_STRIDE = 3
 W60 = 60
 
 
 def _load_status() -> pd.DataFrame:
     """date×code 多级索引 → 各状态列宽表（date, code 列 + 值列）。"""
-    df = pd.read_parquet(Path("e:/data/parquet/history_stock_status.parquet"))
+    from config import Config
+
+    cache_root = Path(str(Config.cache()["root"]))
+    df = pd.read_parquet(cache_root / "history_stock_status.parquet")
     df = df.reset_index()
     for c in ["date"]:
         df[c] = pd.to_datetime(df[c], errors="coerce")
@@ -185,61 +187,8 @@ def main() -> None:
         log.info("[%d/%d] %s cov=%.2f ic_h1=%+.4f | %.0fs", i, len(order),
                  name, cov, row["ic_mean_h1"], time.time() - t0)
 
-    merge_outputs(ds_dir)
+    common.merge_outputs(ds_dir, 'status')
     log.info("停牌/ST因子构建完成 %.0fs", time.time() - t0)
-
-
-def merge_outputs(ds_dir: Path) -> None:
-    sp = ds_dir / "factor_stats_status.jsonl"
-    rows = [json.loads(l) for l in sp.read_text(encoding="utf-8").splitlines()
-            if l.strip()]
-    if not rows:
-        return
-    reg = pd.read_csv(ds_dir / "registry.csv")
-    new_df = pd.DataFrame(rows)
-    before = len(reg)
-    reg = (pd.concat([reg, new_df], ignore_index=True)
-             .drop_duplicates(subset="name", keep="last"))
-    reg.to_csv(ds_dir / "registry.csv", index=False, encoding="utf-8-sig")
-    log.info("registry: %d -> %d 因子", before, len(reg))
-    for h in HORIZONS:
-        fuse_horizon_ic(ds_dir, h)
-
-
-def fuse_horizon_ic(ds_dir: Path, h: int) -> None:
-    from stats.ic import calc_ic_series
-    from scripts.builders.build_alla_fundamental_factors import load_panels as _fp
-    sp = ds_dir / "factor_stats_status.jsonl"
-    stats = [json.loads(l) for l in sp.read_text(encoding="utf-8").splitlines()
-             if l.strip()]
-    names = [s["name"] for s in stats]
-    if not names:
-        return
-    icp = ds_dir / f"ic_h{h}.parquet"
-    ic = pd.read_parquet(icp)
-    # 本脚本独立构造 close_adj（与 main 相同），从 ic 现有索引取股票池
-    cache_root = Path("e:/data/parquet")
-    daily = pd.read_parquet(cache_root / "daily_all_a.parquet")
-    daily.index = daily.index.set_levels(daily.index.levels[0].normalize(),
-                                         level=0)
-    daily = daily[daily.index.get_level_values(0) >= pd.Timestamp(KEEP_FROM)]
-    bf = pd.read_parquet(cache_root / "backward_factor.parquet")
-    bf.index = bf.index.normalize()
-    bf = bf.loc[bf.index >= pd.Timestamp(KEEP_FROM)]
-    close_raw = daily["close"].unstack()
-    cols = close_raw.columns.intersection(bf.columns)
-    close_raw = close_raw.reindex(close_raw.index.intersection(bf.index),
-                                  columns=cols)
-    bf = bf.reindex(index=close_raw.index, columns=close_raw.columns)
-    close_adj = (close_raw * bf).astype(np.float32)
-    fwd = close_adj.pct_change(h, fill_method=None).shift(-h)
-    ic_codes = close_adj.columns[::IC_CODE_STRIDE]
-    for n in names:
-        p = pd.read_parquet(ds_dir / "panels" / f"{n}.parquet")
-        ic[n] = calc_ic_series(p[ic_codes], fwd).reindex(ic.index)
-    ic = ic.astype(np.float32)
-    ic.to_parquet(icp)
-    log.info("ic_h%d merged: %d 因子", h, ic.shape[1])
 
 
 if __name__ == "__main__":

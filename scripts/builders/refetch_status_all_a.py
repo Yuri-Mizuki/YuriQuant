@@ -95,7 +95,8 @@ def main() -> None:
 
     cfg = Config.datasource()
     ds = create_datasource(cfg)
-    local_path = cfg["amazing_data"].get("sdk_local_path", "e://data//sdk_cache//")
+    # sdk_local_path 真源在 settings.yaml；此处仅防御键缺失（不再复制字面量）
+    local_path = cfg["amazing_data"]["sdk_local_path"]
 
     master = load_master(ds, local_path)
     codes = master["code"].tolist()

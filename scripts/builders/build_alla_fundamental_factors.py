@@ -47,11 +47,11 @@ if str(ROOT) not in sys.path:
 from scripts.common.cli_common import setup_logging  # noqa: E402
 
 log = setup_logging("build_alla_fundam")
+from scripts.builders import common  # noqa: E402
+from scripts.common.fundamental_common import add_single_quarter, add_ttm_yoy  # noqa: E402
+from scripts.builders.common import KEEP_FROM, HORIZONS, IC_CODE_STRIDE  # noqa: E402
 
 DATASET = "all_a_2018_2026"
-KEEP_FROM = "2016-07-01"
-HORIZONS = (1, 5, 10, 20)
-IC_CODE_STRIDE = 3
 
 # ---- 财务长表字段（all_a 全表已含，见 backfill_financial_alla）----
 _INCOME_FIELDS = {
@@ -72,55 +72,6 @@ _NET_CF_FIELD = "NET_INCR_CASH_AND_CASH_EQU"
 # ---------------------------------------------------------------------------
 # TTM / 同比 / 单季（长表维度，逻辑与 build_fundamental_factors 一致）
 # ---------------------------------------------------------------------------
-def add_ttm_yoy(df: pd.DataFrame, field: str, ttm_col: str, yoy_col: str | None) -> pd.DataFrame:
-    if field not in df.columns:
-        return df
-    d = df[["code", "ann_date", "report_period", field]].copy()
-    d = d.dropna(subset=["report_period", field])
-    d["year"] = d["report_period"].dt.year
-    d["quarter"] = d["report_period"].dt.quarter
-    d["_key"] = (d["code"].astype(str) + "_" + d["year"].astype(str)
-                 + "_" + d["quarter"].astype(str))
-    d["_prev_annual_key"] = (d["code"].astype(str) + "_" + (d["year"] - 1).astype(str) + "_4")
-    d["_prev_yoy_key"] = (d["code"].astype(str) + "_" + (d["year"] - 1).astype(str)
-                          + "_" + d["quarter"].astype(str))
-    d = d.sort_values(["code", "report_period", "ann_date"])
-    d = d.drop_duplicates(subset=["code", "report_period"], keep="last")
-    val_map = dict(zip(d["_key"], d[field]))
-    d["_prev_annual"] = d["_prev_annual_key"].map(lambda k: val_map.get(k, np.nan))
-    d["_prev_yoy"] = d["_prev_yoy_key"].map(lambda k: val_map.get(k, np.nan))
-    d[ttm_col] = d[field] + d["_prev_annual"] - d["_prev_yoy"]
-    if yoy_col:
-        d[yoy_col] = d[field] / d["_prev_yoy"].replace(0.0, np.nan) - 1.0
-    out = df.copy()
-    keep = ["code", "ann_date", "report_period", ttm_col] + ([yoy_col] if yoy_col else [])
-    return out.merge(d[keep], on=["code", "ann_date", "report_period"], how="left")
-
-
-def add_single_quarter(df: pd.DataFrame, field: str, sq_col: str) -> pd.DataFrame:
-    if field not in df.columns:
-        return df
-    d = df[["code", "ann_date", "report_period", field]].copy()
-    d = d.dropna(subset=["report_period", field])
-    d["year"] = d["report_period"].dt.year
-    d["quarter"] = d["report_period"].dt.quarter
-    d = d.sort_values(["code", "report_period", "ann_date"])
-    d = d.drop_duplicates(subset=["code", "report_period"], keep="last")
-    prev_q = (d["quarter"] - 2) % 4 + 1
-    prev_y = d["year"] - (d["quarter"] == 1).astype(int)
-    d["_key"] = (d["code"].astype(str) + "_" + d["year"].astype(str)
-                 + "_" + d["quarter"].astype(str))
-    d["_prev_key"] = (d["code"].astype(str) + "_" + prev_y.astype(str)
-                      + "_" + prev_q.astype(str))
-    val_map = dict(zip(d["_key"], d[field]))
-    d["_prev_cum"] = d["_prev_key"].map(lambda k: val_map.get(k, np.nan))
-    same_year = (d["year"] == prev_y)
-    d["sq"] = d[field].where(~same_year | (d["quarter"] == 1), d[field] - d["_prev_cum"])
-    out = df.copy()
-    return out.merge(d[["code", "ann_date", "report_period", "sq"]].rename(
-        columns={"sq": sq_col}), on=["code", "ann_date", "report_period"], how="left")
-
-
 def sq_growth_long(df, sq_col, yoy_col, qoq_col):
     d = df[["code", "ann_date", "report_period", sq_col]].copy()
     d = d.dropna(subset=["report_period", sq_col])
@@ -450,50 +401,8 @@ def main() -> None:
         log.info("[%d/%d] %s cov=%.2f ic_h1=%+.4f | %.0fs", i, len(panels),
                  name, cov, row["ic_mean_h1"], time.time() - t0)
 
-    merge_outputs(ds_dir)
+    common.merge_outputs(ds_dir, 'fundamental', skip_existing=False, empty_log='无基本面因子统计产出')
     log.info("B族财务报表基本面因子构建完成 %.0fs", time.time() - t0)
-
-
-def merge_outputs(ds_dir: Path) -> None:
-    rows = [json.loads(line) for line in
-            (ds_dir / "factor_stats_fundamental.jsonl").read_text(
-                encoding="utf-8").splitlines() if line.strip()]
-    if not rows:
-        log.warning("无基本面因子统计产出")
-        return
-    reg = pd.read_csv(ds_dir / "registry.csv")
-    new_df = pd.DataFrame(rows)
-    before = len(reg)
-    reg = (pd.concat([reg, new_df], ignore_index=True)
-             .drop_duplicates(subset="name", keep="last"))
-    reg.to_csv(ds_dir / "registry.csv", index=False, encoding="utf-8-sig")
-    log.info("registry: %d -> %d 因子", before, len(reg))
-    for h in HORIZONS:
-        fuse_horizon_ic(ds_dir, h)
-
-
-def fuse_horizon_ic(ds_dir: Path, h: int) -> None:
-    from stats.ic import calc_ic_series
-
-    stats = [json.loads(line) for line in
-             (ds_dir / "factor_stats_fundamental.jsonl").read_text(
-                 encoding="utf-8").splitlines() if line.strip()]
-    names = [s["name"] for s in stats]
-    if not names:
-        return
-    icp = ds_dir / f"ic_h{h}.parquet"
-    ic = pd.read_parquet(icp)
-
-    close_adj, _close_raw, *_rest = load_panels()
-    fwd = close_adj.pct_change(h, fill_method=None).shift(-h)
-    ic_codes = close_adj.columns[::IC_CODE_STRIDE]
-    for n in names:
-        p = pd.read_parquet(ds_dir / "panels" / f"{n}.parquet")
-        ic_col = calc_ic_series(p[ic_codes], fwd)
-        ic[n] = ic_col.reindex(ic.index)
-    ic = ic.astype(np.float32)
-    ic.to_parquet(icp)
-    log.info("ic_h%d merged: %d 因子", h, ic.shape[1])
 
 
 if __name__ == "__main__":

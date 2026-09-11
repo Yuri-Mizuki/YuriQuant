@@ -11,10 +11,8 @@
 from __future__ import annotations
 
 import argparse
-import json
 import subprocess
 import sys
-import time
 from pathlib import Path
 
 import pandas as pd
@@ -25,7 +23,12 @@ if str(ROOT) not in sys.path:
 
 PY = sys.executable
 FULL_CODES = 5810
-CACHE = Path("e:/data/parquet")
+
+
+def _cache() -> Path:
+    from config import Config
+
+    return Path(str(Config.cache()["root"]))
 PULL_MOD = "scripts.builders.backfill_pledge_profit_alla"
 BUILD_ORDER = [
     ("scripts.builders.build_alla_event_factors", "event/evt"),
@@ -36,7 +39,7 @@ BUILD_ORDER = [
 
 def table_ready(table: str) -> bool:
     """parquet 已落盘且含 code 列即视为完成（backfill 同步返回即为拉完）。"""
-    p = CACHE / f"{table}.parquet"
+    p = _cache() / f"{table}.parquet"
     if not p.exists():
         return False
     try:

@@ -44,11 +44,10 @@ if str(ROOT) not in sys.path:
 from scripts.common.cli_common import setup_logging  # noqa: E402
 
 log = setup_logging("build_alla_constructed")
+from scripts.builders import common  # noqa: E402
+from scripts.builders.common import HORIZONS, IC_CODE_STRIDE  # noqa: E402
 
 DATASET = "all_a_2018_2026"
-KEEP_FROM = "2016-07-01"
-HORIZONS = (1, 5, 10, 20)
-IC_CODE_STRIDE = 3
 
 from scripts.builders.build_alla_fundamental_factors import (  # noqa: E402
     load_panels, add_ttm_yoy, add_single_quarter, sq_growth_long,
@@ -230,46 +229,6 @@ def _div_consecutive(div: pd.DataFrame, cal_idx, codes) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 # 主流程 & 合并
 # ---------------------------------------------------------------------------
-def merge_outputs(ds_dir: Path) -> None:
-    rows = [json.loads(l) for l in
-            (ds_dir / "factor_stats_constructed.jsonl").read_text(
-                encoding="utf-8").splitlines() if l.strip()]
-    if not rows:
-        log.warning("无 B++ 构造因子统计产出")
-        return
-    reg = pd.read_csv(ds_dir / "registry.csv")
-    new_df = pd.DataFrame(rows)
-    before = len(reg)
-    reg = (pd.concat([reg, new_df], ignore_index=True)
-             .drop_duplicates(subset="name", keep="last"))
-    reg.to_csv(ds_dir / "registry.csv", index=False, encoding="utf-8-sig")
-    log.info("registry: %d -> %d 因子", before, len(reg))
-    for h in HORIZONS:
-        fuse_horizon_ic(ds_dir, h)
-
-
-def fuse_horizon_ic(ds_dir: Path, h: int) -> None:
-    from stats.ic import calc_ic_series
-
-    stats = [json.loads(l) for l in
-             (ds_dir / "factor_stats_constructed.jsonl").read_text(
-                 encoding="utf-8").splitlines() if l.strip()]
-    names = [s["name"] for s in stats]
-    if not names:
-        return
-    ic = pd.read_parquet(ds_dir / f"ic_h{h}.parquet")
-    close_adj, *_ = load_panels()
-    fwd = close_adj.pct_change(h, fill_method=None).shift(-h)
-    ic_codes = close_adj.columns[::IC_CODE_STRIDE]
-    for n in names:
-        p = pd.read_parquet(ds_dir / "panels" / f"{n}.parquet")
-        if n not in ic.columns:
-            ic[n] = calc_ic_series(p[ic_codes], fwd).reindex(ic.index)
-    ic = ic.astype(np.float32)
-    ic.to_parquet(ds_dir / f"ic_h{h}.parquet")
-    log.info("ic_h%d merged: %d 因子", h, ic.shape[1])
-
-
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--resume", action="store_true")
@@ -333,7 +292,7 @@ def main() -> None:
         log.info("[%d/%d] %s cov=%.3f ic_h1=%+.4f | %.0fs",
                  i, len(names_all), name, cov, row["ic_mean_h1"], time.time() - t0)
 
-    merge_outputs(ds_dir)
+    common.merge_outputs(ds_dir, 'constructed', skip_existing=True, empty_log='无 B++ 构造因子统计产出')
     log.info("B++ 构造型基本面因子完成 %.0fs", time.time() - t0)
 
 

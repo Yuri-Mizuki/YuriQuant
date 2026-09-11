@@ -32,11 +32,10 @@ if str(ROOT) not in sys.path:
 from scripts.common.cli_common import setup_logging  # noqa: E402
 
 log = setup_logging("build_alla_pledge")
+from scripts.builders import common  # noqa: E402
+from scripts.builders.common import HORIZONS, IC_CODE_STRIDE  # noqa: E402
 
 DATASET = "all_a_2018_2026"
-KEEP_FROM = "2016-07-01"
-HORIZONS = (1, 5, 10, 20)
-IC_CODE_STRIDE = 3
 
 
 def _safe(x, denom):
@@ -116,48 +115,6 @@ def build_pledge_factors(close_adj, close_raw, balance, pledge=None,
 # ---------------------------------------------------------------------------
 # 主流程 & 合并
 # ---------------------------------------------------------------------------
-def merge_outputs(ds_dir: Path) -> None:
-    rows = [json.loads(line) for line in
-            (ds_dir / "factor_stats_pledge.jsonl").read_text(
-                encoding="utf-8").splitlines() if line.strip()]
-    if not rows:
-        log.warning("无 B+ 三件套因子统计产出")
-        return
-    reg = pd.read_csv(ds_dir / "registry.csv")
-    new_df = pd.DataFrame(rows)
-    before = len(reg)
-    reg = (pd.concat([reg, new_df], ignore_index=True)
-             .drop_duplicates(subset="name", keep="last"))
-    reg.to_csv(ds_dir / "registry.csv", index=False, encoding="utf-8-sig")
-    log.info("registry: %d -> %d 因子", before, len(reg))
-    for h in HORIZONS:
-        fuse_horizon_ic(ds_dir, h)
-
-
-def fuse_horizon_ic(ds_dir: Path, h: int) -> None:
-    from stats.ic import calc_ic_series
-    from scripts.builders.build_alla_fundamental_factors import load_panels
-
-    stats = [json.loads(line) for line in
-             (ds_dir / "factor_stats_pledge.jsonl").read_text(
-                 encoding="utf-8").splitlines() if line.strip()]
-    names = [s["name"] for s in stats]
-    if not names:
-        return
-    icp = ds_dir / f"ic_h{h}.parquet"
-    ic = pd.read_parquet(icp)
-
-    close_adj, _raw, *_ = load_panels()
-    fwd = close_adj.pct_change(h, fill_method=None).shift(-h)
-    ic_codes = close_adj.columns[::IC_CODE_STRIDE]
-    for n in names:
-        p = pd.read_parquet(ds_dir / "panels" / f"{n}.parquet")
-        ic[n] = calc_ic_series(p[ic_codes], fwd).reindex(ic.index)
-    ic = ic.astype(np.float32)
-    ic.to_parquet(icp)
-    log.info("ic_h%d merged: %d 因子", h, ic.shape[1])
-
-
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--resume", action="store_true")
@@ -219,7 +176,7 @@ def main() -> None:
         log.info("[%d/%d] %s cov=%.2f ic_h1=%+.4f | %.0fs", i, len(panels),
                  name, cov, row["ic_mean_h1"], time.time() - t0)
 
-    merge_outputs(ds_dir)
+    common.merge_outputs(ds_dir, 'pledge', skip_existing=False, empty_log='无 B+ 三件套因子统计产出')
     log.info("B+ 三件套基本面因子构建完成 %.0fs", time.time() - t0)
 
 

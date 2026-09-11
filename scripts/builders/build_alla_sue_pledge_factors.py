@@ -48,11 +48,10 @@ if str(ROOT) not in sys.path:
 from scripts.common.cli_common import setup_logging  # noqa: E402
 
 log = setup_logging("build_alla_sue_pledge")
+from scripts.builders import common  # noqa: E402
+from scripts.builders.common import KEEP_FROM, HORIZONS, IC_CODE_STRIDE  # noqa: E402
 
 DATASET = "all_a_2018_2026"
-KEEP_FROM = "2016-07-01"
-HORIZONS = (1, 5, 10, 20)
-IC_CODE_STRIDE = 3
 EVENT_WINDOW = 20
 Z_CAP = 5.0
 WINS_CAP = 2.0  # 冻结/持股 密度 winsorize 上界
@@ -322,47 +321,8 @@ def main() -> None:
         log.info("[%d/%d] %s cov=%.2f ic_h1=%+.4f | %.0fs", i, len(panels),
                  name, cov, row["ic_mean_h1"], time.time() - t0)
 
-    merge_outputs(ds_dir)
+    common.merge_outputs(ds_dir, 'sue_pledge')
     log.info("SUE+质押深度因子构建完成 %.0fs", time.time() - t0)
-
-
-def merge_outputs(ds_dir: Path) -> None:
-    sp = ds_dir / "factor_stats_sue_pledge.jsonl"
-    rows = [json.loads(l) for l in sp.read_text(encoding="utf-8").splitlines()
-            if l.strip()]
-    if not rows:
-        return
-    reg = pd.read_csv(ds_dir / "registry.csv")
-    new_df = pd.DataFrame(rows)
-    before = len(reg)
-    reg = (pd.concat([reg, new_df], ignore_index=True)
-             .drop_duplicates(subset="name", keep="last"))
-    reg.to_csv(ds_dir / "registry.csv", index=False, encoding="utf-8-sig")
-    log.info("registry: %d -> %d 因子", before, len(reg))
-    for h in HORIZONS:
-        fuse_horizon_ic(ds_dir, h)
-
-
-def fuse_horizon_ic(ds_dir: Path, h: int) -> None:
-    from stats.ic import calc_ic_series
-    from scripts.builders.build_alla_fundamental_factors import load_panels as _fp
-    sp = ds_dir / "factor_stats_sue_pledge.jsonl"
-    stats = [json.loads(l) for l in sp.read_text(encoding="utf-8").splitlines()
-             if l.strip()]
-    names = [s["name"] for s in stats]
-    if not names:
-        return
-    icp = ds_dir / f"ic_h{h}.parquet"
-    ic = pd.read_parquet(icp)
-    close_adj, _raw, *_ = _fp()
-    fwd = close_adj.pct_change(h, fill_method=None).shift(-h)
-    ic_codes = close_adj.columns[::IC_CODE_STRIDE]
-    for n in names:
-        p = pd.read_parquet(ds_dir / "panels" / f"{n}.parquet")
-        ic[n] = calc_ic_series(p[ic_codes], fwd).reindex(ic.index)
-    ic = ic.astype(np.float32)
-    ic.to_parquet(icp)
-    log.info("ic_h%d merged: %d 因子", h, ic.shape[1])
 
 
 if __name__ == "__main__":

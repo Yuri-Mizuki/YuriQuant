@@ -51,11 +51,10 @@ if str(ROOT) not in sys.path:
 from scripts.common.cli_common import setup_logging  # noqa: E402
 
 log = setup_logging("build_alla_holder")
+from scripts.builders import common  # noqa: E402
+from scripts.builders.common import KEEP_FROM, HORIZONS, IC_CODE_STRIDE  # noqa: E402
 
 DATASET = "all_a_2018_2026"
-KEEP_FROM = "2016-07-01"
-HORIZONS = (1, 5, 10, 20)
-IC_CODE_STRIDE = 3
 
 INST_KEYWORDS = ("基金", "保险", "信托", "证券", "银行", "社保", "汇金",
                  "资产管理", "投资", "企业年金", "养老", "QFII", "外资")
@@ -90,30 +89,6 @@ def load_panels() -> tuple[pd.DataFrame, pd.DataFrame,
     return close_adj, holder_num, share_holder
 
 
-def _ffill_pit_multi(series_long: pd.DataFrame, cal_idx: pd.DatetimeIndex,
-                     codes: pd.Index, value_cols: list[str]) -> dict[str, pd.DataFrame]:
-    """长表 (code, eff, c1, c2, ...) → {c: date×code} 宽表（按 sku ffill）。
-
-    同一长表一次性产出多个因子列，避免重复 groupby/ffill。
-    series_long 需按 code 分组后 eff 无重复（调用方保证）。
-    """
-    frames = {c: pd.DataFrame(np.nan, index=cal_idx, columns=codes)
-              for c in value_cols}
-    for code, g in series_long.groupby("code"):
-        g = g.dropna(subset=["eff"])
-        if g.empty:
-            continue
-        g = (g.sort_values("eff")
-              .drop_duplicates(subset="eff", keep="last"))
-        if g.empty:
-            continue
-        idx = g.set_index("eff")
-        for c in value_cols:
-            s = idx[c].reindex(cal_idx, method="ffill")
-            frames[c][code] = s.values
-    return frames
-
-
 def pit_holder_num(holder_num: pd.DataFrame, cal_idx, codes) -> dict:
     """股东户数：环比/同比变化率（报告期粒度算好再 PIT，PIT 后不重算 diff）。"""
     hn = holder_num.copy()
@@ -137,7 +112,7 @@ def pit_holder_num(holder_num: pd.DataFrame, cal_idx, codes) -> dict:
         "holder_num_chg": chg.mul(-1).values,   # 户数降=筹码集中（正向）
         "holder_num_yoy": yoy.values,
     })
-    return _ffill_pit_multi(out_long, cal_idx, codes,
+    return common.ffill_pit_multi(out_long, cal_idx, codes,
                             ["holder_num_chg", "holder_num_yoy"])
 
 
@@ -188,7 +163,7 @@ def pit_share_holder(share_holder: pd.DataFrame, cal_idx, codes) -> dict:
         "top10_hhi": agg["hhi"],
         "inst_holding": agg["inst"],
     })
-    return _ffill_pit_multi(out_long, cal_idx, codes,
+    return common.ffill_pit_multi(out_long, cal_idx, codes,
                             ["top1_holding", "top5_holding", "top10_holding",
                              "top10_hhi", "inst_holding"])
 
@@ -248,55 +223,8 @@ def main() -> None:
         log.info("[%d/%d] %s cov=%.2f ic_h1=%+.4f | %.0fs", i, len(defs),
                  name, cov, row["ic_mean_h1"], time.time() - t0)
 
-    merge_outputs(ds_dir)
+    common.merge_outputs(ds_dir, 'holder', skip_existing=False, empty_log='无股东因子统计产出')
     log.info("股东因子构建完成 %.0fs", time.time() - t0)
-
-
-def merge_outputs(ds_dir: Path) -> None:
-    """把股东因子 stats 并入既有量价 registry + ic_h{}。"""
-    rows = [json.loads(line) for line in
-            (ds_dir / "factor_stats_holder.jsonl").read_text(
-                encoding="utf-8").splitlines() if line.strip()]
-    if not rows:
-        log.warning("无股东因子统计产出")
-        return
-
-    reg = pd.read_csv(ds_dir / "registry.csv")
-    new_df = pd.DataFrame(rows)
-    before = len(reg)
-    reg = (pd.concat([reg, new_df], ignore_index=True)
-             .drop_duplicates(subset="name", keep="last"))
-    reg.to_csv(ds_dir / "registry.csv", index=False, encoding="utf-8-sig")
-    log.info("registry: %d -> %d 因子", before, len(reg))
-
-    for h in HORIZONS:
-        fuse_horizon_ic(ds_dir, h)
-
-
-def fuse_horizon_ic(ds_dir: Path, h: int) -> None:
-    """把股东因子的 IC 列并入 ic_h{h}.parquet（从 panels 重算对齐）。"""
-    from stats.ic import calc_ic_series
-
-    stats = [json.loads(line) for line in
-             (ds_dir / "factor_stats_holder.jsonl").read_text(
-                 encoding="utf-8").splitlines() if line.strip()]
-    names = [s["name"] for s in stats]
-    icp = ds_dir / f"ic_h{h}.parquet"
-    ic = pd.read_parquet(icp)
-    if not names:
-        return
-
-    close_adj, _, _ = load_panels()
-    fwd = close_adj.pct_change(h, fill_method=None).shift(-h)
-    ic_codes = close_adj.columns[::IC_CODE_STRIDE]
-    for n in names:
-        p = pd.read_parquet(ds_dir / "panels" / f"{n}.parquet")
-        ic_col = calc_ic_series(p[ic_codes], fwd)
-        # 只写入与 ic 索引对齐的部分（股东因子从 2016-07 起，一致）
-        ic[n] = ic_col.reindex(ic.index)
-    ic = ic.astype(np.float32)
-    ic.to_parquet(icp)
-    log.info("ic_h%d merged: %d 因子", h, ic.shape[1])
 
 
 if __name__ == "__main__":

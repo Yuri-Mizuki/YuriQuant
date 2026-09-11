@@ -37,7 +37,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 import time
 from pathlib import Path
@@ -52,11 +51,10 @@ if str(ROOT) not in sys.path:
 from scripts.common.cli_common import setup_logging  # noqa: E402
 
 log = setup_logging("build_alla_event")
+from scripts.builders import common  # noqa: E402
+from scripts.builders.common import KEEP_FROM, HORIZONS, IC_CODE_STRIDE  # noqa: E402
 
 DATASET = "all_a_2018_2026"
-KEEP_FROM = "2016-07-01"
-HORIZONS = (1, 5, 10, 20)
-IC_CODE_STRIDE = 3
 
 
 # ---------------------------------------------------------------------------
@@ -104,23 +102,6 @@ def _load_event_tables() -> dict[str, pd.DataFrame]:
 # ---------------------------------------------------------------------------
 # PIT helper（长表 code+eff → date×code 宽表）
 # ---------------------------------------------------------------------------
-def _ffill_pit_multi(series_long: pd.DataFrame, cal_idx: pd.DatetimeIndex,
-                     codes: pd.Index, value_cols: list[str]) -> dict[str, pd.DataFrame]:
-    frames = {c: pd.DataFrame(np.nan, index=cal_idx, columns=codes) for c in value_cols}
-    for code, g in series_long.groupby("code"):
-        g = g.dropna(subset=["eff"])
-        if g.empty:
-            continue
-        g = (g.sort_values("eff").drop_duplicates(subset="eff", keep="last"))
-        if g.empty:
-            continue
-        idx = g.set_index("eff")
-        for c in value_cols:
-            s = idx[c].reindex(cal_idx, method="ffill")
-            frames[c][code] = s.values
-    return frames
-
-
 def _to_num(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
     for c in cols:
         if c in df.columns:
@@ -148,7 +129,7 @@ def _pit_notice(notice: pd.DataFrame, cal_idx, codes) -> dict:
         "notice_profit_ttm": n["net_profit_max"].values,
         "notice_forecast_hit": n["net_profit_max"].values,
     })
-    return _ffill_pit_multi(out_long, cal_idx, codes,
+    return common.ffill_pit_multi(out_long, cal_idx, codes,
                             ["notice_sue", "notice_profit_ttm", "notice_forecast_hit"])
 
 
@@ -170,7 +151,7 @@ def _pit_express(express: pd.DataFrame, cal_idx, codes) -> dict:
         "express_rev_yoy": e["yoy_gr_gross_rev"].values,
         "express_reporting": np.ones(len(e)),
     })
-    return _ffill_pit_multi(out_long, cal_idx, codes,
+    return common.ffill_pit_multi(out_long, cal_idx, codes,
                             ["express_profit_yoy", "express_rev_yoy",
                              "express_reporting"])
 
@@ -220,7 +201,7 @@ def _pit_restricted(restricted: pd.DataFrame, cal_idx, codes) -> dict:
         "code": acc["code"], "eff": acc["eff"],
         "unlock_ratio_20d": acc["share_ratio"].values,
     })
-    return _ffill_pit_multi(out_long, cal_idx, codes, ["unlock_ratio_20d"])
+    return common.ffill_pit_multi(out_long, cal_idx, codes, ["unlock_ratio_20d"])
 
 
 # ---------------------------------------------------------------------------
@@ -294,46 +275,8 @@ def main() -> None:
                  name, cov, row["ic_mean_h1"], time.time() - t0)
 
     if not args.only:
-        merge_outputs(ds_dir)
+        common.merge_outputs(ds_dir, 'event')
     log.info("事件因子构建完成 %.0fs", time.time() - t0)
-
-
-def merge_outputs(ds_dir: Path) -> None:
-    rows = [json.loads(line) for line in
-            (ds_dir / "factor_stats_event.jsonl").read_text(
-                encoding="utf-8").splitlines() if line.strip()]
-    if not rows:
-        return
-    reg = pd.read_csv(ds_dir / "registry.csv")
-    new_df = pd.DataFrame(rows)
-    before = len(reg)
-    reg = (pd.concat([reg, new_df], ignore_index=True)
-             .drop_duplicates(subset="name", keep="last"))
-    reg.to_csv(ds_dir / "registry.csv", index=False, encoding="utf-8-sig")
-    log.info("registry: %d -> %d 因子", before, len(reg))
-
-    for h in HORIZONS:
-        fuse_horizon_ic(ds_dir, h)
-
-
-def fuse_horizon_ic(ds_dir: Path, h: int) -> None:
-    from stats.ic import calc_ic_series
-    stats = [json.loads(line) for line in
-             (ds_dir / "factor_stats_event.jsonl").read_text(
-                 encoding="utf-8").splitlines() if line.strip()]
-    names = [s["name"] for s in stats]
-    ic = pd.read_parquet(ds_dir / f"ic_h{h}.parquet")
-    if not names:
-        return
-    close_adj, _ = load_panels()
-    fwd = close_adj.pct_change(h, fill_method=None).shift(-h)
-    ic_codes = close_adj.columns[::IC_CODE_STRIDE]
-    for n in names:
-        p = pd.read_parquet(ds_dir / "panels" / f"{n}.parquet")
-        ic[n] = calc_ic_series(p[ic_codes], fwd).reindex(ic.index)
-    ic = ic.astype(np.float32)
-    ic.to_parquet(ds_dir / f"ic_h{h}.parquet")
-    log.info("ic_h%d merged: %d 因子", h, ic.shape[1])
 
 
 if __name__ == "__main__":

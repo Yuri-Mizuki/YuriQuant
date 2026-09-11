@@ -43,11 +43,10 @@ if str(ROOT) not in sys.path:
 from scripts.common.cli_common import setup_logging  # noqa: E402
 
 log = setup_logging("build_alla_moneyflow")
+from scripts.builders import common  # noqa: E402
+from scripts.builders.common import KEEP_FROM, HORIZONS, IC_CODE_STRIDE  # noqa: E402
 
 DATASET = "all_a_2018_2026"
-KEEP_FROM = "2016-07-01"
-HORIZONS = (1, 5, 10, 20)
-IC_CODE_STRIDE = 3
 WINDOW = 20
 
 
@@ -76,23 +75,6 @@ def load_panels() -> tuple[pd.DataFrame, pd.DataFrame]:
         p = cache_root / f"{key}.parquet"
         tables[key] = pd.read_parquet(p) if p.exists() else None
     return close_adj, tables
-
-
-def _ffill_pit_multi(series_long: pd.DataFrame, cal_idx: pd.DatetimeIndex,
-                     codes: pd.Index, value_cols: list[str]) -> dict[str, pd.DataFrame]:
-    frames = {c: pd.DataFrame(np.nan, index=cal_idx, columns=codes) for c in value_cols}
-    for code, g in series_long.groupby("code"):
-        g = g.dropna(subset=["eff"])
-        if g.empty:
-            continue
-        g = (g.sort_values("eff").drop_duplicates(subset="eff", keep="last"))
-        if g.empty:
-            continue
-        idx = g.set_index("eff")
-        for c in value_cols:
-            s = idx[c].reindex(cal_idx, method="ffill")
-            frames[c][code] = s.values
-    return frames
 
 
 def _event_rolling(events: pd.DataFrame, cal_idx, codes,
@@ -140,7 +122,7 @@ def _pit_lhb(lhb: pd.DataFrame, cal_idx, codes) -> dict:
 
     # 当日净买额（取净额>0 on 上榜日；多席位取合计）
     daily_net = (l.groupby(["code", "eff"], sort=False)["net"].sum()).reset_index()
-    net_panels = _ffill_pit_multi(daily_net.rename(columns={"net": "lhb_net_buy"}),
+    net_panels = common.ffill_pit_multi(daily_net.rename(columns={"net": "lhb_net_buy"}),
                                   cal_idx, codes, ["lhb_net_buy"])
     # 20 日上榜次数 + 累计净额
     cnt = _event_rolling(l, cal_idx, codes, "net", agg="sum", count=True)
@@ -228,46 +210,8 @@ def main() -> None:
         log.info("[%d/%d] %s cov=%.2f ic_h1=%+.4f | %.0fs", i, len(defs),
                  name, cov, row["ic_mean_h1"], time.time() - t0)
 
-    merge_outputs(ds_dir)
+    common.merge_outputs(ds_dir, 'moneyflow')
     log.info("资金流因子构建完成 %.0fs", time.time() - t0)
-
-
-def merge_outputs(ds_dir: Path) -> None:
-    rows = [json.loads(line) for line in
-            (ds_dir / "factor_stats_moneyflow.jsonl").read_text(
-                encoding="utf-8").splitlines() if line.strip()]
-    if not rows:
-        return
-    reg = pd.read_csv(ds_dir / "registry.csv")
-    new_df = pd.DataFrame(rows)
-    before = len(reg)
-    reg = (pd.concat([reg, new_df], ignore_index=True)
-             .drop_duplicates(subset="name", keep="last"))
-    reg.to_csv(ds_dir / "registry.csv", index=False, encoding="utf-8-sig")
-    log.info("registry: %d -> %d 因子", before, len(reg))
-
-    for h in HORIZONS:
-        fuse_horizon_ic(ds_dir, h)
-
-
-def fuse_horizon_ic(ds_dir: Path, h: int) -> None:
-    from stats.ic import calc_ic_series
-    stats = [json.loads(line) for line in
-             (ds_dir / "factor_stats_moneyflow.jsonl").read_text(
-                 encoding="utf-8").splitlines() if line.strip()]
-    names = [s["name"] for s in stats]
-    ic = pd.read_parquet(ds_dir / f"ic_h{h}.parquet")
-    if not names:
-        return
-    close_adj, _ = load_panels()
-    fwd = close_adj.pct_change(h, fill_method=None).shift(-h)
-    ic_codes = close_adj.columns[::IC_CODE_STRIDE]
-    for n in names:
-        p = pd.read_parquet(ds_dir / "panels" / f"{n}.parquet")
-        ic[n] = calc_ic_series(p[ic_codes], fwd).reindex(ic.index)
-    ic = ic.astype(np.float32)
-    ic.to_parquet(ds_dir / f"ic_h{h}.parquet")
-    log.info("ic_h%d merged: %d 因子", h, ic.shape[1])
 
 
 if __name__ == "__main__":
