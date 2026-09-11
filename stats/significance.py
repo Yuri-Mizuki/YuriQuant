@@ -59,7 +59,8 @@ def t_pvalue(t: float | np.ndarray, df: float | None = None) -> float | np.ndarr
 
     Args:
         t: t 统计量（标量或数组）。负号自动取绝对值（双侧检验）。
-        df: 自由度。``None``（或非有限）→ 用标准正态近似。
+        df: 自由度（标量，或与 ``t`` 同形状的数组——如按行不同的 ``n - 1``）。
+            ``None`` 或非有限 → 用标准正态近似；``<= 0`` → NaN。
             小样本（IC 序列常为几百个交易日）建议传 ``n - 1``。
 
     Returns:
@@ -67,15 +68,26 @@ def t_pvalue(t: float | np.ndarray, df: float | None = None) -> float | np.ndarr
     """
     ta = np.asarray(t, dtype=float)
     a = np.abs(ta)
-    if df is None or not np.isfinite(df):
+    if df is None or (np.ndim(df) == 0 and not np.isfinite(df)):
+        # 标量 df 非有限（或未给）→ 标准正态近似
         with np.errstate(invalid="ignore"):
             p = 2.0 * stats.norm.sf(a)
-    else:
+    elif np.ndim(df) == 0:
         if df <= 0:
             p = np.full(a.shape, np.nan)
         else:
             with np.errstate(invalid="ignore"):
                 p = 2.0 * stats.t.sf(a, df=df)
+    else:
+        # 数组 df（逐元素自由度，如 registry 补算时的 n_dates - 1）：语义与标量
+        # 路径一致 —— 有限且 >0 走 t 分布；有限但 <=0 → NaN；非有限 → 正态近似。
+        dfa = np.broadcast_to(np.asarray(df, dtype=float), a.shape).astype(float)
+        pos = dfa > 0
+        fin = np.isfinite(dfa)
+        with np.errstate(invalid="ignore"):
+            p_pos = 2.0 * stats.t.sf(a, df=np.where(pos, dfa, 1.0))
+            p_norm = 2.0 * stats.norm.sf(a)
+        p = np.where(pos, p_pos, np.where(fin, np.nan, p_norm))
     p = np.where(np.isnan(a), np.nan, p)
     return float(p) if p.ndim == 0 else p
 
