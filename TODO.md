@@ -317,7 +317,6 @@
     改变了哪些数字。
 
 - [x] **口径统一第三批 —— 工程卫生（2026-09-11 完成，五项独立提交）**：
-
   基线：全量 **692 passed**（2411s / 40min，串行；改前跑通终态）。改后收集 **712**。
 
   - [x] **① tie-break 确定化（`1bd9100`）**：`TopKLongShort` / `TopKLongOnly` /
@@ -384,8 +383,90 @@
     `stats.ic→scipy.stats`(4.0s) + `research.xlsx_report→openpyxl`(2.4s) +
     pandas(2.7s)。
 
-### 3.2 机械性（可批量清理）
+- [x] **口径统一第四批 —— 结构卫生 + 文档合一（2026-09-11 完成，四项独立提交，
+  `ff060a5` / `8cdca30` / `c84ee4d` / `a03d36b`，已推送）**：
 
+  用户给的问题清单经 AST 核查后**有 5 处与实测不符**（已逐条纠正，见各项）：
+
+  - [x] **① 归档 7 个零引用一次性脚本（`ff060a5`）**：`compare_htai_fitness` /
+    `compare_ml_synthesis` / `diagnose_factor_vs_model` /
+    `diagnose_neutralized_compare` / `gtja_discipline_eval` /
+    `ml_algorithm_compare` / `ml_synthesis_experiment` 移入 `scripts/archive/`。
+    **刻意不走 `scripts/oneoff/`**：该目录整目录 gitignored（62 文件 / 0 跟踪），
+    移过去等于从版本控制删除，而这 7 个里 5 个**支撑已引用结论**（报告23 四象限 /
+    华泰·GTJA 复现对照 / 合成对比 / 算法对比），丢弃会毁掉可复现性。
+    scripts 根 64 → 57，archive 5 → 12（git 记为 rename，历史保留）。
+    **顺带修一处潜伏 bug**：脚本用 `Path(__file__).resolve().parents[1]` 作
+    project root——在 `scripts/` 下恰为仓库根，移入 `scripts/archive/` 后变成
+    `scripts/`，非 cwd 调用即 `from factor...` 失败。10 个文件改 `parents[2]`
+    （含 archive 里原本就写错的 daily_pipeline / factor_usability_stats /
+    dpp_library_compare），2 个补 bootstrap。
+  - [x] **② 报告渲染收口（`8cdca30`）**：**审计推翻了原假设——公共层早已存在**
+    （`research/html_report.py` 的 `page` / `BASE_CSS` / `render_table` /
+    `base_js` / `SORT_JS` / `svg_sparkline` / `embed_image_b64`）。6 个"各写一套
+    CSS"的脚本与 BASE_CSS **逐字节相同的声明 = 0 个**（逐选择器比对：body/h1/h2/
+    .card/table/th/td 配色字号字体全不同）→ 删了只改视觉、无功能收益，
+    **刻意不动**。真正绕开 `page()` 自拼外壳的是另外 **3 个**脚本
+    （`jq_style_report` / `rolling_grid_report` / `alla_excess_attribution`），
+    已收编；自拼外壳模块 4 → **1**（仅基座）。`page()` 新增 `extra_css=`
+    （BASE_CSS 在前、增量在后的**组合**语义），补上"继承而非替换"的缺口。
+    **端到端等价验证**：实跑重生成 `rolling_grid_report` 与重构前产物比对——
+    `<style>` 块**逐字节一致**；body 仅 3 处差异且全可解释（1 行空白 / 时间戳 /
+    canvas id）。⚠️ 顺带发现原有非确定性：`cid = "chart_" + str(abs(hash(title))
+    % 10**8)` —— Python 字符串 hash 每进程随机 → 报告 HTML 不可字节复现
+    （**未修，留作独立项**）。
+  - [x] **③ 常量收口（`c84ee4d`）**：用户口径"只收同概念重复 + 项目级策略"。
+    审计纠正：`ETF_CANDIDATES` **已收口**在 `data/etf_universe.py`；
+    `MIN_PERIODS` 在 `monitoring/crowding`(重叠交易日) 与
+    `compare_portfolio_methods`(协方差最少期数) 是**两个不同概念**，合并会造成
+    假耦合 → 均不动。真正的散落是 **对照基准 5 处且取值各不相同**（同名字面量、
+    不同用途）→ 新增顶层 `benchmarks` 段 + `Config.benchmarks()` 按**用途**分键
+    （default / all_a / etf / report_a_share），**刻意不合并成一个值**。
+    3 个脚本改读 config，逐项验等（取值全部不变）。
+    同类倒挂补漏：`rolling_grid_alla._existence_mask` → `existence_mask`
+    （被生产 `alla_daily_rank` 用）、`build_intraday_factors._minute_frame` /
+    `_ex_div_keys`、`build_fundamental_factors._add_ttm_yoy` 公开化；
+    守卫纳管模块表扩到 7 个 scripts 模块。
+    新增 `test_frozen_recipe_stays_consistent_across_layers`：把"冻结配方"三处
+    声明（settings.model_portfolio ↔ rolling_grid_alla ↔ alla_daily_rank）
+    钉死，此前只靠注释约定一致。
+  - [x] **④ 文档合一（`a03d36b`）**：README 的「待建 / 已知缺口」169 行
+    （含 3 段已完成流水账）**无损迁入 `TODO.md` 附录「历史交付记录」**；
+    README 替换为指针。该节开头 4 条「待建」bullet 未随迁（逐条核对确认
+    §二已有对应条目，避免两处维护，附录头已注明）。三份文档互相加链并各自声明
+    唯一真源。**顺带修 README 三类失真**：3 个失效引用
+    （`ml_synthesis_round2` / `ml_decay_diagnosis` / `ml_window_compare` 文件已不存在）、
+    「公共库」表只列 2 个而**实测 19 个 scripts 根模块被跨模块 import**
+    （另有 textmining 10 / oneoff 5 / data_tools 1）、scripts 索引未随归档同步。
+    体量：README 50.6KB → **37.8KB（−25%）**。
+
+#### 🔴 第四批审计新发现（未修，需拍板）
+
+- [ ] **生产脚本依赖 gitignored 目录（P0，真缺陷非洁癖）**：
+  `scripts/alla_daily_rank.py`（生产每日推理）有 **6 处** `from scripts.oneoff.*
+  import`（`build_alla_alpha_panels` / `build_alla_fundamental_factors` /
+  `build_alla_constructed_factors._build_panels` / `build_alla_pledge_factors` /
+  `build_alla_holder_factors._pit_holder_num,_pit_share_holder`），而
+  `.gitignore:41` 忽略整个 `scripts/oneoff/`（本地 62 文件 / 0 跟踪）——
+  **干净 clone / 生产环境上该脚本必然 ImportError**。
+  修法需先拍板这批 `build_all_*` 面板构造函数归哪一层（它们产出的基本面/质押/股东
+  面板是主实验输入；候选：`factor/` 或受跟踪的 `scripts/`）。
+  已用 `tests/test_layering.py::test_production_scripts_do_not_depend_on_gitignored_oneoff`
+  （xfail）记录在案，防"看起来全绿"把缺陷忘掉。
+- [ ] **报告 HTML 不可字节复现**：`rolling_grid_report` 用
+  `abs(hash(title)) % 10**8` 生成 canvas id，Python 字符串 hash 每进程随机
+  （`PYTHONHASHSEED`）→ 同输入两次运行产物不同。改用 `hashlib` 摘要即可。
+- [ ] **其余 scripts 层私有名跨模块 import（约 19 处）**：
+  主要是 `scripts/textmining/*` 内部互引（另一会话在改，已豁免）与
+  `scripts.oneoff.*`（同上条）。待两条落地后把守卫豁免项清零。
+- [ ] **根目录 5 个 `_probe_*.py`**（`_probe_cols` / `_probe_pledge` /
+  `_probe_quality` / `_probe_senti_artifacts` / `_probe_status`）：被
+  `.gitignore:38 /_*.py` 覆盖、未跟踪、零引用。但**其中 2 个是另一会话当天在用**
+  （`_probe_senti_artifacts` 12:26 / `_probe_status` 13:28），**本批未动**。
+- [ ] **`strategy/enhanced.py` 零 import**（2533 字符）：确认无人引用，
+  删或补文档说明归属待定。
+
+### 3.2 机械性（可批量清理）
 - [x] **cli_common 推广**（骨架已建、采用率 <15%）：
   - 53 处 `logging.basicConfig` 手写样板 → `setup_logging()`（仅 scripts 层）
   - 22 处手写 `--real`/`--mock` add_argument → `add_real_mock_args()`
