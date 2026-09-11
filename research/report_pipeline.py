@@ -192,7 +192,17 @@ def collect_factor_library(ctx: ReportContext) -> Section | None:
             parts.append(f"<div class='stat'><span>IC 均值中位</span><b>{ic.median():.4f}</b></div>")
     if "significant" in reg.columns:
         n_sig = int(reg["significant"].sum()) if reg["significant"].dtype == bool else 0
-        parts.append(f"<div class='stat'><span>显著因子</span><b>{n_sig}</b></div>")
+        parts.append(f"<div class='stat'><span>显著因子（raw）</span><b>{n_sig}</b></div>")
+        # 整库 BH-FDR 口径**并排展示**（2026-09-11 第二批 a 项）：默认入库判据仍是
+        # 单因子 raw，FDR 只作报告层参考——两者回答不同问题：raw = 该因子自身有无
+        # alpha；FDR = 这批候选里有多少是真的（扣掉多重检验幸存者）。
+        try:
+            tbl = lib.significance_table(q=0.05, exclude_model=True)
+            parts.append(
+                f"<div class='stat'><span>显著因子（FDR q=0.05）</span>"
+                f"<b>{int(tbl['fdr_significant'].sum())}</b></div>")
+        except Exception as exc:            # 报告层容错：缺列/旧库不应打断出报告
+            log.warning("FDR 统计失败（已跳过该展示）: %s", exc)
     parts.append("</div>")
 
     # top 20 因子

@@ -236,10 +236,19 @@ def main() -> None:
         for _, f in fam_df.iterrows())
 
     n_sig_total = int(reg["significant"].sum()) if "significant" in reg else 0
+    # 整库 BH-FDR 口径并排展示（2026-09-11 第二批 a 项）：默认入库判据仍是单因子
+    # raw；FDR 只作报告层参考，回答"这批候选里有多少是真的"。
+    try:
+        n_fdr_total = int(
+            lib.significance_table(q=0.05, exclude_model=True)["fdr_significant"].sum())
+    except Exception as exc:
+        log.warning("FDR 统计失败（已跳过该展示）: %s", exc)
+        n_fdr_total = None
+    n_fdr_txt = "—" if n_fdr_total is None else str(n_fdr_total)
     body = f"""<div class="container">
 <div class="header">
 <h1>YuriQuant 全因子库检验报告 — {args.dataset}</h1>
-<div class="meta">{len(reg)} 个因子 | {n_sig_total} 个显著 | 面板 2022-01 ~ 2026-08 | 逐日 IC + 分层回测（多空/多头，月频+周频）</div>
+<div class="meta">{len(reg)} 个因子 | raw 显著 {n_sig_total} 个 | 整库 FDR(q=0.05) 显著 {n_fdr_txt} 个 | 面板 2022-01 ~ 2026-08 | 逐日 IC + 分层回测（多空/多头，月频+周频）</div>
 </div>
 
 <div class="warning">
