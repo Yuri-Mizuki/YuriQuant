@@ -40,7 +40,7 @@ from data.intraday import MinutePanelStore  # noqa: E402
 from data.offline import OfflineDataSource  # noqa: E402
 from data.universe import Universe  # noqa: E402
 from factor.intraday_features import FEATURE_DOCS, extract_all  # noqa: E402
-from scripts.build_intraday_factors import _ex_div_keys  # noqa: E402
+from scripts.build_intraday_factors import ex_div_keys  # noqa: E402
 from scripts.cli_common import (  # noqa: E402
     record_experiment_safe,
     register_panels,
@@ -77,7 +77,7 @@ def load_context(period: int, pool: str):
 def mask_ex_div(features: dict[str, pd.DataFrame],
                 status: pd.DataFrame) -> dict[str, pd.DataFrame]:
     """除权除息日置 NaN（该日分钟 bar 收益被跳变污染）。"""
-    bad = _ex_div_keys(status)
+    bad = ex_div_keys(status)
     if not bad:
         return features
     dates = next(iter(features.values())).index

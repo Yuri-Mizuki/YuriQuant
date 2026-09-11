@@ -48,6 +48,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from config import Config  # noqa: E402
 from scripts.cli_common import setup_logging  # noqa: E402
 
 log = setup_logging("rolling_grid_alla")
@@ -109,7 +110,7 @@ INCLUDE_FUNDAMENTAL = True
 FREQ_BY_HORIZON = {1: ["D", "W", "M"], 5: ["M"], 10: ["M"], 20: ["2M"]}
 NEUT_VARIANTS = [True, False]
 FRACS = [0.20, 0.10]
-BENCH_INDEX = "000001.SH"       # 上证指数（全A 组合对照）
+BENCH_INDEX = Config.benchmarks()["all_a"]   # 上证指数（全A 组合对照；真源 config.benchmarks）
 
 # 子网格 smallcap：聚焦验证 A股小盘溢价 + 集中度 + 信号加权。
 SC_MODEL = "gbdt"               # 全网格核心最优形态
@@ -421,7 +422,7 @@ def rolling_window_oos(predictor_cls, params, features: dict, labels: pd.DataFra
     return out
 
 
-def _existence_mask(feats: dict, close: pd.DataFrame,
+def existence_mask(feats: dict, close: pd.DataFrame,
                     test_days: pd.DatetimeIndex) -> pd.DataFrame:
     """股票在信号日的可用性掩码：当日有行情 且 >=1/4 特征非 NaN。
 
@@ -498,8 +499,8 @@ def stage_predict(quick: bool = False, only_horizons: list[int] | None = None):
                 pred_y = rolling_window_oos(
                     PREDICTORS[mcfg["key"]], mcfg["params"], feats, labels,
                     test_days, all_days, h, mcfg["window"])
-                # 幽灵股守卫：掩掉未上市/无行情/特征不可用的股票（见 _existence_mask）
-                valid = _existence_mask(feats, close, test_days)
+                # 幽灵股守卫：掩掉未上市/无行情/特征不可用的股票（见 existence_mask）
+                valid = existence_mask(feats, close, test_days)
                 n_before = int(pred_y.notna().sum().sum())
                 pred_y = pred_y.where(valid)
                 log.info("  掩码: 可用股票/日 中位 %d（掩前 %d）",

@@ -85,7 +85,7 @@ def build_ensemble_panel(cfg: dict, base: dict, force_retrain: bool):
 
     复用 rolling_grid_alla 的实验验证组件（单一真源）：
     FeatureStore（ortho 加载 panels_neu）/ select_features_for_year（DPP+保留席位，
-    生产口径 cut=最新完整日）/ rolling_window_oos（500 日窗季度折）/ _existence_mask。
+    生产口径 cut=最新完整日）/ rolling_window_oos（500 日窗季度折）/ existence_mask。
     """
     import scripts.rolling_grid_alla as RG
     from model.labels import build_labels
@@ -120,7 +120,7 @@ def build_ensemble_panel(cfg: dict, base: dict, force_retrain: bool):
             pred = RG.rolling_window_oos(
                 PREDICTORS["gbdt"], params, feats, labels,
                 test_days, all_days, h, cfg["train_window"])
-            valid = RG._existence_mask(feats, close, test_days)
+            valid = RG.existence_mask(feats, close, test_days)
             pred = pred.where(valid)
             OUT_DIR.mkdir(parents=True, exist_ok=True)
             pred.astype(np.float32).to_parquet(cache_path)

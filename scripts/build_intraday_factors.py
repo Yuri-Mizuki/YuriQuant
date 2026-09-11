@@ -89,7 +89,7 @@ def load_data(cache, uni, index_code, begin, end):
     log.info("日线 %d 行 / %d分钟 %d 行 / 状态 %d 行", len(daily), PERIOD, len(mk), len(status))
     return codes, daily, mk, status
 
-def _ex_div_keys(status) -> set:
+def ex_div_keys(status) -> set:
     """返回除权/除息日 (date, code) 集合。"""
     if status is None or status.empty:
         return set()
@@ -101,11 +101,11 @@ def _ex_div_keys(status) -> set:
         return set()
     return set(zip(pd.to_datetime(flags["date"]).dt.normalize(), flags["code"]))
 
-def _minute_frame(mk, status) -> pd.DataFrame:
+def minute_frame(mk, status) -> pd.DataFrame:
     """5 分钟长表：date/code/bar_ret/vol/amount/typical，剔除除权日。"""
     df = mk.reset_index()
     df["date"] = df["kline_time"].dt.normalize()
-    bad = _ex_div_keys(status)
+    bad = ex_div_keys(status)
     if bad:
         mask = ~pd.Series(
             [(d, c) in bad for d, c in zip(df["date"], df["code"])], index=df.index
@@ -131,7 +131,7 @@ def build_features(mf: pd.DataFrame, daily: pd.DataFrame,
                    status: pd.DataFrame | None = None) -> dict[str, pd.DataFrame]:
     """计算全部日内特征面板（date×code）。
 
-    mf: _minute_frame 输出的 5 分钟长表。
+    mf: minute_frame 输出的 5 分钟长表。
     daily: (date, code) 日线（用于隔夜/日内收益）。
     status: 历史状态表，用于剔除 daily 部分的除权日样本。
     返回 {name: 原始面板}。
@@ -142,7 +142,7 @@ def build_features(mf: pd.DataFrame, daily: pd.DataFrame,
     # ---- 日线口径 ----
     d = daily.reset_index()
     d["date"] = d["date"].dt.normalize()
-    bad = _ex_div_keys(status)
+    bad = ex_div_keys(status)
     if bad:
         keep = ~pd.Series(
             [(dt, c) in bad for dt, c in zip(d["date"], d["code"])], index=d.index
@@ -247,7 +247,7 @@ def main():
         sys.exit(1)
 
     log.info("构建日内特征（%d 个）...", len(names))
-    mf = _minute_frame(mk, status)
+    mf = minute_frame(mk, status)
     features = build_features(mf, daily, status)
     returns_panel = build_returns(daily)
 

@@ -33,7 +33,7 @@ from research.html_report import page
 from strategy.etf_rotation import EtfRotation
 from strategy.multi_signal import compose_signals, DEFAULT_WEIGHTS
 
-BENCH = "000300.SH"
+BENCH = Config.benchmarks()["etf"]   # 沪深300（ETF 轮动对照；真源 config.benchmarks）
 
 # 流动性下限：平均日成交额（元）低于该值剔除（默认 0 = 不过滤）
 MIN_AVG_AMOUNT = 0.0

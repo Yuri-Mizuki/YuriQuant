@@ -129,6 +129,20 @@ backtest:
   rebalance_freq: M          # D=日 / W=周 / M=月调仓
   benchmark: "000300.SH"
 
+# --- 对照基准指数（各报告/策略"与谁比"的唯一真源，2026-09-11 收敛）---
+# 此前指数字面量散落在 5 处：本段 backtest.benchmark、model_portfolio.benchmark、
+# scripts/rolling_grid_alla.BENCH_INDEX、scripts/jq_style_report.BENCH_INDEX、
+# scripts/run_etf_rotation.BENCH（另有 scripts/textmining/* 4 处待随其链路一并处理）。
+# ⚠️ 四者**取值本就不同**（用途不同，不是同一概念的重复），故按用途分键，
+#    不合并成一个值——合并会静默改掉某条链路的对照基准。
+# 消费方走 Config.benchmarks()。
+benchmarks:
+  default: "000300.SH"                        # 引擎缺省对照（同 backtest.benchmark）
+  all_a: "000001.SH"                          # 全A组合对照（上证指数）
+  etf: "000300.SH"                            # ETF 轮动对照（沪深300）
+  report_a_share: "399317.SZ"                 # 全A报告图表对照（国证A指；中证全指 000985 行情缺失的替代）
+  report_a_share_label: "国证A指(399317)≈中证全指"
+
 # --- 模型增强组合默认配置（2026-09-09 升级：全A · 因子层正交化 · ens_h1h5 集成）---
 # 升级依据（reports/alla_rolling 三臂对比 + 消融 + 集成实验，2018-2026 样本外含成本）：
 #   - 股票池：全A（含退市回补，无幸存者偏差）

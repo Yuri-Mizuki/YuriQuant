@@ -14,7 +14,7 @@ h=1 rank 标签 + 500 日滚动训练窗 + raw（不中性化）Top10% 等权、
      构造型/质押五族复用 oneoff 构建器），截面 zscore + ±10 剪裁（与
      FeatureStore 同口径）；
   4. gbdt 在最近 500 个有效标签日上重训，预测最新截面；
-  5. 幽灵股守卫（_existence_mask）+ 信号日可交易性标注（停牌/ST/封板）；
+  5. 幽灵股守卫（existence_mask）+ 信号日可交易性标注（停牌/ST/封板）；
   6. 输出全A排名 CSV + Top10% 持仓候选 + history 追加（reports/alla_daily/）。
 
 口径披露（与实验的差异，均为如实可知的边界）：
@@ -972,7 +972,7 @@ def remove_task() -> str:
 # 主流程
 # ---------------------------------------------------------------------------
 def run(args) -> dict:
-    from scripts.rolling_grid_alla import _existence_mask
+    from scripts.rolling_grid_alla import existence_mask
 
     t0 = time.time()
     if not args.skip_update:
@@ -1000,7 +1000,7 @@ def run(args) -> dict:
     scores, train_meta, predictor = train_and_predict(feats, close_adj,
                                                       predict_date, args.window)
     # 幽灵股守卫：掩掉未上市/无行情/特征不可用的股票（同实验 stage_predict）
-    valid = _existence_mask(feats, close_adj, pd.DatetimeIndex([predict_date]))
+    valid = existence_mask(feats, close_adj, pd.DatetimeIndex([predict_date]))
     scores = scores.where(valid.iloc[0])
     n_raw = int(scores.notna().sum())
 

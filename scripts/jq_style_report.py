@@ -31,14 +31,16 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from config import Config  # noqa: E402
 from scripts.cli_common import setup_logging  # noqa: E402
 from research.html_report import page  # noqa: E402
 
 log = setup_logging("jq_style_report")
 
 OUT = Path("reports") / "alla_rolling"
-BENCH_INDEX = "399317.SZ"          # 国证A指（中证全指 000985 行情缺失的替代）
-BENCH_LABEL = "国证A指(399317)≈中证全指"
+_BM = Config.benchmarks()
+BENCH_INDEX = _BM["report_a_share"]   # 国证A指（中证全指 000985 行情缺失的替代）
+BENCH_LABEL = _BM["report_a_share_label"]
 
 # 聚宽风格配色
 C_STRAT = "#3f8cd6"     # 策略：蓝

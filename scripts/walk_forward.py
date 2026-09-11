@@ -120,14 +120,14 @@ def load_full_panels(begin: int = 20220101, end: int = 20251231):
 
     # 日内（2022-2025 分钟线；未覆盖则跳过）
     try:
-        from scripts.build_intraday_factors import build_features, _minute_frame
+        from scripts.build_intraday_factors import build_features, minute_frame
         mk = pd.read_parquet(CACHE_ROOT / "min5_hs300.parquet")
         if not mk.empty:
             kt = mk.index.get_level_values("kline_time")
             mk = mk[(kt >= pd.Timestamp(str(begin))) & (kt <= pd.Timestamp(str(end)) + pd.Timedelta(days=1))]
             if not mk.empty:
                 status = pd.read_parquet(CACHE_ROOT / "history_stock_status.parquet")
-                mf = _minute_frame(mk, status)
+                mf = minute_frame(mk, status)
                 dd = pd.read_parquet(CACHE_ROOT / "daily_hs300.parquet")   # (date, code) MultiIndex
                 dd = dd[dd.index.get_level_values("code").isin(codes)]
                 dt0 = dd.index.get_level_values("date")

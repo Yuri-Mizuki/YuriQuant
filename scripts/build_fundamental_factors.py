@@ -141,7 +141,7 @@ FACTOR_DEFS: dict[str, str] = {
 
 # ---- TTM / 同比（长表维度，按 (code, report_period)）----
 
-def _add_ttm_yoy(df: pd.DataFrame, field: str, ttm_col: str, yoy_col: str | None) -> pd.DataFrame:
+def add_ttm_yoy(df: pd.DataFrame, field: str, ttm_col: str, yoy_col: str | None) -> pd.DataFrame:
     """给财报长表加 TTM 列（和可选同比列）。
 
     A 股利润表/现金流为年初至今累计值：
@@ -474,17 +474,17 @@ def build_factor_panels(daily, cal, income, balance, cashflow,
 
     # 1) 财务长表加 TTM / 同比列
     inc = income.copy()
-    inc = _add_ttm_yoy(inc, "OPERA_REV", "OPERA_REV_TTM", "REV_YOY")
-    inc = _add_ttm_yoy(inc, "LESS_OPERA_COST", "LESS_OPERA_COST_TTM", None)
-    inc = _add_ttm_yoy(inc, "NET_PRO_INCL_MIN_INT_INC", "NET_PRO_TTM", "NP_YOY")
+    inc = add_ttm_yoy(inc, "OPERA_REV", "OPERA_REV_TTM", "REV_YOY")
+    inc = add_ttm_yoy(inc, "LESS_OPERA_COST", "LESS_OPERA_COST_TTM", None)
+    inc = add_ttm_yoy(inc, "NET_PRO_INCL_MIN_INT_INC", "NET_PRO_TTM", "NP_YOY")
     if "LESS_OPERA_COST_TTM" in inc.columns:
         inc["GROSS_PROFIT_TTM"] = inc["OPERA_REV_TTM"] - inc["LESS_OPERA_COST_TTM"]
     else:
         inc["GROSS_PROFIT_TTM"] = inc["OPERA_REV_TTM"]  # mock 无成本列，毛利≈营收
     cf = cashflow.copy()
-    cf = _add_ttm_yoy(cf, CFO_FIELD, "CFO_TTM", "CFO_YOY")
-    cf = _add_ttm_yoy(cf, FREE_CF_FIELD, "FREE_CF_TTM", None)
-    cf = _add_ttm_yoy(cf, NET_CF_FIELD, "NET_CF_TTM", None)
+    cf = add_ttm_yoy(cf, CFO_FIELD, "CFO_TTM", "CFO_YOY")
+    cf = add_ttm_yoy(cf, FREE_CF_FIELD, "FREE_CF_TTM", None)
+    cf = add_ttm_yoy(cf, NET_CF_FIELD, "NET_CF_TTM", None)
 
     # 1b) 单季拆解 + 单季同比/环比
     inc = _add_single_quarter(inc, "NET_PRO_INCL_MIN_INT_INC", "NP_SQ")
@@ -494,7 +494,7 @@ def build_factor_panels(daily, cal, income, balance, cashflow,
     inc = _add_sq_growth(inc, "REV_SQ", "REV_SQ_YOY", "REV_SQ_QOQ")
     inc = _add_sq_growth(inc, "OPPROF_SQ", "OPPROF_SQ_YOY", "OPPROF_SQ_QOQ")
     # 扣非净利 TTM 同比
-    inc = _add_ttm_yoy(inc, "NET_PRO_AFTER_DED_NR_GL", "NP_DED_TTM", "NP_DED_TTM_YOY")
+    inc = add_ttm_yoy(inc, "NET_PRO_AFTER_DED_NR_GL", "NP_DED_TTM", "NP_DED_TTM_YOY")
 
     # 2) PIT 展开（按公告日对齐交易日，ffill）
     def _pit(report_df, field):
@@ -563,14 +563,14 @@ def build_factor_panels(daily, cal, income, balance, cashflow,
     invest_cap = all_pit["EQUITY"] + debt
     # EBIT_TTM×(1-税率)/投入资本；税率=所得税/利润总额 缺省 25%
     # EBIT 是累计值，需 TTM（若存在）
-    inc_ebit = _add_ttm_yoy(inc, "EBIT", "EBIT_TTM", None) if "EBIT" in inc.columns else inc
+    inc_ebit = add_ttm_yoy(inc, "EBIT", "EBIT_TTM", None) if "EBIT" in inc.columns else inc
     ebit_ttm_panel = _pit(inc_ebit, "EBIT_TTM") if "EBIT_TTM" in inc_ebit.columns else None
     tax_rate = _pit(inc, "INCOME_TAX") / _pit(inc, "TOTAL_PROFIT").replace(0.0, np.nan)
     tax_rate = tax_rate.clip(0.0, 0.6).fillna(0.25)
     roic = (ebit_ttm_panel * (1 - tax_rate)) / invest_cap.replace(0.0, np.nan) if ebit_ttm_panel is not None else pd.DataFrame()
     fin_exp_ratio = all_pit["LESS_OPERA_COST_TTM"] * np.nan  # 占位，下方用财务费用
     if "LESS_FIN_EXP" in inc.columns:
-        inc_fin = _add_ttm_yoy(inc, "LESS_FIN_EXP", "LESS_FIN_EXP_TTM", None)
+        inc_fin = add_ttm_yoy(inc, "LESS_FIN_EXP", "LESS_FIN_EXP_TTM", None)
         fin_exp_ratio = _pit(inc_fin, "LESS_FIN_EXP_TTM") / all_pit["OPERA_REV_TTM"].replace(0.0, np.nan)
     else:
         log.warning("LESS_FIN_EXP 不在表中，fin_exp_ratio_ttm 为空")

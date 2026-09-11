@@ -101,11 +101,11 @@ def build_panels(begin: int, end: int) -> tuple[dict[str, pd.DataFrame], pd.Data
 
     # ---- 日内（分钟线 warmup 同样用更长历史；2026 研究区间内分钟线已拉）----
     try:
-        from scripts.build_intraday_factors import build_features, _minute_frame
+        from scripts.build_intraday_factors import build_features, minute_frame
         mk = cache.get_minute_kline(codes, warm_begin, end, period=5)
         if not mk.empty:
             status = cache.get_history_stock_status(codes, warm_begin, end)
-            mf = _minute_frame(mk, status)
+            mf = minute_frame(mk, status)
             dailyw2 = dailyw.copy()
             intra = build_features(mf, dailyw2, status)
             for k, pnl in intra.items():

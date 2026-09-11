@@ -117,6 +117,39 @@ class Config:
         }
 
     @classmethod
+    def benchmarks(cls) -> dict:
+        """对照基准指数（各报告/策略的"与谁比"**唯一真源**）。
+
+        2026-09-11 收敛：此前指数代码散落在 scripts 里（`rolling_grid_alla.BENCH_INDEX`
+        = 000001.SH、`jq_style_report.BENCH_INDEX` = 399317.SZ、
+        `run_etf_rotation.BENCH` = 000300.SH），加上 `backtest.benchmark` 与
+        `model_portfolio.benchmark`，共 5 处字面量、改一个要满仓找。
+        ⚠️ **三者取值本就不同**（用途不同，非同一概念的重复），故这里按**用途**分键，
+        不强行合并成一个值——合并会静默改变某条链路的对照基准。
+
+        Returns:
+            {"default": 引擎缺省对照（backtest.benchmark）,
+             "all_a": 全A组合对照（上证指数，rolling_grid_alla / model_portfolio）,
+             "etf": ETF 轮动对照（沪深300）,
+             "report_a_share": 全A报告图表对照（国证A指，中证全指行情缺失的替代）,
+             "report_a_share_label": 上者的展示名}
+
+        新增消费方请走这里，不要在别处硬编码指数字面量。
+        """
+        b = cls.get().get("benchmarks") or {}
+        bt = cls.get().get("backtest") or {}
+        mp = cls.get().get("model_portfolio") or {}
+        default = str(b.get("default") or bt.get("benchmark") or "000300.SH")
+        return {
+            "default": default,
+            "all_a": str(b.get("all_a") or mp.get("benchmark") or "000001.SH"),
+            "etf": str(b.get("etf") or "000300.SH"),
+            "report_a_share": str(b.get("report_a_share") or "399317.SZ"),
+            "report_a_share_label": str(
+                b.get("report_a_share_label") or "国证A指(399317)≈中证全指"),
+        }
+
+    @classmethod
     def monitoring(cls) -> dict:
         """生产化监控阈值（monitoring/ 包单一真源，缺省值与 settings.yaml 一致）。"""
         m = cls.get().get("monitoring") or {}

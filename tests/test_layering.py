@@ -239,7 +239,7 @@ def test_periods_per_year_single_source():
 
 
 # ---------------------------------------------------------------------------
-# 私有函数倒挂守卫（2026-09-11 P1#3）
+# 私有函数倒挂守卫（2026-09-11 P1#3 + 第四批扩展）
 # ---------------------------------------------------------------------------
 #: 被跨模块引用的私有名已公开化（见 factor.genetic_mining 模块 docstring）
 #: —— 定义这些名字的模块，以及"只许测试白盒引用"的私有名白名单
@@ -251,7 +251,22 @@ _PRIVATE_IMPORT_GUARDS = {
                        "_seg_ic_stats"},
     },
     "data.cache_helpers": {"tests_only": set()},
+    # 第四批扩展：scripts 层的生产/实验链（同样禁止跨模块 import 私有名）
+    "scripts.rolling_grid_alla": {
+        "tests_only": {"_yearly_metrics", "_rebalance_days_validated"},
+    },
+    "scripts.build_intraday_factors": {"tests_only": set()},
+    "scripts.build_fundamental_factors": {"tests_only": set()},
+    "scripts.alla_daily_rank": {
+        "tests_only": {"_limit_from_daily", "_ALPHA_PREFIXES", "_CONSTRUCTED_KEYS",
+                       "_HOLDER_NUM_KEYS", "_HOLDER_TOP_KEYS", "_PLEDGE_KEYS"},
+    },
+    "scripts.mine_factors": {"tests_only": {"_apply_gtja_preset"}},
+    "scripts.e2e_backtest": {"tests_only": {"_enforce_caps"}},
 }
+#: 已知暂不纳管：scripts/textmining/* 由另一会话在改（同目录 8 个文件未提交），
+#: 待其落地后再并入。scripts/oneoff/* 见 test_production_must_not_depend_on_oneoff。
+_PRIVATE_IMPORT_EXEMPT_PREFIXES = ("scripts.textmining",)
 
 
 def _private_names_from_imports(path: Path) -> set[tuple[str, str]]:
@@ -297,6 +312,8 @@ def test_no_private_import_from_factor_and_data():
             continue
         is_test = rel.startswith("tests/")
         for mod, name in _private_names_from_imports(f):
+            if mod.startswith(_PRIVATE_IMPORT_EXEMPT_PREFIXES):
+                continue
             guard = _PRIVATE_IMPORT_GUARDS.get(mod)
             if guard is None:
                 continue
@@ -306,6 +323,58 @@ def test_no_private_import_from_factor_and_data():
             offenders.append(f"{rel}: from {mod} import {name}")
     assert not offenders, (
         "跨模块 import 了私有名（请公开化后再引用）:\n" + "\n".join(offenders))
+
+
+@pytest.mark.xfail(strict=False, reason=(
+    "已知缺陷（2026-09-11 审计发现）：scripts/alla_daily_rank.py 等生产脚本依赖 "
+    "gitignored 的 scripts/oneoff/，归属待拍板。修好后本测试自然转绿。"))
+def test_production_scripts_do_not_depend_on_gitignored_oneoff():
+    """生产入口不得依赖 ``scripts/oneoff/``（该目录整目录 gitignored → 干净 clone 会 ImportError）。
+
+    ⚠️ **已知缺陷，暂标 xfail 记录在案**（2026-09-11 第四批审计发现）：
+    ``scripts/alla_daily_rank.py``（生产每日推理）有 6 处
+    ``from scripts.oneoff.* import ...``，而 ``.gitignore`` 第 41 行忽略整个
+    ``scripts/oneoff/``（本地 62 个文件、0 个被跟踪）。也就是说**在生产环境/
+    新 clone 上该脚本必然 ImportError**。
+    修法需要先拍板这些 build_all_* 面板构造函数该归哪一层（它们产出的基本面/
+    质押/股东面板是主实验的输入，候选：``factor/`` 或 ``scripts/`` 跟踪目录）。
+    决策前本测试保持 xfail，防止"看起来全绿"地把缺陷忘掉。
+    """
+    offenders = []
+    for f in sorted((ROOT / "scripts").rglob("*.py")):
+        if "oneoff" in f.parts or "archive" in f.parts:
+            continue
+        if "scripts.oneoff" in f.read_text(encoding="utf-8"):
+            offenders.append(str(f.relative_to(ROOT)))
+    assert not offenders, (
+        "生产/实验脚本依赖了 gitignored 的 scripts/oneoff/:\n" + "\n".join(offenders))
+
+
+def test_frozen_recipe_stays_consistent_across_layers():
+    """冻结配方（训练窗/折数/质量窗/最少训练日）在三处声明必须一致。
+
+    `settings.model_portfolio`（生产控制面）与 `rolling_grid_alla`
+    （实验真源）各写了一份数字、并在注释里互相声明"必须一致"；`alla_daily_rank`
+    同样镜像了一份。这里把耦合**钉死**，避免改一处忘一处导致生产与实验悄悄分叉。
+    """
+    import importlib
+
+    from config import Config
+
+    rg = importlib.import_module("scripts.rolling_grid_alla")
+    adr = importlib.import_module("scripts.alla_daily_rank")
+    mp = Config.get().get("model_portfolio") or {}
+
+    assert int(mp.get("train_window", 500)) == rg.DEFAULT_WINDOW, (
+        "settings.model_portfolio.train_window 与 rolling_grid_alla.DEFAULT_WINDOW 分叉")
+    assert int(mp.get("n_folds", 4)) == rg.N_FOLDS, (
+        "settings.model_portfolio.n_folds 与 rolling_grid_alla.N_FOLDS 分叉")
+    assert int(mp.get("quality_window", 500)) == rg.QUALITY_WINDOW, (
+        "settings.model_portfolio.quality_window 与 rolling_grid_alla.QUALITY_WINDOW 分叉")
+    assert adr.MIN_TRAIN == rg.MIN_TRAIN, (
+        "alla_daily_rank.MIN_TRAIN 与 rolling_grid_alla.MIN_TRAIN 分叉（注释声明'同实验'）")
+    assert adr.DEFAULT_WINDOW == rg.DEFAULT_WINDOW, (
+        "alla_daily_rank.DEFAULT_WINDOW 与 rolling_grid_alla.DEFAULT_WINDOW 分叉")
 
 
 if __name__ == "__main__":

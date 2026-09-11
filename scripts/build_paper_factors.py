@@ -42,7 +42,7 @@ from data.cache_helpers import load_daily, load_financial_tables  # noqa: E402
 from data.financials import build_pit_panel  # noqa: E402
 from factor.paper_factors import PaperData, compute_paper_factors  # noqa: E402
 from research.factor_library import FactorLibrary  # noqa: E402
-from scripts.build_fundamental_factors import _add_ttm_yoy  # noqa: E402
+from scripts.build_fundamental_factors import add_ttm_yoy  # noqa: E402
 from scripts.cli_common import (  # noqa: E402
     add_build_args,
     make_data_context,
@@ -100,17 +100,17 @@ def build_paper_panels(daily: pd.DataFrame, cal, income: pd.DataFrame,
 
     # ---- 财务长表：TTM 化 + PIT 展开 ----
     inc = income.copy()
-    inc = _add_ttm_yoy(inc, "OPERA_REV", "OPERA_REV_TTM", None)
-    inc = _add_ttm_yoy(inc, "LESS_OPERA_COST", "LESS_OPERA_COST_TTM", None)
-    inc = _add_ttm_yoy(inc, "NET_PRO_INCL_MIN_INT_INC", "NET_PRO_TTM", None)
+    inc = add_ttm_yoy(inc, "OPERA_REV", "OPERA_REV_TTM", None)
+    inc = add_ttm_yoy(inc, "LESS_OPERA_COST", "LESS_OPERA_COST_TTM", None)
+    inc = add_ttm_yoy(inc, "NET_PRO_INCL_MIN_INT_INC", "NET_PRO_TTM", None)
     if "EBIT" in inc.columns:
-        inc = _add_ttm_yoy(inc, "EBIT", "EBIT_TTM", None)
+        inc = add_ttm_yoy(inc, "EBIT", "EBIT_TTM", None)
     if "EBITDA" in inc.columns:
-        inc = _add_ttm_yoy(inc, "EBITDA", "EBITDA_TTM", None)
+        inc = add_ttm_yoy(inc, "EBITDA", "EBITDA_TTM", None)
     cf = cashflow.copy()
     if CFO_FIELD not in cf.columns and "NET_CASH_FLOWS_OPERA_ACT" in cf.columns:
         cf[CFO_FIELD] = cf["NET_CASH_FLOWS_OPERA_ACT"]
-    cf = _add_ttm_yoy(cf, CFO_FIELD, "CFO_TTM", None)
+    cf = add_ttm_yoy(cf, CFO_FIELD, "CFO_TTM", None)
 
     def _pit(report_df: pd.DataFrame, field: str) -> pd.DataFrame:
         if field not in report_df.columns:
