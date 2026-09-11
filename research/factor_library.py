@@ -238,7 +238,6 @@ class FactorLibrary:
         ic_valid = ic.dropna()
         n = len(ic_valid)
         ic_ir = calc_ir(ic) if n >= 2 else 0.0
-        t_stat = ic_mean / (ic_std / np.sqrt(n)) if ic_std > 0 else 0.0
         # 显著性：一步式给出 OLS 与 NW 两套 t/p（真源 = stats.significance；
         # IC 序列强自相关时 OLS t 会虚高，判显著一律用 NW 那一列）。
         from stats.significance import mean_inference
@@ -428,7 +427,10 @@ class FactorLibrary:
         # 补算，并明确记录近似范围——不静默编数。
         miss = ~np.isfinite(p) & np.isfinite(d["t_stat_nw"].values)
         if miss.any():
-            nd = pd.to_numeric(reg.get("n_dates"), errors="coerce").fillna(250).values
+            if "n_dates" in reg.columns:
+                nd = pd.to_numeric(reg["n_dates"], errors="coerce").fillna(250).values
+            else:                                # 极旧库缺列：退回 250（≈一年交易日）
+                nd = np.full(len(reg), 250.0)
             p[miss] = np.asarray(t_pvalue(d["t_stat_nw"].values[miss],
                                           df=np.maximum(nd[miss] - 1, 1)), dtype=float)
             log.warning("significance_table: %d 行缺 p_value_nw，已用 t 与 n_dates-1 近似补算"

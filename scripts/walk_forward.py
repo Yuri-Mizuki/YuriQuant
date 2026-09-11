@@ -313,7 +313,9 @@ def main():
             if len(ic) < 20:
                 continue
             m, s = float(ic.mean()), float(ic.std())
-            t = m / (s / np.sqrt(len(ic))) if s > 0 else 0.0
+            from stats.significance import mean_inference
+            _inf = mean_inference(ic, robust=False)       # OLS t 统一实现（2026-09-11）
+            t = _inf["t_stat"] if _inf["n"] >= 2 else 0.0
             sel_rows.append({"formula": formula, "train_t": row.get("t_stat", np.nan),
                              "valid_ic": m, "valid_ir": m / s if s > 0 else 0.0,
                              "valid_t": t, "n": len(ic)})
@@ -353,8 +355,10 @@ def main():
     for label, dts, rts in segments:
         cseg = comp_all.loc[dts]
         ic = calc_ic_series(cseg, rts).dropna()
+        from stats.significance import mean_inference
+        _inf = mean_inference(ic, robust=False)           # OLS t 统一实现（2026-09-11）
         summary_rows.append({"阶段": label, "IC": ic.mean(),
-                             "IR": calc_ir(ic), "t": ic.mean() / (ic.std() / np.sqrt(len(ic))) if ic.std() > 0 else 0,
+                             "IR": calc_ir(ic), "t": _inf["t_stat"] if _inf["n"] >= 2 else 0,
                              "n_days": len(ic)})
 
     # test 回测

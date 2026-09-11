@@ -38,6 +38,7 @@ from factor.operators import (
 )
 from stats import PERIODS_PER_YEAR
 from stats.ic import calc_ic_series, calc_ir
+from stats.significance import mean_inference
 
 log = logging.getLogger(__name__)
 
@@ -821,8 +822,10 @@ def _seg_ic_stats(fp, seg) -> tuple[float, float]:
     ic = calc_ic_series(fp, seg, method="spearman").dropna()
     if len(ic) == 0:
         return float("nan"), float("nan")
-    m, s = float(ic.mean()), float(ic.std())
-    t = m / (s / np.sqrt(len(ic))) if s > 0 else 0.0
+    m = float(ic.mean())
+    # OLS t 统一走 stats.significance（2026-09-11 口径统一；n < 2 保持 0.0）
+    _inf = mean_inference(ic, robust=False)
+    t = _inf["t_stat"] if _inf["n"] >= 2 else 0.0
     return m, t
 
 
@@ -1122,7 +1125,9 @@ def _summarize_gp_results(
             n = len(ic)
             m, s = float(ic.mean()), float(ic.std())
             ir = calc_ir(ic)
-            t = m / (s / np.sqrt(n)) if s > 0 else 0.0
+            # OLS t 统一走 stats.significance（2026-09-11 口径统一）
+            _inf = mean_inference(ic, robust=False)
+            t = _inf["t_stat"] if _inf["n"] >= 2 else 0.0
             ic_train, t_train = _seg_ic_stats(fp_s, returns_month_fit if htai else returns_fit)
             ic_oos, t_oos = _seg_ic_stats(fp_s, returns_oos_seg)
             row = {
@@ -1659,8 +1664,10 @@ def run_gp_nsga2(
             fp = eval_tree(ind, panel, prim_map)
             ic = calc_ic_series(fp, returns_panel, method="spearman").dropna()
             n = len(ic)
-            m, s = float(ic.mean()), float(ic.std())
-            t = m / (s / np.sqrt(n)) if s > 0 else 0.0
+            m = float(ic.mean())
+            # OLS t 统一走 stats.significance（2026-09-11 口径统一）
+            _inf = mean_inference(ic, robust=False)
+            t = _inf["t_stat"] if _inf["n"] >= 2 else 0.0
             ic_train, _ = _seg_ic_stats(fp, returns_fit)
             ic_oos, _ = _seg_ic_stats(fp, returns_oos)
             rows.append({

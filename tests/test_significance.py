@@ -14,6 +14,9 @@
 """
 from __future__ import annotations
 
+import re
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -226,3 +229,186 @@ def test_load_significant_features_correction_switch(tmp_path):
 
     with pytest.raises(ValueError):
         lib.load_significant_features(correction="bogus")
+
+
+# ===========================================================================
+# d 项：全仓内联 OLS t 收口到 mean_inference（2026-09-11 第二批口径统一）
+# ---------------------------------------------------------------------------
+# 收口前有 13 处自己内联 ``t = m / (s / np.sqrt(n))``（分布在 factor / research
+# / scripts），与 stats.significance 并行维护。前 5 处由 09-10 批次收敛公式
+# 时发现，剩下的用 ``np.sqrt(n)`` 太窄的搜索模式漏掉了（真正写法多为
+# ``np.sqrt(len(ic))``）。这里用静态守卫 + 函数级比对双保险。
+# ===========================================================================
+_INLINE_T = re.compile(r"/\s*\(.*?/\s*np\.sqrt\(")
+
+
+def test_no_inline_ols_t_left_in_repo():
+    """全仓不得再有"均值 / 标准误"的内联写法——必须走统一实现。
+
+    注意：标准误 ``sd / np.sqrt(n)``（如 ``attribution`` 的 ``se_ols``）是合法
+    写法，本守卫只匹配``X / (Y / np.sqrt(n))``这种除法嵌套形式。
+    """
+    root = Path(__file__).resolve().parents[1]
+    source_of_truth = root / "stats" / "significance.py"   # 真源自身当然含该公式
+    offenders: list[str] = []
+    for pkg in ("factor", "research", "scripts", "model", "monitoring", "stats"):
+        for p in sorted((root / pkg).rglob("*.py")):
+            if "oneoff" in p.parts or p.name.startswith("_old_"):
+                continue
+            if p == source_of_truth:
+                continue
+            for i, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1):
+                if _INLINE_T.search(line):
+                    offenders.append(f"{p.relative_to(root)}:{i}: {line.strip()}")
+    assert not offenders, (
+        "发现内联 OLS t 公式（应改用 stats.significance.mean_inference）:\n"
+        + "\n".join(offenders))
+
+
+def _nh_panel(seed: int = 7, n_days: int = 150, n_codes: int = 30) -> pd.DataFrame:
+    """构造 date×code 面板（非退化、无 NaN）供各 t 入口比对。"""
+    rng = np.random.default_rng(seed)
+    idx = pd.date_range("2024-01-01", periods=n_days, freq="B")
+    cols = [f"s{i:02d}" for i in range(n_codes)]
+    return pd.DataFrame(rng.normal(0.0, 0.02, (n_days, n_codes)),
+                        index=idx, columns=cols)
+
+
+def test_composite_stats_t_matches_mean_inference():
+    """因子层 ``factor.synthesis.composite_stats`` 的 OLS t == 统一实现。"""
+    from factor.synthesis import composite_stats
+    from stats.ic import calc_ic_series
+
+    comp, rets = _nh_panel(seed=11), _nh_panel(seed=12)
+    st = composite_stats(comp, rets)
+
+    ic = calc_ic_series(comp, rets, method="spearman").dropna()
+    exp = mean_inference(ic, robust=False)
+    assert st["t_stat"] == pytest.approx(exp["t_stat"], abs=1e-12)
+    # 与旧内联写法（ddof=1 的 pandas std）逐位一致
+    m, s, n = float(ic.mean()), float(ic.std()), len(ic)
+    assert st["t_stat"] == pytest.approx(m / (s / np.sqrt(n)), abs=1e-12)
+
+
+def test_seg_ic_stats_t_matches_mean_inference():
+    """GP 分段统计 ``factor.genetic_mining._seg_ic_stats`` 的 t == 统一实现。"""
+    from factor.genetic_mining import _seg_ic_stats
+    from stats.ic import calc_ic_series
+
+    fp, seg = _nh_panel(seed=21), _nh_panel(seed=22)
+    m_got, t_got = _seg_ic_stats(fp, seg)
+
+    ic = calc_ic_series(fp, seg, method="spearman").dropna()
+    exp = mean_inference(ic, robust=False)
+    assert t_got == pytest.approx(exp["t_stat"], abs=1e-12)
+    assert m_got == pytest.approx(float(ic.mean()), abs=1e-15)
+
+    # 空段保持旧的 (nan, nan) 语义（注意 NaN 不能用 == 比较）
+    m_e, t_e = _seg_ic_stats(fp, seg.iloc[:0])
+    assert np.isnan(m_e) and np.isnan(t_e)
+
+
+def test_standard_factor_summary_t_matches_mean_inference():
+    """研究层 ``standard_factor_summary`` 的 OLS t == 统一实现。"""
+    from research.factor_analysis import calc_ic_series, standard_factor_summary
+
+    fac, fwd = _nh_panel(seed=31), _nh_panel(seed=32)
+    out = standard_factor_summary(fac, fwd)
+
+    ic_valid = calc_ic_series(fac, fwd).dropna()
+    assert out["t_stat"] == pytest.approx(
+        mean_inference(ic_valid, robust=False)["t_stat"], abs=1e-12)
+
+
+def test_fama_macbeth_t_ols_matches_mean_inference():
+    """``research.attribution.fama_macbeth`` 的朴素 t 列 == 统一实现。
+
+    顺带锁住它与同一函数内 ``se_ols`` 的自洽性（t_ols == premium / se_ols），
+    避免两个口径各改一半。
+    """
+    from research.attribution import fama_macbeth
+
+    fac, fwd = _nh_panel(seed=41), _nh_panel(seed=42)
+    out = fama_macbeth({"f": fac}, fwd, add_intercept=True)
+    row = out.loc["f"]
+
+    # 复刻第一步横截面回归得到 β_t 序列，再与统一实现比对
+    betas: list[float] = []
+    for d in fwd.index:
+        y, x = fwd.loc[d], fac.loc[d]
+        v = (y.notna() & x.notna()).values
+        if v.sum() < 10:
+            continue
+        X = np.column_stack([np.ones(int(v.sum())), x.values[v]])
+        b, *_ = np.linalg.lstsq(X, y.values[v], rcond=None)
+        betas.append(float(b[1]))
+    exp = mean_inference(np.asarray(betas), robust=False)
+
+    assert row["n_periods"] == exp["n"]
+    assert row["t_ols"] == pytest.approx(exp["t_stat"], abs=1e-12)
+    assert row["t_ols"] == pytest.approx(row["premium"] / row["se_ols"], abs=1e-10)
+
+
+# ===========================================================================
+# a 项：FDR 降到报告层（默认入库判据仍为 raw）
+# ===========================================================================
+def test_t_pvalue_supports_array_df():
+    """数组 ``df`` 与逐元素标量调用一致——registry 补算路径的回归测试。
+
+    该分支在 2026-09-11 实跑真实因子库时暴露：``significance_table`` 对缺
+    ``p_value_nw`` 的旧行用 ``df = n_dates - 1`` 的**数组**补算，而 ``t_pvalue``
+    当时只支持标量 ``df``，``not np.isfinite(df)`` 对数组直接抛 ValueError。
+    构造出的临时库每个因子都带 p 值，所以这个分支一直没被测到。
+    """
+    t = np.array([1.0, 2.0, -3.0, np.nan])
+    df = np.array([10.0, 50.0, 0.0, 20.0])          # 含 df=0（应 NaN）
+    got = t_pvalue(t, df=df)
+    assert got.shape == (4,)
+    assert got[0] == pytest.approx(t_pvalue(1.0, df=10.0), abs=1e-15)
+    assert got[1] == pytest.approx(t_pvalue(2.0, df=50.0), abs=1e-15)
+    assert np.isnan(got[2]) and np.isnan(got[3])    # df<=0 与 t=NaN 均为 NaN
+    # 非有限 df → 正态近似（与标量语义一致，不是 NaN）
+    got2 = t_pvalue(np.array([1.96]), df=np.array([np.nan]))
+    assert got2[0] == pytest.approx(t_pvalue(1.96, df=None), abs=1e-15)
+
+
+def test_missing_pvalue_nw_is_backfilled(tmp_path):
+    """缺 p_value_nw 的旧行会被补算（不静默丢该行），且补算值落在合理范围。"""
+    lib = _lib_with_factors(tmp_path)
+    reg = lib.list_all()
+    # 抹掉一行的 p_value_nw 模拟旧库（该列引入前入库的因子）
+    df = reg.copy()
+    df.loc[df.index[0], "p_value_nw"] = np.nan
+    df.to_csv(lib._registry_path, index=False)
+
+    tbl = lib.significance_table(q=0.05, exclude_model=True)
+    assert len(tbl) == len(df), "补算不应丢行"
+    assert tbl["p_value_nw"].notna().all(), "缺 p 的行应被补算"
+    assert ((tbl["p_value_nw"] >= 0) & (tbl["p_value_nw"] <= 1)).all()
+
+
+def test_report_pipeline_shows_raw_and_fdr_side_by_side(tmp_path, monkeypatch):
+    """a 项：报告层**并排**展示 raw 与整库 FDR 计数，且不改默认判据。"""
+    from research import report_pipeline as rp
+
+    lib = _lib_with_factors(tmp_path)
+
+    class _Lib:
+        def __init__(self, dataset=None, root=None):
+            self._lib = lib
+
+        def list_all(self):
+            return self._lib.list_all()
+
+        def significance_table(self, q=0.05, exclude_model=True):
+            return self._lib.significance_table(q=q, exclude_model=exclude_model)
+
+    monkeypatch.setattr("research.factor_library.FactorLibrary", _Lib)
+
+    ctx = rp.ReportContext(dataset="tmpds", report_dir=tmp_path)
+    sec = rp.collect_factor_library(ctx)
+    assert sec is not None
+    assert "raw" in sec.html and "FDR" in sec.html
+    # 默认口径未被动过：raw 入口仍与 registry 的 significant 列一致
+    raw_default = lib.load_significant_features(correction="raw")
+    assert set(raw_default) <= set(lib.list_all()["name"])

@@ -37,7 +37,7 @@ import pandas as pd
 
 from backtest.metrics import PERIODS_PER_YEAR
 from stats.robust_stats import nw_tstat, ols_newey_west
-from stats.significance import t_pvalue
+from stats.significance import mean_inference, t_pvalue
 
 __all__ = ["fama_macbeth", "brinson_attribution", "alpha_beta"]
 
@@ -127,7 +127,9 @@ def fama_macbeth(
         n = len(s)
         mean = float(s.mean())
         sd = float(s.std())
-        t_ols = mean / (sd / np.sqrt(n)) if sd > 0 else 0.0
+        # OLS t 统一走 stats.significance（2026-09-11 口径统一；系数序列无 NaN）
+        _inf = mean_inference(s, robust=False)
+        t_ols = _inf["t_stat"] if _inf["n"] >= 2 else 0.0
         se_ols = sd / np.sqrt(n) if n > 1 else 0.0
         t_nw, se_nw, _lag = nw_tstat(s, lag=lag)
         p_nw = t_pvalue(t_nw, df=max(n - 1, 1))

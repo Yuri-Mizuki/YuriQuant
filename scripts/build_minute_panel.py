@@ -31,6 +31,7 @@ from data.cache import DataCache  # noqa: E402
 from data.intraday import MinutePanelStore  # noqa: E402
 from factor.intraday_features import FEATURE_DOCS, extract_all  # noqa: E402
 from scripts.cli_common import setup_logging  # noqa: E402
+from stats.significance import mean_inference  # noqa: E402
 
 log = setup_logging("build_minute_panel")
 
@@ -80,7 +81,12 @@ def demo_ic(features: dict[str, pd.DataFrame], cache: "DataCache", pool: str) ->
         ic = ic[n >= 10]
         if ic.empty or ic.isna().all():
             continue
-        t = ic.mean() / (ic.std(ddof=1) / np.sqrt(len(ic)))
+        # t 统一走 stats.significance（2026-09-11 口径统一）。顺带修正旧写法
+        # "分子 skipna、分母却用含 NaN 的 len(ic)" 的口径不匹配，并剔除截面秩
+        # 标准差为 0 时产生的 ±inf —— 故**此处数值会变**（t 相对旧值偏大）。
+        ic_v = ic.replace([np.inf, -np.inf], np.nan).dropna()
+        _inf = mean_inference(ic_v, robust=False)
+        t = _inf["t_stat"] if _inf["n"] >= 2 else 0.0
         rows.append({"feature": name, "ic_mean": ic.mean(), "ic_ir": ic.mean() / ic.std(ddof=1),
                      "t": t, "n_days": len(ic)})
     return pd.DataFrame(rows).sort_values("t", key=abs, ascending=False)

@@ -32,6 +32,7 @@ import pandas as pd
 
 from factor.preprocessing import standardize_zscore
 from stats.ic import calc_ic_series, calc_ir
+from stats.significance import mean_inference
 
 
 @dataclass
@@ -372,7 +373,10 @@ def composite_stats(
                 "ic_win_rate": float("nan"), "t_stat": 0.0, "n": n}
     m, s = float(ic.mean()), float(ic.std())
     ir = calc_ir(ic)
-    t = m / (s / np.sqrt(n)) if s > 0 else 0.0
+    # OLS t 统一走 stats.significance（std 固定 ddof=1，与旧内联写法逐位一致；
+    # n < 2 保持旧的 0.0 边界）。2026-09-11 第二批口径统一。
+    _inf = mean_inference(ic, robust=False)
+    t = _inf["t_stat"] if _inf["n"] >= 2 else 0.0
     return {
         "ic_mean": m, "ic_std": s, "ir": ir,
         "ic_win_rate": float((ic > 0).mean()), "t_stat": t, "n": n,

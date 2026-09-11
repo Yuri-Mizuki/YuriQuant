@@ -113,7 +113,9 @@ def evaluate_factor(formula: str, panel: dict, returns_panel: pd.DataFrame,
     if len(ic) == 0:
         return {"formula": formula}
     lin_ic = float(ic.mean())
-    lin_t = float(lin_ic / (ic.std() / np.sqrt(len(ic)))) if ic.std() > 0 else 0.0
+    from stats.significance import mean_inference
+    _inf = mean_inference(ic, robust=False)          # OLS t 统一实现（2026-09-11 口径统一）
+    lin_t = float(_inf["t_stat"] if _inf["n"] >= 2 else 0.0)
     mi = _mutual_info_series(fpp, r_month).dropna()
     t_ex, b_ex, _ = _top_excess_series(fpp, r_month, top_frac=0.1)
     prof = layer_excess_profile(fpp, returns_panel)

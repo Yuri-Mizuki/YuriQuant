@@ -141,7 +141,9 @@ def main():
                 if len(ic) < 20:
                     continue
                 m, s = float(ic.mean()), float(ic.std())
-                t = m / (s / np.sqrt(len(ic))) if s > 0 else 0.0
+                from stats.significance import mean_inference
+                _inf = mean_inference(ic, robust=False)   # OLS t 统一实现（2026-09-11）
+                t = _inf["t_stat"] if _inf["n"] >= 2 else 0.0
                 sel.append({"formula": f, "valid_ic": m, "valid_ir": m / s if s > 0 else 0.0,
                             "valid_t": t, "train_t": r.get("t_stat", np.nan)})
             if not sel:
@@ -195,10 +197,12 @@ def main():
                             ("valid", valid_dates, valid_returns),
                             ("test", test_dates, test_returns)]:
         ic = calc_ic_series(comp_all.loc[dts], rts).dropna()
+        from stats.significance import mean_inference
+        _inf = mean_inference(ic, robust=False)           # OLS t 统一实现（2026-09-11）
         test_rows.append({
             "阶段": label, "IC": float(ic.mean()),
             "IR": calc_ir(ic),
-            "t": float(ic.mean() / (ic.std() / np.sqrt(len(ic)))) if ic.std() > 0 else 0.0,
+            "t": float(_inf["t_stat"] if _inf["n"] >= 2 else 0.0),
             "n_days": len(ic),
         })
     try:

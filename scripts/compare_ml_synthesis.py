@@ -76,11 +76,13 @@ def seg_stats(comp: pd.DataFrame, rets: pd.DataFrame, frac_lo: float = 0.0,
     seg = ic.iloc[int(len(ic) * frac_lo):int(len(ic) * frac_hi)]
     if len(seg) < 5:
         return {"ic_mean": float("nan"), "ir": float("nan"), "t": float("nan"), "n": len(seg)}
-    m, s = float(seg.mean()), float(seg.std())
+    m = float(seg.mean())
+    from stats.significance import mean_inference
+    _inf = mean_inference(seg, robust=False)          # OLS t 统一实现（2026-09-11 口径统一）
     return {
         "ic_mean": m,
         "ir": calc_ir(seg),
-        "t": m / (s / np.sqrt(len(seg))) if s > 0 else 0.0,
+        "t": _inf["t_stat"] if _inf["n"] >= 2 else 0.0,
         "n": len(seg),
     }
 

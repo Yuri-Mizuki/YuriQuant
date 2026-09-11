@@ -58,10 +58,12 @@ def standard_factor_summary(
     ic_mean = float(ic_valid.mean()) if n else float("nan")
     ic_std = float(ic_valid.std()) if n else float("nan")
     ir = calc_ir(ic)
-    t = ic_mean / (ic_std / np.sqrt(n)) if ic_std > 0 and n > 0 else 0.0
+    # OLS t 统一走 stats.significance（2026-09-11 口径统一；n < 2 保持 0.0）
+    from stats.significance import mean_inference, t_pvalue
+    _inf = mean_inference(ic_valid, robust=False)
+    t = _inf["t_stat"] if _inf["n"] >= 2 else 0.0
     # 双侧 p 值真源 = stats.significance.t_pvalue（2026-09-10 收口，
     # 此前各处内联 2*(1-t.cdf(|t|, df))，公式漂移无从对照）
-    from stats.significance import t_pvalue
     p = t_pvalue(t, df=n - 1) if n > 1 else float("nan")
     # Newey-West 自相关稳健推断（业界标准：Andrews 1991 带宽）
     from stats.robust_stats import nw_tstat
