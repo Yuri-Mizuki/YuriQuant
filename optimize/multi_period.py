@@ -124,7 +124,17 @@ def optimize_rebalance_weights(
 
 
 class PrecomputedWeightsStrategy(Strategy):
-    """按调仓日回放预计算的目标权重；无该日记录则沿用最近一期（持仓）。"""
+    """按调仓日回放预计算的目标权重；无该日记录则沿用最近一期（持仓）。
+
+    **层间契约适配器**（2026-09-11 明确）：组合优化（:mod:`optimize.solver`）
+    产出的是一张"调仓日×code"的目标权重表，而回测引擎只认
+    :class:`strategy.base.Strategy` 契约（``get_weights_at(date, factor_values)``）。
+    本类就是把前者适配成后者的唯一通道——``optimize`` 的任何优化结果要进
+    ``backtest.VectorBacktest`` 都走它，无需改造引擎。
+
+    适配语义：查表命中该日则用该行目标权重，否则沿用最近一期（调仓日之间
+    持仓不动）；不在表内的 code 权重置 0（含新上市 / 已退出的标的）。
+    """
 
     name = "multi_period_executor"
 

@@ -1,25 +1,37 @@
 """
-optimize —— 03 优化层（对齐聚宽 AI 投研流程）。
+optimize —— 03 优化层「组合优化 / 风险 / 监控」。
 
-组合优化（portfolio.optimize_weights 启发式投影 + solver.optimize_weights_qp
-求解器版：滚动 Ledoit-Wolf 协方差 + cvxpy QP，TEV/最小方差/MVO）
-→ 风险归因（risk.risk_attribution：α/β + 基准对照 + Brinson；
-  risk.risk_decomposition：Euler 分解 + 风格/行业方差贡献 + VaR/CVaR + 预算校验）
-→ 持续监控（monitor.monitor_report：IC 漂移 / 衰减 / 自相关）。
+**与 strategy/ 的边界（2026-09-11 第 3 批口径统一后定案）**
 
-现状（2026-08-14）：
-- 启发式投影（行业中性 / 权重上下限 / 换手约束）已就绪，无 cvxpy 环境可用（mock venv）。
-- 求解器版 P0 已就绪（optimize/solver.py，依赖 cvxpy，系统 python 3.12）：
-  滚动 Ledoit-Wolf 收缩 Σ（防前视）+ cvxpy QP，约束线性精确满足（预算/上限/行业中性/换手）。
-- P1 已就绪：风格中性化（style_exposures）、行业偏离限制（industry_deviation）、
-  风险平价（method="risk_parity"）、HRP（hrp_weights / optimize_weights_hrp，免逆矩阵）。
-- P2 已就绪：Black-Litterman（bl_posterior / bl_views_from_factor / method="bl"，
-  因子得分→观点）、多空（allow_short + short_limit/gross_limit，回测多空口径）、
-  Almgren-Chriss 成本惩罚（turnover_penalty 线性 + quadratic_cost 二次冲击）。
-  对比脚本 scripts/compare_portfolio_methods.py（--mock / --real PIT 并集池四窗口）。
-  待建（P3）：完整多期最优执行、风险预算非等权、真实四窗口结论分析。
+- **不需要风险模型**的权重生产 —— 信号构建 + 行业中性 / 权重上下限 / 换手投影
+  —— 属"组合构建"，真源在 :mod:`strategy.constraints`。本包的
+  ``portfolio.optimize_weights`` 已退化为**面板级薄门面**，不再持有独立实现。
+- **需要协方差 Σ** 的组合优化（QP / HRP / BL）才是优化层本体，见 :mod:`optimize.solver`。
+- 两层统一于 :class:`strategy.base.Strategy` 契约：优化产物经
+  :class:`optimize.multi_period.PrecomputedWeightsStrategy` 适配后即可喂
+  ``backtest.VectorBacktest``——这是优化结果接入回测引擎的唯一路径。
+
+能力清单：
+
+- 组合优化：``solver.optimize_weights_qp``（滚动 Ledoit-Wolf Σ + cvxpy QP：
+  min_var / tev / mvo / risk_parity / bl）、``solver.optimize_weights_hrp``
+  （层次聚类递归二分，免逆矩阵）。
+- 多期执行：``multi_period.run_multi_period_backtest``（逐调仓日重解 QP，
+  prev_weights 进换手/成本约束，由回测引擎按日记账评估）。
+- 风险归因：``risk.risk_attribution``（α/β + 基准对照 + Brinson）、
+  ``risk.risk_decomposition``（Euler 分解 + 风格/行业方差贡献 + VaR/CVaR）。
+- 执行信号：``signals.build_signal_frame``（目标权重 → 整手可下单信号）。
+- 持续监控：``monitor.monitor_report``（转发 :mod:`stats.monitor`）。
+
+进阶能力（均已就绪）：风格中性化（``style_exposures``）、行业偏离
+（``industry_deviation``）、多空（``allow_short`` + ``short_limit``/``gross_limit``）、
+Almgren-Chriss 成本惩罚（``turnover_penalty`` 线性 + ``quadratic_cost`` 二次冲击）、
+Black-Litterman（``bl_posterior`` / ``bl_views_from_factor``）。
+对比脚本 ``scripts/compare_portfolio_methods.py``（--mock / --real PIT 并集池四窗口）。
+待建（P3）：风险预算非等权、真实四窗口结论分析。
 """
 from optimize.monitor import monitor_report, rolling_ic
+from optimize.multi_period import PrecomputedWeightsStrategy
 from optimize.portfolio import optimize_weights
 from optimize.risk import risk_attribution, risk_decomposition
 from optimize.solver import (
@@ -45,4 +57,5 @@ __all__ = [
     "risk_decomposition",
     "rolling_ic",
     "monitor_report",
+    "PrecomputedWeightsStrategy",
 ]
