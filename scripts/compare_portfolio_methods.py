@@ -4,7 +4,9 @@
 
 五种组合构建方法统一对比（同一因子/收益/行业/风格面板）：
 
-  1. projection   启发式投影（optimize_weights factor_weighted + 约束）—— 现状基线
+  1. projection   启发式投影（真源 strategy.constraints：信号构建 +
+                  行业中性/上下限/换手投影，经 optimize.portfolio.optimize_weights
+                  薄门面调用）—— 现状基线
   2. min_var      QP 最小方差（solver.optimize_weights_qp，滚动 Ledoit-Wolf Σ）
   3. tev          QP 跟踪误差（基准=等权，λ=1.0）
   4. risk_parity  QP 风险平价（等风险预算）

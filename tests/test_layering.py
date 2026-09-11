@@ -1,5 +1,6 @@
 """
-分层守卫测试（2026-08-29 stats 公共层下沉后固化；2026-09-11 补 factor/model 边界）
+分层守卫测试（2026-08-29 stats 公共层下沉后固化；2026-09-11 补 factor/model 与
+optimize/strategy 边界）
 ================================================================================
 
 静态扫描 + 运行时同一性校验，防止包级循环依赖与归属倒挂回潮：
@@ -10,6 +11,8 @@
 4. research/ 不得 import optimize（monitor 统计已下沉 stats/monitor.py）
 5. stats/ 是纯统计底层：不得 import 任何业务包（只允许 numpy/pandas/scipy/stdlib）
 6. 兼容转出口必须指向 stats 真源（同一对象，防 shim 漂移成第二实现）
+7. strategy/ 是回测引擎的基础件：不得 import 上层包，也不得引入 cvxpy 等重依赖
+8. 组合构建约束（无需风险模型）真源在 strategy.constraints，optimize 只做编排
 """
 from __future__ import annotations
 
@@ -124,6 +127,54 @@ def test_compat_shims_point_to_stats():
     assert rs.ols_newey_west is stats.robust_stats.ols_newey_west
     assert om.monitor_report is stats.monitor.monitor_report
     assert om.rolling_ic is stats.monitor.rolling_ic
+
+
+# strategy/ 必须保持"基础件"地位：回测引擎直接依赖它
+_HEAVY_DEPS = {"cvxpy", "deap", "lightgbm", "torch", "shap"}
+
+
+def test_strategy_layer_has_no_upward_or_heavy_deps():
+    """strategy/ 是回测引擎的基础件：不得依赖上层包，也不得引入重依赖。"""
+    offenders = []
+    for f in (ROOT / "strategy").rglob("*.py"):
+        bad = _imports_of(f) & ({"optimize", "backtest", "research", "model"} | _HEAVY_DEPS)
+        if bad:
+            offenders.append(f"{f.relative_to(ROOT)} -> {sorted(bad)}")
+    assert not offenders, "strategy 层依赖违规:\n" + "\n".join(offenders)
+
+
+def test_combination_constraints_live_in_strategy():
+    """组合构建约束（无需风险模型）真源在 strategy.constraints，optimize 只做编排。
+
+    2026-09-11 第三批口径统一：``optimize/portfolio.py`` 的信号构建与工程约束
+    （行业中性 / 上下限 / 换手投影）**不需要协方差**，属"组合构建"而非"组合优化"，
+    已下沉为 :mod:`strategy.constraints`（面板级、零三方依赖）。只有需要 Σ 的
+    QP / HRP / BL 才留在 optimize 层。
+    """
+    import numpy as np
+    import pandas as pd
+
+    import strategy.constraints as sc
+    from optimize import portfolio as op
+
+    names = ("build_signal_weights", "neutralize_industry", "apply_bounds",
+             "apply_turnover", "apply_constraints")
+    for n in names:
+        assert hasattr(sc, n), f"strategy.constraints 缺少 {n}"
+
+    # optimize/portfolio.py 不得重新定义这些算子（只能转发，防第二实现）
+    src = (ROOT / "optimize" / "portfolio.py").read_text(encoding="utf-8")
+    for n in names:
+        assert f"def {n}" not in src, f"optimize/portfolio.py 重新定义了 {n}（真源漂移）"
+
+    # 门面行为 == 真源组合（逐位）
+    rng = np.random.default_rng(0)
+    p = pd.DataFrame(rng.normal(0, 1, (20, 10)),
+                     index=pd.date_range("2024-01-01", periods=20, freq="B"),
+                     columns=[f"C{i}" for i in range(10)])
+    a = op.optimize_weights(p, method="factor_weighted", max_weight=0.2)
+    b = sc.apply_constraints(sc.build_signal_weights(p, "factor_weighted"), max_weight=0.2)
+    assert np.allclose(a.values, b.values, atol=1e-15)
 
 
 def test_periods_per_year_single_source():
