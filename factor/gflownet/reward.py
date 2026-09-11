@@ -33,6 +33,21 @@ IC 符号为负的因子按"取反向"处理：long_ir 以 sign(mean IC) 定向�
 
 **奖励缓存**：canonical 字符串 -> 奖励（研报 §2.2 用 ExprNode 简化降缓存重复；
 TB 训练中同一公式会被反复采到，缓存是 CPU 训练可行性的关键）。
+
+**IC 口径分层（2026-09-11 声明）**：本模块的 ``returns_rank`` 是**训练期**性能
+捷径——预先算好收益的截面 rank，省去每天重排（约 30% IC 耗时）。它与 canonical
+（``stats.ic.calc_ic_series`` 逐日取共同有效点再算 Spearman）**不总等价**：因子
+整行缺失无影响，**行内散点缺失才分叉**（30% 散点缺失时日均 IC 差 ~1.1e-2，与
+IC 量级同阶）。分层约定：
+
+- **训练**（``scripts/run_gflownet_phase1.py`` -> ``RewardPool``）：走捷径。奖励
+  只是 batch 内的相对排序信号（决定哪些公式进 hof），1e-2 偏差不改变相对次序，
+  而训练时间敏感。
+- **入库 / 评估**（``FactorLibrary.register`` -> ``calc_ic_series``，不传该参数）：
+  走 canonical。写进因子库、对外呈现的 IC 必须与全库唯一口径一致。
+
+**因此两处 IC 数字不可直接对比**；已完成的 Phase 0 / Phase 1 结论基于捷径口径，
+若改用 canonical 需重跑才有可比性（代价约 30% 训练时间）。
 """
 from __future__ import annotations
 

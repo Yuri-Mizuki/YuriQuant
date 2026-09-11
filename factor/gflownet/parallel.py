@@ -7,6 +7,11 @@ TB 训练中 batch 内 16 条轨迹的 reward 计算是主要瓶颈（深树求�
 维护独立的子树缓存（``node_cache``），公式字符串 -> reward 并行计算。
 
 Windows 无 fork，必须用模块级函数（spawn 可 pickle）。
+
+**IC 口径**：``returns_rank`` 是训练期性能捷径，与入库评估用的 canonical IC
+**不总等价**（因子整行缺失无影响，行内散点缺失才分叉）。分层约定与差异边界详见
+:mod:`factor.gflownet.reward` 模块 docstring 的「IC 口径分层」——两处数字不可直接
+对比。
 """
 from __future__ import annotations
 

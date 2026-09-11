@@ -155,6 +155,9 @@ def main():
         from factor.gflownet.parallel import RewardPool
         from factor.gflownet.reward import build_horizon_returns
         rets = build_horizon_returns(train_close, args.horizon)
+        # returns_rank 是**训练期**性能捷径（省约 30% IC 耗时）；与入库评估走的
+        # canonical IC 不总等价（因子整行缺失无影响，行内散点缺失才分叉）。
+        # 分层约定见 factor/gflownet/reward.py 模块 docstring 的「IC 口径分层」。
         reward_pool = RewardPool(train_panel, market_cap=mc_arg, returns=rets,
                                  returns_rank=rets.rank(axis=1),
                                  features=FEATURES, n_jobs=args.jobs,
