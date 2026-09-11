@@ -13,6 +13,7 @@ optimize/strategy 边界）
 6. 兼容转出口必须指向 stats 真源（同一对象，防 shim 漂移成第二实现）
 7. strategy/ 是回测引擎的基础件：不得 import 上层包，也不得引入 cvxpy 等重依赖
 8. 组合构建约束（无需风险模型）真源在 strategy.constraints，optimize 只做编排
+9. 模型超参真源在 model.params，scripts 层不得持第二份定义（2026-09-11 下沉）
 """
 from __future__ import annotations
 
@@ -175,6 +176,29 @@ def test_combination_constraints_live_in_strategy():
     a = op.optimize_weights(p, method="factor_weighted", max_weight=0.2)
     b = sc.apply_constraints(sc.build_signal_weights(p, "factor_weighted"), max_weight=0.2)
     assert np.allclose(a.values, b.values, atol=1e-15)
+
+
+def test_model_params_live_in_model_layer():
+    """模型超参真源在 model.params；scripts 层不得持第二份定义。
+
+    2026-09-11 下沉：原 ``scripts/run_model_portfolio.DEFAULT_MODEL_PARAMS``
+    被主实验 ``rolling_grid_alla`` 与生产 ``alla_daily_rank`` **反向 import**
+    ——实验入口脚本成了生产链路的依赖库。超参是模型层公共契约，归 ``model/``。
+    """
+    from model.params import DEFAULT_MODEL_PARAMS
+
+    assert set(DEFAULT_MODEL_PARAMS) == {"gbdt", "ridge", "ranker"}
+
+    offenders = []
+    for f in (ROOT / "scripts").rglob("*.py"):
+        if {"oneoff", "archive"} & set(f.parts):
+            continue
+        src = f.read_text(encoding="utf-8")
+        if re.search(r"^DEFAULT_MODEL_PARAMS\s*[:=]", src, re.M):
+            offenders.append(str(f.relative_to(ROOT)))
+    assert not offenders, (
+        "scripts 层重新定义了 DEFAULT_MODEL_PARAMS（应 import model.params）:\n"
+        + "\n".join(offenders))
 
 
 def test_periods_per_year_single_source():

@@ -31,7 +31,7 @@ from config import Config  # noqa: E402
 log = setup_logging("multiyear")
 
 DATASET = "hs300_2022_2025"
-# 模型超参单一真源：scripts/run_model_portfolio.DEFAULT_MODEL_PARAMS
+# 模型超参单一真源：model.params.DEFAULT_MODEL_PARAMS
 # （2026-08-29 收编本地 MODEL_PARAMS 逐字副本）
 N_FOLDS = 4
 YEARS = [2023, 2024, 2025]
@@ -60,7 +60,7 @@ def run_year(year, model, horizon, features, close, all_days):
     test_days = all_days[(all_days >= pd.Timestamp(f"{year}-01-01")) &
                          (all_days <= pd.Timestamp(f"{year}-12-31"))]
     labels, embargo = build_labels(close, horizon=horizon, mode="rank")
-    from scripts.run_model_portfolio import DEFAULT_MODEL_PARAMS
+    from model.params import DEFAULT_MODEL_PARAMS
     params = DEFAULT_MODEL_PARAMS.get(model, {})
     pred = rolling_oos(PREDICTORS[model], features, labels, test_days, all_days,
                        n_folds=N_FOLDS, embargo_days=embargo, min_train_days=120, **params)

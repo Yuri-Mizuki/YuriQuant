@@ -2,7 +2,7 @@
 
 实验背景（reports/alla_rolling，2026-09-01 交付 + 2026-09-07 退市股修复后重跑）：
 最优方案 = 全A + 每年特征选择（50个量价/基本面因子，reports/alla_rolling/selection/
-y{year}__h1.json）+ gbdt（超参沿用 run_model_portfolio.DEFAULT_MODEL_PARAMS）+
+y{year}__h1.json）+ gbdt（超参沿用 model.params.DEFAULT_MODEL_PARAMS）+
 h=1 rank 标签 + 500 日滚动训练窗 + raw（不中性化）Top10% 等权、月频调仓，
 年超额 vs 上证 +9.1%（9 年中 7 年为正，README 正典方案）。
 
@@ -819,7 +819,7 @@ def train_and_predict(feats: dict, close_adj: pd.DataFrame,
     """
     from model.labels import build_labels
     from model.predictor import LGBMPredictor
-    from scripts.run_model_portfolio import DEFAULT_MODEL_PARAMS
+    from model.params import DEFAULT_MODEL_PARAMS
 
     labels, _embargo = build_labels(close_adj, horizon=HORIZON, mode="rank")
     valid = labels.index[labels.notna().any(axis=1)]

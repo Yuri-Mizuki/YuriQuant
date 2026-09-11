@@ -40,21 +40,13 @@ if str(ROOT) not in sys.path:
 from backtest.engine import VectorBacktest  # noqa: E402
 from backtest.metrics import PERIODS_PER_YEAR  # noqa: E402
 from config import Config  # noqa: E402
+from model.params import DEFAULT_MODEL_PARAMS  # noqa: E402
 from scripts.cli_common import setup_logging  # noqa: E402
 from strategy.examples import TopFracLongOnly  # noqa: E402
 
 log = setup_logging("model_portfolio")
 
 OUT_DIR = Path("reports") / "model_portfolio"
-
-DEFAULT_MODEL_PARAMS = {
-    "gbdt":   dict(n_estimators=150, learning_rate=0.03, num_leaves=15,
-                   min_child_samples=50, seed=0),
-    "ridge":  {},
-    "ranker": dict(n_estimators=200, learning_rate=0.05, num_leaves=15,
-                   min_child_samples=50, seed=0, labels_bins=2,
-                   objective="rank_xendcg"),
-}
 
 
 def _mp_cfg() -> dict:

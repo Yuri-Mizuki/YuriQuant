@@ -122,11 +122,11 @@ SC_WEIGHTS = ["equal", "factor"]
 def _build_model_grid() -> dict[str, dict]:
     """模型网格：name -> (PREDICTORS key, params, train window)。
 
-    超参单一真源：scripts/run_model_portfolio.DEFAULT_MODEL_PARAMS（项目固化值）。
+    超参单一真源：model.params.DEFAULT_MODEL_PARAMS（项目固化值）。
     h=1 跑全网格（模型/超参/窗口变体）；h>1 只跑核心三模型（gbdt/ridge/ranker），
     控制全A规模下的总训练时长（模型×horizon 交互弱，主效应各自可辨）。
     """
-    from scripts.run_model_portfolio import DEFAULT_MODEL_PARAMS
+    from model.params import DEFAULT_MODEL_PARAMS
     return {
         "ridge":      dict(key="ridge", params={}, window=DEFAULT_WINDOW,
                            h1_only=False),
