@@ -181,7 +181,7 @@
       按截面回归惯例（含截距）应给 size-only 路径补 ones 列，但会改变因子层
       中性化结果，需拍板。已用 characterization 测试钉住现行为。
     - **内联 t 统计量**：p 值公式 **4 处已收口**（见上）。仅算 t 的一行式
-      `m/(s/√n)` 尚有 5 处（`factor/synthesis.py:725`、
+      `m/(s/√n)` 尚有 5 处（`factor/synthesis.py:375`、
       `factor/genetic_mining.py` 的 `_seg_ic_stats` / `:1125` / `:1663`、
       `scripts/build_minute_panel.py:83`、`scripts/compare_htai_fitness.py:116`）
       **刻意保留**：它们只要 t，且 n<2 的退化语义（旧代码返回 0.0）与
@@ -207,12 +207,31 @@
     optimize_weights_qp`。生产链路 `rolling_grid_alla` **只走 `strategy/`**，
     `optimize/` 目前只在对比脚本里被调用 → 定一个为生产入口，另一个降级为
     研究代码并注明。这关系到"优化层是否接上主线"。
-  - [ ] **`factor/synthesis.py` 归属倒挂**：其内容是模型层的活（IC 加权 / PCA /
-    Gram-Schmidt 正交化 / ML stacking），却被 `model/training.py:20` import
-    （该文件自述为「薄封装 factor/synthesis」，`model/features.py:13` /
-    `model/predictor.py:42` 也按它对齐口径）——即依赖方向 model → factor。
-    需决定：把 synthesis 迁入 `model/`，或让 `model` 依赖改由调用方注入，
-    同时更新 `tests/test_layering.py` 的分层约束。
+  - [x] **`factor/synthesis.py` 归属倒挂（2026-09-11 完成，`a6a166c`）**：
+    诊断发现该模块是**两类职责混装**——`ic_weighted` / `pca` / `orthogonal` /
+    `build_components` 是**确定性因子组合**（挖掘闭环最后一环、直接喂因子库），
+    而 `synthesize_stacking` 系列拟合**有监督模型**（ridge / LightGBM /
+    LambdaRank + 时序 CV），是模型层的活。故**未整体搬迁**（会把因子组合错放进
+    模型层，并让 `synthesize_library` / `gflownet_library_ingest` 这些纯因子库
+    ingest 反向依赖 model），改为**按职责拆分**：
+    - 新增 `model/stacking.py`：四个 stacking 合成器 + 私有辅助
+      （`_make_target` / `_time_fold_masks` / `_inner_split_by_day` /
+      `_rank_ic_by_day`）原样迁入；探针 `scripts/oneoff/probe_stacking_move.py`
+      对四个合成器与折掩码逐位验证 **max|Δ|=0**（真正的纯搬运）；
+    - `factor/synthesis.py` 只留确定性组合；`_long_matrix` 因被跨层复用提升为
+      公开 `long_matrix`（与 `model.predictor._long_matrix` 同口径声明）；
+    - **依赖方向固定为 model → factor**（与 `model/predictor.py` 早已 import
+      `factor.cv` / `factor.preprocessing` 一致），`factor/` 不得反向依赖 model。
+    改动面：`model/training.py` + 4 个脚本（`compare_ml_synthesis` /
+    `gflownet_library_ingest` / `synthesize_factors` / `synthesize_library`）的
+    import 站点；`model/features.py` / `model/predictor.py` / `factor/cv.py` /
+    `factor/__init__.py` 的交叉引用注释；新建 `tests/test_stacking.py`（stacking
+    + 时序 CV 测试迁入），`tests/test_synthesis.py` 只留因子层，共享 fixture
+    `synth_parts` 上移 `tests/conftest.py`；`tests/test_layering.py` 新增两条守卫
+    （factor ↛ model；stacking 实现必须在 model 且 factor 不得留转发口）。
+    **顺带修复**：`tests/test_metrics.py` 上一批重复追加了同一批 3 个测试
+    （F811 重定义 → pytest 静默去重，等于测试从未真正跑；CI 快检查的
+    `ruff --select F811` 会红），已去重（`7a75235`）。
   - 备注：第二批动的是**口径与依赖边界**，与本批"先跑全量测试定基线、
     改完对比"的做法一致；建议一次只动一项并单独提交，便于定位是哪一项
     改变了哪些数字。
@@ -252,9 +271,10 @@
 
 1. 重跑 multiyear + freq_tune（补核心结论证据链，顺带验证整改后口径）
 2. ~~最小 CI~~（09-10 完成：已转为手动触发；3.2 机械清理亦已批量收口）
-3. **口径统一第二批（见 3.1）**——先做**显著性判定收口**（唯一会直接改变因子库
-   `significant` 结论的一项，优先级高于其余三项）；其余三项按"一次一项 + 单独
-   提交 + 全量测试比对"推进，其中"权重生产唯一入口"需先拍板
+3. **口径统一第二批（见 3.1）**——已完成：显著性判定收口、统计/预处理/绩效原语
+   收口、`factor/synthesis.py` 归属倒挂拆分（三项各自独立提交 + 全量测试比对）；
+   仅剩**"权重生产唯一入口"**一项需先拍板。其余三项按"一次一项 + 单独提交 +
+   全量测试比对"推进
 4. 分钟频挖掘 pipeline（现成数据的最大增量）
 5. cli_common 批量推广 + 报告模板收编（机械清理，可穿插）
 6. 攻"跑输基准"研究问题本身
