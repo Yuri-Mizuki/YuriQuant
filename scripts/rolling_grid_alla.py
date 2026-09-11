@@ -592,8 +592,9 @@ def _yearly_metrics(dr: pd.Series, bench: pd.Series) -> dict[int, dict]:
 
 
 def stage_backtest(quick: bool = False):
+    from backtest.costs import default_costs
     from backtest.engine import VectorBacktest
-    from scripts.run_model_portfolio import default_costs, neutralize_panel
+    from scripts.run_model_portfolio import neutralize_panel
     from strategy.examples import TopFracLongOnly
 
     t0 = time.time()
@@ -723,9 +724,9 @@ def stage_smallcap(quick: bool = False):
     推断对齐：h=1 日频收益，月频调仓（M），小盘换手高——成本用项目固化
     default_costs（对小盘滑点略乐观，结论仅作方向参考）。
     """
+    from backtest.costs import default_costs
     from backtest.engine import VectorBacktest
     from factor.preprocessing import neutralize
-    from scripts.run_model_portfolio import default_costs
     from strategy.examples import TopFracLongOnly
 
     t0 = time.time()
@@ -857,9 +858,9 @@ def stage_ensemble(quick: bool = False):
     frac 用 0.10 / 0.20 两组；对照 raw（不中性）同 frac。产出
     pred/ens_*.parquet + equity_ensemble/*.csv + metrics_ensemble.csv。
     """
+    from backtest.costs import default_costs
     from backtest.engine import VectorBacktest
     from factor.preprocessing import neutralize
-    from scripts.run_model_portfolio import default_costs
     from stats.ic import calc_ic_series
     from strategy.examples import TopFracLongOnly
 

@@ -32,12 +32,12 @@ OUT = Path("reports") / "buffer_tune"
 
 
 def main():
+    from backtest.costs import default_costs
     from backtest.engine import VectorBacktest
     from data.cache_helpers import build_panel
     from scripts.run_model_portfolio import (
         build_model_panel,
         build_style_covariates_panel,
-        default_costs,
         load_index_benchmark,
         neutralize_panel,
     )

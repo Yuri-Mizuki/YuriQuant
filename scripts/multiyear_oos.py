@@ -73,9 +73,9 @@ def run_year(year, model, horizon, features, close, all_days):
     return pred.loc[test_days], fwd, test_days
 
 def main():
+    from backtest.costs import default_costs
     from scripts.run_model_portfolio import (
         load_index_benchmark, build_style_covariates_panel, neutralize_panel,
-        default_costs,
     )
     from strategy.examples import TopFracLongOnly
     from backtest.engine import VectorBacktest

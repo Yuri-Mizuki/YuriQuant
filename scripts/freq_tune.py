@@ -33,9 +33,10 @@ VALID = {(1, "D"), (1, "W"), (1, "M"), (5, "M")}
 OUT = Path("reports") / "freq_tune"
 
 def main():
+    from backtest.costs import default_costs
     from scripts.run_model_portfolio import (
         load_index_benchmark, build_model_panel, build_style_covariates_panel,
-        neutralize_panel, default_costs,
+        neutralize_panel,
     )
     from strategy.examples import TopFracLongOnly
     from backtest.engine import VectorBacktest

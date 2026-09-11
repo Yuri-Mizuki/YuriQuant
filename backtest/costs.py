@@ -136,3 +136,29 @@ class ShortCostModel:
         需要 2 倍资金才能同时满仓两端）。
         """
         return long_exposure + short_exposure * self.margin_ratio
+
+
+def default_costs(factor_cost: bool = True) -> TransactionCosts:
+    """交易成本单一真源：从 config 顶层 ``costs`` 段构建（2026-09-11 下沉）。
+
+    原先定义在 ``scripts/run_model_portfolio.py``——一个实验入口脚本，却被主实验
+    （``rolling_grid_alla``）、生产（``alla_daily_rank``）和多个实验脚本**反向
+    import**，属归属倒挂。成本是回测层概念，归 ``backtest/``。
+
+    2026-09-10：费率真源由 ``model_portfolio.cost_*`` 上移到顶层 ``costs`` 段，
+    与 :mod:`backtest.engine` 的缺省费率共用同一份配置（原先两套差 2~3 倍，
+    网格实验选出的最优参数无法用引擎默认复跑）。
+
+    Args:
+        factor_cost: ``False`` 时置零（无成本对照）。
+
+    消费方一律走本函数，禁止再硬编码费率字面量（防 config 改动后漂移）。
+    """
+    if not factor_cost:
+        return TransactionCosts(commission_rate=0.0, stamp_duty=0.0, slippage_bp=0.0)
+    from config import Config  # 延迟导入：让本模块顶层保持"纯成本模型"无配置副作用
+
+    cfg = Config.costs()
+    return TransactionCosts(commission_rate=cfg["commission_rate"],
+                            stamp_duty=cfg["stamp_duty"],
+                            slippage_bp=cfg["slippage_bp"])

@@ -88,7 +88,7 @@ def test_production_pipeline_and_engine_agree():
     必须能用引擎默认原样复跑。
     """
     from backtest import VectorBacktest
-    from scripts.run_model_portfolio import default_costs
+    from backtest.costs import default_costs
     from strategy.examples import build_strategy
 
     bt = VectorBacktest(strategy=build_strategy("topk_lo", 5), rebalance_freq="W")
@@ -100,7 +100,31 @@ def test_production_pipeline_and_engine_agree():
 
 def test_default_costs_zero_for_precost_comparison():
     """factor_cost=False 置零（无成本对照口径），不受 costs 段影响。"""
-    from scripts.run_model_portfolio import default_costs
+    from backtest.costs import default_costs
 
     z = default_costs(factor_cost=False)
     assert z.commission_rate == 0.0 and z.stamp_duty == 0.0 and z.slippage_bp == 0.0
+
+
+def test_default_costs_source_is_the_backtest_layer():
+    """成本工厂真源在 ``backtest.costs``；scripts 层不得再定义（2026-09-11 下沉）。
+
+    该函数原先定义在 ``scripts/run_model_portfolio.py``，被主实验
+    （``rolling_grid_alla``）、生产（``alla_daily_rank``）与多个实验脚本
+    **反向 import**——实验入口脚本成了生产链路的依赖库。成本是回测层概念，
+    归 ``backtest/``；谁再把它搬回 scripts 层，本测试立刻红。
+    """
+    import re
+
+    from backtest.costs import default_costs  # noqa: F401  （真源存在性）
+
+    root = Path(__file__).resolve().parents[1]
+    offenders = []
+    for f in (root / "scripts").rglob("*.py"):
+        if {"oneoff", "archive"} & set(f.parts):
+            continue
+        if re.search(r"^def default_costs\s*\(", f.read_text(encoding="utf-8"), re.M):
+            offenders.append(str(f.relative_to(root)))
+    assert not offenders, (
+        "scripts 层重新定义了 default_costs（应 import backtest.costs）:\n"
+        + "\n".join(offenders))

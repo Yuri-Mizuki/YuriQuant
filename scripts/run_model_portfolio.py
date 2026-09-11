@@ -37,6 +37,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from backtest.costs import default_costs  # noqa: E402
 from backtest.engine import VectorBacktest  # noqa: E402
 from backtest.metrics import PERIODS_PER_YEAR  # noqa: E402
 from config import Config  # noqa: E402
@@ -63,25 +64,6 @@ def _mp_cfg() -> dict:
         benchmark="000001.SH")
     defaults.update({k: v for k, v in cfg.items() if v is not None})
     return defaults
-
-
-def default_costs(factor_cost: bool = True):
-    """交易成本单一真源：从 config 顶层 `costs` 段构建。
-
-    factor_cost=False 置零（无成本对照）；消费方一律走本函数，
-    禁止再硬编码费率字面量（防 config 改动后漂移）。
-
-    2026-09-10：真源由 `model_portfolio.cost_*` 上移到顶层 `costs` 段，
-    与 `backtest/engine.py` 的缺省费率共用同一份配置（原先两套差 2~3 倍，
-    网格实验选出的最优参数无法用引擎默认复跑）。
-    """
-    from backtest.costs import TransactionCosts
-    if not factor_cost:
-        return TransactionCosts(commission_rate=0.0, stamp_duty=0.0, slippage_bp=0.0)
-    cfg = Config.costs()
-    return TransactionCosts(commission_rate=cfg["commission_rate"],
-                            stamp_duty=cfg["stamp_duty"],
-                            slippage_bp=cfg["slippage_bp"])
 
 
 def neutralize_panel(signal, cov):
