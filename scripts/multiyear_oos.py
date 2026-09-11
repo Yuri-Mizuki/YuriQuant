@@ -74,7 +74,7 @@ def run_year(year, model, horizon, features, close, all_days):
 
 def main():
     from backtest.costs import default_costs
-    from scripts.run_model_portfolio import (
+    from scripts.portfolio_common import (
         load_index_benchmark, build_style_covariates_panel, neutralize_panel,
     )
     from strategy.examples import TopFracLongOnly

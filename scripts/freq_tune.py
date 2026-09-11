@@ -34,7 +34,7 @@ OUT = Path("reports") / "freq_tune"
 
 def main():
     from backtest.costs import default_costs
-    from scripts.run_model_portfolio import (
+    from scripts.portfolio_common import (
         load_index_benchmark, build_model_panel, build_style_covariates_panel,
         neutralize_panel,
     )

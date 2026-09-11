@@ -201,6 +201,32 @@ def test_model_params_live_in_model_layer():
         + "\n".join(offenders))
 
 
+def test_experiment_entry_scripts_are_not_imported_by_other_scripts():
+    """实验入口脚本不得被其他 scripts 反向 import（防"入口变依赖库"回潮）。
+
+    2026-09-11 收口：``scripts/run_model_portfolio.py`` 是主实验入口（全A正交化
+    管线），却把 ``DEFAULT_MODEL_PARAMS`` / ``default_costs`` 以及 4 个 legacy
+    组件定义在自身，被 ``rolling_grid_alla``（主实验）、``alla_daily_rank``（生产）
+    与 ``buffer_tune`` / ``freq_tune`` / ``multiyear_oos`` 反向 import。现四类
+    共享件均已下沉：超参 → :mod:`model.params`，成本 → :mod:`backtest.costs`，
+    legacy 组件 → :mod:`scripts.portfolio_common`。本守卫钉住"入口脚本只进不出"。
+    """
+    entry = {"run_model_portfolio.py"}
+    offenders = []
+    for f in (ROOT / "scripts").rglob("*.py"):
+        if {"oneoff", "archive"} & set(f.parts) or f.name in entry:
+            continue
+        src = f.read_text(encoding="utf-8")
+        for e in entry:
+            mod = e[:-3]
+            if re.search(rf"^\s*(from\s+scripts\.{mod}\s+import|import\s+scripts\.{mod}\b)",
+                         src, re.M):
+                offenders.append(f"{f.relative_to(ROOT)} -> {e}")
+    assert not offenders, (
+        "实验入口脚本被其他 scripts 反向 import（应改用共享模块）:\n"
+        + "\n".join(offenders))
+
+
 def test_periods_per_year_single_source():
     """年化常数单一真源：stats 定义，backtest.metrics re-export 同一对象。"""
     import stats

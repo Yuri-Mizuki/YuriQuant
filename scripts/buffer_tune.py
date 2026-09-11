@@ -35,7 +35,7 @@ def main():
     from backtest.costs import default_costs
     from backtest.engine import VectorBacktest
     from data.cache_helpers import build_panel
-    from scripts.run_model_portfolio import (
+    from scripts.portfolio_common import (
         build_model_panel,
         build_style_covariates_panel,
         load_index_benchmark,

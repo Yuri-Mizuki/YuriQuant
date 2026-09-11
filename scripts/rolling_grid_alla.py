@@ -594,7 +594,7 @@ def _yearly_metrics(dr: pd.Series, bench: pd.Series) -> dict[int, dict]:
 def stage_backtest(quick: bool = False):
     from backtest.costs import default_costs
     from backtest.engine import VectorBacktest
-    from scripts.run_model_portfolio import neutralize_panel
+    from scripts.portfolio_common import neutralize_panel
     from strategy.examples import TopFracLongOnly
 
     t0 = time.time()
