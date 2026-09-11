@@ -96,9 +96,11 @@ def neutralize(
     - 行业哑变量用全量哑变量（不 drop_first），不额外加截距列——全量哑变量
       的列和本身就是全1向量，已经span了截距的位置，不会漏掉任何一个
       行业的组均值。
-      ⚠️ 但**不传行业、只传市值时没有截距项**：``x_matrix`` 只有 ``[log(mc)]``
-      一列，等价于过原点回归。含截距的快速专化版见 :func:`neutralize_single`
-      （两者在纯市值情形**差一个截距项**，不是同一口径；2026-09-10 审计留作待办）。
+    - **无行业哑变量时补一列常数列作截距**（2026-09-11 第二批 c 项修复）：
+      未传行业、或当天样本不足以容纳行业哑变量而将其丢弃时，都会落到"只有
+      市值"的设计矩阵。此前该矩阵仅 ``[log(mc)]`` 一列，等价于**过原点回归**，
+      与含截距的 :func:`neutralize_single` 差一个截距项；现在补 ``_intercept``
+      列，两者口径一致。含行业哑变量时不补（列和已 span 截距，重复加列会共线）。
     - 用 numpy.linalg.lstsq 而不是求逆/normal equation，遇到秩不足（比如
       当天截面里某个行业只有极少样本）时会自动退化到最小范数解而不报错。
     - 每天根据有效样本数 n_valid 相对参数数 n_params 的余量，分级降级：
@@ -147,6 +149,7 @@ def neutralize(
         codes_valid = y_valid.index
 
         cols = []
+        has_industry = False
         if size_x is not None:
             size_series = pd.Series(
                 size_x[valid].astype(float).values, index=codes_valid, name="size"
@@ -162,6 +165,7 @@ def neutralize(
                         dummies[col].astype(float).values, index=codes_valid, name=col
                     )
                     cols.append(dummy_series)
+                has_industry = True
 
         for nm, s in extra_x.items():
             cov_series = pd.Series(
@@ -173,6 +177,14 @@ def neutralize(
             # 没有任何回归变量（比如只传了行业但样本太少被丢弃），退化为原值
             result.loc[d, codes_valid] = y_valid.values
             continue
+
+        # 无行业哑变量时补一列常数列作**截距**（2026-09-11 第二批 c 项修复）：
+        # 此前只传市值时设计矩阵仅 [log(mc)]，等价于过原点回归，与含截距的
+        # neutralize_single 差一个截距项。含行业哑变量时其列和本身即全 1 向量、
+        # 已 span 截距，不再重复加列（避免共线）。
+        if not has_industry:
+            cols.append(pd.Series(np.ones(len(codes_valid)), index=codes_valid,
+                                  name="_intercept"))
 
         x_matrix = np.column_stack([c.values for c in cols])
         beta, *_ = np.linalg.lstsq(x_matrix, y_valid.values, rcond=None)

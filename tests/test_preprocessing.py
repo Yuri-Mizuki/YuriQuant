@@ -276,23 +276,26 @@ def test_neutralize_single_residual_is_mean_zero_and_nan_safe():
     assert np.allclose(got.mean(axis=1).dropna().to_numpy(), 0.0, atol=1e-12)
 
 
-def test_neutralize_size_only_lacks_intercept_known_gap():
-    """**characterization**：``neutralize`` 只传市值时是**过原点**回归。
+def test_neutralize_size_only_matches_with_intercept_version():
+    """c 项（2026-09-11）：``neutralize`` 只传市值时已补截距，与 ``neutralize_single`` 同口径。
 
-    它没有截距列——截距靠"全量行业哑变量的列和 = 全 1 向量"来 span，不传行业
-    就没有。所以纯市值情形它与含截距的 ``neutralize_single`` **差一个截距项**，
-    两者不是同一口径。
+    此前该路径的设计矩阵仅 ``[log(mc)]``，等价于**过原点回归**，残差均值不为 0，
+    与含截距的 ``neutralize_single`` 差一个截距项（2026-09-10 审计留作待办，
+    当日用一条 characterization 测试钉住了这个差异）。现在补 ``_intercept`` 列，
+    两个入口口径一致。
 
-    2026-09-10 审计把"是否给 size-only 路径补 ones 列"留作待定项：若将来统一到
-    含截距口径，本测试会红——那正是提醒你"这里的口径被有意识地改过了"。
+    影响面实测很小：真实 HS300 上"样本不足以容纳行业哑变量"的降级天数 = 0
+    （``scripts/oneoff/probe_size_only_exposure.py``），所以只有"行业面板完全
+    未传"的调用方（如 GP 特征预处理在行业加载失败时）才会走到这里。
     """
     panel, mc = _mc_case(n_days=1, n_codes=30)
     size_only = neutralize(panel, market_cap_panel=mc)
     with_intercept = neutralize_single(panel, mc)
 
-    # 现行为：size-only 残差均值不为 0（过原点回归不保证正交于常数）
-    assert abs(float(size_only.iloc[0].mean())) > 1e-3
-    # 含截距版均值恒为 0
+    # 含截距的直接推论：每日残差正交于常数（均值恰为 0）
+    assert abs(float(size_only.iloc[0].mean())) < 1e-12
     assert abs(float(with_intercept.iloc[0].mean())) < 1e-12
-    # 两者确实不同
-    assert float((size_only - with_intercept).abs().max().max()) > 1e-3
+    # 两个入口现在是同一口径
+    assert float((size_only - with_intercept).abs().max().max()) < 1e-12
+    # NaN 位置原样保留
+    assert int(size_only.notna().sum().sum()) == int(panel.notna().sum().sum())
