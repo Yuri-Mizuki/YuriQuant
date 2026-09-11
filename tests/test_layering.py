@@ -19,6 +19,9 @@ optimize/strategy 边界）
     （2026-09-11 P1#3 倒挂收口）
 12. 入库代码不得 import gitignored 目录（scripts/oneoff 等）——否则干净 clone /
     生产环境必 ImportError（2026-09-11 P0+P1：全A 构建管线迁入 scripts/builders/）
+13. model/monitoring/optimize 不得在**模块级** import research（2026-09-11 P2：
+    research 是实验层且 __init__/html_report 拖 matplotlib/openpyxl，向上依赖
+    一律降为函数级按需引用；AST 区分模块级与函数级）
 """
 from __future__ import annotations
 
@@ -102,6 +105,42 @@ def test_research_does_not_import_optimize():
         if bad:
             offenders.append(f"{f.relative_to(ROOT)} -> {sorted(bad)}")
     assert not offenders, "research -> optimize 违规:\n" + "\n".join(offenders)
+
+
+def test_no_module_level_research_import_in_lower_layers():
+    """model / monitoring / optimize 不得在**模块级** import research（守卫 13）。
+
+    research 是实验层：其 ``__init__`` / ``html_report`` / ``xlsx_report`` 拖
+    matplotlib + openpyxl。上层包（消费方）对其的引用一律**函数级**按需——
+    否则 ``import monitoring`` 这类生产入口被连带拖慢，且埋下潜在运行时环。
+    AST 区分模块级（col_offset == 0）与函数内 import；子模块直接 import
+    （``import research.factor_analysis``）同样算模块级违规。
+    """
+    import ast
+
+    def _module_level_research(path: Path) -> list[str]:
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        hits = []
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                if node.col_offset != 0:
+                    continue  # 函数/类内的按需引用是合规形态
+                if isinstance(node, ast.ImportFrom):
+                    root_mod = (node.module or "").split(".")[0]
+                else:
+                    root_mod = node.names[0].name.split(".")[0] if node.names else ""
+                if root_mod == "research":
+                    hits.append(f"line {node.lineno}")
+        return hits
+
+    offenders = []
+    for pkg in ("model", "monitoring", "optimize"):
+        for f in sorted((ROOT / pkg).rglob("*.py")):
+            hits = _module_level_research(f)
+            if hits:
+                offenders.append(f"{f.relative_to(ROOT)}: {', '.join(hits)}")
+    assert not offenders, (
+        "下层包模块级 import research（应降为函数级按需引用）:\n" + "\n".join(offenders))
 
 
 def test_stats_is_pure():

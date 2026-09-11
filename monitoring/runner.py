@@ -17,7 +17,6 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from backtest.metrics import PERIODS_PER_YEAR
 from config import Config
 from monitoring.alerts import attach_alerts
 from monitoring.ledger import MonitoringLedger
@@ -28,10 +27,7 @@ from monitoring.metrics import (
     load_returns_panel,
 )
 from monitoring.state import confirm_rows
-from research.html_report import (
-    page,
-    svg_sparkline_monthly as _sparkline_monthly,
-)
+from stats import PERIODS_PER_YEAR
 
 log = logging.getLogger("monitoring")
 
@@ -397,6 +393,10 @@ def generate_html_report(
     章节顺序：概要 → 模型预测 → 全部快照 → 拥挤度 → 告警明细。
     所有表格使用 thead/tbody 分离，排序 JS 只排 tbody 行，不会把表头挤走。
     """
+    # research 是实验层（其 __init__/html_report 拖 matplotlib）：monitoring
+    # （生产监控）只允许函数级向上引用（2026-09-11 自模块级降级，守卫防回潮）。
+    from research.html_report import page, svg_sparkline_monthly as _sparkline_monthly
+
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 

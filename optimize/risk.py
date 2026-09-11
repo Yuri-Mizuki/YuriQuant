@@ -26,8 +26,6 @@ import numpy as np
 import pandas as pd
 
 from optimize.solver import to_psd, estimate_covariance
-from research.attribution import alpha_beta, brinson_attribution
-from research.benchmarks import compare_to_benchmark
 
 __all__ = ["risk_attribution", "risk_decomposition"]
 
@@ -56,6 +54,12 @@ def risk_attribution(
     Returns:
         dict: alpha_beta(dict) / benchmark(dict) / brinson(可选 (df, summary))。
     """
+    # research 是实验层（且其 __init__ 拖 matplotlib/openpyxl）：optimize 层
+    # 只允许函数级向上引用（2026-09-11 自模块级降级，守卫
+    # test_no_module_level_research_import_in_lower_layers 防回潮）。
+    from research.attribution import alpha_beta, brinson_attribution
+    from research.benchmarks import compare_to_benchmark
+
     out: dict[str, Any] = {
         "alpha_beta": alpha_beta(portfolio_returns, benchmark_returns,
                                  factor_returns=factor_returns),

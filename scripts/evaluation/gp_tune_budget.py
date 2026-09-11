@@ -95,7 +95,6 @@ def main():
     log.info("预算网格: %s × seeds %s", grid, seeds)
 
     # ---- 数据（PIT 并集池 + 核心特征，轻量加载）----
-    from scripts.evaluation.gp_tune_budget import load_pit_core_panels
     panels, returns_panel = load_pit_core_panels(20220101, 20251231)
     features = ["close", "open", "high", "low", "volume", "amount", "returns", "vwap"]
     windows = tuple(int(x) for x in args.windows.split(",") if x.strip())

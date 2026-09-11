@@ -17,11 +17,6 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from scipy import stats as sps
-
-from research.factor_analysis import calc_neutral_ic_series
-from stats.ic import quantile_backtest
-from stats.monitor import monitor_ic_series
 
 MODEL_PREFIX = "model:"
 _MODEL_ID_RE = re.compile(r"model_id=(\d+)")
@@ -147,11 +142,17 @@ def quantile_monotonicity(
     单调性 = Q1..Qn 日均收益与组序号的 Spearman 相关（+1 完美正向，
     -1 完美反向 —— GP 因子负 IC 属正常反向，模型因子应为正向）。
     """
+    from stats.ic import quantile_backtest
+
     qb = quantile_backtest(factor_panel, returns_panel, n_quantiles=n_quantiles)
     ret = qb.diff().dropna(how="all")
     if ret.empty or len(ret.columns) < 2:
         return float("nan"), float("nan")
     mean_ret = ret.mean(axis=0).values
+    # scipy 按需加载（monitoring/__init__ 会 eager import 本模块，模块级 import
+    # 会让 `import monitoring` 白付 ~2s 的 scipy 冷启）
+    from scipy import stats as sps
+
     mono = float(sps.spearmanr(np.arange(1, len(mean_ret) + 1), mean_ret).statistic)
     hi, lo = ret.columns[-1], ret.columns[0]
     ls = float((ret[hi] - ret[lo]).mean())
@@ -204,6 +205,8 @@ def compute_factor_metrics(
     ic = ic_series.dropna()
     ic = ic[ic.index <= as_of]
     if len(ic) >= 2:
+        from stats.monitor import monitor_ic_series
+
         base = monitor_ic_series(ic, window=window)
         m.n_days = base["n_days"]
         m.recent_n_days = base["recent_n_days"]
@@ -213,6 +216,8 @@ def compute_factor_metrics(
         m.ic_ir_recent = base["ic_ir_recent"]
         m.ic_t_nw_recent = base["ic_t_nw_recent"]
         m.ic_p_nw_recent = base["ic_p_nw_recent"]
+
+        from stats.monitor import monitor_ic_series
 
         base252 = monitor_ic_series(ic, window=window_long)
         m.recent_n_days_252 = base252["recent_n_days"]
@@ -258,6 +263,10 @@ def compute_factor_metrics(
     # 中性化 IC：风格剥离后的纯 Alpha IC（style_covariates 传入时计算）
     if style_covariates:
         try:
+            # research 是实验层：monitoring（生产监控）只允许函数级向上引用
+            # （2026-09-11 自模块级降级，守卫防回潮）。
+            from research.factor_analysis import calc_neutral_ic_series
+
             neutral_ic = calc_neutral_ic_series(
                 factor_panel, returns_panel,
                 style_covariates=style_covariates,
