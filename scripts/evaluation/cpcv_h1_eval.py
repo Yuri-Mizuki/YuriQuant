@@ -55,11 +55,11 @@ log = setup_logging("cpcv_h1_eval")
 
 OUT_DIR = Path("reports") / "cpcv_h1"
 
-from scipy import stats as sp_stats  # noqa: E402
-
 from factor.cv import CPCVPath, cpcv  # noqa: E402
 from model.labels import build_labels, forward_returns  # noqa: E402
 from research.factor_analysis import calc_ic_series  # noqa: E402
+from stats.ic import calc_ir  # noqa: E402
+from stats.significance import mean_inference, t_pvalue  # noqa: E402
 
 # ===========================================================================
 # h=1 固定配置（已定型，不重新选择）
@@ -191,12 +191,17 @@ def _eval_path(
         return {"ic_mean": np.nan, "n_days": len(ic)}
 
     t_nw, _, _ = nw_tstat(ic.values) if len(ic) > 1 else (0.0, 0.0, 0)
-    p_nw = 2 * (1 - sp_stats.t.cdf(abs(t_nw), df=max(len(ic) - 1, 1)))
+    # p 值走判定层真源；此前手搓 2*(1-t.cdf) 与 t_pvalue 逐位等价（2026-09-11 收口）
+    p_nw = t_pvalue(t_nw, df=len(ic) - 1)
 
     return {
         "ic_mean": float(ic.mean()),
         "ic_std": float(ic.std()) if len(ic) > 1 else np.nan,
-        "ic_ir": float(ic.mean() / ic.std()) if len(ic) > 1 and ic.std() > 0 else np.nan,
+        # ICIR 年化走 calc_ir 真源（×√PERIODS_PER_YEAR，与 rolling_grid /
+        # factor_library 同名口径一致）。此前是未年化的 mean/std——同名字段
+        # 两种定义，跨报告对比会差 √252 倍（2026-09-11 修复；存量
+        # reports/cpcv_h1/ 产物为旧口径，下次重跑覆盖）。
+        "ic_ir": float(calc_ir(ic)) if len(ic) > 1 else np.nan,
         "ic_t_nw": float(t_nw),
         "ic_p_nw": float(p_nw),
         "n_days": int(len(ic)),
@@ -208,12 +213,17 @@ def _eval_path(
 # 路径间显著性检验
 # ===========================================================================
 def _path_significance(path_ics: np.ndarray) -> dict:
-    """对路径间 IC 均值做单样本 t-test（H0: mean IC = 0）。"""
+    """对路径间 IC 均值做单样本 t 检验（H0: mean IC = 0）。
+
+    走 ``stats.significance.mean_inference(robust=False)`` 真源——OLS 单样本 t，
+    与 ``scipy.stats.ttest_1samp`` 逐位一致（2026-09-11 收口，此前自调 scipy）。
+    """
     valid = path_ics[~np.isnan(path_ics)]
     if len(valid) < 3:
         return {"ttest_stat": np.nan, "ttest_p": np.nan, "note": "路径不足"}
 
-    t_stat, p_val = sp_stats.ttest_1samp(valid, 0.0)
+    _inf = mean_inference(valid, robust=False)
+    t_stat, p_val = _inf["t_stat"], _inf["p_value"]
     return {
         "ttest_stat": float(t_stat),
         "ttest_p": float(p_val),

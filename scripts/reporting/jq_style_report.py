@@ -24,7 +24,6 @@ import json
 import sys
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -34,6 +33,9 @@ if str(ROOT) not in sys.path:
 from config import Config  # noqa: E402
 from scripts.common.cli_common import setup_logging  # noqa: E402
 from research.html_report import page  # noqa: E402
+from backtest.metrics import (  # noqa: E402
+    annual_return, annual_volatility, calmar_ratio, information_ratio, sharpe_ratio,
+)
 
 log = setup_logging("jq_style_report")
 
@@ -111,28 +113,35 @@ def load_benchmark(days: pd.DatetimeIndex) -> pd.Series:
 
 
 def _sharpe(dr: pd.Series) -> float:
-    sd = dr.std()
-    return float(dr.mean() / sd * np.sqrt(252)) if sd > 0 else 0.0
+    """Sharpe 走 backtest.metrics 真源（几何超额口径，rf=0）。
+
+    旧实现是算术口径 mean/sd·√252——与 calc_all_metrics / rolling_grid 报告的
+    同名 "Sharpe" 不是同一公式，两份报告数字对不上（2026-09-11 统一，数值有变）。
+    """
+    return float(sharpe_ratio(dr))
 
 
 def stats_block(dr: pd.Series, bench: pd.Series, turnover: pd.Series | None) -> dict:
     n = len(dr)
     cum = float((1 + dr).prod() - 1)
-    ann = float((1 + dr).prod() ** (252 / n) - 1)
+    ann = float(annual_return(dr))
     b_cum = float((1 + bench).prod() - 1)
-    b_ann = float((1 + bench).prod() ** (252 / n) - 1)
+    b_ann = float(annual_return(bench))
     eq = (1 + dr).cumprod()
     mdd = float((eq / eq.cummax() - 1).min())
-    vol = float(dr.std() * np.sqrt(252))
-    # β/α（日频回归年化）
-    cov = np.cov(dr, bench)[0, 1]
-    beta = float(cov / np.var(bench)) if np.var(bench) > 0 else 0.0
-    alpha = ann - beta * b_ann
-    ex = dr - bench
-    ex_sd = ex.std()
-    ir = float(ex.mean() / ex_sd * np.sqrt(252)) if ex_sd > 0 else 0.0
+    vol = float(annual_volatility(dr))
+    # β/α：OLS 回归真源（research.attribution.alpha_beta）——α 为年化回归截距
+    # （附 NW t/p），β 为回归斜率。旧实现 alpha = ann − β·b_ann 是几何恒等式
+    # 而非回归 α，与 alla_attribution 报告的 "α" 同名不同义（2026-09-11 统一，
+    # α 数值有变）。
+    from research.attribution import alpha_beta
+
+    ab = alpha_beta(dr, bench)
+    beta = float(ab["beta"])
+    alpha = float(ab["alpha_annual"])
+    ir = float(information_ratio(dr, bench))
     to = turnover.dropna() if turnover is not None else pd.Series(dtype=float)
-    calmar = ann / abs(mdd) if mdd < 0 else 0.0
+    calmar = float(calmar_ratio(dr))
     return {
         "cum": cum, "ann": ann, "excess_cum": cum - b_cum,
         "sharpe": _sharpe(dr), "mdd": mdd, "win": float((dr > 0).mean()),

@@ -682,6 +682,11 @@ class FactorLibrary:
 
         残差 IC 显著（|t|>2）→ 新因子相对库内最相似因子仍含增量信息；
         不显著 → 只是旧因子的（近似）线性组合，入库价值低。
+
+        口径：逐日 **Rank IC**（残差与未来收益先截面 rank 再 Pearson，与
+        ``calc_ic_series`` 的 spearman 默认一致）。2026-09-11 前为原始
+        Pearson——与库内 "IC" 一词的其余用法不同义且未声明；存量 registry 行
+        的 ``resid_ic`` / ``resid_t_nw`` 为旧口径，重新注册后按新口径覆盖。
         """
         old = self.get_panel(top_name)
         if old is None:
@@ -709,7 +714,10 @@ class FactorLibrary:
                 continue
             if len(resid) < 5 or np.std(rv) == 0:
                 continue
-            ic_d = float(np.corrcoef(resid, rv)[0, 1])
+            ic_d = float(np.corrcoef(
+                pd.Series(resid).rank().values,
+                pd.Series(rv).rank().values,
+            )[0, 1])
             if not np.isnan(ic_d):
                 resid_dates.append(d)
                 resid_vals.append(ic_d)

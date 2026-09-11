@@ -39,6 +39,8 @@ from research.factor_report import (  # noqa: E402
     monthly_nav, monthly_series, qcut_rebal, weekly_ic_series,
 )
 from research.html_report import page  # noqa: E402
+from stats.ic import calc_ir  # noqa: E402
+from backtest.metrics import sharpe_ratio  # noqa: E402
 
 def build_factor_data(lib: FactorLibrary, reg: pd.DataFrame,
                       returns: pd.DataFrame | None = None) -> list[dict]:
@@ -56,14 +58,20 @@ def build_factor_data(lib: FactorLibrary, reg: pd.DataFrame,
         n = len(ic)
         ic_mean = float(ic.mean()) if n else np.nan
         ic_std = float(ic.std()) if n > 1 else np.nan
-        icir = ic_mean / ic_std * np.sqrt(12) if ic_std and ic_std > 0 else np.nan
+        # ICIR / LS Sharpe 优先读 registry 落盘值（calc_ir 与 backtest.metrics
+        # 的 canonical 口径，日频 ×√252 年化）；缺列/NaN 时按同口径现算。此前
+        # 自算误用 ×√12（月频年化因子），把两个指标系统性低估 ~4.6 倍，与
+        # factor_library 报告同名字段对不上（2026-09-11 修复）。
+        icir = pd.to_numeric(r.get("ic_ir"), errors="coerce")
+        if pd.isna(icir):
+            icir = calc_ir(ic) if n > 1 and ic_std and ic_std > 0 else np.nan
         ls_ret = float(ls_eq.iloc[-1] - 1) if len(ls_eq) else np.nan
         lo_ret = float(lo_eq.iloc[-1] - 1) if len(lo_eq) else np.nan
-        ls_sharpe = None
-        if "dret_ls_M" in ev.columns:
+        ls_sharpe = pd.to_numeric(r.get("sharpe_ls_M"), errors="coerce")
+        if pd.isna(ls_sharpe) and "dret_ls_M" in ev.columns:
             d = ev["dret_ls_M"].dropna()
-            if len(d) > 1 and d.std() > 0:
-                ls_sharpe = float(d.mean() / d.std() * np.sqrt(12))
+            if len(d) > 1:
+                ls_sharpe = sharpe_ratio(d)
 
         item = {
             "name": name,
@@ -84,7 +92,7 @@ def build_factor_data(lib: FactorLibrary, reg: pd.DataFrame,
                 "t_nw": round(float(r.get("t_stat_nw", np.nan)), 3) if pd.notna(r.get("t_stat_nw")) else None,
                 "ls_ret": round(ls_ret, 4) if not np.isnan(ls_ret) else None,
                 "lo_ret": round(lo_ret, 4) if not np.isnan(lo_ret) else None,
-                "ls_sharpe": round(ls_sharpe, 3) if ls_sharpe is not None else None,
+                "ls_sharpe": round(float(ls_sharpe), 3) if pd.notna(ls_sharpe) else None,
                 "win": round(float(r.get("ic_win_rate", np.nan)), 3) if pd.notna(r.get("ic_win_rate")) else None,
                 "turn": round(float(r.get("avg_turnover_ls_M", np.nan)), 4) if pd.notna(r.get("avg_turnover_ls_M")) else None,
                 "sig": bool(r.get("significant", False)),

@@ -251,7 +251,8 @@ def test_no_inline_ols_t_left_in_repo():
     root = Path(__file__).resolve().parents[1]
     source_of_truth = root / "stats" / "significance.py"   # 真源自身当然含该公式
     offenders: list[str] = []
-    for pkg in ("factor", "research", "scripts", "model", "monitoring", "stats"):
+    for pkg in ("factor", "research", "scripts", "model", "monitoring", "stats",
+                "backtest", "optimize", "data", "strategy"):
         for p in sorted((root / pkg).rglob("*.py")):
             if "oneoff" in p.parts or p.name.startswith("_old_"):
                 continue
