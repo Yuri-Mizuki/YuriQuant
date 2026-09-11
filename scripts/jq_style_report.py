@@ -32,6 +32,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.cli_common import setup_logging  # noqa: E402
+from research.html_report import page  # noqa: E402
 
 log = setup_logging("jq_style_report")
 
@@ -44,6 +45,44 @@ C_STRAT = "#3f8cd6"     # 策略：蓝
 C_BENCH = "#e05d5d"     # 基准：红
 C_EXCESS = "#f5a623"    # 超额：橙
 C_DD = "#9db3c9"        # 回撤：灰蓝
+
+# 报告主题（经 research.html_report.page 外壳注入；本文件不再自拼 HTML 外壳）
+_CHART_CDN = ('<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/'
+              'dist/chart.umd.min.js"></script>')
+_CSS = """
+ * { box-sizing: border-box; }
+ body { font-family: "Microsoft YaHei","PingFang SC",sans-serif; margin: 0;
+        background: #eef1f5; color: #333; font-size: 13px; }
+ .navbar { background: #2d3a4a; color: #fff; padding: 10px 20px;
+           display: flex; align-items: baseline; gap: 14px; }
+ .navbar .title { font-size: 15px; font-weight: 600; }
+ .navbar .sub { font-size: 12px; color: #aab7c8; }
+ .wrap { max-width: 1120px; margin: 14px auto; padding: 0 12px; }
+ .card { background: #fff; border: 1px solid #e3e8ee; border-radius: 4px;
+         margin-bottom: 12px; }
+ .strip { display: flex; flex-wrap: wrap; padding: 14px 10px 6px; }
+ .stat { min-width: 118px; padding: 2px 14px 10px; }
+ .stat .v { font-size: 20px; font-weight: 600; }
+ .stat .l { font-size: 12px; color: #8f9bb3; margin-top: 2px; }
+ .pos { color: #e04b4b; } .neg { color: #1fa06a; }
+ .more-toggle { cursor: pointer; }
+ .tabs { display: flex; border-bottom: 1px solid #e3e8ee; padding: 0 12px; }
+ .tab { padding: 10px 16px; color: #666; border-bottom: 2px solid transparent; }
+ .tab.active { color: #2d6fb2; border-bottom-color: #2d6fb2; font-weight: 600; }
+ .ranges { margin-left: auto; display: flex; gap: 4px; align-items: center;
+          padding: 6px 0; }
+ .ranges button { border: 1px solid #d8dee8; background: #fff; color: #555;
+                 padding: 3px 10px; border-radius: 3px; cursor: pointer; font-size: 12px; }
+ .ranges button.on { background: #2d6fb2; color: #fff; border-color: #2d6fb2; }
+ .chartbox { padding: 10px 14px 14px; }
+ .main { height: 360px; } .sub { height: 140px; }
+ .legendline { padding: 4px 16px 0; color: #666; font-size: 12px; }
+ table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+ th, td { border-bottom: 1px solid #eef1f5; padding: 6px 12px; text-align: right; }
+ th { color: #8f9bb3; font-weight: 500; background: #fafbfd; }
+ td:first-child, th:first-child { text-align: left; }
+ .note { font-size: 12px; color: #8f9bb3; padding: 10px 16px 14px; line-height: 1.8; }
+"""
 
 
 def load_run(run_id: str | None) -> tuple[str, pd.DataFrame]:
@@ -203,45 +242,7 @@ def main():
         f"<td>{r['sharpe']:.2f}</td></tr>"
         for r in yearly)
 
-    html = f"""<!DOCTYPE html>
-<html lang="zh"><head><meta charset="utf-8">
-<title>{run_id} · 收益曲线（vs {BENCH_LABEL}）</title>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-<style>
- * {{ box-sizing: border-box; }}
- body {{ font-family: "Microsoft YaHei","PingFang SC",sans-serif; margin: 0;
-        background: #eef1f5; color: #333; font-size: 13px; }}
- .navbar {{ background: #2d3a4a; color: #fff; padding: 10px 20px;
-           display: flex; align-items: baseline; gap: 14px; }}
- .navbar .title {{ font-size: 15px; font-weight: 600; }}
- .navbar .sub {{ font-size: 12px; color: #aab7c8; }}
- .wrap {{ max-width: 1120px; margin: 14px auto; padding: 0 12px; }}
- .card {{ background: #fff; border: 1px solid #e3e8ee; border-radius: 4px;
-         margin-bottom: 12px; }}
- .strip {{ display: flex; flex-wrap: wrap; padding: 14px 10px 6px; }}
- .stat {{ min-width: 118px; padding: 2px 14px 10px; }}
- .stat .v {{ font-size: 20px; font-weight: 600; }}
- .stat .l {{ font-size: 12px; color: #8f9bb3; margin-top: 2px; }}
- .pos {{ color: #e04b4b; }} .neg {{ color: #1fa06a; }}
- .more-toggle {{ cursor: pointer; }}
- .tabs {{ display: flex; border-bottom: 1px solid #e3e8ee; padding: 0 12px; }}
- .tab {{ padding: 10px 16px; color: #666; border-bottom: 2px solid transparent; }}
- .tab.active {{ color: #2d6fb2; border-bottom-color: #2d6fb2; font-weight: 600; }}
- .ranges {{ margin-left: auto; display: flex; gap: 4px; align-items: center;
-          padding: 6px 0; }}
- .ranges button {{ border: 1px solid #d8dee8; background: #fff; color: #555;
-                 padding: 3px 10px; border-radius: 3px; cursor: pointer; font-size: 12px; }}
- .ranges button.on {{ background: #2d6fb2; color: #fff; border-color: #2d6fb2; }}
- .chartbox {{ padding: 10px 14px 14px; }}
- .main {{ height: 360px; }} .sub {{ height: 140px; }}
- .legendline {{ padding: 4px 16px 0; color: #666; font-size: 12px; }}
- table {{ border-collapse: collapse; width: 100%; font-size: 12.5px; }}
- th, td {{ border-bottom: 1px solid #eef1f5; padding: 6px 12px; text-align: right; }}
- th {{ color: #8f9bb3; font-weight: 500; background: #fafbfd; }}
- td:first-child, th:first-child {{ text-align: left; }}
- .note {{ font-size: 12px; color: #8f9bb3; padding: 10px 16px 14px; line-height: 1.8; }}
-</style></head><body>
-<div class="navbar">
+    body = f"""<div class="navbar">
   <span class="title">YuriQuant · 全A滚动训练实验</span>
   <span class="sub">策略 <code>{run_id}</code>
    · 样本外 {str(dr.index[0].date())} ~ {str(dr.index[-1].date())}
@@ -365,7 +366,9 @@ document.getElementById('moreToggle').onclick = () => {{
   s.style.display = s.style.display === 'none' ? 'flex' : 'none';
 }};
 </script>
-</body></html>"""
+"""
+    html = page(f"{run_id} · 收益曲线（vs {BENCH_LABEL}）", header="", body=body,
+                css=_CSS, head_extra=_CHART_CDN)
 
     out = OUT / "best_strategy_jq.html"
     out.write_text(html, encoding="utf-8")

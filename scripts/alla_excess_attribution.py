@@ -23,6 +23,7 @@ import numpy as np
 import pandas as pd
 
 from scripts.cli_common import setup_logging
+from research.html_report import page
 
 log = setup_logging("alla_excess_attribution")
 
@@ -140,8 +141,8 @@ def compute_attribution(dr: pd.Series, weights: pd.DataFrame,
 # ---------------------------------------------------------------------------
 # 报告渲染
 # ---------------------------------------------------------------------------
-_HTML_STYLE = """
-<style>
+# 报告主题 CSS（经 research.html_report.page 外壳注入；本文件不再自拼 HTML 外壳）
+_CSS = """
 body{font-family:'Microsoft YaHei',sans-serif;margin:24px;color:#222;max-width:960px}
 h1{font-size:20px} h2{font-size:16px;margin-top:28px}
 table{border-collapse:collapse;margin:12px 0;font-size:13px}
@@ -149,7 +150,6 @@ th,td{border:1px solid #ddd;padding:5px 10px;text-align:right}
 th{background:#f5f5f5} td:first-child,th:first-child{text-align:left}
 .pos{color:#c0392b}.neg{color:#27ae60}
 .note{color:#666;font-size:12px;margin:6px 0}
-</style>
 """
 
 
@@ -192,9 +192,7 @@ def render_html(ab_df: pd.DataFrame, br_df: pd.DataFrame,
         ])
     br_tbl = _table(["行业", "配置效应", "选择效应", "交互效应", "合计"], br_rows)
 
-    html = f"""<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8">
-<title>全A主策略超额归因</title>{_HTML_STYLE}</head><body>
-<h1>全A主策略超额收益归因（gbdt × h1 × 月频 × raw × Top10%）</h1>
+    body = f"""<h1>全A主策略超额收益归因（gbdt × h1 × 月频 × raw × Top10%）</h1>
 <p class="note">组合 vs 上证指数：年化超额 {_fmt_pct(cmp_summary.get('excess_idx'))}，
 跟踪误差 {_fmt_pct(cmp_summary.get('te_idx'))}，相关系数 {_fmt_f(cmp_summary.get('corr_idx'), 3)}。
 Brinson 基准为全A等权，效应为 Carino 链接累计值</p>
@@ -208,7 +206,8 @@ Brinson 基准为全A等权，效应为 Carino 链接累计值</p>
 {br_tbl}
 <p class="note">配置效应=行业间权重偏离的贡献；选择效应=行业内选股贡献；
 两者合计应近似等于主动收益。</p>
-</body></html>"""
+"""
+    html = page("全A主策略超额归因", header="", body=body, css=_CSS)
     out_path.write_text(html, encoding="utf-8")
     log.info("HTML 报告：%s", out_path)
 

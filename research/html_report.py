@@ -286,15 +286,29 @@ def page(
     head_extra: str = "",
     scripts: str = "",
     footer: str = "",
+    extra_css: str = "",
 ) -> str:
     """自包含 HTML 页面外壳（统一 doctype/head/标题/样式/脚本块）。
 
-    - css: 页面样式（默认 BASE_CSS；个性化主题可传入整段 CSS 覆盖）
+    **这是全仓唯一的 HTML 外壳实现**——任何报告模块都不应自己拼 ``<!DOCTYPE``
+    （守卫见 ``tests/test_report_shell.py``）。
+
+    样式两种用法（2026-09-11 补 ``extra_css``）：
+
+    - ``css=<整段>``：**替换** ``BASE_CSS``，用于自带完整主题的报告
+      （如 jq_style_report / rolling_grid_report 的深色导航主题）。
+    - ``extra_css=<增量>``：``BASE_CSS`` 在前、增量在后**叠加**（同优先级时后者
+      胜出）。想让报告"继承基础样式 + 只改几处"时用它，避免整份拷贝 BASE_CSS。
+      两者互斥：同时传时 ``css`` 优先。
+
     - header: 页首 HTML（默认 ``<h1>标题 + <div class=sub>meta</div>``；可传自定义块或空串）
     - head_extra: <head> 内追加标签（如 Chart.js CDN <script src>）
     - scripts: </body> 前的原始 <script>...</script> 块（可多个）
     """
-    css = css or BASE_CSS
+    if css is not None:
+        css = css
+    else:
+        css = BASE_CSS + (("\n" + extra_css) if extra_css else "")
     header = header if header is not None else f"<h1>{title}</h1>\n<div class=\"sub\">{meta}</div>"
     return f"""<!DOCTYPE html>
 <html lang="zh-CN"><head><meta charset="utf-8">

@@ -25,10 +25,31 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.cli_common import setup_logging  # noqa: E402
+from research.html_report import page  # noqa: E402
 
 log = setup_logging("rolling_grid_report")
 
 OUT = Path("reports") / "alla_rolling"
+
+# 报告主题（经 research.html_report.page 外壳注入；本文件不再自拼 HTML 外壳）
+_TITLE = "全A滚动训练实验报告（2018~now）"
+_CHART_CDN = ('<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/'
+              'dist/chart.umd.min.js"></script>')
+_CSS = """
+ body { font-family: "Microsoft YaHei", sans-serif; margin: 24px auto; max-width: 1280px;
+        color: #222; background: #fafafa; }
+ h1 { font-size: 22px; } h2 { font-size: 18px; border-left: 4px solid #c0392b;
+      padding-left: 8px; margin-top: 36px; } h3 { font-size: 15px; color: #444; }
+ table { border-collapse: collapse; font-size: 12px; width: 100%; margin: 8px 0 20px; }
+ th, td { border: 1px solid #ddd; padding: 4px 7px; text-align: right; white-space: nowrap; }
+ th { background: #eee; cursor: pointer; position: sticky; top: 0; }
+ td.rid { text-align: left; font-family: Consolas, monospace; }
+ .pos { color: #c0392b; } .neg { color: #27ae60; }
+ .chartwrap { height: 380px; background: #fff; border: 1px solid #ddd; padding: 8px; }
+ .note { background: #fff8e1; border-left: 4px solid #f1c40f; padding: 10px 14px;
+         font-size: 13px; line-height: 1.7; }
+ .meta { color: #666; font-size: 12px; }
+"""
 
 # 代表性对比组（run_id 片段匹配）
 GROUPS = {
@@ -278,26 +299,7 @@ def main():
             .sort_values("mean_excess", ascending=False))
     robust = best[(best["pos"] >= max(3, best["n"].max() - 1)) & (best["mean_excess"] > 0)]
 
-    html = f"""<!DOCTYPE html>
-<html lang="zh"><head><meta charset="utf-8">
-<title>全A滚动训练实验报告（2018~now）</title>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-<style>
- body {{ font-family: "Microsoft YaHei", sans-serif; margin: 24px auto; max-width: 1280px;
-        color: #222; background: #fafafa; }}
- h1 {{ font-size: 22px; }} h2 {{ font-size: 18px; border-left: 4px solid #c0392b;
-      padding-left: 8px; margin-top: 36px; }} h3 {{ font-size: 15px; color: #444; }}
- table {{ border-collapse: collapse; font-size: 12px; width: 100%; margin: 8px 0 20px; }}
- th, td {{ border: 1px solid #ddd; padding: 4px 7px; text-align: right; white-space: nowrap; }}
- th {{ background: #eee; cursor: pointer; position: sticky; top: 0; }}
- td.rid {{ text-align: left; font-family: Consolas, monospace; }}
- .pos {{ color: #c0392b; }} .neg {{ color: #27ae60; }}
- .chartwrap {{ height: 380px; background: #fff; border: 1px solid #ddd; padding: 8px; }}
- .note {{ background: #fff8e1; border-left: 4px solid #f1c40f; padding: 10px 14px;
-         font-size: 13px; line-height: 1.7; }}
- .meta {{ color: #666; font-size: 12px; }}
-</style></head><body>
-<h1>全A多年度滚动训练实验报告（2018 ~ now）</h1>
+    body = f"""<h1>全A多年度滚动训练实验报告（2018 ~ now）</h1>
 <p class="meta">生成于 {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M')} ·
 股票池：全A（数据缓存内全部 A 股，{len(run_ids)} 个组合配置） ·
 预测评估年数：{n_years} 年 · 基准：上证指数 000001.SH 与 全A等权</p>
@@ -345,7 +347,8 @@ horizon 只剩 3~16 特征的连锁误杀问题；⑦ 基本面/股东因子面�
 
 <p class="meta">数据与产物目录：reports/alla_rolling/（metrics_overall.csv ·
 metrics_yearly.csv · ic_stats.csv · equity/*.csv · pred/*.parquet）</p>
-</body></html>"""
+"""
+    html = page(_TITLE, header="", body=body, css=_CSS, head_extra=_CHART_CDN)
     out = OUT / "report.html"
     out.write_text(html, encoding="utf-8")
     log.info("报告已生成: %s（%.1f MB）", out.resolve(), out.stat().st_size / 1e6)
