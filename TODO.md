@@ -449,8 +449,9 @@
   ImportError**。已按 `scripts/oneoff/README.md` 自己的规则修复（"被其他模块
   import 的脚本不放这里"）：**P0+P1 共 22 个模块**迁入新建的**受跟踪**
   `scripts/builders/`（13 个因子面板构建器 + 8 个数据回补器 + 1 个编排器）。
-  依赖闭包由 `scripts/oneoff/_audit_oneoff_closure.py` 实算（生产直接依赖的
-  恰好 5 个、1666 行、自成闭包）。顺带公开化 7 个跨模块私有名。
+  依赖闭包由一次性脚本 `scripts/oneoff/_audit_oneoff_closure.py` 实算（生产直接依赖的
+  恰好 5 个、1666 行、自成闭包）。⚠️ 该脚本已随 2026-09-11「一次性工具清理」删除，
+  结论见 `.workbuddy/memory/2026-09-11.md`。顺带公开化 7 个跨模块私有名。
   守卫：`test_no_tracked_code_imports_gitignored_dirs`（AST 版，替代原 xfail）。
 - [x] **私有名倒挂（已由守卫泛化一并清干净，`3c32279`）**：守卫从"逐模块列表"
   改为**通用 AST 规则**后一次扫出 18 处，其中 **5 处在生产代码**
@@ -463,10 +464,16 @@
   （`PYTHONHASHSEED`）→ 同输入两次运行产物不同。改用 `hashlib` 摘要即可。
 - [ ] **其余 scripts 层私有名跨模块 import**：仅剩 `scripts/textmining/*`
   内部互引（另一会话在改，守卫已按前缀豁免）。待其落地后把豁免项清零。
-- [ ] **根目录 5 个 `_probe_*.py`**（`_probe_cols` / `_probe_pledge` /
+- [x] **根目录 5 个 `_probe_*.py`（已清理）**（`_probe_cols` / `_probe_pledge` /
   `_probe_quality` / `_probe_senti_artifacts` / `_probe_status`）：被
-  `.gitignore:38 /_*.py` 覆盖、未跟踪、零引用。但**其中 2 个是另一会话当天在用**
-  （`_probe_senti_artifacts` 12:26 / `_probe_status` 13:28），**未动**。
+  `.gitignore:38 /_*.py` 覆盖、未跟踪、零引用；一次性数据探查，答案已消费。
+  2026-09-11 经用户确认后删除（走回收站）。连同清理的还有：`scripts/oneoff/` 里
+  17 个搬迁/收口用的一次性工具 + 2 个迁移前参照副本（`_old_*_ref.py`）、
+  `reports/_tmp/`（35 项测试日志与临时产物）、工具缓存（`__pycache__` ×18 /
+  `.pytest_cache` / `.ruff_cache`）、`.trae-html-share-packages/`（IDE 缓存）、
+  `etf-rotation-plan/`（8-26 HTML 方案产物）。
+  **保守保留**：`scripts/oneoff/` 里的 12 个 `probe_*.py` 与历史实验脚本
+  —— 它们背后的数字进了 memory/报告，是结论的可复现场景。
 - [ ] **`strategy/enhanced.py` 零 import**（2533 字符）：确认无人引用，
   删或补文档说明归属待定。
 - [ ] **疑似双实现**：`scripts/factors/build_fundamental_factors._add_single_quarter`
