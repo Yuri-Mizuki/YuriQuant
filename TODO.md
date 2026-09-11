@@ -440,31 +440,38 @@
     （另有 textmining 10 / oneoff 5 / data_tools 1）、scripts 索引未随归档同步。
     体量：README 50.6KB → **37.8KB（−25%）**。
 
-#### 🔴 第四批审计新发现（未修，需拍板）
+#### 🔴 第四批审计新发现（① 已于同日修复）
 
-- [ ] **生产脚本依赖 gitignored 目录（P0，真缺陷非洁癖）**：
-  `scripts/alla_daily_rank.py`（生产每日推理）有 **6 处** `from scripts.oneoff.*
-  import`（`build_alla_alpha_panels` / `build_alla_fundamental_factors` /
-  `build_alla_constructed_factors._build_panels` / `build_alla_pledge_factors` /
-  `build_alla_holder_factors._pit_holder_num,_pit_share_holder`），而
-  `.gitignore:41` 忽略整个 `scripts/oneoff/`（本地 62 文件 / 0 跟踪）——
-  **干净 clone / 生产环境上该脚本必然 ImportError**。
-  修法需先拍板这批 `build_all_*` 面板构造函数归哪一层（它们产出的基本面/质押/股东
-  面板是主实验输入；候选：`factor/` 或受跟踪的 `scripts/`）。
-  已用 `tests/test_layering.py::test_production_scripts_do_not_depend_on_gitignored_oneoff`
-  （xfail）记录在案，防"看起来全绿"把缺陷忘掉。
+- [x] **生产脚本依赖 gitignored 目录（真缺陷，已修 `8b634fa`）**：
+  `scripts/alla_daily_rank.py`（生产每日推理，Windows 计划任务
+  `YuriQuant AllaDailyRank`）有 **6 处** `from scripts.oneoff.* import`，而
+  `.gitignore:41` 忽略整个 `scripts/oneoff/` → **干净 clone / 生产环境必然
+  ImportError**。已按 `scripts/oneoff/README.md` 自己的规则修复（"被其他模块
+  import 的脚本不放这里"）：**P0+P1 共 22 个模块**迁入新建的**受跟踪**
+  `scripts/builders/`（13 个因子面板构建器 + 8 个数据回补器 + 1 个编排器）。
+  依赖闭包由 `scripts/oneoff/_audit_oneoff_closure.py` 实算（生产直接依赖的
+  恰好 5 个、1666 行、自成闭包）。顺带公开化 7 个跨模块私有名。
+  守卫：`test_no_tracked_code_imports_gitignored_dirs`（AST 版，替代原 xfail）。
+- [x] **私有名倒挂（已由守卫泛化一并清干净，`3c32279`）**：守卫从"逐模块列表"
+  改为**通用 AST 规则**后一次扫出 18 处，其中 **5 处在生产代码**
+  （`factor/operators.safe_div` / `monitoring/metrics.pick_baseline` /
+  `optimize/solver.to_psd` / `research/factor_report.fig_to_b64`），
+  全部公开化；13 处 tests 白盒登记进白名单。改名前核过 `op_registry()` 走
+  `OpSpec.name`（显式字符串）、因子库 registry 无该字符串 → 对公式解析零影响。
 - [ ] **报告 HTML 不可字节复现**：`rolling_grid_report` 用
   `abs(hash(title)) % 10**8` 生成 canvas id，Python 字符串 hash 每进程随机
   （`PYTHONHASHSEED`）→ 同输入两次运行产物不同。改用 `hashlib` 摘要即可。
-- [ ] **其余 scripts 层私有名跨模块 import（约 19 处）**：
-  主要是 `scripts/textmining/*` 内部互引（另一会话在改，已豁免）与
-  `scripts.oneoff.*`（同上条）。待两条落地后把守卫豁免项清零。
+- [ ] **其余 scripts 层私有名跨模块 import**：仅剩 `scripts/textmining/*`
+  内部互引（另一会话在改，守卫已按前缀豁免）。待其落地后把豁免项清零。
 - [ ] **根目录 5 个 `_probe_*.py`**（`_probe_cols` / `_probe_pledge` /
   `_probe_quality` / `_probe_senti_artifacts` / `_probe_status`）：被
   `.gitignore:38 /_*.py` 覆盖、未跟踪、零引用。但**其中 2 个是另一会话当天在用**
-  （`_probe_senti_artifacts` 12:26 / `_probe_status` 13:28），**本批未动**。
+  （`_probe_senti_artifacts` 12:26 / `_probe_status` 13:28），**未动**。
 - [ ] **`strategy/enhanced.py` 零 import**（2533 字符）：确认无人引用，
   删或补文档说明归属待定。
+- [ ] **疑似双实现**：`scripts/build_fundamental_factors._add_single_quarter`
+  （HS300 单池）与 `scripts/builders/build_alla_fundamental_factors.add_single_quarter`
+  （全A）同名同职，疑为两份拷贝；是否合并需先写等价性探针。
 
 ### 3.2 机械性（可批量清理）
 - [x] **cli_common 推广**（骨架已建、采用率 <15%）：
