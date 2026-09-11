@@ -151,7 +151,7 @@ def main():
              kline.index.get_level_values("code").nunique())
     if pool == "all_a":
         log.info("提示: 因子面板不会自动延伸——需要新日期进实验时重算 "
-                 "scripts/oneoff/build_alla_alpha_panels.py --workers 6（全量 ~1h）"
+                 "scripts/builders/build_alla_alpha_panels.py --workers 6（全量 ~1h）"
                  "及基本面/股东/质押/构造型构建脚本")
 
     # 4.5 增量拉取分钟K线（日内研究，按池落盘 min{period}_{pool}.parquet）

@@ -611,11 +611,11 @@
 
 #### 已完成（2026-09-01）全A多年度滚动训练实验（最终交付物）
 
-- **数据回补**（`scripts/oneoff/fetch_alla_history.py` + `fetch_status_batched.py`）：
+- **数据回补**（`scripts/builders/fetch_alla_history.py` + `fetch_status_batched.py`）：
   全A日线 2015-01~2026-09-01（1098 万行 × 5549 股，分批断点续拉，SDK 大清单
   单查会挂死的对策）、状态表回补 2015-2018、交易日历/上证指数基准 000001.SH。
   backward_factor / equity_structure / 行业分类原本已全A覆盖。
-- **全A公因子数据集 `all_a_2018_2026`**（`scripts/oneoff/build_alla_alpha_panels.py`，
+- **全A公因子数据集 `all_a_2018_2026`**（`scripts/builders/build_alla_alpha_panels.py`，
   54 分钟 4 进程）：alpha101/158/191/360 共 **798 因子 × 2471 日 × 5549 股**
   （float32 面板，~24GB）。截面算子要求全截面在场——按因子分片并行而非按股票分块；
   逐因子落盘 + 预计算 4 个 horizon 的日频 IC 缓存（特征漏斗零 IO 复用）。
@@ -661,7 +661,7 @@
   盘中半拉数据永久污染（daily 增量起点=last+1，不会自愈）；② 状态表拉取在
   cache 层统一 200 只/批 + 3 次重试（SDK 大清单单查会挂死）。
 - **全A面板刷新流程**（日线有新日期后，按序）：① `update_data --pool all_a`；
-  ② `python scripts/oneoff/build_alla_alpha_panels.py --workers 6`（全量重算
+  ② `python scripts/builders/build_alla_alpha_panels.py --workers 6`（全量重算
   ~1h，不加 --resume 才会覆盖延伸）；③ 基本面族按需重跑 `build_alla_fundamental_
   factors / _holder / _pledge / _constructed`（源头已过滤非股票列）；
   ④ `rolling_grid_alla --stage prep` 重建 _base；⑤ 实验各阶段按产物断点续跑。

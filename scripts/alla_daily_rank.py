@@ -78,7 +78,7 @@ TASK_NAME = "YuriQuant AllaDailyRank"
 SYSTEM_PY = Path(os.environ.get("YQ_SYSTEM_PY") or sys.executable)
 
 _ALPHA_PREFIXES = ("alpha101_", "alpha158_", "alpha191_", "alpha360_")
-# 股东族因子名（scripts/oneoff/build_alla_holder_factors 的两组输出键）
+# 股东族因子名（scripts/builders/build_alla_holder_factors 的两组输出键）
 _HOLDER_NUM_KEYS = {"holder_num_chg", "holder_num_yoy"}
 _HOLDER_TOP_KEYS = {"top1_holding", "top5_holding", "top10_holding",
                     "top10_hhi", "inst_holding"}
@@ -86,7 +86,7 @@ _HOLDER_TOP_KEYS = {"top1_holding", "top5_holding", "top10_holding",
 _PLEDGE_KEYS = {"goodwill_ratio", "pledge_ratio", "pledge_holder_ratio",
                 "frozen_ratio", "profit_notice_chg", "profit_express_np_yoy",
                 "profit_express_rev_yoy"}
-# 构造型基本面族（build_alla_constructed_factors._build_panels 输出键）
+# 构造型基本面族（build_alla_constructed_factors.build_panels 输出键）
 _CONSTRUCTED_KEYS = {"np_ded_ratio", "main_profit_ratio", "ebit_margin",
                      "altman_zscore", "debt_to_ebitda", "interest_coverage",
                      "np_rev_gap", "rev_recv_gap", "cfo_to_np",
@@ -588,7 +588,7 @@ def compute_alpha_features(names: list[str], px: dict,
                            industry: pd.DataFrame | None) -> dict[str, pd.DataFrame]:
     """量价因子：factor.alphaXXX 注册表 + AlphaData（与实验面板构建同一路径）。"""
     from factor.alpha_base import AlphaData
-    from scripts.oneoff.build_alla_alpha_panels import collect_factor_fns, registry_lookup
+    from scripts.builders.build_alla_alpha_panels import collect_factor_fns, registry_lookup
 
     fns = collect_factor_fns()
     missing = [n for n in names if n not in fns]
@@ -633,7 +633,7 @@ def compute_fundamental_features(
         names: list[str], close_raw: pd.DataFrame,
         tables: dict[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
     """基本面/分红因子（B族）：复用 build_alla_fundamental_factors 构建器（PIT）。"""
-    from scripts.oneoff.build_alla_fundamental_factors import build_fundamental_panels
+    from scripts.builders.build_alla_fundamental_factors import build_fundamental_panels
 
     panels = build_fundamental_panels(
         close_raw, close_raw.index, close_raw.columns,
@@ -701,9 +701,9 @@ def compute_constructed_features(
         names: list[str], close_adj: pd.DataFrame, close_raw: pd.DataFrame,
         tables: dict[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
     """构造型基本面（B++族）：复用 build_alla_constructed_factors 构建器（PIT）。"""
-    from scripts.oneoff.build_alla_constructed_factors import _build_panels
+    from scripts.builders.build_alla_constructed_factors import build_panels
 
-    panels = _build_panels(close_adj, close_raw, tables["income"],
+    panels = build_panels(close_adj, close_raw, tables["income"],
                            tables["balance"], tables["cashflow"],
                            tables["dividend"])
     missing = [n for n in names if n not in panels]
@@ -717,7 +717,7 @@ def compute_pledge_features(
         names: list[str], close_adj: pd.DataFrame, close_raw: pd.DataFrame,
         tables: dict[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
     """商誉/质押/业绩预告快报（B+族）：复用 build_alla_pledge_factors 构建器。"""
-    from scripts.oneoff.build_alla_pledge_factors import build_pledge_factors
+    from scripts.builders.build_alla_pledge_factors import build_pledge_factors
 
     panels = build_pledge_factors(close_adj, close_raw, tables["balance"],
                                   pledge=tables.get("pledge"),
@@ -735,7 +735,7 @@ def compute_holder_features(names: list[str],
                             columns: pd.Index) -> dict[str, pd.DataFrame]:
     """股东族因子（A族）：复用 build_alla_holder_factors 的 PIT 构建器。"""
     from config import Config
-    from scripts.oneoff.build_alla_holder_factors import _pit_holder_num, _pit_share_holder
+    from scripts.builders.build_alla_holder_factors import pit_holder_num, pit_share_holder
 
     cache_root = Path(str(Config.cache()["root"]))
     out: dict[str, pd.DataFrame] = {}
@@ -744,11 +744,11 @@ def compute_holder_features(names: list[str],
     if need_num:
         p = cache_root / "holder_num.parquet"
         hn = pd.read_parquet(p) if p.exists() else pd.DataFrame()
-        out.update(_pit_holder_num(hn, index, columns))
+        out.update(pit_holder_num(hn, index, columns))
     if need_top:
         p = cache_root / "share_holder.parquet"
         sh = pd.read_parquet(p) if p.exists() else pd.DataFrame()
-        out.update(_pit_share_holder(sh, index, columns))
+        out.update(pit_share_holder(sh, index, columns))
     missing = [n for n in names if n not in out]
     if missing:
         raise KeyError(f"选择文件包含未知股东族因子: {missing}")

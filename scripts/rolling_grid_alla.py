@@ -6,8 +6,8 @@
 做向量化回测，产出分年收益曲线与绩效指标。
 
 数据与因子（2026-09-01 就位）：
-- 全A日线 2015~now（scripts/oneoff/fetch_alla_history.py 回填）；
-- 公因子面板 alpha101/158/191/360 共 ~790 个（scripts/oneoff/build_alla_alpha_panels.py
+- 全A日线 2015~now（scripts/builders/fetch_alla_history.py 回填）；
+- 公因子面板 alpha101/158/191/360 共 ~790 个（scripts/builders/build_alla_alpha_panels.py
   重建于 all_a_2018_2026 数据集，含 4 个 horizon 的日频 IC 缓存）；
 - 风格中性化协变量：市值（equity_structure × 未复权 close）+ 申万一级行业
   + 动量/波动/换手（build_style_covariates）；

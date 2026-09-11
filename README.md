@@ -284,7 +284,8 @@ mock 落 `reports/models_mock`，真实落 `reports/models`。
 
 ### 公共库（被其他模块 import，非独立入口）
 `scripts/` 不是"纯 CLI 目录"——**19 个根模块被跨模块 import**（AST 实测，2026-09-11；
-另有 `textmining/` 10 个、`oneoff/` 5 个、`data_tools/` 1 个）。改动前务必先看谁在依赖：
+另有 `builders/` 被生产依赖、`textmining/` 10 个、`oneoff/` 5 个、`data_tools/` 1 个）。
+改动前务必先看谁在依赖：
 
 **① 公共助手**（多方复用，改它影响面最大）
 
@@ -307,7 +308,23 @@ mock 落 `reports/models_mock`，真实落 `reports/models`。
 | `alla_daily_rank` / `alla_excess_attribution` / `build_intraday_stat_factors` / `factor_explorer_report` / `mine_factors` / `monitor_performance` / `optimize_e2e` / `run_gflownet_phase1` / `gp_tune_budget` / `gtja_repro_eval` / `walk_forward_model` | 各自被 1~6 个（生产脚本 / 测试）依赖 |
 
 > 维护约定：跨模块引用的名字**必须公开**（无下划线前缀）。私有名跨模块 import 由
-> `tests/test_layering.py::test_no_private_import_from_factor_and_data` 拦截。
+> `tests/test_layering.py::test_no_private_names_cross_module`（通用 AST 规则）
+> 拦截；入库代码 import gitignored 目录由
+> `test_no_tracked_code_imports_gitignored_dirs` 拦截。
+
+### 全A 数据集构建 / 回补管线 `scripts/builders/`
+**受跟踪**（2026-09-11 自 gitignored 的 `scripts/oneoff/` 迁入，22 个模块）。
+⚠️ 之所以必须入库：生产入口 `alla_daily_rank`（每日计划任务）直接 import 它，
+迁出前**干净 clone 上生产会 ImportError**。详见该包 `__init__.py` 的说明。
+
+| 分组 | 模块 |
+|---|---|
+| 因子面板构建器（→ `all_a_2018_2026`） | `build_alla_alpha_panels`（alpha101/158/191/360）、`build_alla_fundamental_factors`（B族基本面，**闭包基座**）、`build_alla_constructed_factors`（B++构造型）、`build_alla_pledge_factors`（B+质押/预告）、`build_alla_holder_factors`（股东结构）、`build_alla_status_factors`（停牌/ST）、`build_alla_style_factors`（C·Style）、`build_alla_event_factors`（事件驱动）、`build_alla_margin_factors`（两融）、`build_alla_moneyflow_factors`（机构资金流）、`build_alla_sue_pledge_factors`（SUE+质押深度）、`build_alla_disc_holder_dyn`（大宗折价+股东动态）、`build_alla_factor_neutralized`（因子层中性化面板） |
+| 数据回补器（面板的上游输入） | `fetch_alla_history`、`refetch_status_all_a`、`backfill_financial_alla`、`backfill_holder_alla`、`backfill_pledge_profit_alla`、`backfill_delisted_kline` / `_backward` / `_equity` |
+| 编排器 | `run_evt_margin_build`（事件/两融/资金流：回补 + 构建串行，防 SDK 单连接竞争） |
+
+用法示例：`python -m scripts.builders.build_alla_alpha_panels --workers 6`；
+多数支持 `--resume` 断点续跑。
 
 ### 归档区 `scripts/archive/`
 `daily_pipeline`（被 monitor/update/extend 拆散取代）、`factor_screening`（消费端未接线）、
@@ -317,8 +334,12 @@ mock 落 `reports/models_mock`，真实落 `reports/models`。
 `diagnose_neutralized_compare`、`gtja_discipline_eval`、`ml_algorithm_compare`、
 `ml_synthesis_experiment`。
 
-> ⚠️ 归档区用 `parents[2]` 作 project root（比 `scripts/` 下多一层），
-> 新增归档脚本若带 `sys.path` 引导请照此写。
+> `scripts/` 下三个受跟踪子目录的分工：
+> `builders/` = 待用的构建/回补管线；`archive/` = 已定稿、不再迭代；
+> `textmining/` = 文本线（另一会话维护）。
+>
+> ⚠️ 子目录脚本用 `parents[2]` 作 project root（比 `scripts/` 下多一层），
+> 新增脚本若带 `sys.path` 引导请照此写。
 
 ## 安装
 

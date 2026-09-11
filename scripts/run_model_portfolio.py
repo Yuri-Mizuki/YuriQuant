@@ -14,7 +14,7 @@
 
 数据前置（_base 与因子面板由 rolling_grid_alla 管线维护，本入口直接消费）：
     python scripts/rolling_grid_alla.py --stage prep        # _base 基础面板
-    python scripts/oneoff/build_alla_alpha_panels.py ...    # 因子面板（已存在则跳过）
+    python scripts/builders/build_alla_alpha_panels.py ...    # 因子面板（已存在则跳过）
 
 用法:
     python -m scripts.run_model_portfolio                       # 全流程（当年预测+回测+今日选股）
