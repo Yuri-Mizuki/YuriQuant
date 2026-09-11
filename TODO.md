@@ -120,6 +120,12 @@
   `ml_algorithm_compare.py` 仍 import `ml_synthesis_experiment` 的
   `_eval_row` / `_px_panels` / `_fit_predict_valid` / `_monthly_ic` 等私有函数
   （P3 仅解掉了 `_classic_features`）。公共函数应迁至 `e2e_common` 或独立模块。
+  - **2026-09-11 第三批补齐另两类遗漏**：`data/cache_helpers` 的
+    `_pit_universe_codes`（被 **6** 个 scripts 引用）/ `_apply_membership_mask`
+    （**4** 个）+ `factor/genetic_mining` 的 5 个适应度组件
+    （`_ls_net_stats` / `_monthly_forward_returns` / `_mutual_info_series` /
+    `_top_excess_series` / `_htai_preprocess`，共 4 个 scripts 引用）此前漏解，
+    已全部公开化；新增 AST 守卫防回潮。见 3.1 末尾「口径统一第三批」。
 - [x] **最小 CI**：无 `.github/workflows`。加最简 GitHub Actions
   （pytest + ruff check + tests/test_layering.py 门禁），
   把口径守卫和分层守卫变成强制约束（测试漂移到无法收集才被发现，
@@ -272,10 +278,11 @@
     真实因子库（HS300 2025，40 面板 / 46930 截面）**4.4% 的截面**在 top-k 边界
     存在 tie（两个离散型因子接近 100%），委托会改这些截面的持仓集合，且是
     **向不确定实现退化**，故保留确定性实现并写进 docstring。
-    **新发现（待单独处理）**：同一 tie 隐患也在 `TopFracLongOnly` /
-    `BufferedTopFracLongOnly` 等**主线用到的策略类**里（`sort_values()` 不稳定
-    → 同输入在不同平台/版本可能选出不同股票）。若要"tie-break 确定化"，需
-    单独一项 + 重跑受影响实验，本次**刻意未动**以免改变主实验数字。
+    **新发现（2026-09-11 第三批已完成）**：同一 tie 隐患也在
+    `TopFracLongOnly` / `BufferedTopFracLongOnly` 等**主线用到的策略类**里
+    （`sort_values()` 不稳定 → 同输入在不同平台/版本可能选出不同股票）。
+    第三批已统一为 `rank(ascending=False, method="first")`（列序确定性），
+    详见 3.1 末尾「口径统一第三批」。
   - [x] **`factor/synthesis.py` 归属倒挂（2026-09-11 完成，`a6a166c`）**：
     诊断发现该模块是**两类职责混装**——`ic_weighted` / `pca` / `orthogonal` /
     `build_components` 是**确定性因子组合**（挖掘闭环最后一环、直接喂因子库），
@@ -304,6 +311,74 @@
   - 备注：第二批动的是**口径与依赖边界**，与本批"先跑全量测试定基线、
     改完对比"的做法一致；建议一次只动一项并单独提交，便于定位是哪一项
     改变了哪些数字。
+
+- [x] **口径统一第三批 —— 工程卫生（2026-09-11 完成，五项独立提交）**：
+
+  基线：全量 **692 passed**（2411s / 40min，串行；改前跑通终态）。改后收集 **712**。
+
+  - [x] **① tie-break 确定化（`1bd9100`）**：`TopKLongShort` / `TopKLongOnly` /
+    `TopFracLongOnly` 由 `vals.sort_values()`（quicksort，不稳定）改为
+    `rank(ascending=False, method="first")`（列序确定性），与
+    `strategy.constraints.build_signal_weights` 及 `BufferedTopFracLongOnly`
+    统一为全仓唯一 tie 规则。
+    **影响面实测**（`scripts/oneoff/probe_tie_stable_sort.py` +
+    `probe_alla_tie_impact.py`）：① 因子库面板（HS300 2025，40 面板 / 46930 截面）
+    约 **4.4%** 截面在 top-k 边界并列，且几乎每个并列截面新旧持仓集合不同，
+    最坏 Jaccard = 0（top-k 全换）——**离散型因子链路需按新口径重跑**；
+    ② 主实验（全A正交化 ens_h1h5，2107 日 × 5801 股）tie 率 4.95%、月频调仓日
+    8.57%，但差异日平均 Jaccard 0.995、对称差仅 **2.0 只**（占持仓 0.5%），
+    月频调仓换手 0.7303 → **0.7303（零变化）** → **主实验数字不变**，属可复现性加固。
+    顺带修复：`TopKLongOnly` 空截面 `1.0/0` 抛 ZeroDivisionError；旧实现
+    `index[-0:]` 等价于全部索引（k=0 时给出 inf 权重）。
+    新增 `tests/test_strategy_tie.py`（10 例）。
+  - [x] **② scripts 层中性化去重（`6ebc6ae`）**：核查确认三份同名实现
+    （`e2e_common.neutralize_predictions` / `optimize_e2e.neutralize_predictions_local`
+    / `run_model_portfolio.neutralize_panel`）**都走 `factor.preprocessing.neutralize`
+    同一真源，不存在口径分裂**。真正的问题是 `scripts/run_model_portfolio.py`
+    这个**实验入口脚本被主实验/生产反向 import**：`DEFAULT_MODEL_PARAMS`
+    → `model/params.py`（`037324e`）、`default_costs` → `backtest/costs.py`
+    （`47b6976`）、4 个 legacy 组件（`neutralize_panel` /
+    `load_index_benchmark` / `build_style_covariates_panel` / `build_model_panel`）
+    → 新建 `scripts/portfolio_common.py`（`6ebc6ae`）。共 17 个 import 站点改向。
+    守卫：`test_model_params_live_in_model_layer` /
+    `test_default_costs_source_is_the_backtest_layer` /
+    `test_experiment_entry_scripts_are_not_imported_by_other_scripts`。
+    **遗留**：`run_model_portfolio` 仍 import `rolling_grid_alla`（复用其
+    `FeatureStore` / `select_features_for_year`，属"管线组件复用"），未纳入守卫
+    目标，待评估是否把该管线件也下沉。
+  - [x] **③ 私有函数倒挂收口（`acdb07e`）**：`data/cache_helpers` 2 个
+    （`pit_universe_codes` / `apply_membership_mask`）+ `factor/genetic_mining`
+    5 个（`ls_net_stats` / `monthly_forward_returns` / `mutual_info_series` /
+    `top_excess_series` / `htai_preprocess`）公开化，10 个 scripts + 测试站点改向。
+    仍保留私有（**仅测试白盒引用**）：`_adjust_crowding` / `_restore_crowding` /
+    `_dedup_hof_by_correlation` / `_ensure_creator` / `_seg_ic_stats`。
+    守卫 `test_no_private_import_from_factor_and_data`（AST 解析，scripts 层一律
+    禁 import 下划线名；tests 层白名单）。
+  - [x] **④ 文本链路 IC 口径核查（仅核查，代码改动按纪律延后）**：探针
+    `scripts/oneoff/probe_text_ic_convention.py` 在真实文本因子数据上实测
+    `evaluate_senti.rank_ic_stats`（月度）/ `evaluate_sue_txt.rank_ic`（季度末）
+    与 `stats.ic.calc_ic_series` **逐位一致**（共同有效期 max|ΔIC| 分别为
+    2.8e-17 / 5.6e-17，期数 92/92、32/32 完全对齐）→ **无实质分叉**。
+    三条真实差异（非数值分叉，需声明）：① 无显式「有效观测 <5 门槛」（canonical
+    剔、legacy 只靠 `.corr()` 对 <2 样本返 NaN 兜底，本数据恰好未触发但 2~4 只
+    股票的期会漏网 → 潜在假显著性）；② `evaluate_sue_txt.rank_ic` 的字段
+    `n_months` 实际是**期数**且粒度是**季度末**（32 期 ≈ 8 年季度），命名误导；
+    ③ 年化常数：senti 月度若误用 `calc_ir` 的 ×√252 得 ICIR 1.996（正确 ×√12
+    = 0.436，虚高 4.6 倍），legacy 用不年化的 mean/std 规避了误用但使两条线
+    ICIR 不可比。**延后原因**：`scripts/textmining/*` 正被另一会话编辑
+    （8 个文件未提交），现在改会污染他会话的 diff。待其落地后补 <5 门槛 + 修字段名。
+  - [x] **⑤ P2 清洁项（`1e36456`）**：删死代码 `factor/synthesis.py::_align_sign`
+    （全仓零引用，活的是 `_align_sign_by_ic`）；**cvxpy 真·惰性导入**
+    （`optimize/solver.py` 原模块级 try/except 名为"延迟"实则在 `import optimize`
+    时执行，冷启 7.3s → 改 `_require_cvxpy()` 函数内按需加载）；
+    **`optimize/__init__` 惰性导入**（PEP 562 `__getattr__` + `__dir__`，
+    `import optimize` **10.2s → 0.02s**，cvxpy/openpyxl/scipy.stats 均不再进
+    `sys.modules`）。新增 `tests/test_optimize_lazy_import.py`（4 例，含干净子进程
+    验证）。**核实为误报**：`optimize/multi_period.py:26` 的 print 位于模块
+    docstring 的「用法」示例中；AST 扫描全部核心包真实 print 调用数 **= 0**。
+    **纠正审计前提**：11.7s 导入开销里 cvxpy 只占约 2s，其余是
+    `stats.ic→scipy.stats`(4.0s) + `research.xlsx_report→openpyxl`(2.4s) +
+    pandas(2.7s)。
 
 ### 3.2 机械性（可批量清理）
 
@@ -346,6 +421,11 @@
    c size-only 补截距 / d 13 处内联 t 收口且不补 NW 列）、**权重生产入口定案**
    （方案 A：约束算子下沉 `strategy.constraints`，`optimize/portfolio` 退化为薄门面，
    不合并模块），各自独立提交 + 全量测试比对
-4. 分钟频挖掘 pipeline（现成数据的最大增量）
-5. cli_common 批量推广 + 报告模板收编（机械清理，可穿插）
-6. 攻"跑输基准"研究问题本身
+4. **口径统一第三批（见 3.1）—— 工程卫生，已全部完成**：tie-break 确定化 /
+   实验入口脚本反向依赖消除（下沉 model.params + backtest.costs +
+   scripts.portfolio_common）/ 私有函数倒挂收口 / 文本链路 IC 口径核查
+   （结论：逐位等价，代码改动延后至他会话落地）/ P2 清洁（死代码 + 重依赖惰性化，
+   `import optimize` 10.2s→0.02s）。遗留两项见 3.1 对应条目。
+5. 分钟频挖掘 pipeline（现成数据的最大增量）
+6. cli_common 批量推广 + 报告模板收编（机械清理，可穿插）
+7. 攻"跑输基准"研究问题本身
