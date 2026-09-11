@@ -397,7 +397,7 @@ def build_real_panel(cfg: dict, begin: int, end: int,
                      offline: bool = False) -> tuple[dict[str, pd.DataFrame], pd.DataFrame]:
     """统一真实面板构建（带日志的 ``build_panel`` 便捷包装）。
 
-    2026-08-31 自 ``scripts.mine_factors`` 下沉（跨 scripts 复用：
+    2026-08-31 自 ``scripts.factors.mine_factors`` 下沉（跨 scripts 复用：
     synthesize_factors / compare_ml_synthesis / compare_htai_fitness），
     与 ``build_panel`` 完全同口径。
     """
@@ -409,7 +409,8 @@ def build_htai_neutral_panels(panel: dict[str, pd.DataFrame],
                               real: bool = False) -> dict[str, pd.DataFrame]:
     """构建华泰五因子中性化协变量面板。
 
-    2026-08-31 自 ``scripts.mine_factors._build_htai_neutral_panels`` 下沉
+    2026-08-31 自脚本层 ``mine_factors``（时在 `scripts/` 根）的私有名
+    ``_build_htai_neutral_panels`` 下沉
     （跨 scripts 复用：walk_forward / compare_ml_synthesis / compare_htai_fitness）。
 
     对应研报报告21 适应度计算的「行业、市值、过去20日收益率、过去20日平均换手率、

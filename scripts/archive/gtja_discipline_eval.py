@@ -13,7 +13,7 @@ test 2025 起（冻结，只碰一次）。本脚本在挖掘完成后运行：
 4. **test 段**：入选因子 + 等权复合的一次性评估（唯一可信的"未来"数字）。
 
 用法:
-    python scripts/gtja_discipline_eval.py --pool reports/gtja_repro/pool.csv
+    python scripts/archive/gtja_discipline_eval.py --pool reports/gtja_repro/pool.csv
 """
 from __future__ import annotations
 import sys
@@ -22,7 +22,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
-from scripts.cli_common import setup_logging  # noqa: E402
+from scripts.common.cli_common import setup_logging  # noqa: E402
 
 
 import argparse  # noqa: E402
@@ -56,7 +56,7 @@ def main():
     from config import Config
     from data.cache_helpers import build_panel
     from data.tradability import build_tradable_mask
-    from scripts.gtja_repro_eval import TOP_FRAC, FEE_RT, SIX, ls_metrics, load_backward_once
+    from scripts.evaluation.gtja_repro_eval import TOP_FRAC, FEE_RT, SIX, ls_metrics, load_backward_once
     from factor.gtja import build_vwap_exec_returns
     from factor.formula import formula_builder
     from factor.genetic_mining import ls_net_stats

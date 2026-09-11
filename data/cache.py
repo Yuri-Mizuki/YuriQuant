@@ -449,7 +449,7 @@ class DataCache:
 
     # ---- 历史涨跌停/停牌/ST ----
     #: SDK 对大代码清单的单次状态查询会硬崩宿主进程且无 traceback
-    #: （2026-08-28 实证：5550 只单查挂死，见 scripts/fetch_status_batched.py）。
+    #: （2026-08-28 实证：5550 只单查挂死，见 scripts/ingest/fetch_status_batched.py）。
     #: 缓存层统一分批 + 重试，调用方（update_data 等）无需各自实现。
     STATUS_BATCH = 200
 

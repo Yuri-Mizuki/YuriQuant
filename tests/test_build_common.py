@@ -4,7 +4,7 @@ import argparse
 import numpy as np
 import pandas as pd
 
-from scripts.cli_common import (
+from scripts.common.cli_common import (
     add_build_args, make_data_context, print_no_save, register_panels,
     returns_from_daily,
 )

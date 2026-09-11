@@ -110,7 +110,7 @@ def test_plot_images():
 def test_investment_report_mock(tmp_path):
     out_dir = tmp_path / "ir"
     cmd = [
-        sys.executable, str(ROOT / "scripts" / "investment_report.py"),
+        sys.executable, str(ROOT / "scripts" / "reporting" / "investment_report.py"),
         "--top", "20", "--model", "ridge", "--skip-rp",
         "--n-days", "400", "--n-codes", "30", "--seed", "1",
         "--out", str(out_dir),

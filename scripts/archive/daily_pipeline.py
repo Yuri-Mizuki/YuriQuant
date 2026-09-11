@@ -7,19 +7,19 @@
 
 用法：
     # 手动跑一次
-    python scripts/daily_pipeline.py
+    python scripts/archive/daily_pipeline.py
 
     # 常驻模式（每日 17:30 自动跑一轮）
-    python scripts/daily_pipeline.py --daemon 17:30
+    python scripts/archive/daily_pipeline.py --daemon 17:30
 
     # 注册 Windows 计划任务（每日 17:30，用系统 Python 3.12）
-    python scripts/daily_pipeline.py --install-task
+    python scripts/archive/daily_pipeline.py --install-task
 
     # 只跑前两步（不生成报告）
-    python scripts/daily_pipeline.py --skip-monitor
+    python scripts/archive/daily_pipeline.py --skip-monitor
 
     # 只跑监控（因子已是最新）
-    python scripts/daily_pipeline.py --skip-data --skip-extend
+    python scripts/archive/daily_pipeline.py --skip-data --skip-extend
 """
 from __future__ import annotations
 
@@ -91,7 +91,7 @@ def run_pipeline(
     # Step 1: 拉数据
     if not skip_data:
         ok = _run_step("update_data", [
-            py, "-m", "scripts.update_data", "--no-minute",
+            py, "-m", "scripts.ingest.update_data", "--no-minute",
         ])
         results["update_data"] = "ok" if ok else "fail"
         if not ok:
@@ -102,7 +102,7 @@ def run_pipeline(
     # Step 2: 延长因子面板
     if not skip_extend:
         ok = _run_step("extend_library", [
-            py, "-m", "scripts.extend_factor_library", "--offline",
+            py, "-m", "scripts.ingest.extend_factor_library", "--offline",
             "--sets", "alpha101,alpha191,alpha158,alpha360,gp",
         ], timeout=3600)
         results["extend_library"] = "ok" if ok else "fail"
@@ -114,7 +114,7 @@ def run_pipeline(
     # Step 3: 监控报告
     if not skip_monitor:
         ok = _run_step("monitor", [
-            py, "-m", "scripts.monitor_performance", "--dataset", dataset,
+            py, "-m", "scripts.reporting.monitor_performance", "--dataset", dataset,
         ])
         results["monitor"] = "ok" if ok else "fail"
     else:

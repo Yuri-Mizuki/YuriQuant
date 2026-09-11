@@ -137,13 +137,13 @@ def test_calc_all_metrics_excess_tstat_requires_benchmark():
 # 报告层 perf_stats 与 metrics 原语的一致性（2026-09-10 口径收口）
 # ===========================================================================
 def test_perf_stats_reuses_metrics_primitives():
-    """``scripts.e2e_backtest.perf_stats`` 的年化/波动/回撤 == metrics 原语。
+    """``scripts.pipelines.e2e_backtest.perf_stats`` 的年化/波动/回撤 == metrics 原语。
 
     perf_stats 此前各自内联一套公式（与 metrics 并行维护）。收口后仍保留两处
     **报告层独有**约定（短样本不年化、月胜率），但那三个基础量必须与 metrics
     逐字一致——本测试就是那条锁。
     """
-    from scripts.e2e_backtest import perf_stats
+    from scripts.pipelines.e2e_backtest import perf_stats
 
     n = 1500
     idx = pd.date_range("2020-01-01", periods=n, freq="B")
@@ -161,7 +161,7 @@ def test_perf_stats_reuses_metrics_primitives():
 
 def test_perf_stats_short_sample_does_not_annualize():
     """报告层约定：样本不足 0.3 年时 annual_return 退化为累计收益。"""
-    from scripts.e2e_backtest import perf_stats
+    from scripts.pipelines.e2e_backtest import perf_stats
 
     n = 40                                    # 40/252 ≈ 0.159 年 < 0.3
     idx = pd.date_range("2024-01-01", periods=n, freq="B")
@@ -172,6 +172,6 @@ def test_perf_stats_short_sample_does_not_annualize():
 
 
 def test_perf_stats_empty_returns_label_only():
-    from scripts.e2e_backtest import perf_stats
+    from scripts.pipelines.e2e_backtest import perf_stats
 
     assert perf_stats(pd.Series(dtype=float), "empty") == {"label": "empty"}

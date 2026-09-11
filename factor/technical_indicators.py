@@ -13,7 +13,7 @@ TechnicalIndicators 类移植自星耀数智技术分析 skill
 - 仅提供指标数值计算，不含任何交易信号/投资建议
 
 用法（批量面板）：逐股票调用静态方法，再把 Series 拼成 date×code 面板，
-见 scripts/build_technical_factors.py 的 calc_technical_panels。
+见 scripts/factors/build_technical_factors.py 的 calc_technical_panels。
 
 注意：skill 原脚本的 forward_adjust 是"前复权"（raw × backward / latest），
 有样本末端漂移问题；项目侧统一用【后复权】价喂入（与已入库的 9 个技术面

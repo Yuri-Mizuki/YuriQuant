@@ -12,7 +12,7 @@ def exp(tmp_path):
 
 
 def test_record_and_list(exp):
-    rid = exp.record(kind="mining", command="python -m scripts.mine_factors --depth 2",
+    rid = exp.record(kind="mining", command="python -m scripts.factors.mine_factors --depth 2",
                      params={"depth": 2, "windows": [5, 10]}, data_fingerprint="abc123",
                      result_path="reports/x.csv", metrics={"ic_mean": 0.03, "n": 100})
     df = exp.list()

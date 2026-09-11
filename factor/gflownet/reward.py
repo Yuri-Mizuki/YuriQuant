@@ -40,7 +40,7 @@ TB 训练中同一公式会被反复采到，缓存是 CPU 训练可行性的关
 整行缺失无影响，**行内散点缺失才分叉**（30% 散点缺失时日均 IC 差 ~1.1e-2，与
 IC 量级同阶）。分层约定：
 
-- **训练**（``scripts/run_gflownet_phase1.py`` -> ``RewardPool``）：走捷径。奖励
+- **训练**（``scripts/factors/run_gflownet_phase1.py`` -> ``RewardPool``）：走捷径。奖励
   只是 batch 内的相对排序信号（决定哪些公式进 hof），1e-2 偏差不改变相对次序，
   而训练时间敏感。
 - **入库 / 评估**（``FactorLibrary.register`` -> ``calc_ic_series``，不传该参数）：

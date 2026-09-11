@@ -24,7 +24,7 @@ def _run_mock_cli(tmp_path, horizons="1,5", extra_args=None):
     """运行 cpcv_h1_eval.py --mock，输出到 tmp_path。"""
     out_dir = tmp_path / "cpcv_h1"
     cmd = [
-        sys.executable, str(ROOT / "scripts" / "cpcv_h1_eval.py"),
+        sys.executable, str(ROOT / "scripts" / "evaluation" / "cpcv_h1_eval.py"),
         "--mock", "--horizons", horizons,
         "--out", str(out_dir),
     ]

@@ -6,9 +6,9 @@ DPP 集合级筛选 vs 两两贪心去重 —— 真实因子库实测对比
 
 用法（真实因子库，只读不写）::
 
-    python scripts/dpp_library_compare.py                 # 默认 hs300_2025 全池
-    python scripts/dpp_library_compare.py --dataset hs300_2025 --k 80
-    python scripts/dpp_library_compare.py --source filter  # 支持后续按 source 过滤
+    python scripts/archive/dpp_library_compare.py                 # 默认 hs300_2025 全池
+    python scripts/archive/dpp_library_compare.py --dataset hs300_2025 --k 80
+    python scripts/archive/dpp_library_compare.py --source filter  # 支持后续按 source 过滤
 
 产出：reports/dpp_vs_pairwise_<dataset>.csv + 控制台摘要。
 """

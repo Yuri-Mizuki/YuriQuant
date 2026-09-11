@@ -64,7 +64,7 @@ class EtfUniverse:
         d = self._cache.read_daily(ETF_TABLE)
         if d is None or d.empty:
             raise RuntimeError(
-                "ETF 行情缓存为空，请先运行 python -m scripts.update_etf"
+                "ETF 行情缓存为空，请先运行 python -m scripts.ingest.update_etf"
             )
         close = d["close"].unstack("code").sort_index()
 

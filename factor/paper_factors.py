@@ -4,7 +4,7 @@
 从 awesome-systematic-trading 复现库的 ``static/strategies/`` 中筛选出
 可在 A 股数据面（日线 OHLCV + 财务 PIT + 行业 + 公告日历）实现的 21 个
 经典已发表策略，翻译为截面因子面板。原始策略多为多空双腿，本库只做多，
-因此统一做了如下改造（逐因子细节见 ``scripts/build_paper_factors.py``
+因此统一做了如下改造（逐因子细节见 ``scripts/factors/build_paper_factors.py``
 的 FACTOR_DEFS 注释）：
 
 - **方向统一**：所有面板值"越大预期收益越高"。原策略的"低好"因子

@@ -109,7 +109,7 @@ def test_default_costs_zero_for_precost_comparison():
 def test_default_costs_source_is_the_backtest_layer():
     """成本工厂真源在 ``backtest.costs``；scripts 层不得再定义（2026-09-11 下沉）。
 
-    该函数原先定义在 ``scripts/run_model_portfolio.py``，被主实验
+    该函数原先定义在 ``scripts/pipelines/run_model_portfolio.py``，被主实验
     （``rolling_grid_alla``）、生产（``alla_daily_rank``）与多个实验脚本
     **反向 import**——实验入口脚本成了生产链路的依赖库。成本是回测层概念，
     归 ``backtest/``；谁再把它搬回 scripts 层，本测试立刻红。

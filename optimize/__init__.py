@@ -27,7 +27,7 @@ optimize —— 03 优化层「组合优化 / 风险 / 监控」。
 （``industry_deviation``）、多空（``allow_short`` + ``short_limit``/``gross_limit``）、
 Almgren-Chriss 成本惩罚（``turnover_penalty`` 线性 + ``quadratic_cost`` 二次冲击）、
 Black-Litterman（``bl_posterior`` / ``bl_views_from_factor``）。
-对比脚本 ``scripts/compare_portfolio_methods.py``（--mock / --real PIT 并集池四窗口）。
+对比脚本 ``scripts/portfolio/compare_portfolio_methods.py``（--mock / --real PIT 并集池四窗口）。
 待建（P3）：风险预算非等权、真实四窗口结论分析。
 
 **惰性导入（2026-09-11 P2）**：本包的子模块各有重依赖（solver→cvxpy 7.3s 冷启、

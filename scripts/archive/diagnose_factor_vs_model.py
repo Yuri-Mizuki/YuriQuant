@@ -11,7 +11,7 @@
 4. 相关性：模型预测与 top 单因子的截面相关（模型是否在学这些因子）
 
 用法：
-    python scripts/diagnose_factor_vs_model.py --real
+    python scripts/archive/diagnose_factor_vs_model.py --real
 """
 from __future__ import annotations
 
@@ -25,12 +25,12 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
-from scripts.cli_common import add_real_mock_args, setup_logging  # noqa: E402
+from scripts.common.cli_common import add_real_mock_args, setup_logging  # noqa: E402
 
-from scripts.e2e_common import HORIZON, drop_stale_factors, load_daily_data  # noqa: E402
+from scripts.common.e2e_common import HORIZON, drop_stale_factors, load_daily_data  # noqa: E402
 from factor.classic import compute_classic_features  # noqa: E402
 from model.labels import build_labels  # noqa: E402
-from scripts.e2e_backtest import (  # noqa: E402
+from scripts.pipelines.e2e_backtest import (  # noqa: E402
     run_equal_weight_backtest, perf_stats,
 )
 from data.cache_helpers import load_index_returns  # noqa: E402

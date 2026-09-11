@@ -69,7 +69,7 @@ def build_gtja_tradable(panel_full: dict[str, pd.DataFrame]) -> pd.DataFrame | N
         frac = float(mask.values.mean())
         log.info("可交易性掩码：平均可交易比例 %.2f（False=剔除 T+1 停牌/封板、当日 ST/停牌）", frac)
         if frac > 0.999:
-            log.warning("掩码几乎全 True——状态表可能缺失，请先跑 scripts/fetch_status_batched.py")
+            log.warning("掩码几乎全 True——状态表可能缺失，请先跑 scripts/ingest/fetch_status_batched.py")
         return mask
     except Exception as exc:
         log.warning("可交易性掩码构建失败（适应度将不过滤）: %s", exc)

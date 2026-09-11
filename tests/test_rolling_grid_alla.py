@@ -30,7 +30,7 @@ def _make_base(tmp_path):
 
 
 def test_yearly_metrics_basic():
-    from scripts.rolling_grid_alla import _yearly_metrics
+    from scripts.pipelines.rolling_grid_alla import _yearly_metrics
     idx = pd.bdate_range("2019-01-01", "2020-12-31")
     rng = np.random.default_rng(0)
     dr = pd.Series(rng.normal(0.0005, 0.01, len(idx)), index=idx)
@@ -47,7 +47,7 @@ def test_yearly_metrics_basic():
 
 
 def test_rebalance_days_validated():
-    from scripts.rolling_grid_alla import _rebalance_days_validated
+    from scripts.pipelines.rolling_grid_alla import _rebalance_days_validated
     idx = pd.bdate_range("2018-01-01", "2018-06-30")
     # 2M：每 2 个月首个交易日；末日 6/1 的区间（6/1->末尾）跨度 21 >= 1 保留
     rbd = _rebalance_days_validated(idx, 1, "2M")
@@ -65,7 +65,7 @@ def test_rebalance_days_validated():
 
 
 def test_select_features_dedup_and_coverage(tmp_path, monkeypatch):
-    from scripts import rolling_grid_alla as R
+    from scripts.pipelines import rolling_grid_alla as R
 
     days = pd.bdate_range("2016-07-01", "2018-12-31")
     codes = [f"c{i}" for i in range(8)]
@@ -109,7 +109,7 @@ def test_select_features_dedup_and_coverage(tmp_path, monkeypatch):
 
 
 def test_res_metrics_matches_manual():
-    from scripts.rolling_grid_alla import res_metrics
+    from scripts.pipelines.rolling_grid_alla import res_metrics
     idx = pd.bdate_range("2019-01-01", periods=252)
     rng = np.random.default_rng(2)
     dr = pd.Series(rng.normal(0.001, 0.012, len(idx)), index=idx)
@@ -123,7 +123,7 @@ def test_res_metrics_matches_manual():
 
 
 def test_load_base_guard(tmp_path, monkeypatch):
-    from scripts import rolling_grid_alla as R
+    from scripts.pipelines import rolling_grid_alla as R
     monkeypatch.setattr(R, "OUT", tmp_path)
     with pytest.raises(FileNotFoundError, match="先跑 --stage prep"):
         R.load_base()

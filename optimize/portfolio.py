@@ -3,7 +3,7 @@
 
 **本模块已退化为薄门面**（2026-09-11 第 3 批口径统一，方案 A）：信号构建与
 工程约束投影的真源下沉到 :mod:`strategy.constraints`，这里只保留"面板进 /
-面板出"的批量编排签名，供历史调用方（`scripts/compare_portfolio_methods.py`
+面板出"的批量编排签名，供历史调用方（`scripts/portfolio/compare_portfolio_methods.py`
 的 projection 基线、`tests/test_pipeline_layers.py`）无缝继续使用。
 
 为什么下沉：这些算子**不需要风险模型**（无协方差、无求解器），属于"组合构建"

@@ -5,7 +5,7 @@
 纯 pandas/numpy 实现，**离线可用**，不依赖 AmazingData SDK。
 
 定位（2026-08-17 抽取，收敛"第三份"实现）：
-本模块原为 ``scripts/build_technical_factors.py`` 中的 ``_calc_indicators`` / ``_calc_sar``，
+本模块原为 ``scripts/factors/build_technical_factors.py`` 中的 ``_calc_indicators`` / ``_calc_sar``，
 被因子构建（build_technical_factors）、walk-forward（walk_forward）与两段回测
 （backtest_two_periods）三个调用方分别 import —— 属散落的重复逻辑。现收敛为
 独立模块统一提供。

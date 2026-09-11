@@ -311,7 +311,7 @@ def build_style_covariates(
         vol:      过去 N 日波动率 = 日收益的 N 日滚动 std
         turn:     过去 N 日平均换手率 = (volume / TOT_SHARE) 的 N 日滚动均值
 
-    与 scripts/mine_factors.py:_build_htai_neutral_panels 功能等价但
+    与 scripts/factors/mine_factors.py:_build_htai_neutral_panels 功能等价但
     提升为 factor 层公共函数，供 IC 计算、监控、入库评估复用。
 
     Args:

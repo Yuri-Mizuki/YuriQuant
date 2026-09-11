@@ -11,13 +11,13 @@ import pytest
 
 
 def test_tail_n_days():
-    from scripts.alla_daily_rank import HORIZON, TAIL_BUFFER, WARMUP, tail_n_days
+    from scripts.pipelines.alla_daily_rank import HORIZON, TAIL_BUFFER, WARMUP, tail_n_days
     assert tail_n_days(500) == 500 + WARMUP + HORIZON + TAIL_BUFFER
     assert tail_n_days(750) - tail_n_days(500) == 250
 
 
 def test_preprocess_panel():
-    from scripts.alla_daily_rank import preprocess_panel
+    from scripts.pipelines.alla_daily_rank import preprocess_panel
     idx = pd.bdate_range("2024-01-01", periods=3)
     p = pd.DataFrame({"a": [1.0, 1.0, np.inf], "b": [2.0, 4.0, -np.inf],
                       "c": [3.0, 3.0, 3.0]}, index=idx)
@@ -31,7 +31,7 @@ def test_preprocess_panel():
 
 
 def test_load_selection_exact_and_fallback(tmp_path):
-    from scripts.alla_daily_rank import load_selection
+    from scripts.pipelines.alla_daily_rank import load_selection
     names = ["alpha158_KLEN", "bp"]
     (tmp_path / "y2026__h1.json").write_text(
         json.dumps(names), encoding="utf-8")
@@ -73,7 +73,7 @@ def _make_status(parquet_path: Path, predict_date: pd.Timestamp):
 
 
 def test_signal_day_tradable(tmp_path):
-    from scripts.alla_daily_rank import signal_day_tradable
+    from scripts.pipelines.alla_daily_rank import signal_day_tradable
     d = pd.Timestamp("2026-09-04")
     cache = tmp_path / "cache"
     cache.mkdir()
@@ -105,7 +105,7 @@ def test_signal_day_tradable(tmp_path):
 
 
 def test_build_ranking():
-    from scripts.alla_daily_rank import build_ranking
+    from scripts.pipelines.alla_daily_rank import build_ranking
     codes = [f"c{i}" for i in range(10)]
     scores = pd.Series(np.arange(10.0), index=codes)        # c9 最高
     tradable = pd.Series([i % 3 != 0 for i in range(10)], index=codes)
@@ -130,7 +130,7 @@ def test_build_ranking():
 
 
 def test_build_ranking_annotations():
-    from scripts.alla_daily_rank import build_ranking
+    from scripts.pipelines.alla_daily_rank import build_ranking
     codes = ["c0", "c1", "c2", "c3"]
     scores = pd.Series([4.0, 3.0, 2.0, 1.0], index=codes)
     tradable = pd.Series(True, index=codes)
@@ -154,7 +154,7 @@ def test_build_ranking_annotations():
 
 
 def test_industry_series():
-    from scripts.alla_daily_rank import industry_series
+    from scripts.pipelines.alla_daily_rank import industry_series
     d = pd.Timestamp("2026-09-04")
     panel = pd.DataFrame(
         {"c0": ["801120"], "c1": ["801760"], "c2": [np.nan]},
@@ -173,7 +173,7 @@ def test_industry_series():
 
 
 def test_build_industry_table():
-    from scripts.alla_daily_rank import build_industry_table
+    from scripts.pipelines.alla_daily_rank import build_industry_table
     codes = ["c0", "c1", "c2", "c3", "c4"]
     ranking = pd.DataFrame({
         "rank": range(1, 6),
@@ -220,7 +220,7 @@ def _mk_daily(tmp_path) -> Path:
 
 
 def test_limit_from_daily(tmp_path):
-    from scripts.alla_daily_rank import _limit_from_daily
+    from scripts.pipelines.alla_daily_rank import _limit_from_daily
     root = _mk_daily(tmp_path)
     close_raw = pd.DataFrame({
         "600000.SH": [10.0, 11.0], "300001.SZ": [20.0, 21.0],
@@ -240,7 +240,7 @@ def test_limit_from_daily(tmp_path):
 
 def test_signal_day_tradable_fallback(tmp_path):
     """状态表缺预测日 → 降级日线推断：一字板/停牌不可交易，正常股可交易。"""
-    from scripts.alla_daily_rank import signal_day_tradable
+    from scripts.pipelines.alla_daily_rank import signal_day_tradable
     root = _mk_daily(tmp_path)
     # 状态表只到 09-02（预测日 09-07 缺失 → 触发降级）
     st_idx = pd.MultiIndex.from_product(
@@ -267,7 +267,7 @@ def test_signal_day_tradable_fallback(tmp_path):
 
 
 def test_write_outputs(tmp_path):
-    from scripts.alla_daily_rank import write_outputs
+    from scripts.pipelines.alla_daily_rank import write_outputs
     d = pd.Timestamp("2026-09-04")
     ranking = pd.DataFrame({
         "rank": [1, 2], "name": ["贵州茅台", "宁德时代"],
@@ -294,7 +294,7 @@ def test_write_outputs(tmp_path):
 
 def test_write_latest_locked(tmp_path, monkeypatch):
     """latest 副本被外部进程占用时：告警并继续，不中断主输出。"""
-    import scripts.alla_daily_rank as mod
+    import scripts.pipelines.alla_daily_rank as mod
     d = pd.Timestamp("2026-09-04")
     ranking = pd.DataFrame({
         "rank": [1], "name": ["贵州茅台"], "score": [3.0],
@@ -322,7 +322,7 @@ def test_write_latest_locked(tmp_path, monkeypatch):
 
 def test_write_main_locked_raises(tmp_path, monkeypatch):
     """主输出被占用（用户打开着 CSV）→ 明确报错而非静默/半写。"""
-    import scripts.alla_daily_rank as mod
+    import scripts.pipelines.alla_daily_rank as mod
     d = pd.Timestamp("2026-09-04")
     ranking = pd.DataFrame({
         "rank": [1], "name": ["贵州茅台"], "score": [3.0],
@@ -334,7 +334,7 @@ def test_write_main_locked_raises(tmp_path, monkeypatch):
 
 
 def test_append_history_idempotent(tmp_path):
-    from scripts.alla_daily_rank import append_history
+    from scripts.pipelines.alla_daily_rank import append_history
     row1 = {"predict_date": "20260904", "n_scored": 5000, "runtime_sec": 100.0}
     row2 = {"predict_date": "20260905", "n_scored": 5010, "runtime_sec": 90.0}
     append_history(row1, out_dir=tmp_path)
@@ -352,7 +352,7 @@ def test_append_history_idempotent(tmp_path):
 
 def test_feature_dispatch_sets():
     """选择文件里的名字必须能被五条路径之一接住（含 2026-09-08 重选后的实际组合）。"""
-    from scripts.alla_daily_rank import (
+    from scripts.pipelines.alla_daily_rank import (
         _ALPHA_PREFIXES,
         _CONSTRUCTED_KEYS,
         _HOLDER_NUM_KEYS,
@@ -384,7 +384,7 @@ def test_glossary_covers_selection_2026():
     import json
     from pathlib import Path
 
-    from scripts.alla_daily_rank import lookup_glossary
+    from scripts.pipelines.alla_daily_rank import lookup_glossary
     p = (Path(__file__).resolve().parents[1] / "reports" / "alla_rolling"
          / "selection" / "y2026__h1.json")
     if not p.exists():
@@ -398,7 +398,7 @@ def test_glossary_covers_selection_2026():
 
 
 def test_explain_features():
-    from scripts.alla_daily_rank import explain_features, factor_family
+    from scripts.pipelines.alla_daily_rank import explain_features, factor_family
     imp = pd.Series({"alpha360_VOLUME48": 8.0, "bp": 1.0, "ln_mktcap": 1.0})
     out = explain_features(imp)
     assert list(out["feature"]) == ["alpha360_VOLUME48", "bp", "ln_mktcap"]
@@ -415,7 +415,7 @@ def test_explain_features():
 
 
 def test_explain_stocks():
-    from scripts.alla_daily_rank import explain_stocks
+    from scripts.pipelines.alla_daily_rank import explain_stocks
     codes = ["c0", "c1"]
     contrib = pd.DataFrame({
         "bp": [0.8, -0.2], "alpha158_KLEN": [-0.2, 0.5],
@@ -446,7 +446,7 @@ def test_explain_stocks():
 
 
 def test_build_leaders():
-    from scripts.alla_daily_rank import build_leaders
+    from scripts.pipelines.alla_daily_rank import build_leaders
 
     codes = [f"c{i}" for i in range(6)]
     ranking = pd.DataFrame({
@@ -473,7 +473,7 @@ def test_build_leaders():
 
 
 def test_compute_market_cap_scale(tmp_path):
-    from scripts.alla_daily_rank import compute_market_cap
+    from scripts.pipelines.alla_daily_rank import compute_market_cap
 
     idx = pd.date_range("2026-09-04", periods=2)
     codes = ["600001.SH", "600002.SH"]

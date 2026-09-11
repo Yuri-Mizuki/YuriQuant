@@ -6,7 +6,7 @@ import datetime as dt
 
 import pandas as pd
 
-from scripts.cli_common import complete_day_target
+from scripts.common.cli_common import complete_day_target
 
 
 def _cal(*days: str) -> list[int]:

@@ -603,7 +603,7 @@ def test_beam_search_population_reduction(signal_panel):
 def test_apply_gtja_preset_resolution(signal_panel):
     """gtja 预设：None 哨兵按表1 解析；显式传参优先；终端裁剪为六量价字段。"""
     import argparse
-    from scripts.mine_factors import _apply_gtja_preset
+    from scripts.factors.mine_factors import _apply_gtja_preset
 
     panel, rets = signal_panel
     panel = dict(panel)

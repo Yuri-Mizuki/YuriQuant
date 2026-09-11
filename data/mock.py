@@ -32,7 +32,7 @@ def load_mock_data(n_days: int = 500, n_codes: int = 50, seed: int = 0) -> dict:
 def gen_mock_panel_with_signal(n_days: int = 400, n_codes: int = 50, seed: int = 0) -> dict:
     """AR(1) 收益注入动量信号：rets[t] = phi*rets[t-1] + noise，使 ts_mean/momentum 类因子有正 IC。
 
-    历史定义于 scripts/mine_factors.py，2026-08-31 随 mock 数据下沉归位 data/mock。
+    历史定义于 scripts/factors/mine_factors.py，2026-08-31 随 mock 数据下沉归位 data/mock。
     含合成"财务字段" OPERA_REV（PIT 化：每 60 日更新一次，中间 ffill）。
     """
     rng = np.random.default_rng(seed)

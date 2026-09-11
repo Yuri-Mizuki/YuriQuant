@@ -209,24 +209,29 @@ def test_model_params_live_in_model_layer():
 def test_experiment_entry_scripts_are_not_imported_by_other_scripts():
     """实验入口脚本不得被其他 scripts 反向 import（防"入口变依赖库"回潮）。
 
-    2026-09-11 收口：``scripts/run_model_portfolio.py`` 是主实验入口（全A正交化
+    2026-09-11 收口：``scripts/pipelines/run_model_portfolio.py`` 是主实验入口（全A正交化
     管线），却把 ``DEFAULT_MODEL_PARAMS`` / ``default_costs`` 以及 4 个 legacy
     组件定义在自身，被 ``rolling_grid_alla``（主实验）、``alla_daily_rank``（生产）
     与 ``buffer_tune`` / ``freq_tune`` / ``multiyear_oos`` 反向 import。现四类
     共享件均已下沉：超参 → :mod:`model.params`，成本 → :mod:`backtest.costs`，
-    legacy 组件 → :mod:`scripts.portfolio_common`。本守卫钉住"入口脚本只进不出"。
+    legacy 组件 → :mod:`scripts.common.portfolio_common`。本守卫钉住"入口脚本只进不出"。
     """
-    entry = {"run_model_portfolio.py"}
+    entry_mods = {"scripts.pipelines.run_model_portfolio"}
+    entry_files = {m.rsplit(".", 1)[-1] + ".py" for m in entry_mods}
     offenders = []
     for f in (ROOT / "scripts").rglob("*.py"):
-        if {"oneoff", "archive"} & set(f.parts) or f.name in entry:
+        if {"oneoff", "archive"} & set(f.parts) or f.name in entry_files:
             continue
         src = f.read_text(encoding="utf-8")
-        for e in entry:
-            mod = e[:-3]
-            if re.search(rf"^\s*(from\s+scripts\.{mod}\s+import|import\s+scripts\.{mod}\b)",
-                         src, re.M):
-                offenders.append(f"{f.relative_to(ROOT)} -> {e}")
+        for mod in entry_mods:
+            pkg, leaf = mod.rsplit(".", 1)
+            pats = (
+                rf"^\s*from\s+{re.escape(mod)}\s+import\b",       # from scripts.pkg.mod import x
+                rf"^\s*import\s+{re.escape(mod)}\b",              # import scripts.pkg.mod
+                rf"^\s*from\s+{re.escape(pkg)}\s+import\s+[^\n]*\b{re.escape(leaf)}\b",  # from scripts.pkg import mod
+            )
+            if any(re.search(p, src, re.M) for p in pats):
+                offenders.append(f"{f.relative_to(ROOT)} -> {mod}")
     assert not offenders, (
         "实验入口脚本被其他 scripts 反向 import（应改用共享模块）:\n"
         + "\n".join(offenders))
@@ -257,16 +262,16 @@ _TESTS_ONLY_PRIVATE: set[tuple[str, str]] = {
     ("factor.genetic_mining", "_dedup_hof_by_correlation"),
     ("factor.genetic_mining", "_ensure_creator"),
     ("factor.genetic_mining", "_seg_ic_stats"),
-    ("scripts.rolling_grid_alla", "_yearly_metrics"),
-    ("scripts.rolling_grid_alla", "_rebalance_days_validated"),
-    ("scripts.alla_daily_rank", "_limit_from_daily"),
-    ("scripts.alla_daily_rank", "_ALPHA_PREFIXES"),
-    ("scripts.alla_daily_rank", "_CONSTRUCTED_KEYS"),
-    ("scripts.alla_daily_rank", "_HOLDER_NUM_KEYS"),
-    ("scripts.alla_daily_rank", "_HOLDER_TOP_KEYS"),
-    ("scripts.alla_daily_rank", "_PLEDGE_KEYS"),
-    ("scripts.mine_factors", "_apply_gtja_preset"),
-    ("scripts.e2e_backtest", "_enforce_caps"),
+    ("scripts.pipelines.rolling_grid_alla", "_yearly_metrics"),
+    ("scripts.pipelines.rolling_grid_alla", "_rebalance_days_validated"),
+    ("scripts.pipelines.alla_daily_rank", "_limit_from_daily"),
+    ("scripts.pipelines.alla_daily_rank", "_ALPHA_PREFIXES"),
+    ("scripts.pipelines.alla_daily_rank", "_CONSTRUCTED_KEYS"),
+    ("scripts.pipelines.alla_daily_rank", "_HOLDER_NUM_KEYS"),
+    ("scripts.pipelines.alla_daily_rank", "_HOLDER_TOP_KEYS"),
+    ("scripts.pipelines.alla_daily_rank", "_PLEDGE_KEYS"),
+    ("scripts.factors.mine_factors", "_apply_gtja_preset"),
+    ("scripts.pipelines.e2e_backtest", "_enforce_caps"),
     # 2026-09-11 把守卫改为**通用规则**后新暴露的测试白盒用例（生产侧已一并清干净）
     ("backtest.engine", "_apply_executable_mask"),
     ("research.factor_library", "_coerce_date"),
@@ -354,7 +359,7 @@ def test_no_private_names_cross_module():
 def test_no_tracked_code_imports_gitignored_dirs():
     """入库代码不得 import **gitignored 目录**（否则干净 clone / 生产环境必 ImportError）。
 
-    2026-09-11 修复：``scripts/alla_daily_rank.py``（生产每日推理，注册为 Windows
+    2026-09-11 修复：``scripts/pipelines/alla_daily_rank.py``（生产每日推理，注册为 Windows
     计划任务 ``YuriQuant AllaDailyRank``）原有 6 处 ``from scripts.oneoff.* import``，
     而 ``.gitignore`` 第 41 行忽略整个 ``scripts/oneoff/``——生产入口在干净 clone 上
     必然 ImportError。已把全A 数据集构建/回补管线 22 个模块迁入**受跟踪**的
@@ -408,8 +413,8 @@ def test_frozen_recipe_stays_consistent_across_layers():
 
     from config import Config
 
-    rg = importlib.import_module("scripts.rolling_grid_alla")
-    adr = importlib.import_module("scripts.alla_daily_rank")
+    rg = importlib.import_module("scripts.pipelines.rolling_grid_alla")
+    adr = importlib.import_module("scripts.pipelines.alla_daily_rank")
     mp = Config.get().get("model_portfolio") or {}
 
     assert int(mp.get("train_window", 500)) == rg.DEFAULT_WINDOW, (

@@ -141,7 +141,7 @@ class ShortCostModel:
 def default_costs(factor_cost: bool = True) -> TransactionCosts:
     """交易成本单一真源：从 config 顶层 ``costs`` 段构建（2026-09-11 下沉）。
 
-    原先定义在 ``scripts/run_model_portfolio.py``——一个实验入口脚本，却被主实验
+    原先定义在 ``scripts/pipelines/run_model_portfolio.py``——一个实验入口脚本，却被主实验
     （``rolling_grid_alla``）、生产（``alla_daily_rank``）和多个实验脚本**反向
     import**，属归属倒挂。成本是回测层概念，归 ``backtest/``。
 

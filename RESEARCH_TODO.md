@@ -63,7 +63,7 @@
   - 待提取：Mamba2 状态空间模型的输入构造（时序面板如何喂入）、
     端到端 vs 两阶段（因子→模型）的收益差异、训练成本量级
   - 落点：与现有 TabICL / GBDT / ridge / lambdarank 合成方法做第 N 种对照；
-    注意对齐 CPCV 评估协议（`scripts/cpcv_h1_eval.py`，N=6 k=2）
+    注意对齐 CPCV 评估协议（`scripts/evaluation/cpcv_h1_eval.py`，N=6 k=2）
 
 - [ ] **华泰 基于全频段量价特征的选股模型**（20231208，`因子合成/`）
   - 关联：5 分钟线数据 2022-01~2026-06 **至今未动**（本项目最大沉睡资产）
@@ -160,7 +160,7 @@
 - [ ] 华泰 AI42 图神经网络选股与 Qlib 实践 —— GNN 结构化关系建模
 - [ ] 华泰 AI11 stacking 集成学习 —— 合成层方法对照
 - [ ] 华泰 AI14 / AI16 时序交叉验证防过拟合（两期）
-  —— 对齐已实现的 h=1 CPCV（`scripts/cpcv_h1_eval.py`）
+  —— 对齐已实现的 h=1 CPCV（`scripts/evaluation/cpcv_h1_eval.py`）
 - [ ] 华泰 AI19 重采样检验过拟合 / AI22 回测过拟合概率（PBO）
   —— **策略级过拟合检验尚未上，可补**
 - [ ] 华泰 AI40 微软 Qlib 体验 —— 工程架构参考

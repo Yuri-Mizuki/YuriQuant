@@ -28,7 +28,7 @@ class OfflineDataSource:
         cache = DataCache(OfflineDataSource(), cache_root=...)
     """
 
-    _DEFAULT_MSG = "offline 模式不连接数据源：请先运行 scripts.update_data 拉取缓存"
+    _DEFAULT_MSG = "offline 模式不连接数据源：请先运行 scripts.ingest.update_data 拉取缓存"
 
     def __init__(self, message: str | None = None):
         self._msg = message or self._DEFAULT_MSG

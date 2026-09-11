@@ -16,9 +16,9 @@
     - 评估分段报告：前 40%（冷启动）/ 后 40%（训练充分，真 OOS）/ 全样本
 
 用法:
-    python scripts/compare_ml_synthesis.py                 # mock（快）
-    python scripts/compare_ml_synthesis.py --real           # 真实 HS300
-    python scripts/compare_ml_synthesis.py --real --top 9 --seed 42
+    python scripts/archive/compare_ml_synthesis.py                 # mock（快）
+    python scripts/archive/compare_ml_synthesis.py --real           # 真实 HS300
+    python scripts/archive/compare_ml_synthesis.py --real --top 9 --seed 42
 
 输出: reports/_htai_gp/ml_synthesis_<real|mock>.csv + 终端 2×2 对比表
 """
@@ -35,7 +35,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.cli_common import add_real_mock_args, setup_logging  # noqa: E402
+from scripts.common.cli_common import add_real_mock_args, setup_logging  # noqa: E402
 
 
 log = setup_logging("compare_ml_synthesis")

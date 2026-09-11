@@ -11,7 +11,7 @@ from optimize.multi_period import (
     optimize_rebalance_weights,
     run_multi_period_backtest,
 )
-from scripts.compare_portfolio_methods import gen_mock_panel
+from scripts.portfolio.compare_portfolio_methods import gen_mock_panel
 
 
 @pytest.fixture(scope="module")

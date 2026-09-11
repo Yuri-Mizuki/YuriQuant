@@ -167,7 +167,7 @@ def test_build_alpha_factors_mock_register(tmp_path: Path):
     from data.universe import Universe
     from factor.alpha_base import load_alpha_panels
     from research.factor_library import FactorLibrary
-    from scripts.cli_common import register_panels
+    from scripts.common.cli_common import register_panels
     from tests.conftest import MockDataSource
 
     cache = DataCache(MockDataSource(), cache_root=str(tmp_path / "cache"))

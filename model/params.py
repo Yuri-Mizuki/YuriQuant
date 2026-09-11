@@ -1,10 +1,10 @@
 """模型超参默认值（单一真源）
 
-2026-09-11 由 ``scripts/run_model_portfolio.py`` **下沉**到此处。
+2026-09-11 由 ``scripts/pipelines/run_model_portfolio.py`` **下沉**到此处。
 
 背景：该常量原本定义在实验入口脚本 ``run_model_portfolio.py`` 里，却被
-主实验 ``scripts/rolling_grid_alla.py``、生产 ``scripts/alla_daily_rank.py``
-和 ``scripts/multiyear_oos.py`` **反向 import**——实验脚本成了生产链路的
+主实验 ``scripts/pipelines/rolling_grid_alla.py``、生产 ``scripts/pipelines/alla_daily_rank.py``
+和 ``scripts/evaluation/multiyear_oos.py`` **反向 import**——实验脚本成了生产链路的
 依赖库，属归属倒挂。超参是模型层的公共契约，归属 ``model/``。
 
 消费方一律从这里取，禁止在脚本里复制字面量（防网格实验与生产漂移）。

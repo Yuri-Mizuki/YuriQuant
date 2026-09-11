@@ -99,9 +99,9 @@ def test_page_emits_single_doctype_and_body():
 
 
 @pytest.mark.parametrize("modname,title", [
-    ("scripts.jq_style_report", "x · 收益曲线（vs y）"),
-    ("scripts.rolling_grid_report", "全A滚动训练实验报告（2018~now）"),
-    ("scripts.alla_excess_attribution", "全A主策略超额归因"),
+    ("scripts.reporting.jq_style_report", "x · 收益曲线（vs y）"),
+    ("scripts.reporting.rolling_grid_report", "全A滚动训练实验报告（2018~now）"),
+    ("scripts.pipelines.alla_excess_attribution", "全A主策略超额归因"),
 ])
 def test_converted_reports_keep_theme_css_verbatim(modname, title):
     """收编的 3 个脚本：主题 CSS 必须逐字节进入 page() 输出（收编只换外壳）。"""

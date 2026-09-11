@@ -87,7 +87,7 @@ def test_ic_decay_and_heatmap():
 def test_html_generation_smoke(tmp_path):
     """mock 模式下 HTML 能生成且包含核心组件。"""
     # 用临时库避免污染真实库：直接测 HTML 模板 + 一个假因子
-    import scripts.factor_explorer_report as mod
+    import scripts.reporting.factor_explorer_report as mod
     fake = {
         "name": "test_factor", "family": "alpha101",
         "formula": "rank(close)", "ic_series": {"2024-01": 0.05, "2024-02": 0.03},
@@ -126,7 +126,7 @@ def test_main_mock_smoke(tmp_path):
     import subprocess, sys
     out = tmp_path / "explorer.html"
     r = subprocess.run(
-        [sys.executable, str(Path(__file__).resolve().parents[1] / "scripts" / "factor_explorer_report.py"),
+        [sys.executable, str(Path(__file__).resolve().parents[1] / "scripts" / "reporting" / "factor_explorer_report.py"),
          "--dataset", "mock", "--out", str(out)],
         capture_output=True, text=True, timeout=300)
     # mock 库/缓存缺失时生成失败也接受——但必须报错信息明确

@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from scripts.alla_excess_attribution import (
+from scripts.pipelines.alla_excess_attribution import (
     compute_attribution,
     equal_weight_bench,
     industry_mapping,

@@ -13,17 +13,17 @@
 用法::
 
     # 默认：硬门槛 → DPP 选 70% → RRE 过滤
-    python -m scripts.factor_screening --dataset hs300_2022_2025
+    python -m scripts.archive.factor_screening --dataset hs300_2022_2025
 
     # 自定义阈值和目标数
-    python -m scripts.factor_screening --dataset hs300_2022_2025 \
+    python -m scripts.archive.factor_screening --dataset hs300_2022_2025 \
         --min-ic 0.015 --min-t-nw 2.0 --dpp-k 200 --min-autocorr 0.3
 
     # 只做 PPS 硬门槛，不做 DPP/RRE
-    python -m scripts.factor_screening --dataset hs300_2022_2025 --no-dpp --no-rre
+    python -m scripts.archive.factor_screening --dataset hs300_2022_2025 --no-dpp --no-rre
 
     # 输出筛选报告
-    python -m scripts.factor_screening --dataset hs300_2022_2025 --report
+    python -m scripts.archive.factor_screening --dataset hs300_2022_2025 --report
 """
 from __future__ import annotations
 

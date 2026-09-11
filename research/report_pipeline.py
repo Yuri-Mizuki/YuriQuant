@@ -25,7 +25,7 @@ collect 函数 + 注册一行，不碰任何已有代码。
     generate_research_report("hs300_2025", out="reports/research_report.html")
 
     # 或 CLI
-    python scripts/generate_report.py --dataset hs300_2025
+    python scripts/reporting/generate_report.py --dataset hs300_2025
 """
 from __future__ import annotations
 

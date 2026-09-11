@@ -12,7 +12,7 @@
 1. **内存**：all_a 的 5 分钟数据全量约数 GB～数十 GB，长表整读进内存做
    groupby 不可行；研究迭代时反复读取也慢。
 2. **向量化**：长表上做"按 (date, code) 分组聚合"只能 groupby-apply 逐组
-   Python 回调（``scripts/build_intraday_factors.py`` 的 14 因子即此实现，
+   Python 回调（``scripts/factors/build_intraday_factors.py`` 的 14 因子即此实现，
    全量 hs300 约 5 分钟）；稠密数组 [day, bar, code] 上则是纯 numpy
    整块运算，快 1~2 个数量级。
 
@@ -89,7 +89,7 @@ class MinutePanelStore:
         if not meta_path.exists():
             raise FileNotFoundError(
                 f"分钟面板不存在: {meta_path}。先运行 "
-                f"`python -m scripts.build_minute_panel --offline` 构建。"
+                f"`python -m scripts.factors.build_minute_panel --offline` 构建。"
             )
         with open(meta_path, "r", encoding="utf-8") as f:
             self._meta = json.load(f)

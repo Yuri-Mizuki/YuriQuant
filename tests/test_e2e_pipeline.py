@@ -72,7 +72,7 @@ def test_load_library_factors_excludes_model():
 
 
 def test_enforce_caps_constraints():
-    from scripts.e2e_backtest import _enforce_caps
+    from scripts.pipelines.e2e_backtest import _enforce_caps
     w = pd.Series({"a": 0.5, "b": 0.3, "c": 0.2, "d": 0.0})
     out = _enforce_caps(w, cap=0.3)
     assert abs(out.sum() - 1.0) < 1e-9
@@ -86,7 +86,7 @@ def test_enforce_caps_constraints():
 def test_e2e_stock_picks_mock(tmp_path):
     out_dir = tmp_path / "picks"
     cmd = [
-        sys.executable, str(ROOT / "scripts" / "e2e_stock_picks.py"),
+        sys.executable, str(ROOT / "scripts" / "pipelines" / "e2e_stock_picks.py"),
         "--top", "10", "--model", "ridge", "--seed", "0",
         "--n-days", "300", "--n-codes", "30",
         "--out", str(out_dir),
@@ -106,7 +106,7 @@ def test_e2e_stock_picks_mock(tmp_path):
 def test_e2e_backtest_mock(tmp_path):
     out_dir = tmp_path / "bt"
     cmd = [
-        sys.executable, str(ROOT / "scripts" / "e2e_backtest.py"),
+        sys.executable, str(ROOT / "scripts" / "pipelines" / "e2e_backtest.py"),
         "--top", "20", "--model", "ridge", "--skip-rp",
         "--n-days", "400", "--n-codes", "30", "--seed", "1",
         "--out", str(out_dir),

@@ -5,7 +5,7 @@
 ``extend_alpha_factors``）。scripts 只保留 CLI 入口与数据源解析。
 
 依赖纪律：本模块不依赖 scripts（scripts 是顶层）；``register_panels`` 由
-``scripts.cli_common`` 转出口保持既有导入面不变。
+``scripts.common.cli_common`` 转出口保持既有导入面不变。
 """
 from __future__ import annotations
 

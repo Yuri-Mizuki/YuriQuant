@@ -29,8 +29,8 @@ train_end/valid_end 与 config discipline 一致）：
    分开看——2026 是模型从未见过的时段）。
 
 用法：
-    python scripts/ml_algorithm_compare.py                # 完整实验（~25 分钟）
-    python scripts/ml_algorithm_compare.py --skip-tune    # 复用调参缓存
+    python scripts/archive/ml_algorithm_compare.py                # 完整实验（~25 分钟）
+    python scripts/archive/ml_algorithm_compare.py --skip-tune    # 复用调参缓存
 """
 from __future__ import annotations
 
@@ -46,7 +46,7 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
-from scripts.cli_common import setup_logging  # noqa: E402
+from scripts.common.cli_common import setup_logging  # noqa: E402
 
 
 log = setup_logging("ml_algorithm_compare")
@@ -98,7 +98,7 @@ def main(skip_tune: bool = False, do_register: bool = True) -> None:
     fwd = forward_returns(px["close"], horizon=HORIZON)
 
     # ---------------- 4. 特征漏斗（dev 段；单一实现 e2e_common.select_features） ----------------
-    from scripts.e2e_common import select_features
+    from scripts.common.e2e_common import select_features
     feats, quality = select_features(feats_all, fwd, quality_days=va_days,
                                      panel_days=dev_days, max_features=12)
     if quality is not None:

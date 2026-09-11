@@ -231,7 +231,7 @@ class TestIntradayFeatures:
 class TestBatchDupReport:
     def test_daily_rank_corr_mean_vs_corrwith(self):
         """向量化逐日秩相关均值 vs pandas corrwith 慢参照（含 NaN/列不齐）。"""
-        from scripts.build_intraday_stat_factors import daily_rank_corr_mean
+        from scripts.factors.build_intraday_stat_factors import daily_rank_corr_mean
 
         rng = np.random.default_rng(21)
         T, C = 40, 25

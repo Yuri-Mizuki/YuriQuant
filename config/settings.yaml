@@ -78,7 +78,7 @@ preprocessing:
 discipline:
   # 所有搜索/训练类算法（穷举/GP/GFlowNet/RL/stacking/predictor）允许消费的数据硬上限。
   # test 段（valid_end 之后）只允许两件事：walk_forward 型最终验证、上线后监控；
-  # 绝不参与挖掘/筛选/调参/入库决策。对齐 scripts/walk_forward.py 三段式纪律。
+  # 绝不参与挖掘/筛选/调参/入库决策。对齐 scripts/evaluation/walk_forward.py 三段式纪律。
   begin: 20220101        # 定型期起点
   train_end: 20231231    # train 段结束（挖掘/粗筛）
   valid_end: 20241231    # valid 段结束（筛选/定权重）；之后为冻结 test 段

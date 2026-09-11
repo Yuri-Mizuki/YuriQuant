@@ -265,7 +265,7 @@ def test_next_run_time():
 # ---------------------------------------------------------------------------
 @pytest.mark.skipif(sys.platform != "win32", reason="schtasks 计划任务注册仅适用于 Windows")
 def test_task_scheduler_command():
-    from scripts.monitor_performance import (
+    from scripts.reporting.monitor_performance import (
         SCHEDULED_TASK,
         SYSTEM_PY,
         task_scheduler_cmd,

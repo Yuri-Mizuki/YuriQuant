@@ -70,7 +70,7 @@ class Universe:
         if d is None:
             warnings.warn(
                 "全A池 daily_all_a 缓存不存在（尚未拉取），回退返回空池。"
-                "请先 python -m scripts.update_data --pool all_a",
+                "请先 python -m scripts.ingest.update_data --pool all_a",
                 stacklevel=2,
             )
             return []

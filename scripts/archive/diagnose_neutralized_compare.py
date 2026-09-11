@@ -20,7 +20,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from scripts.cli_common import add_real_mock_args, setup_logging  # noqa: E402
+from scripts.common.cli_common import add_real_mock_args, setup_logging  # noqa: E402
 
 log = setup_logging("diagnose_neu")
 
@@ -28,19 +28,19 @@ from data.cache_helpers import load_index_returns  # noqa: E402
 from factor.classic import compute_classic_features  # noqa: E402
 from model.labels import build_label_pair  # noqa: E402
 from research.factor_analysis import calc_ic_series  # noqa: E402
-from scripts.e2e_backtest import (  # noqa: E402
+from scripts.pipelines.e2e_backtest import (  # noqa: E402
     perf_stats,
     run_equal_weight_backtest,
     walk_forward_predictions,
 )
-from scripts.e2e_common import (  # noqa: E402
+from scripts.common.e2e_common import (  # noqa: E402
     DATASET,
     HORIZON,
     drop_stale_factors,
     load_daily_data,
     select_features,
 )
-from scripts.optimize_e2e import build_neutral_covariates, neutralize_predictions  # noqa: E402
+from scripts.portfolio.optimize_e2e import build_neutral_covariates, neutralize_predictions  # noqa: E402
 
 import sys
 ROOT = Path(__file__).resolve().parents[2]

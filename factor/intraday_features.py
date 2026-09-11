@@ -4,7 +4,7 @@
 
 日内因子挖掘的"降维"层（参照 Alpha掘金 22 的做法：先用约 40 个统计指标把
 日内分钟数据压成日频特征，再复用日频挖掘框架；统计量选取参照 tsfresh 的
-feature calculators）。与 ``scripts/build_intraday_factors.py`` 的 14 个
+feature calculators）。与 ``scripts/factors/build_intraday_factors.py`` 的 14 个
 **经济含义** 因子互补：本层是面向挖掘的**统计特征族**原料。
 
 设计约束

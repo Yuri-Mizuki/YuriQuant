@@ -15,13 +15,13 @@
 
 口径变更后，以下历史实验结论需重跑才能继续引用：
 
-- [x] **重跑 `scripts/multiyear_oos.py`**（2026-09-01 完成，620s）：README 已标注
+- [x] **重跑 `scripts/evaluation/multiyear_oos.py`**（2026-09-01 完成，620s）：README 已标注
   "h>1 结论基于回测引擎 bug 下的伪结果"。修复后重跑结论：**h1×M 仍是唯一
   三年一致稳健的频率解**（gbdt +5.5%±1.7%、ranker +5.4%±4.6%，均 3/3 年正超额；
   h1×W/D 与 h5×M 全负，ridge 全负）。注意待查：脚本 `oos_ic` 为原始预测 vs
   收益的 IC（h1 全模型为负 −0.1~−0.36），而策略交易中性化后信号——两口径
   方向相反，需核对 IC 口径或将其并入"信号强度"研究问题。
-- [x] **重跑 `scripts/freq_tune.py`**（2026-09-01 完成）：修复后引擎下重新生成。
+- [x] **重跑 `scripts/evaluation/freq_tune.py`**（2026-09-01 完成）：修复后引擎下重新生成。
   h=1 排名不变（M +6.1% > W −8.9% > D −40.6%），h5×M 从伪结果（Sharpe −3.1）
   修正为超额 −16.6%/Sharpe 0.95——h1×M 仍最优但差幅可信。
   修复前旧结果存档于 `reports/freq_tune/freq_tune_prefix_engine_fix_20260825.csv`。
@@ -29,7 +29,7 @@
   `reports/e2e_backtest/`、`reports/investment_report/` 中 e2e 链路历史数字
   与现行口径存在 ~3% 系统性偏移。
 - [x] **攻"跑输全池基准"的研究问题——全A滚动训练实验**（2026-09-01 完成，
-  `scripts/rolling_grid_alla.py` → `reports/alla_rolling/report.html`）：
+  `scripts/pipelines/rolling_grid_alla.py` → `reports/alla_rolling/report.html`）：
   全A 5549 股 × 798 公因子 × 2018~2026 分年 walk-forward 网格
   （horizon×频率×模型×超参×中性化×集中度，120 组合）。**选股宽度是关键答案**：
   全A Top10%~20% 等权多头显著跑赢等权基准（gbdt h1×M raw Top10% 年化 14.0%，
@@ -42,7 +42,7 @@
   全链路重建后幸存者偏差消除，头部配置超额回落 ~2pp（量级合理、排序不变）；
   ② 状态表全量重拉（修复 2019-2021 覆盖锯齿）；③ 基本面面板 32 只 ETF 列剔除 +
   IC 重算；④ 2026-09-02 半拉日全链路裁剪（水位回退自愈）。
-- [x] **最优方案生产化每日推理**（2026-09-08 完成，`scripts/alla_daily_rank.py`）：
+- [x] **最优方案生产化每日推理**（2026-09-08 完成，`scripts/pipelines/alla_daily_rank.py`）：
   全A滚动实验最优方案（gbdt h1 + 当年入选 50 因子 + 500 日窗 + raw Top10%）的
   每日盘后推理——增量数据更新 → 尾部重算因子（同一复权基准自洽，不改写冻结
   数据集）→ 重训预测最新截面 → 全A排名 + Top10% 可交易候选 → `reports/alla_daily/`；
@@ -59,7 +59,7 @@
   （实测卡 20260902）——改为 end=None 语义=覆盖到今天，附回归测试。
 
 - [x] **全A超额收益来源复核（α/β 分解 + Brinson 行业归因）**（2026-09-08 完成，
-  `scripts/alla_excess_attribution.py` → `reports/alla_attribution/`）：复跑主策略
+  `scripts/pipelines/alla_excess_attribution.py` → `reports/alla_attribution/`）：复跑主策略
   （gbdt h1×M×raw Top10%）取每日权重后归因。结论：① 对上证的超额 +10.2%/年中
   约 一半来自风格敞口——对上证 β=1.10、R²=0.61（小盘暴露），剔除后 α=+11.2%/年
   但 t=1.89 未过显著线；对全A等权（自然基准）β≈0.97、R²=0.93，**纯选股 α=+5.1%/年、
@@ -73,7 +73,7 @@
   8.35 年样本 Sharpe 0.515 → t=1.69（未过 1.96，证明需 14.5 年）、超额 t=1.947
   （恰好压线）—— headline 年化的统计证据比直觉弱，引用时须带 t 值。
 - [x] **论文复现因子族入库（awesome-systematic-trading 21 式）**（2026-09-08 完成，
-  `factor/paper_factors.py` + `scripts/build_paper_factors.py`）：61 个已复现策略中
+  `factor/paper_factors.py` + `scripts/factors/build_paper_factors.py`）：61 个已复现策略中
   筛出可在 A 股数据面实现的 21 个，翻译为截面因子入 all_a_2018_2026（879→900），
   全部走 PIT + IC/NW-t + canonical 回测标准流程。A 股实测速览：短期反转
   （IC=0.038, t=11.3）、公告期反转（t=3.2）、低波（t=8.2）、价值 BP（t=8.5）、
@@ -88,7 +88,7 @@
   - [x] 数据层：`data/intraday.py` MinutePanelStore——parquet 分钟长表 → 按年分区
     MemMap 稠密面板 `[日,bar,码]`（全市场 GB 级不进内存，参照 Alpha掘金 24 的
     MemMap+年份切片方案）；`DataCache.read_minute_kline` 只读入口；
-    `scripts/build_minute_panel.py`（--features/--demo-ic）。hs300 2022–2026
+    `scripts/factors/build_minute_panel.py`（--features/--demo-ic）。hs300 2022–2026
     已物化（1085 日 × 48 bar × 339 码，覆盖 88%）。
   - [x] 特征层：`factor/intraday_features.py`——tsfresh 风格向量化"分钟→日频"
     统计特征 42 个（动量/分布/波动/形态自相关/量价/蜡烛，Alpha掘金 22 的降维
@@ -97,7 +97,7 @@
   - [ ] 挖掘层：把 42 特征接入 GP/GFlowNet 日频挖掘框架（Alpha掘金 22 的
     "降维后复用日频框架"）；涨跌停/ST 可执行性处理对齐
     build_intraday_factors 口径。
-  - [x] 第一层单因子体检（2026-09-09 完成）：`scripts/build_intraday_stat_factors.py`
+  - [x] 第一层单因子体检（2026-09-09 完成）：`scripts/factors/build_intraday_stat_factors.py`
     ——除权除息日掩码（1754 格）→ zscore 入库 hs300_2022_2025（42 个 im_*，
     821→863）；批量冗余体检（vs 库内 821 因子逐日秩相关 + top1 正交残差 IC，
     报告 `reports/intraday_stat_checkup.csv`；`daily_rank_corr_mean` 有 corrwith
@@ -173,7 +173,7 @@
     **62**（22 个会翻）；hs300_2022_2025 的 862 个：397 → 339。
     **决策（2026-09-11）：默认保持 raw，FDR 降到报告层并排展示**。
     `research/report_pipeline.collect_factor_library` 与
-    `scripts/factor_library_full_report.py` 已接入 `significance_table`，
+    `scripts/reporting/factor_library_full_report.py` 已接入 `significance_table`，
     同时显示 raw / 整库 FDR 两个计数。理由：
     ① 全仓 `load_significant_features` 只有 3 个消费点（`e2e_common` /
     `diagnose_neutralized_compare` / 一个测试），**主实验（全A滚动主线
@@ -218,8 +218,8 @@
       `research/factor_analysis.py`（`standard_factor_summary`）、
       `research/attribution.py`（`fama_macbeth` 的 `t_ols`）、
       `scripts/archive/compare_htai_fitness.py`、`scripts/archive/compare_ml_synthesis.py`、
-      `scripts/gp_tune_budget.py`（2 处）、`scripts/walk_forward.py`（2 处）、
-      `scripts/build_minute_panel.py`。全部改走 `mean_inference(robust=False)`，
+      `scripts/evaluation/gp_tune_budget.py`（2 处）、`scripts/evaluation/walk_forward.py`（2 处）、
+      `scripts/factors/build_minute_panel.py`。全部改走 `mean_inference(robust=False)`，
       并保住旧的 `n < 2 → 0.0` 边界（`mean_inference` 该情况返回 NaN）。
       等价性探针 `scripts/oneoff/probe_ols_t_unify.py`：A 型（调用方均已 dropna）
       **9/10 逐位一致**，唯一分叉是**常数序列**——旧写法因 pandas `Series.std()`
@@ -337,12 +337,12 @@
   - [x] **② scripts 层中性化去重（`6ebc6ae`）**：核查确认三份同名实现
     （`e2e_common.neutralize_predictions` / `optimize_e2e.neutralize_predictions_local`
     / `run_model_portfolio.neutralize_panel`）**都走 `factor.preprocessing.neutralize`
-    同一真源，不存在口径分裂**。真正的问题是 `scripts/run_model_portfolio.py`
+    同一真源，不存在口径分裂**。真正的问题是 `scripts/pipelines/run_model_portfolio.py`
     这个**实验入口脚本被主实验/生产反向 import**：`DEFAULT_MODEL_PARAMS`
     → `model/params.py`（`037324e`）、`default_costs` → `backtest/costs.py`
     （`47b6976`）、4 个 legacy 组件（`neutralize_panel` /
     `load_index_benchmark` / `build_style_covariates_panel` / `build_model_panel`）
-    → 新建 `scripts/portfolio_common.py`（`6ebc6ae`）。共 17 个 import 站点改向。
+    → 新建 `scripts/common/portfolio_common.py`（`6ebc6ae`）。共 17 个 import 站点改向。
     守卫：`test_model_params_live_in_model_layer` /
     `test_default_costs_source_is_the_backtest_layer` /
     `test_experiment_entry_scripts_are_not_imported_by_other_scripts`。
@@ -443,7 +443,7 @@
 #### 🔴 第四批审计新发现（① 已于同日修复）
 
 - [x] **生产脚本依赖 gitignored 目录（真缺陷，已修 `8b634fa`）**：
-  `scripts/alla_daily_rank.py`（生产每日推理，Windows 计划任务
+  `scripts/pipelines/alla_daily_rank.py`（生产每日推理，Windows 计划任务
   `YuriQuant AllaDailyRank`）有 **6 处** `from scripts.oneoff.* import`，而
   `.gitignore:41` 忽略整个 `scripts/oneoff/` → **干净 clone / 生产环境必然
   ImportError**。已按 `scripts/oneoff/README.md` 自己的规则修复（"被其他模块
@@ -469,9 +469,53 @@
   （`_probe_senti_artifacts` 12:26 / `_probe_status` 13:28），**未动**。
 - [ ] **`strategy/enhanced.py` 零 import**（2533 字符）：确认无人引用，
   删或补文档说明归属待定。
-- [ ] **疑似双实现**：`scripts/build_fundamental_factors._add_single_quarter`
+- [ ] **疑似双实现**：`scripts/factors/build_fundamental_factors._add_single_quarter`
   （HS300 单池）与 `scripts/builders/build_alla_fundamental_factors.add_single_quarter`
   （全A）同名同职，疑为两份拷贝；是否合并需先写等价性探针。
+
+- [x] **口径统一第五批 —— scripts/ 全量重排（2026-09-11 完成，已推送）**：
+
+  用户问"scripts 里的脚本是不是很多很乱，清理/合并冗余，按功能归类"。**先审计再动手**，
+  结论与预期相反：**没有垃圾可删**，问题在结构。三项检查一致——
+  ① 全文件近似重复（函数名 Jaccard ≥ 0.5 且共同 ≥ 4）：**0 对**；
+  ② 零被 import **且**无 `__main__`（死代码硬嫌疑）31 个，**30 个在 gitignored 的
+  `scripts/oneoff/`**（不在仓库里），唯一 tracked 的是 `archive/factor_usability_stats.py`
+  （README 已注明"无 main，功能被覆盖"）；
+  ③ 我推测的两个"冗余"**都被推翻**：`generate_report.py` 是
+  `research.report_pipeline.generate_research_report` 的 **CLI 薄壳**（47 行，非重复实现）；
+  `select_stocks`（`research.factor_library` + `strategy.examples`，因子库层）与
+  `e2e_stock_picks`（`factor.classic` + `model.labels`，模型层）**分层不同**。
+
+  → **"很乱"的真实来源 = root 扁平（56 个平铺）**，故做物理归类。
+
+  - [x] **7 个功能子目录**：`common`(3 公共库) / `ingest`(5 数据更新·回补·体检) /
+    `factors`(15 构建·合成·入库·挖掘) / `pipelines`(6 主实验·生产·端到端) /
+    `portfolio`(6 组合·信号·执行) / `evaluation`(11 回测·评估·调参) /
+    `reporting`(10 报告·归因·监控)。root **56 → 1**（只剩 `__init__.py`）。
+    `builders` / `textmining` / `archive` / `data_tools` / `oneoff` 不动。
+  - [x] **命名避坑（关键）**：**不用** `scripts/data/` 与 `scripts/reports/` ——
+    与顶层 `data/` 包、`reports/` 产物目录同名；以「文件路径」调用脚本时解释器会把
+    脚本所在目录放进 `sys.path[0]`，`import data` 会被 `scripts/data/` **劫持**。
+    故改用 **`ingest/`** 与 **`reporting/`**。已实测 `python scripts/ingest/update_data.py`
+    与 `python -m scripts.ingest.update_data` 两条路径都通。
+  - [x] **改写面**：56 次移动 + 7 个新 `__init__.py` + 48 个文件的 ROOT 引导
+    `parents[1]` → `parents[2]`（多一层）+ 全仓**140 个文件**的引用改写。
+  - [x] **搬迁脚本的两处盲区（首次跑测才发现，已修）**：纯文本正则漏了两种写法——
+    ① `Path(...) / "scripts" / "x.py"`（分段字符串，非连续 `scripts/x.py`）；
+    ② `from scripts import x`。共 7 处（5 个测试 + 2 个**计划任务注册代码**：
+    `alla_daily_rank.install_task` / `monitor_performance.task_scheduler_cmd`
+    里的 `script = (ROOT / "scripts" / ...)` —— 不修则重注册指向不存在的路径）。
+    另修 `test_layering` 的入口守卫正则（原 `scripts\.run_model_portfolio` 在搬迁后
+    **静默失效**）。
+  - [x] **最终校验**：全仓扫描所有 `scripts/<path>.py` 与 `scripts.<mod>` 引用并
+    **逐个验证目标文件真实存在** → 失效引用 0（`oneoff` 与历史注释除外）；
+    56 个新位置模块全部可 import 且 ROOT 正确；`textmining`(22) / `builders`(22) /
+    `data_tools`(3) 导入全绿；定向测试 70 passed。**基线**：搬迁前全量
+    `722 passed, 0 failed`（24m11s）。
+  - [ ] 🚨 **待用户执行**：计划任务的路径**内嵌在 Windows 任务里**，搬目录后必须重注册
+    （本 agent 的 shell 被安全策略禁用 `schtasks.exe`）：
+    `python -m scripts.pipelines.alla_daily_rank --install-task <HH:MM>`，
+    以及 `python -m scripts.reporting.monitor_performance ...`（`YuriQuant Monitor`）。
 
 ### 3.2 机械性（可批量清理）
 - [x] **cli_common 推广**（骨架已建、采用率 <15%）：
@@ -485,7 +529,7 @@
 - [x] **超长文件/函数拆分**：
   - `factor/genetic_mining.py` 1692 行（`run_gp_mining` 单函数 ~301 行）
   - `factor/alpha191.py` 1273 行（公式库，可辩护）
-  - `scripts/mine_factors.py` 800 行、`scripts/factor_explorer_report.py` 的
+  - `scripts/factors/mine_factors.py` 800 行、`scripts/reporting/factor_explorer_report.py` 的
     `build_factor_data` ~493 行
 - [x] **核心包卫生**：25 处 `print(` → logging（factor 15、data 8）；
   10 处 `except: pass` 静默吞异常逐个审查。
@@ -515,7 +559,7 @@
    不合并模块），各自独立提交 + 全量测试比对
 4. **口径统一第三批（见 3.1）—— 工程卫生，已全部完成**：tie-break 确定化 /
    实验入口脚本反向依赖消除（下沉 model.params + backtest.costs +
-   scripts.portfolio_common）/ 私有函数倒挂收口 / 文本链路 IC 口径核查
+   scripts.common.portfolio_common）/ 私有函数倒挂收口 / 文本链路 IC 口径核查
    （结论：逐位等价，代码改动延后至他会话落地）/ P2 清洁（死代码 + 重依赖惰性化，
    `import optimize` 10.2s→0.02s）。遗留两项见 3.1 对应条目。
 5. 分钟频挖掘 pipeline（现成数据的最大增量）
@@ -533,13 +577,13 @@
 
 #### 已完成（2026-08-25）
 
-- **组合级风险分解**（`optimize/risk.py: risk_decomposition`）：Euler 分解（MRC + CR + 占比）+ 风格/行业因子方差贡献（B'ΣB 分解）+ VaR/CVaR 成分分解（历史模拟法）+ 风险预算校验。报告脚本 `scripts/risk_decomposition_report.py`。
-- **h=1 模型 CPCV 无偏评估**（`scripts/cpcv_h1_eval.py`）：固定 h=1 的 10 特征 + gbdt 超参，跑 15 条 CPCV 路径产出 IC 分布 + 路径间 t-test + horizon 对比（h=1/h=5/h=20），消除 horizon 选择偏差。
-- **端到端选股工作流固化**（`scripts/e2e_common.py` + `e2e_stock_picks.py` + `e2e_backtest.py`）：
+- **组合级风险分解**（`optimize/risk.py: risk_decomposition`）：Euler 分解（MRC + CR + 占比）+ 风格/行业因子方差贡献（B'ΣB 分解）+ VaR/CVaR 成分分解（历史模拟法）+ 风险预算校验。报告脚本 `scripts/reporting/risk_decomposition_report.py`。
+- **h=1 模型 CPCV 无偏评估**（`scripts/evaluation/cpcv_h1_eval.py`）：固定 h=1 的 10 特征 + gbdt 超参，跑 15 条 CPCV 路径产出 IC 分布 + 路径间 t-test + horizon 对比（h=1/h=5/h=20），消除 horizon 选择偏差。
+- **端到端选股工作流固化**（`scripts/common/e2e_common.py` + `e2e_stock_picks.py` + `e2e_backtest.py`）：
 
   ```
-  今日选股:  D:/python/Python312/python.exe scripts/e2e_stock_picks.py --real --top 30
-  策略回测:  D:/python/Python312/python.exe scripts/e2e_backtest.py --real --top 50 --freq M
+  今日选股:  D:/python/Python312/python.exe scripts/pipelines/e2e_stock_picks.py --real --top 30
+  策略回测:  D:/python/Python312/python.exe scripts/pipelines/e2e_backtest.py --real --top 50 --freq M
   ```
 
   共享模块 `e2e_common.py` 统一：数据加载（因子库股票池 ~420 股）、经典量价因子、
@@ -552,7 +596,7 @@
   2026-08 月频回测，等权 top50 +16.2%（Sharpe 0.41）、risk_parity top50 +22.7%
   （Sharpe 0.60），**均跑输全池等权基准 +30.8%**——现有信号强度不足以支撑
   top-50 集中持仓跑赢全池。
-- **投资收益报告**（`scripts/investment_report.py`）：最终交付物，含两部分——
+- **投资收益报告**（`scripts/reporting/investment_report.py`）：最终交付物，含两部分——
   ① **模型预测作为因子的检验**（`standard_factor_summary`：IC/ICIR/NW-t/IC 衰减
   + `quantile_backtest` 分层收益图 + 月度 IC 图；双口径：稀疏=调仓日信号、
   持仓=ffill 到日频与组合一致）；② **组合 vs 大盘指数基准**（沪深300池→000300.SH、
@@ -583,7 +627,7 @@
   **range20/alpha191_159/vol60 等负 IC 单因子月频 top50 超额 +20%~+36%，实为
   高波动/高 beta 风格在 2024-2026 上行期的暴露，非预测力**；模型 IC=0.067 最高
   （预测力最强）但 beta 0.56 偏低，牛市跑输风格。
-- **优化实验**（`scripts/optimize_e2e.py`）：调仓频率 × 风格中性化四组对比
+- **优化实验**（`scripts/portfolio/optimize_e2e.py`）：调仓频率 × 风格中性化四组对比
   （2024-01~2026-08 top-50 等权）——① **风格中性化有效**：M 月频 + 五因子残差
   16.2%→27.0%（Sharpe 0.41→0.66，回撤 −15.6%→−12.1%）；② **周频调仓被证伪**：
   W + 原分数 6.2%（Sharpe 0.19）远差于 M——换手成本与信号噪声吃掉 h=5 的短视野
@@ -593,7 +637,7 @@
 #### 固化配置与正式入口（2026-08-25，最终交付物）
 
 - **模型增强组合固化配置**（`config/settings.yaml` 的 `model_portfolio` 段 +
-  `strategy/examples.py: TopFracLongOnly`，入口 `scripts/run_model_portfolio.py`，
+  `strategy/examples.py: TopFracLongOnly`，入口 `scripts/pipelines/run_model_portfolio.py`，
   输出 `reports/model_portfolio/`）：把「模型信号 → 风格中性化 → Top20% 重仓多头」
   固化为可复用正式入口，配置只此一处真源。默认 horizon=1 / gbdt / frac=0.20 /
   月度调仓，2025 test 段成本后超额沪深300 **+3.07%**（Sharpe 1.60，MaxDD −11.3%；
@@ -603,13 +647,13 @@
   `N_BINS=30`+`objective=lambdarank`、绕过构造参数导致负 IC(−0.055)；改为使用
   实例参数、默认 `labels_bins=2`（截面中位数二分）+`rank_xendcg` 后样本内 IC
   由负转正至 +0.207（434/484 天为正），现有调用方无需改动。
-- **调仓频率精修**（`scripts/freq_tune.py` → `reports/freq_tune/freq_tune.csv`）：
+- **调仓频率精修**（`scripts/evaluation/freq_tune.py` → `reports/freq_tune/freq_tune.csv`）：
   h=1 时 M 月度最优（超额 +6.1%/Sharpe 1.55）；频率越高换手越严重侵蚀 alpha
   （日频超额 −40.6%）。2026-09-01 已在修复后引擎下重跑：h5×M 从 BUG 下的伪结果
   （Sharpe −3.1）修正为超额 −16.6%/Sharpe 0.95，h=5 仍显著劣于 h=1 但差幅可信。
   修复前旧结果存档于 `reports/freq_tune/freq_tune_prefix_engine_fix_20260825.csv`。
   注：turnover 列自 BUG-2 修复后为"按调仓事件平均"口径，与修复前的稀释口径不可比。
-- **多年度 OOS 稳健性**（`scripts/multiyear_oos.py` → `reports/multiyear/`）：
+- **多年度 OOS 稳健性**（`scripts/evaluation/multiyear_oos.py` → `reports/multiyear/`）：
   gbdt/ridge/ranker × h1/h5 × D/W/M 在 2023/2024/2025 分年 walk-forward
   （特征在定型期 fixed，防前视选择）。2026-09-01 修复后引擎重跑：
   **h1×M 仍是唯一三年一致稳健的频率解**——gbdt +5.5%±1.7%、ranker +5.4%±4.6%
@@ -628,7 +672,7 @@
   逐因子落盘 + 预计算 4 个 horizon 的日频 IC 缓存（特征漏斗零 IO 复用）。
   工程教训两条：float64 巨值在 astype(float32) 时溢出成 inf（须转换后再
   replace）；爆炸量级因子（alpha191_017 最大 ~3e38）必须加载时 zscore+clip。
-- **实验主链**（`scripts/rolling_grid_alla.py`，四阶段断点续跑，单测
+- **实验主链**（`scripts/pipelines/rolling_grid_alla.py`，四阶段断点续跑，单测
   `tests/test_rolling_grid_alla.py`）：每年特征选择（过去 500 日 horizon 匹配
   IC + 覆盖率 + 项目正典 cross-spearman 去冗余）→ 季度（h≥10 半年）walk-forward
   滚动训练（embargo=horizon，500 日滚动窗）→ **幽灵股守卫**（LightGBM 对全 NaN
@@ -636,7 +680,7 @@
   可用"掩码，2019 年实测可用截面 3393 只/日）→ 含成本与涨跌停/停牌过滤的
   向量化回测。**120 组合**：horizon{1,5,10,20} × 频率{D,W,M,2M} ×
   模型{ridge,gbdt,ranker,+h1 超参/窗口变体} × 中性化{on,off} × TopFrac{20%,10%}。
-- **报告**（`scripts/rolling_grid_report.py` → `reports/alla_rolling/report.html`）：
+- **报告**（`scripts/reporting/rolling_grid_report.py` → `reports/alla_rolling/report.html`）：
   总览排序表 / 模型 IC 分年表 / 分年超额热力图（红涨绿跌）/ 五组维度对比净值
   曲线（含上证与全A等权双基准）/ 分年超额柱状图 / 稳健性小结，六条诚实披露。
 - **核心结论**（全部含成本、样本外 2018-01~2026-09）：全A截面 OOS IC 显著强于
@@ -686,7 +730,7 @@
   正交化与集成的收益叠加成立。stage_ensemble 回测窗口 bug 已修（原用 close
   全索引，2016-2017 无信号空仓期稀释年化/超额：+9.9% → 修复后 +13.3%，
   与主口径逐位一致）。
-- **生产化每日推理**（2026-09-08，`scripts/alla_daily_rank.py`，单测
+- **生产化每日推理**（2026-09-08，`scripts/pipelines/alla_daily_rank.py`，单测
   `tests/test_alla_daily_rank.py`）：最优方案每天盘后自动产出全A选股排名——
   与实验同代码路径尾部重算当年入选 50 因子 → gbdt 500 日窗重训预测最新截面 →
   幽灵股守卫 + 信号日可交易性标注 → `reports/alla_daily/`。一致性验证：与实验

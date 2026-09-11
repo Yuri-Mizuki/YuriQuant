@@ -6,10 +6,10 @@
 并从"线性预测 / 非线性信息 / 分层形态 / 线性化救活"四个维度评估挖出的因子。
 
 用法:
-    python scripts/compare_htai_fitness.py                          # mock（快）
-    python scripts/compare_htai_fitness.py --real                   # 真实 HS300
-    python scripts/compare_htai_fitness.py --fitness-modes rankic_mean,mutual_info
-    python scripts/compare_htai_fitness.py --pop 300 --gen 3 --jobs 4
+    python scripts/archive/compare_htai_fitness.py                          # mock（快）
+    python scripts/archive/compare_htai_fitness.py --real                   # 真实 HS300
+    python scripts/archive/compare_htai_fitness.py --fitness-modes rankic_mean,mutual_info
+    python scripts/archive/compare_htai_fitness.py --pop 300 --gen 3 --jobs 4
 
 评估维度（对每个模式 hof 前 top-K 因子取平均）:
     lin_ic      : 线性预测力 —— 月频 20 日 rank IC 均值（华泰报告21 的适应度口径）
@@ -34,7 +34,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.cli_common import add_real_mock_args, setup_logging  # noqa: E402
+from scripts.common.cli_common import add_real_mock_args, setup_logging  # noqa: E402
 
 
 log = setup_logging("compare_htai_fitness")

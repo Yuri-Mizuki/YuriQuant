@@ -34,7 +34,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.cli_common import setup_logging  # noqa: E402
+from scripts.common.cli_common import setup_logging  # noqa: E402
 
 log = setup_logging("fetch_alla_hist")
 
@@ -68,7 +68,7 @@ def main():
     # ---- 1) 日历回补（先做：后续按最新交易日对齐） ----
     cal = cache.get_calendar(args.begin, None)
     log.info("日历: %s ~ %s（%d 日）", cal[0], cal[-1], len(cal))
-    from scripts.cli_common import complete_day_target
+    from scripts.common.cli_common import complete_day_target
     end_date, rolled = complete_day_target(cal, cal[-1])
     if rolled:
         log.info("盘中守卫: 拉取终点回退到 %s（今天数据未完整）", end_date)

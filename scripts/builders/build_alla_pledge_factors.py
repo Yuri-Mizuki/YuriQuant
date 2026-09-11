@@ -29,7 +29,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.cli_common import setup_logging  # noqa: E402
+from scripts.common.cli_common import setup_logging  # noqa: E402
 
 log = setup_logging("build_alla_pledge")
 
