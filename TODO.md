@@ -213,7 +213,7 @@
       `factor/genetic_mining.py`（`_seg_ic_stats` / `:1129` / `:1669`）、
       `research/factor_analysis.py`（`standard_factor_summary`）、
       `research/attribution.py`（`fama_macbeth` 的 `t_ols`）、
-      `scripts/compare_htai_fitness.py`、`scripts/compare_ml_synthesis.py`、
+      `scripts/archive/compare_htai_fitness.py`、`scripts/archive/compare_ml_synthesis.py`、
       `scripts/gp_tune_budget.py`（2 处）、`scripts/walk_forward.py`（2 处）、
       `scripts/build_minute_panel.py`。全部改走 `mean_inference(robust=False)`，
       并保住旧的 `n < 2 → 0.0` 边界（`mean_inference` 该情况返回 NaN）。

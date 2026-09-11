@@ -34,6 +34,11 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+import sys
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 log = logging.getLogger("factor_screening")
 
 OUTPUT_DIR = Path("reports") / "screening"

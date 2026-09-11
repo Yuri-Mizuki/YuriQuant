@@ -42,6 +42,11 @@ from scripts.e2e_common import (  # noqa: E402
 )
 from scripts.optimize_e2e import build_neutral_covariates, neutralize_predictions  # noqa: E402
 
+import sys
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 BT_START = "2024-01-01"
 TOP_N = 50
 

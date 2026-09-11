@@ -156,8 +156,8 @@ mock 落 `reports/models_mock`，真实落 `reports/models`。
 
 | 实验 | 入口 | 结论 / 交付 |
 |---|---|---|
-| **ML 因子合成**（HS300 2022-2025 三段） | `scripts/ml_synthesis_experiment.py`、`ml_synthesis_round2.py`、`ml_decay_diagnosis.py` | h=5 valid IC 0.055-0.061 但 test 归零（29/35 特征方向翻转，低波/低价风格 2025 反转）；h=1 样本外 IC 0.039-0.041（NW-t 2.5-2.9）；诚实披露 h=1 选择存在数据窥探 → `reports/ml-synthesis-hs300-report/` |
-| **算法对比** | `scripts/ml_algorithm_compare.py`、`ml_window_compare.py` | 2019-2026 长时段 Ridge/GBDT/TabICL + 窗口/再训频率对比 → `reports/ml_algorithm_compare/` |
+| **ML 因子合成**（HS300 2022-2025 三段） | `scripts/archive/ml_synthesis_experiment.py`、`ml_synthesis_round2.py`、`ml_decay_diagnosis.py` | h=5 valid IC 0.055-0.061 但 test 归零（29/35 特征方向翻转，低波/低价风格 2025 反转）；h=1 样本外 IC 0.039-0.041（NW-t 2.5-2.9）；诚实披露 h=1 选择存在数据窥探 → `reports/ml-synthesis-hs300-report/` |
+| **算法对比** | `scripts/archive/ml_algorithm_compare.py`、`ml_window_compare.py` | 2019-2026 长时段 Ridge/GBDT/TabICL + 窗口/再训频率对比 → `reports/ml_algorithm_compare/` |
 | **模型 walk-forward** | `scripts/walk_forward_model.py` | mock/real 滚动再训练，模型因子回写因子库 → `reports/models(_mock)/` |
 | **组合方法对比** | `scripts/compare_portfolio_methods.py` | projection/min_var/tev/risk_parity/hrp 五法对比 → `reports/portfolio_methods_compare.csv` |
 | **多期执行** | `scripts/multi_period_backtest.py`、`backtest_two_periods.py` | 2025 与 2026H1 两段样本外回测 → `reports/multi_period/`、`reports/two_periods/` |
@@ -235,7 +235,7 @@ mock 落 `reports/models_mock`，真实落 `reports/models`。
   此前 diff 口径被非调仓日零行稀释 ~7 倍。③ **收益面板口径守卫**——h=1 传入
   shift(-h) 前视面板直接报错；run_model_portfolio/freq_tune/multiyear_oos
   同步修正（h=1 传未 shift 的 pct_change()，与基准指数标签严格对齐）。
-  诊断脚本 `scripts/diagnose_factor_vs_model.py`：单因子 vs 模型同口径对比——
+  诊断脚本 `scripts/archive/diagnose_factor_vs_model.py`：单因子 vs 模型同口径对比——
   **range20/alpha191_159/vol60 等负 IC 单因子月频 top50 超额 +20%~+36%，实为
   高波动/高 beta 风格在 2024-2026 上行期的暴露，非预测力**；模型 IC=0.067 最高
   （预测力最强）但 beta 0.56 偏低，牛市跑输风格。
