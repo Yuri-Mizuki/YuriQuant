@@ -105,10 +105,11 @@ def test_equal_topk_matches_topk_longonly_without_ties():
 def test_equal_topk_tie_break_is_deterministic_by_column_order():
     """**characterization**：tie 时按**列序**取前 k（确定性、可复现）。
 
-    与 ``TopKLongOnly`` 的 ``vals.sort_values().index[-k:]`` 刻意不同——后者用
-    quicksort（不稳定），在 tie 上不保证顺序。实测真实因子库约 4.4% 的截面在
-    top-k 边界存在 tie（离散型因子接近 100%），故这里保留确定性实现、
-    **不委托**给策略类。若将来统一 tie 语义，本测试会红——那正是提醒。
+    2026-09-11 起 ``strategy.examples`` 的 top-k 已统一到与本模块**同一** tie
+    语义（``rank(ascending=False, method="first")``，并列时列序靠前者优先），
+    ``TopKLongOnly`` / ``TopFracLongOnly`` / ``TopKLongShort`` 不再用不稳定的
+    ``sort_values()``。这里钉住本模块自身的行为；策略类的确定性覆盖见
+    ``tests/test_strategy_tie.py``。
     """
     idx = pd.date_range("2024-01-01", periods=2, freq="B")
     codes = [f"C{i:02d}" for i in range(10)]

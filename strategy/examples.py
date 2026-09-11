@@ -3,12 +3,58 @@
 ========
 
 常用策略实现，继承 Strategy。
+
+tie-break 语义（2026-09-11 统一，全仓单一规则）
+----------------------------------------------
+
+因子值出现并列时（离散型因子、GBDT 同一叶子的样本）"取哪 k 只"必须**确定且
+可解释**。此前三处 top-k 直接对原始因子值排序取值——pandas 默认
+``kind="quicksort"``（introsort，**不稳定**）：并列时谁入选取决于底层排序实现
+细节，同一版本内可复现，但**跨 pandas 版本/平台不保证**，语义上也解释不了。
+
+现统一为 ``rank(ascending=False, method="first")`` —— 并列时**列序靠前者优先**，
+与 :func:`strategy.constraints.build_signal_weights` 以及
+:class:`BufferedTopFracLongOnly` 的内部实现是**同一语义**。
+
+实测影响面（``scripts/oneoff/probe_tie_stable_sort.py``，HS300 2025 真实因子库
+40 面板 / 46930 截面）：约 **4.4%** 的截面在 top-k 边界存在并列，而且几乎每个
+并列截面新旧实现选出的持仓**集合都不同**（最坏 Jaccard = 0，即完全无交集）。
+故本次改动会让受影响实验的持仓与换手发生可辨识变化，需按新口径重跑。
 """
 from __future__ import annotations
 
 import pandas as pd
 
 from strategy.base import Strategy
+
+
+# ---------------------------------------------------------------------------
+# 确定性 top-k 选取（模块内共用，tie 语义的唯一实现）
+# ---------------------------------------------------------------------------
+def _rank_desc(vals: pd.Series) -> pd.Series:
+    """降序名次；并列按**列序**（``method="first"``）确定性打破。"""
+    return vals.rank(ascending=False, method="first")
+
+
+def _top_k_indices(vals: pd.Series, k: int) -> pd.Index:
+    """因子值最大的 k 个 index（按值降序返回）；并列时列序靠前者优先。
+
+    ``k <= 0`` 返回空——注意旧实现 ``index[-0:]`` 会返回**全部**索引
+    （Python 的 ``-0 == 0``），k=0 时给出 ``inf`` 权重，属修复。
+    """
+    if k <= 0:
+        return vals.index[:0]
+    r = _rank_desc(vals)
+    return r[r <= k].sort_values().index
+
+
+def _bottom_k_indices(vals: pd.Series, k: int) -> pd.Index:
+    """因子值最小的 k 个 index（按值升序返回）；并列时列序靠前者优先。"""
+    if k <= 0:
+        return vals.index[:0]
+    r = _rank_desc(vals)
+    n = len(vals)
+    return r[r > n - k].sort_values(ascending=False).index
 
 
 class TopKLongShort(Strategy):
@@ -35,9 +81,8 @@ class TopKLongShort(Strategy):
         else:
             k = self.k
 
-        sorted_vals = vals.sort_values()
-        short_codes = sorted_vals.index[:k]
-        long_codes = sorted_vals.index[-k:]
+        long_codes = _top_k_indices(vals, k)
+        short_codes = _bottom_k_indices(vals, k)
 
         if self.weight_mode == "equal":
             w_long = pd.Series(1.0 / k, index=long_codes)
@@ -63,7 +108,10 @@ class TopKLongOnly(Strategy):
     def get_weights(self, factor_values: pd.Series) -> pd.Series:
         vals = factor_values.dropna()
         k = min(self.k, len(vals))
-        long_codes = vals.sort_values().index[-k:]
+        if k <= 0:
+            # 空截面：旧实现会走到 `1.0 / 0` 抛 ZeroDivisionError，这里显式返回空。
+            return pd.Series(dtype=float)
+        long_codes = _top_k_indices(vals, k)
 
         if self.weight_mode == "equal":
             return pd.Series(1.0 / k, index=long_codes)
@@ -95,7 +143,7 @@ class TopFracLongOnly(Strategy):
         if len(vals) == 0:
             return pd.Series(dtype=float)
         k = max(1, min(round(self.frac * len(vals)), len(vals)))
-        top = vals.sort_values().index[-k:]
+        top = _top_k_indices(vals, k)
 
         if self.weight_mode == "equal":
             return pd.Series(1.0 / k, index=top)
@@ -145,7 +193,9 @@ class BufferedTopFracLongOnly(Strategy):
         n = len(vals)
         n_entry = max(1, min(round(self.frac_entry * n), n))
         n_exit = max(n_entry, min(round(self.frac_exit * n), n))
-        ranks = vals.rank(ascending=False, method="first")
+        # tie 语义：method="first" 按列序确定性打破，与模块内 _rank_desc 及
+        # strategy.constraints.build_signal_weights 完全一致（本类一直是确定的）。
+        ranks = _rank_desc(vals)
 
         keep = [c for c in self._prev if c in ranks.index and ranks[c] <= n_exit]
         candidates = [c for c in ranks.sort_values().index
