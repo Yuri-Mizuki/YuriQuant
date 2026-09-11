@@ -143,8 +143,8 @@
   锁死两种口径的唯一语义差别。全量 629 passed（基线 618）。详见
   `.workbuddy/memory/2026-09-10.md`。
 
-- [ ] **口径统一第二批（2026-09-10 架构审计立项；四项待拍板决策已于
-  2026-09-11 全部落定，仅剩"权重生产唯一入口"）**：
+- [x] **口径统一第二批（2026-09-10 架构审计立项；四项待拍板决策与"权重生产
+  唯一入口"已于 2026-09-11 全部落定）**：
 
   - [x] **显著性判定收口（2026-09-10 完成，`24837bb`）**：新增
     `stats/significance.py` 作为"判定层"单一真源（与 `stats/robust_stats` 的
@@ -242,15 +242,40 @@
       `data/cache_helpers` / `build_panel` 内联）——**注意**：这不是"要统一成
       一套写法"，IC 口径与引擎口径是分层设计、数学等价（`A = B.shift(-1)`），
       只需保证"每个口径一份实现 + 跨层显式声明"，见 MEMORY.md 收益面板条。
-    - **反例（不要动）**：`optimize/portfolio._neutralize_industry` 是权重级
-      投影，与因子级残差中性化范畴不同，不算重复。
-  - [ ] **确定权重生产的唯一入口（需拍板）**：`strategy/`（启发式投影）与
-    `optimize/`（cvxpy 求解器 + HRP + Black-Litterman，1714 行）并存，信号→
-    权重实现分散在 `strategy/examples.py`（多个 `get_weights`）、
-    `optimize/portfolio.py:90 optimize_weights`、`optimize/solver.py:435
-    optimize_weights_qp`。生产链路 `rolling_grid_alla` **只走 `strategy/`**，
-    `optimize/` 目前只在对比脚本里被调用 → 定一个为生产入口，另一个降级为
-    研究代码并注明。这关系到"优化层是否接上主线"。
+    - **反例（不要动）**：`strategy.constraints.neutralize_industry`（2026-09-11
+      自 `optimize/portfolio.py` 下沉）是**权重级**投影，与因子级残差中性化范畴
+      不同，不算重复。
+  - [x] **确定权重生产的唯一入口（2026-09-11 完成，方案 A）**：
+    诊断结论是**不合并模块，而是统一契约 + 消除真重复**。逐函数核对后，
+    `strategy/` 与 `optimize/` 的重叠面**只有 2 处、约 12 行**：
+    `optimize_weights(method="equal_topk")` ↔ `TopKLongOnly`、
+    `method="factor_weighted"` ↔（strategy 层无对应物）。其余 133 行
+    （行业中性投影 / 上下限 / 换手收缩）是 strategy 完全没有的能力，
+    `solver.py` 的 QP/HRP/BL 与 `risk.py` 的风险分解更无从重叠。
+    **不合并的三条理由**：① 依赖重量不对称——`backtest/engine.py:32` 只 import
+    `strategy.base`（零三方依赖），而 `optimize.solver` 要 cvxpy，合并会让回测
+    引擎背重依赖；② 契约粒度不同（单截面 `Series→Series` vs 面板
+    `DataFrame→DataFrame`）；③ 层次不同（业界 alpha → 组合构建 → 执行）。
+    落地：新建 `strategy/constraints.py`（面板级纯函数真源 =
+    `build_signal_weights` / `neutralize_industry` / `apply_bounds` /
+    `apply_turnover` / `apply_constraints`），`optimize/portfolio.py` 退化为
+    **薄门面**（不再持有任何独立实现）；探针
+    `scripts/oneoff/probe_portfolio_move.py` 穷举 72 个约束组合验证新旧
+    **max|Δ|=0**（纯搬迁）。契约显性化：`PrecomputedWeightsStrategy` 从
+    `optimize.multi_period` 导出为公开适配器并补 docstring——它是"优化产物 →
+    `Strategy` 契约 → 回测引擎"的唯一通道。守卫：`tests/test_layering.py`
+    加 strategy 层依赖守卫（不得 import optimize/backtest 及 cvxpy 等重依赖）+
+    约束真源守卫；新增 `tests/test_constraints.py`（16 例）。
+    **⚠️ 一处刻意不合并**：`equal_topk` 与 `TopKLongOnly` 的 **tie-break 不同**
+    —— 前者 `rank(method="first")`（按列序**确定性**），后者 `sort_values()`
+    （quicksort，**不稳定**）。探针 `scripts/oneoff/probe_tie_at_topk.py` 实测
+    真实因子库（HS300 2025，40 面板 / 46930 截面）**4.4% 的截面**在 top-k 边界
+    存在 tie（两个离散型因子接近 100%），委托会改这些截面的持仓集合，且是
+    **向不确定实现退化**，故保留确定性实现并写进 docstring。
+    **新发现（待单独处理）**：同一 tie 隐患也在 `TopFracLongOnly` /
+    `BufferedTopFracLongOnly` 等**主线用到的策略类**里（`sort_values()` 不稳定
+    → 同输入在不同平台/版本可能选出不同股票）。若要"tie-break 确定化"，需
+    单独一项 + 重跑受影响实验，本次**刻意未动**以免改变主实验数字。
   - [x] **`factor/synthesis.py` 归属倒挂（2026-09-11 完成，`a6a166c`）**：
     诊断发现该模块是**两类职责混装**——`ic_weighted` / `pca` / `orthogonal` /
     `build_components` 是**确定性因子组合**（挖掘闭环最后一环、直接喂因子库），
@@ -315,12 +340,12 @@
 
 1. 重跑 multiyear + freq_tune（补核心结论证据链，顺带验证整改后口径）
 2. ~~最小 CI~~（09-10 完成：已转为手动触发；3.2 机械清理亦已批量收口）
-3. **口径统一第二批（见 3.1）**——已完成：显著性判定收口、统计/预处理/绩效原语
+3. **口径统一第二批（见 3.1）—— 已全部完成**：显著性判定收口、统计/预处理/绩效原语
    收口、`factor/synthesis.py` 归属倒挂拆分、**四项待拍板决策全部落定**
    （a 保持 raw + FDR 降报告层 / b GFlowNet 训练捷径 + 入库 canonical 并显式声明 /
-   c size-only 补截距 / d 13 处内联 t 收口且不补 NW 列），各自独立提交 + 全量测试比对；
-   仅剩**"权重生产唯一入口"**一项需先拍板。其余三项按"一次一项 + 单独提交 +
-   全量测试比对"推进
+   c size-only 补截距 / d 13 处内联 t 收口且不补 NW 列）、**权重生产入口定案**
+   （方案 A：约束算子下沉 `strategy.constraints`，`optimize/portfolio` 退化为薄门面，
+   不合并模块），各自独立提交 + 全量测试比对
 4. 分钟频挖掘 pipeline（现成数据的最大增量）
 5. cli_common 批量推广 + 报告模板收编（机械清理，可穿插）
 6. 攻"跑输基准"研究问题本身
