@@ -267,7 +267,13 @@ def run(args) -> dict:
     feats, quality = select_features(all_feats, fwd, sel_days, max_features=args.max_features)
     log.info("特征选择（%s ~ %s）: %d -> %d", sel_days[0].date(), sel_days[-1].date(),
              len(all_feats), len(feats))
-    pd.DataFrame({"valid_abs_ic": [quality.get(k, float("nan")) for k in feats]}) \
+    # 落盘必须带**因子名索引**（2026-09-14 修）：此前写的是无索引 DataFrame，
+    # 只留下一列 IC 值，因子名整个丢失。消费者
+    # ``scripts/reporting/monitor_performance.py::feats.iloc[:, 0]`` 拿到的
+    # 因此是 IC 数值而非因子名。与同族 ml_synthesis_experiment 的
+    # ``pd.Series(..., name=...).to_csv`` 写法对齐。
+    pd.Series({k: (quality.get(k, float("nan")) if quality is not None else float("nan"))
+               for k in feats}, name="valid_abs_ic") \
         .to_csv(out_dir / "selected_features.csv", encoding="utf-8-sig")
 
     # ---- 3. 公共日期网格 + 调仓日 ----
