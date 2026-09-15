@@ -9,8 +9,9 @@ factor_stats jsonl 文件名与两处小开关）、``ffill_pit_multi`` 4 份、
 口径（与既有拷贝逐位一致）：
 - **close_adj 构建**：daily_all_a × backward_factor，交集对齐，float32，
   从 :data:`KEEP_FROM` 起（单一缓存根 = ``Config.cache()["root"]``）；
-- **registry 合并**：append + ``drop_duplicates(subset="name", keep="last")``，
-  utf-8-sig 落盘；
+- **registry 合并**：统一走 ``FactorLibrary.upsert_rows()``（原子写、列序归一
+  到 CANONICAL_COLUMNS、只补空缺不覆盖人工标签）；仅在库根推断失败时才回退
+  历史直写（append + ``keep="last"``、utf-8-sig）；
 - **IC 融合**：对本次 stats 里的因子名重算 ``ic_h{h}``，
   ``fwd = close_adj.pct_change(h).shift(-h)``，因子面板按
   ``IC_CODE_STRIDE`` 抽稀取列（与既有 ic_h 同口径）。
@@ -127,29 +128,84 @@ def fuse_horizon_ic(ds_dir: Path, h: int, family: str, *,
     log.info("ic_h%d merged: %d 因子", h, ic.shape[1])
 
 
+def _lib_for(ds_dir: Path):
+    """由数据集目录反推 FactorLibrary；推断不一致时返回 None（调用方回退直写）。"""
+    from research.factor_library import FactorLibrary
+
+    lib = FactorLibrary(root=ds_dir.parent, dataset=ds_dir.name)
+    if Path(lib.root).resolve() != ds_dir.resolve():
+        log.warning("库根推断不一致（%s != %s），本批次回退直写 registry",
+                    lib.root, ds_dir)
+        return None
+    return lib
+
+
 def merge_outputs(ds_dir: Path, family: str, *,
                   horizons: tuple[int, ...] = HORIZONS,
                   close_adj_loader=None, ic_code_stride: int = IC_CODE_STRIDE,
-                  skip_existing: bool = False, empty_log: str | None = None) -> None:
+                  skip_existing: bool = False, empty_log: str | None = None,
+                  source: str = "", family_tag: str = "", kind: str = "raw",
+                  maturity: str = "experimental",
+                  frequency: str = "日频") -> None:
     """本次产出并入 registry + 融合 ic_h{h}——builder 收尾的唯一入口。
 
     Args:
-        family: 因子族名（决定 ``factor_stats_{family}.jsonl``）。
+        family: 因子集名（决定 ``factor_stats_{family}.jsonl`` 文件名，同时
+            写入 registry 的 ``set`` 列）。注意它**不是**因子族标签——
+            族标签是 ``family_tag``。
         empty_log: stats 为空时的 warning 文案；None 则静默返回（与各拷贝
             原行为一一对应）。
+        source: 本批来源标注，形如 ``alpha101:builders:all_a_2018_2026``。2026-09-12
+            起应显式传入——空来源会让这批因子在
+            ``scripts/ingest/extend_factor_library.py`` 的因子集路由
+            （``source.split(":")[0]``）里被静默跳过。**前缀必须是因子集名**
+            （gp/model/alpha101…），不能写成通用的 ``builders``：路由是按
+            前缀判定的，统一前缀会让 gp/model 因子重算被跳过。
+        family_tag: 因子族标签（受控词表，见 ``FAMILY_WHITELIST``）。
+        kind / maturity / frequency: 轻量登记的默认标签。
+
+    写入统一走 ``FactorLibrary.upsert_rows()``：原子写 + 列序归一 + 只补空缺，
+    不再直接 ``to_csv`` 覆盖 registry（那条路径正是 912 个因子
+    ``source``/``family``/``kind`` 全空的成因）。
     """
     rows = read_stats(ds_dir, family)
     if not rows:
         if empty_log:
             log.warning(empty_log)
         return
-    reg = pd.read_csv(ds_dir / "registry.csv")
-    new_df = pd.DataFrame(rows)
-    before = len(reg)
-    reg = (pd.concat([reg, new_df], ignore_index=True)
-             .drop_duplicates(subset="name", keep="last"))
-    reg.to_csv(ds_dir / "registry.csv", index=False, encoding="utf-8-sig")
-    log.info("registry: %d -> %d 因子", before, len(reg))
+    # 默认来源 = <因子集>:builders:<数据集>，默认族 = SET_TO_FAMILY[因子集]。
+    # 故意不在 12 个 builder 里各写一遍：漏改一个就等于那批因子重新落入
+    # "有来源无分类"（2026-09-12 那个坑），集中在这里由库统一兜底。
+    # 前缀必须是因子集名而非 "builders"——source.split(":")[0] 是路由键，
+    # 见 research.factor_library.source_for 的说明。
+    if not source:
+        from research.factor_library import source_for
+
+        source = source_for(family, scope=ds_dir.name)
+    if not family_tag:
+        from research.factor_library import family_for_set
+
+        family_tag = family_for_set(family)
+        if not family_tag:
+            log.warning("因子集 %r 未收录在 SET_TO_FAMILY，本批 family 留空"
+                        "（新增集请同步该表）", family)
+    lib = _lib_for(ds_dir)
+    if lib is not None:
+        stat = lib.upsert_rows(rows, source=source, family=family_tag, kind=kind,
+                               maturity=maturity, frequency=frequency,
+                               set_name=family)
+        log.info("registry: %d -> %d 因子（新增 %d, 更新 %d）",
+                 stat["before"], stat["after"], stat["added"], stat["updated"])
+    else:
+        # 兜底：库根推断不出来（非常规目录布局）时保持历史直写行为，
+        # 但明确告警——不静默退回"没有来源管理"的老路。
+        rp = ds_dir / "registry.csv"
+        reg = pd.read_csv(rp) if rp.exists() else pd.DataFrame()
+        before = len(reg)
+        reg = (pd.concat([reg, pd.DataFrame(rows)], ignore_index=True)
+                 .drop_duplicates(subset="name", keep="last"))
+        reg.to_csv(rp, index=False, encoding="utf-8-sig")
+        log.info("registry(直写回退): %d -> %d 因子", before, len(reg))
     for h in horizons:
         fuse_horizon_ic(ds_dir, h, family, close_adj_loader=close_adj_loader,
                         ic_code_stride=ic_code_stride, skip_existing=skip_existing)

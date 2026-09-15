@@ -82,6 +82,63 @@ def _st_days(is_st: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(out, index=is_st.index, columns=is_st.columns)
 
 
+#: 因子名 → 中文标签（main 与每日排名的分派表共用单一真源）
+STATUS_LABELS = {
+    "suspend_ratio_60d": "近60日停牌占比",
+    "suspend_count_60d": "近60日停牌次数",
+    "is_st": "ST风险警示",
+    "st_days": "连续ST天数",
+    "limit_pos": "封板位置(涨停热度)",
+}
+STATUS_ORDER = list(STATUS_LABELS)
+
+
+def build_panels(cal_idx, codes, status: pd.DataFrame | None = None,
+                 close_raw: pd.DataFrame | None = None
+                 ) -> dict[str, pd.DataFrame]:
+    """在给定交易日历/股票池上构建停牌/ST 状态族面板。
+
+    与 ``main`` 同一代码路径。``close_raw`` 为未复权收盘（date×code 宽表），
+    仅 limit_pos（封板位置）需要；不给则读缓存日线。
+    """
+    st = _load_status() if status is None else status
+    if st is None or st.empty:
+        return {}
+    if "date" not in st.columns:
+        # 传入的是 parquet 原样（date×code 多级索引），归一化成 date/code 长表
+        st = st.reset_index()
+        st["date"] = pd.to_datetime(st["date"], errors="coerce")
+
+    is_sus_b = _pivot(st, "is_suspended", cal_idx, codes).fillna(False).astype(bool)
+    is_st_p = _pivot(st, "is_st", cal_idx, codes)
+
+    # 停牌因子（60 交易日滚动统计）
+    suspend_ratio = is_sus_b.rolling(W60, min_periods=5).mean().astype(np.float32)
+    suspend_count = is_sus_b.rolling(W60, min_periods=5).sum().astype(np.float32)
+    # ST 状态（PIT：当日已知）
+    st_flag = is_st_p.fillna(False).astype(np.float32)
+    st_enter = _st_days(st_flag)
+
+    limit_pos = pd.DataFrame(np.nan, index=cal_idx, columns=codes, dtype=float)
+    lim = st.dropna(subset=["pre_close", "high_limited"])
+    if len(lim) and close_raw is not None:
+        close_long = close_raw.stack().rename("close").reset_index()
+        close_long.columns = ["date", "code", "close"]
+        lim = lim.assign(den=lim["high_limited"] - lim["pre_close"])
+        lim = lim[lim["den"] > 0]
+        lp = lim.merge(close_long, on=["date", "code"], how="inner")
+        lp["limit_pos"] = ((lp["close"] - lp["pre_close"]) / lp["den"]).clip(0, 1)
+        limit_pos = _pivot(lp, "limit_pos", cal_idx, codes)
+
+    return {
+        "suspend_ratio_60d": suspend_ratio.replace(0.0, np.nan),
+        "suspend_count_60d": suspend_count.replace(0.0, np.nan),
+        "is_st": st_flag.replace(0.0, np.nan),
+        "st_days": st_enter.replace(0.0, np.nan),
+        "limit_pos": limit_pos,
+    }
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--resume", action="store_true")
@@ -120,44 +177,9 @@ def main() -> None:
 
     st = _load_status()
 
-    # ---- 构建各因子宽表 ----
-    is_sus = _pivot(st, "is_suspended", cal_idx, codes).fillna(False)
-    is_sus_b = is_sus.astype(bool)
-    is_st_p = _pivot(st, "is_st", cal_idx, codes)
-
-    # 停牌因子
-    suspend_ratio = is_sus_b.rolling(W60, min_periods=5).mean().astype(np.float32)
-    suspend_count = is_sus_b.rolling(W60, min_periods=5).sum().astype(np.float32)
-    # ST 状态（PIT：当日已知）
-    st_flag = is_st_p.fillna(False).astype(np.float32)
-    st_enter = _st_days(st_flag)
-
-    # 涨跌停位置：limit_pos(封板热度)。daily 的 close 与 status 的 pre_close/high_limited 合并
-    dclose = daily.reset_index().rename(columns={"close": "close"})
-    dclose = dclose[["date", "code", "close"]] if "close" in dclose \
-        else dclose.rename(columns={"levels_0": "date", "level_1": "code"})
-    lim = (st.dropna(subset=["pre_close", "high_limited"])
-             .assign(den=lambda d: d["high_limited"] - d["pre_close"]))
-    lim = lim[lim["den"] > 0]
-    lp = lim.merge(dclose, on=["date", "code"], how="inner")
-    lp["limit_pos"] = ((lp["close"] - lp["pre_close"]) / lp["den"]).clip(0, 1)
-    limit_pos = _pivot(lp, "limit_pos", cal_idx, codes)
-
-    panels = {
-        "suspend_ratio_60d": suspend_ratio.replace(0.0, np.nan),
-        "suspend_count_60d": suspend_count.replace(0.0, np.nan),
-        "is_st": st_flag.replace(0.0, np.nan),
-        "st_days": st_enter.replace(0.0, np.nan),
-        "limit_pos": limit_pos,
-    }
-
-    labels = {
-        "suspend_ratio_60d": "近60日停牌占比",
-        "suspend_count_60d": "近60日停牌次数",
-        "is_st": "ST风险警示",
-        "st_days": "连续ST天数",
-        "limit_pos": "封板位置(涨停热度)",
-    }
+    # ---- 构建各因子宽表（与 build_panels 同一代码路径）----
+    panels = build_panels(cal_idx, codes, status=st, close_raw=close_raw)
+    labels = STATUS_LABELS
 
     if not panels:
         log.warning("无可构建因子")
@@ -166,8 +188,7 @@ def main() -> None:
     fwd = {h: close_adj.pct_change(h, fill_method=None).shift(-h)
            for h in HORIZONS}
     ic_codes = close_adj.columns[::IC_CODE_STRIDE]
-    order = ["suspend_ratio_60d", "suspend_count_60d", "is_st", "st_days",
-             "limit_pos"]
+    order = STATUS_ORDER
 
     t0 = time.time()
     for i, name in enumerate(order, 1):

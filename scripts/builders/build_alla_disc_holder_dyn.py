@@ -245,6 +245,37 @@ def load_panels():
     return close_adj, close_raw, tabs
 
 
+#: 因子名 → (set, 中文标签)
+DISC_HOLDER_DYN_LABELS = {
+    "block_disc_1d": ("moneyflow", "大宗当日加权折价率"),
+    "block_disc_20d": ("moneyflow", "大宗20日折价率累积"),
+    "block_prem_20d": ("moneyflow", "大宗20日溢价率累积"),
+    "top10_hold_chg": ("holder", "前十大股东持股比例变化"),
+    "holder_stability": ("holder", "前十大股东更替率"),
+}
+
+
+def build_panels(cal_idx, codes, tables: dict | None = None,
+                 close_raw: pd.DataFrame | None = None
+                 ) -> dict[str, pd.DataFrame]:
+    """构建大宗折价族（moneyflow）+ 股东动态族（holder）面板。
+
+    ``close_raw`` 为未复权收盘（date×code 宽表），仅折价率对齐需要；
+    二者任一未给则回退读缓存全表——日频调用请显式传入以省 IO。
+    """
+    if tables is None or close_raw is None:
+        _close_adj, _close_raw, tabs = load_panels()
+        tables = tabs if tables is None else tables
+        close_raw = _close_raw if close_raw is None else close_raw
+    tables = tables or {}
+    out: dict[str, pd.DataFrame] = {}
+    if close_raw is not None:
+        out.update(_build_block_disc(tables.get("block"), close_raw,
+                                     cal_idx, codes))
+    out.update(_build_holder_dyn(tables.get("holder"), cal_idx, codes))
+    return out
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--resume", action="store_true")
@@ -269,9 +300,7 @@ def main() -> None:
            for h in HORIZONS}
     ic_codes = close_adj.columns[::IC_CODE_STRIDE]
 
-    panels: dict[str, pd.DataFrame] = {}
-    panels.update(_build_block_disc(tabs.get("block"), close_raw, cal_idx, codes))
-    panels.update(_build_holder_dyn(tabs.get("holder"), cal_idx, codes))
+    panels = build_panels(cal_idx, codes, tables=tabs, close_raw=close_raw)
 
     labels = {
         "block_disc_1d": "大宗当日加权折价率",

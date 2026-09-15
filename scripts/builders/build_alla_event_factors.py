@@ -205,6 +205,42 @@ def _pit_restricted(restricted: pd.DataFrame, cal_idx, codes) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# 可复用构建入口（每日排名尾部重算与 main 全量构建同一代码路径）
+# ---------------------------------------------------------------------------
+#: (源表名, PIT 构建函数, {因子名: 中文标签})
+EVENT_ROUTES: tuple[tuple[str, object, dict[str, str]], ...] = (
+    ("notice", _pit_notice,
+     {"notice_sue": "业绩预告净利同比增幅", "notice_profit_ttm": "预告净利润",
+      "notice_forecast_hit": "预告相对上年净利同比"}),
+    ("express", _pit_express,
+     {"express_profit_yoy": "快报归母净利同比", "express_rev_yoy": "快报营收同比",
+      "express_reporting": "快报披露标记"}),
+    ("restricted", _pit_restricted,
+     {"unlock_ratio_20d": "未来20交易日解禁/总股本"}),
+)
+
+
+def build_panels(cal_idx, codes,
+                 tables: dict[str, pd.DataFrame] | None = None
+                 ) -> dict[str, pd.DataFrame]:
+    """在给定交易日历/股票池上构建事件族面板。
+
+    与 ``main`` 走同一 PIT 代码路径；``alla_daily_rank`` 传尾部
+    (cal_idx, codes) 做尾部重算，``tables`` 不给则读本地缓存三张事件表。
+    """
+    if tables is None:
+        tables = _load_event_tables()
+    out: dict[str, pd.DataFrame] = {}
+    for key, pit_fn, _labels in EVENT_ROUTES:
+        tbl = tables.get(key)
+        if tbl is None or tbl.empty:
+            log.warning("表 %s 无数据，跳过", key)
+            continue
+        out.update(pit_fn(tbl, cal_idx, codes))
+    return out
+
+
+# ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
 def main() -> None:
@@ -232,24 +268,10 @@ def main() -> None:
     ic_codes = close_adj.columns[::IC_CODE_STRIDE]
 
     defs: dict[str, dict] = {}
-    panels_all: dict[str, pd.DataFrame] = {}
-
-    for key, pit_fn, labels in [
-        ("notice", _pit_notice,
-         {"notice_sue": "业绩预告净利同比增幅", "notice_profit_ttm": "预告净利润",
-          "notice_forecast_hit": "预告相对上年净利同比"}),
-        ("express", _pit_express,
-         {"express_profit_yoy": "快报归母净利同比", "express_rev_yoy": "快报营收同比",
-          "express_reporting": "快报披露标记"}),
-        ("restricted", _pit_restricted,
-         {"unlock_ratio_20d": "未来20交易日解禁/总股本"}),
-    ]:
-        if tables.get(key) is None:
-            log.warning("表 %s 无数据，跳过", key)
-            continue
-        pn = pit_fn(tables[key], cal_idx, codes)
-        panels_all.update(pn)
-        defs.update({k: {"src": key, "label": v} for k, v in labels.items() if k in pn})
+    panels_all = build_panels(cal_idx, codes, tables=tables)
+    for key, _pit_fn, labels in EVENT_ROUTES:
+        defs.update({k: {"src": key, "label": v}
+                     for k, v in labels.items() if k in panels_all})
 
     if args.only:
         defs = {k: v for k, v in defs.items() if k == args.only}

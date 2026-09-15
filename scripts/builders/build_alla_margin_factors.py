@@ -110,6 +110,30 @@ def _pit_margin(margin: pd.DataFrame, cal_idx, codes) -> dict:
     return frames
 
 
+#: 因子名 → 中文标签（main 与每日排名的分派表共用单一真源）
+MARGIN_LABELS = {
+    "margin_bal_chg_5d": "两融余额5日变化率",
+    "margin_bal_chg_20d": "两融余额20日变化率",
+    "financing_chg_1d": "融资余额单日变化率",
+    "securities_chg_1d": "融券余额单日变化率",
+}
+
+
+def build_panels(cal_idx, codes,
+                 margin: pd.DataFrame | None = None
+                 ) -> dict[str, pd.DataFrame]:
+    """在给定交易日历/股票池上构建两融族面板（与 main 同一代码路径）。
+
+    ``margin`` 不给则读缓存的 margin_detail 全表。
+    """
+    if margin is None:
+        _, margin = load_panels()
+    if margin is None or margin.empty:
+        log.warning("margin_detail 无数据，跳过")
+        return {}
+    return _pit_margin(margin, cal_idx, codes)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--resume", action="store_true")
@@ -138,15 +162,11 @@ def main() -> None:
         log.warning("margin_detail 无数据，跳过")
         return
 
-    defs = {k: {"src": "margin", "label": v} for k, v in {
-        "margin_bal_chg_5d": "两融余额5日变化率",
-        "margin_bal_chg_20d": "两融余额20日变化率",
-        "financing_chg_1d": "融资余额单日变化率",
-        "securities_chg_1d": "融券余额单日变化率",
-    }.items()}
+    defs = {k: {"src": "margin", "label": v}
+            for k, v in MARGIN_LABELS.items()}
 
-    pn = _pit_margin(margin, cal_idx, codes)
-    panels_all = {k: pn[k] for k in defs}
+    pn = build_panels(cal_idx, codes, margin=margin)
+    panels_all = {k: pn[k] for k in defs if k in pn}
 
     if args.only:
         defs = {k: v for k, v in defs.items() if k == args.only}

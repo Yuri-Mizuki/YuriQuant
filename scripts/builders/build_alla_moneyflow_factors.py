@@ -146,6 +146,36 @@ def _pit_block(block: pd.DataFrame, cal_idx, codes) -> dict:
     return {"block_amt_20d": amt20["amt"], "block_vol_20d": vol20["vol"]}
 
 
+#: 因子名 → (源表名, 中文标签)（main 与每日排名的分派表共用单一真源）
+MONEYFLOW_LABELS = {
+    "lhb_net_buy": ("long_hu_bang", "龙虎榜当日净买入额"),
+    "lhb_count_20d": ("long_hu_bang", "龙虎榜20日上榜次数"),
+    "lhb_net_20d": ("long_hu_bang", "龙虎榜20日累计净买入额"),
+    "block_amt_20d": ("block_trading", "大宗20日成交额"),
+    "block_vol_20d": ("block_trading", "大宗20日成交量"),
+}
+
+
+def build_panels(cal_idx, codes, tables: dict | None = None
+                 ) -> dict[str, pd.DataFrame]:
+    """在给定交易日历/股票池上构建龙虎榜/大宗额量族面板。
+
+    与 ``main`` 同一代码路径；``tables`` 不给则读缓存两张表。
+    注意本构建器**不含** block_disc_* 折溢价因子（属 build_alla_disc_holder_dyn）。
+    """
+    if tables is None:
+        _, tables = load_panels()
+    tables = tables or {}
+    out: dict[str, pd.DataFrame] = {}
+    lhb = tables.get("long_hu_bang")
+    if lhb is not None and not lhb.empty:
+        out.update(_pit_lhb(lhb, cal_idx, codes))
+    block = tables.get("block_trading")
+    if block is not None and not block.empty:
+        out.update(_pit_block(block, cal_idx, codes))
+    return out
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--resume", action="store_true")
@@ -169,23 +199,10 @@ def main() -> None:
     fwd = {h: close_adj.pct_change(h, fill_method=None).shift(-h) for h in HORIZONS}
     ic_codes = close_adj.columns[::IC_CODE_STRIDE]
 
-    defs: dict[str, dict] = {}
-    panels_all: dict[str, pd.DataFrame] = {}
-    if tables.get("long_hu_bang") is not None:
-        pn = _pit_lhb(tables["long_hu_bang"], cal_idx, codes)
-        panels_all.update(pn)
-        defs.update({k: {"src": "long_hu_bang", "label": v} for k, v in {
-            "lhb_net_buy": "龙虎榜当日净买入额",
-            "lhb_count_20d": "龙虎榜20日上榜次数",
-            "lhb_net_20d": "龙虎榜20日累计净买入额",
-        }.items() if k in pn})
-    if tables.get("block_trading") is not None:
-        pn = _pit_block(tables["block_trading"], cal_idx, codes)
-        panels_all.update(pn)
-        defs.update({k: {"src": "block_trading", "label": v} for k, v in {
-            "block_amt_20d": "大宗20日成交额",
-            "block_vol_20d": "大宗20日成交量",
-        }.items() if k in pn})
+    panels_all = build_panels(cal_idx, codes, tables=tables)
+    defs: dict[str, dict] = {k: {"src": src, "label": lbl}
+                             for k, (src, lbl) in MONEYFLOW_LABELS.items()
+                             if k in panels_all}
 
     if not defs:
         log.warning("无资金流数据，跳过")

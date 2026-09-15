@@ -259,6 +259,40 @@ def load_panels():
     return close_adj, close_raw, tabs
 
 
+#: 因子名 → 中文标签（main 与每日排名的分派表共用单一真源）
+SUE_PLEDGE_LABELS = {
+    "sue_notice_cs": "业绩预告盈利意外横截面zscore",
+    "sue_notice_20d": "业绩预告SUE 20日累积",
+    "sue_express_cs": "业绩快报净利意外横截面zscore",
+    "sue_express_20d": "业绩快报SUE 20日累积",
+    "pledge_chg_20d": "质押股本20日变化率",
+    "pledge_frn_density": "冻结股本密度(99分位截断)",
+    "pledge_holder_density": "冻结/持股覆盖密度(2×winsorize)",
+}
+
+
+def build_panels(cal_idx, codes, tables: dict | None = None,
+                 close_raw: pd.DataFrame | None = None
+                 ) -> dict[str, pd.DataFrame]:
+    """构建 SUE 盈利意外族（evt）+ 质押深度族（fundamental）面板。
+
+    与 ``main`` 同一代码路径。``close_raw`` 为未复权收盘（date×code），
+    仅质押深度族需要；任一未给则回退读缓存全表。
+    """
+    if tables is None or close_raw is None:
+        _close_adj, _close_raw, tabs = load_panels()
+        tables = tabs if tables is None else tables
+        close_raw = _close_raw if close_raw is None else close_raw
+    tables = tables or {}
+    out: dict[str, pd.DataFrame] = {}
+    out.update(_build_sue(tables.get("notice"), tables.get("express"),
+                          cal_idx, codes))
+    if close_raw is not None:
+        out.update(_build_pledge_depth(tables.get("pledge"), close_raw,
+                                       cal_idx, codes))
+    return out
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--resume", action="store_true")
@@ -293,10 +327,7 @@ def main() -> None:
     }
     sets = {"sue_": "evt", "pledge_": "fundamental"}
 
-    panels: dict[str, pd.DataFrame] = {}
-    panels.update(_build_sue(tabs.get("notice"), tabs.get("express"),
-                             cal_idx, codes))
-    panels.update(_build_pledge_depth(tabs.get("pledge"), close_raw, cal_idx, codes))
+    panels = build_panels(cal_idx, codes, tables=tabs, close_raw=close_raw)
 
     if not panels:
         log.warning("无可构建因子，跳过")
