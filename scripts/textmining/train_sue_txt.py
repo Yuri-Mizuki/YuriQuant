@@ -32,19 +32,19 @@ import joblib
 import numpy as np
 import pandas as pd
 import xgboost as xgb
+from sklearn.feature_extraction.text import CountVectorizer
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import StratifiedGroupKFold, StratifiedKFold
-from sklearn.feature_extraction.text import CountVectorizer
 
 from scripts.textmining.build_sue_txt_samples import _load_daily, _to_naive
 
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
-from scripts.cli_common import setup_logging  # noqa: E402
-
+from scripts.common.cli_common import setup_logging  # noqa: E402
 from scripts.textmining._paths import Out  # noqa: E402
+
 OUT_DIR = Out("sue")
 SAMPLE_PATH = OUT_DIR / "sue_txt_samples.parquet"
 
@@ -237,7 +237,8 @@ def train_xgb(X, y, groups=None, seed=42):
 def run(begin: int = 20190101, end: int = 20261231,
         model_name: str = "xgb", force: bool = False,
         pool: str = "hs300",
-        label_horizon: str = LABEL_HORIZON_DEFAULT) -> pd.DataFrame:
+        label_horizon: str = LABEL_HORIZON_DEFAULT,
+        test_start: str = "20210101") -> pd.DataFrame:
     sample_path = OUT_DIR / f"sue_txt_samples_{pool}.parquet"
     log.info("加载样本: %s", sample_path)
     samples = pd.read_parquet(sample_path)
@@ -276,7 +277,7 @@ def run(begin: int = 20190101, end: int = 20261231,
         daily_cache = _load_daily(None, [], begin, end)
         log.info("标签 horizon=t15（T+1~T+5 累计超额），日线已加载")
 
-    test_start = pd.Timestamp("20210101")
+    test_start = pd.Timestamp(test_start)
     all_pred: list[pd.DataFrame] = []
     round_no = 0
     while True:
@@ -442,15 +443,18 @@ if __name__ == "__main__":
     ap.add_argument("--begin", type=int, default=20190101)
     ap.add_argument("--end", type=int, default=20261231)
     ap.add_argument("--model", default="xgb", choices=["xgb", "logit"])
-    ap.add_argument("--pool", default="hs300", choices=["hs300", "zz1000"])
+    ap.add_argument("--pool", default="hs300", choices=["hs300", "zz1000", "all_a"])
     ap.add_argument("--force-tokenize", action="store_true")
     ap.add_argument("--label-horizon", default=LABEL_HORIZON_DEFAULT,
                     choices=["t01", "t15"],
                     help="t01=T-1~T+1 两日AR（AI51原版）；t15=T+1~T+5 累计超额")
+    ap.add_argument("--test-start", default="20210101",
+                    help="滚动训练首个样本外起点（all_a 对齐主实验 2018 面板传 20180101）")
     args = ap.parse_args()
 
     log_suffix = f"_{args.label_horizon}" if args.label_horizon != "t01" else ""
     setup_logging("sue_txt",
                   file=OUT_DIR / f"sue_txt_train_{args.model}_{args.pool}{log_suffix}.log")
     run(args.begin, args.end, args.model, args.force_tokenize,
-        pool=args.pool, label_horizon=args.label_horizon)
+        pool=args.pool, label_horizon=args.label_horizon,
+        test_start=args.test_start)

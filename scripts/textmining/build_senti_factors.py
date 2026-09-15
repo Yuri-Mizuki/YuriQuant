@@ -41,7 +41,7 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
-from scripts.cli_common import setup_logging  # noqa: E402
+from scripts.common.cli_common import setup_logging  # noqa: E402
 from scripts.textmining._paths import Out  # noqa: E402
 from scripts.textmining.build_sue_txt_samples import _load_daily  # noqa: E402
 
@@ -280,7 +280,7 @@ def run(pool: str = "zz1000", begin: str = "20190101",
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--pool", default="zz1000", choices=["hs300", "zz1000"])
+    ap.add_argument("--pool", default="zz1000", choices=["hs300", "zz1000", "all_a"])
     ap.add_argument("--begin", default="20190101")
     ap.add_argument("--factor-begin", default="20200601")
     ap.add_argument("--no-validate", action="store_true")

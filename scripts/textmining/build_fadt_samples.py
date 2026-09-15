@@ -42,8 +42,10 @@ from scripts.textmining.build_sue_txt_samples import (
 
 ROOT = Path(__file__).resolve().parents[2]
 from scripts.textmining._paths import Out  # noqa: E402
+
 OUT_DIR = Out("fadt")
 BENCH = "000905.SH"  # 中证500
+BENCH_EQ = "EQ_ALL_A"  # 全A等权合成指数（all_a 池用，缓存无 000905）
 
 # AI 57：调整事件文本线索（近似"本次 vs 上次预测变化"）
 UP_PAT = re.compile(r"上调|上调至|上调预测|上调目标|上修")
@@ -57,13 +59,20 @@ def load_adjustment_reports(pool: str, begin: int, end: int) -> pd.DataFrame:
 
     近似研报"剔除首盖 + 预测不变"：取明确含上调/下调字样的研报，剔除首盖。
     """
-    with open(ROOT / f"reports/{pool}_pit_union_2019.json",
-              encoding="utf-8") as f:
-        codes = json.load(f)
+    if pool == "all_a":
+        from config import Config
+        daily_path = (Path(str(Config.cache()["root"]).replace("//", "/"))
+                      / "daily_all_a.parquet")
+        codes = list(pd.read_parquet(daily_path, columns=[])
+                     .index.get_level_values("code").unique())
+    else:
+        with open(ROOT / f"reports/{pool}_pit_union_2019.json",
+                  encoding="utf-8") as f:
+            codes = json.load(f)
     cache = TextMiningCache()
     df = cache.get_ths_reports(codes)
     # get_ths_reports 返回全部缓存（跨池），必须按请求 codes 过滤（防串池）
-    from data.textmining.fetch import to_code_std, to_code6  # noqa: PLC0415
+    from data.textmining.fetch import to_code6, to_code_std  # noqa: PLC0415
     std_codes = {to_code_std(to_code6(c)) for c in codes}
     df = df[df["code"].isin(std_codes)].copy()
     df["date"] = _to_naive(df["date"])
@@ -96,9 +105,24 @@ def build_samples(pool: str = "zz1000", begin: int = 20190101,
     print(f"      调整事件样本: {len(ev)} 条 / {ev['code'].nunique()} 只")
     print(f"      类型分布: {ev['event_type'].value_counts().to_dict()}")
 
-    print("[2/3] 计算研报发布日 T-1~T+1 两日异常收益 AR（基准中证500）...")
-    daily = _load_daily(None, [], begin, end)
-    with_ar = _abnormal_return(ev, daily)
+    print("[2/3] 计算研报发布日 T-1~T+1 两日异常收益 AR ...")
+    if pool == "all_a":
+        # 缓存无 000905 指数日线：基准改用全A等权指数（等权日收益累乘合成，
+        # 与评估基准全A等权一致）
+        daily = _load_daily(None, [], begin, end, pool="all_a")
+        close_w = (daily.reset_index()
+                   .pivot(index="date", columns="code", values="close"))
+        eq_ret = close_w.pct_change(fill_method=None).mean(axis=1)
+        eq_close = (1 + eq_ret.fillna(0)).cumprod() * 1000.0
+        eq = eq_close.rename_axis("date").rename("close").reset_index()
+        eq["code"] = BENCH_EQ
+        daily = pd.concat([daily, eq.set_index(["date", "code"])])
+        bench = BENCH_EQ
+        print(f"      基准: {bench}（全A等权合成）")
+    else:
+        daily = _load_daily(None, [], begin, end, pool=pool)
+        bench = BENCH
+    with_ar = _abnormal_return(ev, daily, bench=bench)
     valid = with_ar.dropna(subset=["ar"]).copy()
     print(f"      AR 有效: {len(valid)} 行")
 

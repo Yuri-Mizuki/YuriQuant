@@ -28,8 +28,8 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
-from scripts.cli_common import setup_logging  # noqa: E402
-from scripts.textmining._paths import Out  # noqa: E402
+from scripts.common.cli_common import setup_logging  # noqa: E402
+from scripts.textmining._paths import TM, Out  # noqa: E402
 from scripts.textmining.evaluate_senti import (  # noqa: E402
     load_next_ret,
     rank_ic_stats,
@@ -43,9 +43,14 @@ log = setup_logging("fadt_ablation_eval")
 DEFAULT_FACTORS = {
     "base": "fadt_factor_xgb_{pool}.parquet",          # 词频版（AI 57 基线）
     "bert": "fadt_factor_bert_xgb_{pool}.parquet",     # 截断 CLS（AI 63 主线）
+    "rawtone": "fadt_factor_rawtone_xgb_{pool}.parquet",  # 语气得分直用（无二次训练）
     "seg": "fadt_factor_seg_xgb_{pool}.parquet",
     "pooler": "fadt_factor_pooler_xgb_{pool}.parquet",
     "clswf": "fadt_factor_clswf_xgb_{pool}.parquet",
+    "shsun": "fadt_factor_shsun_xgb_{pool}.parquet",   # 熵简 FinBERT1-base 编码
+    "bge": "fadt_factor_bge_xgb_{pool}.parquet",       # bge-base-zh-v1.5 编码
+    "suetxt": str(TM / "sue" / "features"
+                  / "sue_txt_factor_xgb_{pool}.parquet"),  # AI51 业绩预告场景
 }
 
 
@@ -54,7 +59,9 @@ def run(pool: str = "zz1000", variants: list[str] | None = None):
     ret, _ = load_next_ret()
     rows, panels = [], {}
     for v in variants:
-        p = OUT_DIR / DEFAULT_FACTORS[v].format(pool=pool)
+        p = Path(DEFAULT_FACTORS[v].format(pool=pool))
+        if not p.is_absolute():
+            p = OUT_DIR / p
         if not p.exists():
             log.warning("%s 缺失，跳过（先训练该变体）", p)
             continue
@@ -104,7 +111,7 @@ def run(pool: str = "zz1000", variants: list[str] | None = None):
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--pool", default="zz1000", choices=["hs300", "zz1000"])
+    ap.add_argument("--pool", default="zz1000", choices=["hs300", "zz1000", "all_a"])
     ap.add_argument("--variants", default="bert,seg,pooler,clswf")
     args = ap.parse_args()
     run(args.pool, [v.strip() for v in args.variants.split(",")])

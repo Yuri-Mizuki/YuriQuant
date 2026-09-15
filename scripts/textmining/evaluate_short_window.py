@@ -30,11 +30,12 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+from scripts.textmining._paths import Out  # noqa: E402
 from scripts.textmining.build_sue_txt_samples import _load_daily, _to_naive  # noqa: E402
 
-from scripts.textmining._paths import Out  # noqa: E402
 OUT_DIR = Out("fadt")
 BENCH = "000905.SH"
+BENCH_EQ = "EQ_ALL_A"  # 全A等权合成指数（all_a 池用）
 
 
 def _load_pred_with_factor(task: str, model: str, pool: str) -> pd.DataFrame:
@@ -58,11 +59,15 @@ def _load_pred_with_factor(task: str, model: str, pool: str) -> pd.DataFrame:
 
 def _recompute_sue0_sue(model: str, pool: str) -> pd.DataFrame:
     """重算 SUE.txt 逐轮事件级 sue0（复用训练时的滚动逻辑）。"""
-    from scripts.textmining.train_sue_txt import (
-        SUEVectorizer, TRAIN_MONTHS, TEST_MONTHS,
-        _sue0_from_model, make_labels,
-    )
     import joblib
+
+    from scripts.textmining.train_sue_txt import (
+        TEST_MONTHS,
+        TRAIN_MONTHS,
+        SUEVectorizer,
+        _sue0_from_model,
+        make_labels,
+    )
 
     tok_path = OUT_DIR / f"sue_txt_samples_tokenized_{pool}.parquet"
     if not tok_path.exists():
@@ -106,11 +111,14 @@ def _recompute_sue0_sue(model: str, pool: str) -> pd.DataFrame:
 
 def _recompute_sue0_fadt(model: str, pool: str) -> pd.DataFrame:
     """重算 FADT 逐轮事件级 sue0。"""
-    from scripts.textmining.train_fadt import TITLE_TOP, SUMMARY_TOP, TRAIN_MONTHS, TEST_MONTHS
-    from scripts.textmining.train_sue_txt import (
-        SUEVectorizer, _sue0_from_model, make_labels,
-    )
     import joblib
+
+    from scripts.textmining.train_fadt import SUMMARY_TOP, TEST_MONTHS, TITLE_TOP, TRAIN_MONTHS
+    from scripts.textmining.train_sue_txt import (
+        SUEVectorizer,
+        _sue0_from_model,
+        make_labels,
+    )
 
     tok_path = OUT_DIR / f"fadt_samples_tokenized_{pool}.parquet"
     if not tok_path.exists():
@@ -157,15 +165,17 @@ def _recompute_sue0_bert(task: str, base_model: str, pool: str) -> pd.DataFrame:
 
     model 参数传 "bert_xgb"/"bert_logit"，base_model 取 xgb/logit。
     """
+    import joblib
+    import numpy as np
+
+    from scripts.textmining.train_fadt import TEST_MONTHS, TRAIN_MONTHS
     from scripts.textmining.train_fadt_bert import (
         _load_cls,
     )
-    from scripts.textmining.train_fadt import TRAIN_MONTHS, TEST_MONTHS
     from scripts.textmining.train_sue_txt import (
-        _sue0_from_model, make_labels,
+        _sue0_from_model,
+        make_labels,
     )
-    import joblib
-    import numpy as np
 
     sample_path = OUT_DIR / (f"{task}_samples_{pool}.parquet" if task == "fadt"
                              else f"sue_txt_samples_{pool}.parquet")
@@ -211,7 +221,8 @@ def _recompute_sue0_bert(task: str, base_model: str, pool: str) -> pd.DataFrame:
 
 
 def _compute_cum_excess(pred: pd.DataFrame, daily: pd.DataFrame,
-                        k_max: int = 5, k_start: int = 1) -> pd.DataFrame:
+                        k_max: int = 5, k_start: int = 1,
+                        bench: str = BENCH) -> pd.DataFrame:
     """对每个事件计算 T+k_start~T+k_max 累计超额收益（相对中证500）。
 
     P_T = 事件日 T 当日收盘（公告盘后发布，T 收盘不含公告信息）。
@@ -243,13 +254,13 @@ def _compute_cum_excess(pred: pd.DataFrame, daily: pd.DataFrame,
         code = r["code"]
         d = pd.Timestamp(r["event_date"])
         p0 = _close_at(code, d, 0)
-        b0 = _close_at(BENCH, d, 0)
+        b0 = _close_at(bench, d, 0)
         if p0 is None or b0 is None:
             continue
         row = {"code": code, "event_date": d, "sue0": r["sue0"]}
         for k in range(k_start, k_max + 1):
             pk = _close_at(code, d, k)
-            bk = _close_at(BENCH, d, k)
+            bk = _close_at(bench, d, k)
             if pk is not None and bk is not None:
                 row[f"cum_excess_t{k}"] = (pk / p0 - 1) - (bk / b0 - 1)
             else:
@@ -294,6 +305,21 @@ def _daily_rank_ic_decay(df: pd.DataFrame, k_max: int = 5) -> pd.DataFrame:
     return pd.DataFrame(rows).set_index("k")
 
 
+def _load_daily_with_bench(pool: str, begin: int = 20190101,
+                           end: int = 20261231) -> tuple[pd.DataFrame, str]:
+    """按池载入日线；all_a 注入全A等权合成指数（缓存无 000905 指数日线）。"""
+    if pool != "all_a":
+        return _load_daily(None, [], begin, end, pool=pool), BENCH
+    daily = _load_daily(None, [], begin, end, pool="all_a")
+    close_w = (daily.reset_index()
+               .pivot(index="date", columns="code", values="close"))
+    eq_ret = close_w.pct_change(fill_method=None).mean(axis=1)
+    eq_close = (1 + eq_ret.fillna(0)).cumprod() * 1000.0
+    eq = eq_close.rename_axis("date").rename("close").reset_index()
+    eq["code"] = BENCH_EQ
+    return pd.concat([daily, eq.set_index(["date", "code"])]), BENCH_EQ
+
+
 def main(task: str = "sue", model: str = "xgb", pool: str = "hs300",
          k_max: int = 5):
     print(f"== {task.upper()} ({model}) 短窗口日频超额评估 ==")
@@ -302,8 +328,8 @@ def main(task: str = "sue", model: str = "xgb", pool: str = "hs300",
     pred = _load_pred_with_factor(task, model, pool)
     print(f"事件级预测: {len(pred)} 条, 覆盖 {pred['code'].nunique()} 只")
 
-    daily = _load_daily(None, [], 20190101, 20261231)
-    df = _compute_cum_excess(pred, daily, k_max=k_max)
+    daily, bench = _load_daily_with_bench(pool)
+    df = _compute_cum_excess(pred, daily, k_max=k_max, bench=bench)
     valid = df.dropna(subset=[f"cum_excess_t{k_max}"])
     print(f"有效（T+{k_max} 有收益）: {len(valid)} 条\n")
 
@@ -448,10 +474,10 @@ def ablation_sue0_vs_price(task: str, model: str, pool: str, k_max: int = 5):
     pred = pred.groupby(["code", "event_date"], as_index=False)["sue0"].mean()
     pred = pred.merge(ar_df, on=["code", "event_date"], how="inner")
 
-    daily = _load_daily(None, [], 20190101, 20261231)
+    daily, bench = _load_daily_with_bench(pool)
     feat = _event_price_features(pred[["code", "event_date"]], daily)
     df = pred.merge(feat, on=["code", "event_date"], how="inner")
-    targets = _compute_cum_excess(df[["code", "event_date", "sue0"]], daily, k_max)
+    targets = _compute_cum_excess(df[["code", "event_date", "sue0"]], daily, k_max, bench=bench)
     df = df.merge(targets.drop(columns=["sue0"]), on=["code", "event_date"], how="inner")
     print(f"样本: {len(df)} 事件, 覆盖 {df['code'].nunique()} 只\n")
 
@@ -566,7 +592,7 @@ def daily_rebalance_backtest(task: str, model: str, pool: str,
     """
     print(f"\n== {task.upper()} ({model}) 日频调仓回测（持 T+1~T+{hold_days}）==")
     pred = _load_pred_with_factor(task, model, pool)
-    daily = _load_daily(None, [], 20190101, 20261231)
+    daily, bench = _load_daily_with_bench(pool)
 
     # 每只股票的交易日序列 + 收益
     by_code = {}
@@ -613,7 +639,7 @@ def daily_rebalance_backtest(task: str, model: str, pool: str,
     # 年化口径：各层 hold_days 平均日收益 × 250
     print(f"\n[各层平均日频收益 T+1~T+{hold_days}]")
     print((g * 100).round(4).to_string())
-    print(f"\n[年化（日均收益 × 250, %）]")
+    print("\n[年化（日均收益 × 250, %）]")
     g_annual = g.mean(axis=1) * 250 * 100
     print(g_annual.round(2).to_string())
 
@@ -637,7 +663,7 @@ if __name__ == "__main__":
     ap.add_argument("--task", default="sue", choices=["sue", "fadt"])
     ap.add_argument("--model", default="xgb",
                     choices=["xgb", "logit", "bert_xgb", "bert_logit"])
-    ap.add_argument("--pool", default="hs300", choices=["hs300", "zz1000"])
+    ap.add_argument("--pool", default="hs300", choices=["hs300", "zz1000", "all_a"])
     ap.add_argument("--k-max", type=int, default=5)
     ap.add_argument("--ablation", action="store_true",
                     help="跑无泄漏 sue0 vs 价格基准 ablation")

@@ -33,14 +33,27 @@ from data.textmining.fetch import TextMiningCache
 ROOT = Path(__file__).resolve().parents[2]
 
 BENCH = "000905.SH"  # 中证500
+BENCH_EQ = "EQ_ALL_A"  # 全A等权合成指数（all_a 池用，缓存无 000905）
+
+
+def _pool_codes(pool: str) -> list[str]:
+    """池代码表：hs300/zz1000 走历史 pit_union JSON；all_a 走 daily_all_a。"""
+    if pool == "all_a":
+        from config import Config
+        daily_path = (Path(str(Config.cache()["root"]).replace("//", "/"))
+                      / "daily_all_a.parquet")
+        return sorted(set(
+            pd.read_parquet(daily_path, columns=[])
+            .index.get_level_values("code").unique()))
+    with open(ROOT / f"reports/{pool}_pit_union_2019.json",
+              encoding="utf-8") as f:
+        return json.load(f)
 
 
 def _load_events(cache: TextMiningCache, begin: int, end: int,
                  pool: str = "hs300") -> pd.DataFrame:
     """业绩预告事件（巨潮 category=业绩预告）。"""
-    with open(ROOT / f"reports/{pool}_pit_union_2019.json",
-              encoding="utf-8") as f:
-        codes = json.load(f)
+    codes = _pool_codes(pool)
     df = cache.get_cninfo_announcements(
         codes=codes, begin_date=begin, end_date=end, categories=["业绩预告"])
     if df.empty:
@@ -102,8 +115,9 @@ def _to_naive(s: pd.Series) -> pd.Series:
     return s
 
 
-def _abnormal_return(events: pd.DataFrame, daily: pd.DataFrame) -> pd.DataFrame:
-    """计算预告发布日前后 2 个交易日（T-1~T+1）相对中证500 的两日异常收益 AR。
+def _abnormal_return(events: pd.DataFrame, daily: pd.DataFrame,
+                     bench: str = BENCH) -> pd.DataFrame:
+    """计算事件发布日前后 2 个交易日（T-1~T+1）相对基准的两日异常收益 AR。
 
     AR = (P_T+1 / P_T-1 - 1) - (Idx_T+1 / Idx_T-1 - 1)
 
@@ -142,8 +156,8 @@ def _abnormal_return(events: pd.DataFrame, daily: pd.DataFrame) -> pd.DataFrame:
         d = pd.Timestamp(r["event_date"]).to_datetime64()
         c_prev = _close_shift(code, d, -1)
         c_next = _close_shift(code, d, 1)
-        b_prev = _close_shift(BENCH, d, -1)
-        b_next = _close_shift(BENCH, d, 1)
+        b_prev = _close_shift(bench, d, -1)
+        b_next = _close_shift(bench, d, 1)
         if None in (c_prev, c_next, b_prev, b_next):
             ar = None
         else:
@@ -162,9 +176,7 @@ def build_samples(begin: int = 20190101, end: int = 20261231,
     out.mkdir(parents=True, exist_ok=True)
 
     cache = TextMiningCache()
-    with open(ROOT / f"reports/{pool}_pit_union_2019.json",
-              encoding="utf-8") as f:
-        codes = json.load(f)
+    codes = _pool_codes(pool)
 
     print("[1/4] 加载业绩预告事件...")
     events = _load_events(cache, begin, end, pool=pool)
@@ -176,9 +188,23 @@ def build_samples(begin: int = 20190101, end: int = 20261231,
     matched = _match_reports(events, reports, window_days=5)
     print(f"      匹配样本: {len(matched)} 行（预告×研报）")
 
-    print("[3/4] 计算两日异常收益 AR...")
-    daily = _load_daily(cache, codes + [BENCH], begin, end)
-    with_ar = _abnormal_return(matched, daily)
+    print("[3/4] 计算两日异常收益 AR ...")
+    if pool == "all_a":
+        # 缓存无 000905 指数日线：基准改用全A等权合成指数（与评估基准一致）
+        daily = _load_daily(cache, codes, begin, end, pool="all_a")
+        close_w = (daily.reset_index()
+                   .pivot(index="date", columns="code", values="close"))
+        eq_ret = close_w.pct_change(fill_method=None).mean(axis=1)
+        eq_close = (1 + eq_ret.fillna(0)).cumprod() * 1000.0
+        eq = eq_close.rename_axis("date").rename("close").reset_index()
+        eq["code"] = BENCH_EQ
+        daily = pd.concat([daily, eq.set_index(["date", "code"])])
+        bench = BENCH_EQ
+        print(f"      基准: {bench}（全A等权合成）")
+    else:
+        daily = _load_daily(cache, codes + [BENCH], begin, end, pool=pool)
+        bench = BENCH
+    with_ar = _abnormal_return(matched, daily, bench=bench)
     valid = with_ar.dropna(subset=["ar"])
     print(f"      AR 有效样本: {len(valid)} 行")
 

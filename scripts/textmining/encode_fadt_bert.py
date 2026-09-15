@@ -34,9 +34,9 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
-from scripts.cli_common import setup_logging  # noqa: E402
-
+from scripts.common.cli_common import setup_logging  # noqa: E402
 from scripts.textmining._paths import Out  # noqa: E402
+
 OUT_DIR = Out("fadt")
 # 本地模型目录（hf-mirror 下载，沙箱无法用 huggingface_hub 缓存管理）；
 # 路径真源在 config/settings.yaml 的 textmining.bert_model_dir
@@ -57,11 +57,12 @@ log = setup_logging("encode_bert")
 # 直接依赖 transformers 的 AutoTokenizer
 
 
-def load_model(max_len: int = 500):
+def load_model(max_len: int = 500, model_dir: str | None = None):
     """加载 FinBERT + tokenizer（CPU 推理）。"""
     from transformers import AutoModel, AutoTokenizer
-    tok = AutoTokenizer.from_pretrained(MODEL_DIR)
-    model = AutoModel.from_pretrained(MODEL_DIR)
+    d = model_dir or MODEL_DIR
+    tok = AutoTokenizer.from_pretrained(d)
+    model = AutoModel.from_pretrained(d)
     model.eval()
     return model, tok
 
@@ -90,10 +91,17 @@ def encode_batch(model, tok, texts: list[str], max_len: int = 500,
 
 def run(task: str = "fadt", pool: str = "zz1000", max_len: int = 500,
         force: bool = False, limit: int | None = None,
-        chunk: int = 1000) -> pd.DataFrame:
+        chunk: int = 1000, model_dir: str | None = None,
+        tag: str | None = None) -> pd.DataFrame:
+    """编码 FADT/SUE 样本文本。
+
+    tag: 编码器变体标签（如 shsun/bge），输出 {task}_cls_{tag}_{pool}.parquet；
+    缺省用主模型（config textmining.bert_model_dir），输出 {task}_cls_{pool}.parquet。
+    """
     sp = OUT_DIR / (f"{task}_samples_{pool}.parquet" if task == "fadt"
                     else f"sue_txt_samples_{pool}.parquet")
-    out_path = OUT_DIR / f"{task}_cls_{pool}.parquet"
+    out_name = f"{task}_cls_{tag}_{pool}.parquet" if tag else f"{task}_cls_{pool}.parquet"
+    out_path = OUT_DIR / out_name
     if out_path.exists() and not force:
         log.info("编码缓存已存在: %s", out_path)
         return pd.read_parquet(out_path)
@@ -120,10 +128,11 @@ def run(task: str = "fadt", pool: str = "zz1000", max_len: int = 500,
         uni = uni.head(limit)
     log.info("待编码研报 %d 条", len(uni))
 
-    model, tok = load_model(max_len)
+    model, tok = load_model(max_len, model_dir)
     # 分块编码：每 chunk 条存一次临时 parquet（断点续跑），最后合并。
     # 全量 2.7 万行长文本一次性编码会 OOM（CPU）。
-    tmp_dir = OUT_DIR / f"{task}_cls_{pool}_parts"
+    tmp_dir = OUT_DIR / (f"{task}_cls_{tag}_{pool}_parts" if tag
+                         else f"{task}_cls_{pool}_parts")
     tmp_dir.mkdir(exist_ok=True)
     done = 0
     n_chunks = (len(uni) + chunk - 1) // chunk
@@ -157,11 +166,14 @@ def run(task: str = "fadt", pool: str = "zz1000", max_len: int = 500,
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--task", default="fadt", choices=["sue", "fadt"])
-    ap.add_argument("--pool", default="zz1000", choices=["hs300", "zz1000"])
+    ap.add_argument("--pool", default="zz1000", choices=["hs300", "zz1000", "all_a"])
     ap.add_argument("--max-len", type=int, default=500)
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--limit", type=int, default=None)
+    ap.add_argument("--model-dir", default=None, help="编码器模型目录覆盖")
+    ap.add_argument("--tag", default=None, help="变体标签（输出 {task}_cls_{tag}_{pool}）")
     args = ap.parse_args()
 
 
-    run(args.task, args.pool, args.max_len, args.force, args.limit)
+    run(args.task, args.pool, args.max_len, args.force, args.limit,
+        model_dir=args.model_dir, tag=args.tag)

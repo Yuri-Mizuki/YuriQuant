@@ -49,7 +49,7 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
-from scripts.cli_common import setup_logging  # noqa: E402
+from scripts.common.cli_common import setup_logging  # noqa: E402
 from scripts.textmining._paths import Out  # noqa: E402
 
 OUT_DIR = Out("fadt")
@@ -108,7 +108,7 @@ def _fundamental_panels() -> dict[str, pd.DataFrame]:
     from data.cache_helpers import load_daily, load_financial_tables
     from data.offline import OfflineQuietDataSource
     from data.universe import Universe
-    from scripts.build_fundamental_factors import build_factor_panels
+    from scripts.factors.build_fundamental_factors import build_factor_panels
 
     cache = DataCache(OfflineQuietDataSource())
     uni = Universe(cache)

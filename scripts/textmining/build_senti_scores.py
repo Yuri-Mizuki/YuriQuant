@@ -40,7 +40,7 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
-from scripts.cli_common import setup_logging  # noqa: E402
+from scripts.common.cli_common import setup_logging  # noqa: E402
 from scripts.textmining._paths import Out  # noqa: E402
 
 OUT_DIR = Out("senti")
@@ -109,6 +109,20 @@ def run(pool: str = "zz1000", begin: str = "20200701", max_len: int = 256,
     rep = rep[rep["text"].str.len() > 8].reset_index(names="row_idx")
     log.info("清洗后有效文本 %d 条", len(rep))
 
+    # 复用已打分子池（all_a 全量跑时跳过 zz1000 已打分行，最后合并回总表）
+    reused = pd.DataFrame()
+    if pool == "all_a":
+        old_path = OUT_DIR / "senti_scores_zz1000.parquet"
+        if old_path.exists():
+            reused = pd.read_parquet(old_path)
+            key = ["code", "date", "title_head"]
+            rep["title_head"] = rep["title"].str.slice(0, 60)
+            before = len(rep)
+            rep = rep.merge(reused[key].assign(_done=True), on=key, how="left")
+            rep = rep[rep["_done"] != True].drop(columns=["_done"])  # noqa: E712
+            log.info("复用 zz1000 已打分 %d 条，剩余待打分 %d 条",
+                     len(reused), before - len(rep))
+
     # 分片（双进程并行时各拿一半）+ 按长度排序只用于批内动态 padding，
     # 输出顺序按 row_idx 恢复
     shard_idx = np.array([i for i in range(len(rep)) if i % num_shards == shard])
@@ -162,7 +176,10 @@ def run(pool: str = "zz1000", begin: str = "20200701", max_len: int = 256,
         log.info("尚有 %d/%d 个 chunk 未完成，跳过合并", len(parts), expected)
         return pd.DataFrame()
     df = pd.concat([pd.read_parquet(p) for p in parts], ignore_index=True)
-    df = df.sort_values("row_idx").reset_index(drop=True)
+    if not reused.empty:
+        keep = [c for c in reused.columns if c in df.columns or c == "n_chars"]
+        df = pd.concat([df, reused[keep]], ignore_index=True)
+    df = df.sort_values(["code", "date"]).reset_index(drop=True)
     df.to_parquet(out_path, compression="snappy")
     log.info("情感得分已存: %s (%d 行, P(pos)均值 %.3f)",
              out_path, len(df), df["p_pos"].mean())
@@ -171,7 +188,7 @@ def run(pool: str = "zz1000", begin: str = "20200701", max_len: int = 256,
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--pool", default="zz1000", choices=["hs300", "zz1000"])
+    ap.add_argument("--pool", default="zz1000", choices=["hs300", "zz1000", "all_a"])
     ap.add_argument("--begin", default="20200701")
     ap.add_argument("--max-len", type=int, default=256)
     ap.add_argument("--batch-size", type=int, default=48)
