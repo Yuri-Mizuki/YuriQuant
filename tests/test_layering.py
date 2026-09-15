@@ -318,6 +318,9 @@ _TESTS_ONLY_PRIVATE: set[tuple[str, str]] = {
     # 生产侧只有 _load_registry/_save_registry 调用；测试需直连它以逐位验证
     # 「补出来的 canonical 列不得被丢弃」这个回归（见 test_factor_library_schema.py）。
     ("research.factor_library", "_align_registry"),
+    # 2026-09-15 逐年指标重构：_yearly_rows 是「度量列逐年重算」的唯一实现，
+    # 测试直连以验证逐年表不再从整体行继承 excess/ir/turnover。
+    ("scripts.pipelines.rolling_grid_alla", "_yearly_rows"),
     ("research.html_report", "_fmt"),
     ("research.html_report", "_month_cell_style"),
     ("research.html_report", "_monthly_html"),
