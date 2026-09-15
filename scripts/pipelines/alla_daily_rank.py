@@ -10,8 +10,9 @@ h=1 rank 标签 + 500 日滚动训练窗 + raw（不中性化）Top10% 等权、
 
   1. 数据增量更新（scripts.ingest.update_data --pool all_a，--skip-update 跳过）；
   2. 尾部面板重算：最近 (训练窗 + 260 日预热 + 缓冲) 个交易日的后复权 OHLCV/vwap；
-  3. 只重算当年入选的 ~50 个因子（量价走 factor.alphaXXX 注册表，基本面/股东/
-     构造型/质押五族复用 oneoff 构建器），截面 zscore + ±10 剪裁（与
+  3. 只重算当年入选的 ~50 个因子（量价走 factor.alphaXXX 注册表；基本面/风格/
+     股东/质押/构造/事件/SUE/两融/资金流/折价动态/停牌状态等族复用
+     scripts.builders 的 build_panels 入口），截面 zscore + ±10 剪裁（与
      FeatureStore 同口径）；
   4. gbdt 在最近 500 个有效标签日上重训，预测最新截面；
   5. 幽灵股守卫（existence_mask）+ 信号日可交易性标注（停牌/ST/封板）；
@@ -95,6 +96,41 @@ _CONSTRUCTED_KEYS = {"np_ded_ratio", "main_profit_ratio", "ebit_margin",
                      "div_consecutive_years"}
 
 # ---------------------------------------------------------------------------
+# 另类数据族输出键（2026-09-12 接入日频主链）
+# 每组 = 对应 builders 的 build_panels() 产出键集合，是 compute_features 分派
+# 白名单的单一真源：构建器新增因子必须同步登记，否则分派直接报「未知来源」。
+# 未登记因子不再被兜底塞进基本面路径（旧行为会在深层 KeyError，指向性差）。
+# ---------------------------------------------------------------------------
+# 风格族（build_alla_style_factors.build_panels）
+_STYLE_KEYS = {"rd_exp_ratio_ttm", "current_ratio", "cfo_to_rev_ttm",
+               "rd_to_assets_ttm", "selling_exp_ratio_ttm",
+               "admin_exp_ratio_ttm", "debt_to_assets", "noncur_liab_ratio",
+               "quick_ratio", "cash_ratio", "ebitda_margin_ttm",
+               "op_income_margin_ttm", "goodwill_to_equity",
+               "tangible_asset_ratio", "intangible_ratio",
+               "cfo_to_assets_ttm", "cfo_to_debt_ttm"}
+# 事件族（build_alla_event_factors.build_panels）
+_EVENT_KEYS = {"notice_sue", "notice_profit_ttm", "notice_forecast_hit",
+               "express_profit_yoy", "express_rev_yoy", "express_reporting",
+               "unlock_ratio_20d"}
+# SUE 意外 + 质押深度（build_alla_sue_pledge_factors.build_panels）
+_SUE_PLEDGE_KEYS = {"sue_notice_cs", "sue_notice_20d", "sue_express_cs",
+                    "sue_express_20d", "pledge_chg_20d", "pledge_frn_density",
+                    "pledge_holder_density"}
+# 两融族（build_alla_margin_factors.build_panels）
+_MARGIN_KEYS = {"margin_bal_chg_5d", "margin_bal_chg_20d",
+                "financing_chg_1d", "securities_chg_1d"}
+# 龙虎榜/大宗额量族（build_alla_moneyflow_factors.build_panels）
+_MONEYFLOW_KEYS = {"lhb_net_buy", "lhb_count_20d", "lhb_net_20d",
+                   "block_amt_20d", "block_vol_20d"}
+# 大宗折溢价 + 股东动态（build_alla_disc_holder_dyn.build_panels）
+_DISC_HOLDER_DYN_KEYS = {"block_disc_1d", "block_disc_20d", "block_prem_20d",
+                         "top10_hold_chg", "holder_stability"}
+# 停牌/ST 状态族（build_alla_status_factors.build_panels）
+_STATUS_KEYS = {"suspend_ratio_60d", "suspend_count_60d", "is_st", "st_days",
+                "limit_pos"}
+
+# ---------------------------------------------------------------------------
 # 因子释义（选股解释用：特征名 → (中文名, 释义)）
 # ---------------------------------------------------------------------------
 _FUND_VALUE_KEYS = {"bp", "sp_ttm", "div_yield", "ep_ttm"}
@@ -126,7 +162,29 @@ FACTOR_GLOSSARY: dict[str, tuple[str, str]] = {
     "alpha191_118": ("多空实体强度", "20日阳线实体和/阴线实体和，多头占优程度，#118"),
     "alpha191_159": ("多尺度区间位置", "6/12/24日高低区间位置加权复合，RSV 类趋势位置，#159"),
     "alpha191_167": ("12日上行动量", "12日上涨日涨幅累和，短期动量，#167"),
+    # —— 状态族（build_alla_status_factors）——
+    "limit_pos": ("封板位置", "（收盘-前收）/（涨停价-前收）：1.0=收盘封涨停，"
+                             "0=跌停，0.5=区间中部；打板热度/连板惯性。"
+                             "⚠ 收益主要来自次日跳空（T 日收盘已封板、纸面口径买入"
+                             "不可成交），且极偏态易被截面 zscore 推到极端叶子，"
+                             "分数不宜按绝对值解读"),
+    "st_days": ("连续ST天数", "当前已连续处于 ST 状态的天数，治理恶化持续时间"),
+    # —— 事件族（build_alla_event_factors / build_alla_sue_pledge_factors）——
+    "notice_forecast_hit": ("预告相对上年净利同比",
+                            "预告净利润上限/上年同期净利 - 1，业绩预告同比增速"),
+    "sue_notice_20d": ("业绩预告SUE 20日累积",
+                       "过去 20 交易日标准化预期外盈余（SUE）累积，预告窗口脉冲"),
+    # —— 资金族（build_alla_moneyflow_factors）——
+    "lhb_count_20d": ("龙虎榜20日上榜次数",
+                      "过去 20 交易日龙虎榜上榜次数，事件热度"),
+    # —— 两融族（build_alla_margin_factors）——
+    "margin_bal_chg_20d": ("两融余额20日变化率",
+                           "融资融券余额 20 日变化率，中期杠杆趋势"),
 }
+# ⚠ 本表是**报告层副本**：真源在各 builder 的中文标签（如 build_alla_*.
+#   *_ROUTES / build_panels docstring）与 factor/alpha*.py 的 docstring。
+#   新增被选中的因子须同步补表，守卫见
+#   tests/test_alla_daily_rank.py::test_glossary_covers_selection_2026。
 
 
 def lookup_glossary(name: str) -> tuple[str, str]:
@@ -142,6 +200,18 @@ def lookup_glossary(name: str) -> tuple[str, str]:
     if m:
         return (f"{m.group(1)}日最低价回溯",
                 f"{m.group(1)}日前最低价/最新收盘价")
+    m = re.fullmatch(r"alpha360_(OPEN|HIGH|CLOSE|VWAP)(\d+)", name)
+    if m:
+        field = {"OPEN": "开盘价", "HIGH": "最高价",
+                 "CLOSE": "收盘价", "VWAP": "VWAP 均价"}[m.group(1)]
+        return (f"{m.group(1)}日{field}回溯",
+                f"{m.group(1)}日前{field}/最新收盘价")
+    # Alpha158 价格相对族（factor/alpha158.py 的 [OPEN/HIGH/LOW/VWAP]0）
+    m = re.fullmatch(r"alpha158_(OPEN|HIGH|LOW|VWAP)(\d+)", name)
+    if m:
+        field = {"OPEN": "开盘价", "HIGH": "最高价",
+                 "LOW": "最低价", "VWAP": "VWAP 均价"}[m.group(1)]
+        return (f"价格相对·{field}", f"{field}/收盘价（Alpha158 价格相对因子）")
     return (name, "未收录释义")
 
 
@@ -360,12 +430,15 @@ def build_ranking(scores: pd.Series, tradable: pd.Series, frac: float,
     k = max(1, int(round(len(df) * frac)))
     df["top_frac"] = df["rank"] <= k
     df["tradable"] = tradable.reindex(df.index).fillna(False).astype(bool)
+    # 展示列：把裸 bool 变成一眼可辨的中文标记（"" = 可交易；"不可交易" =
+    # 信号日封板/停牌/ST 等被剔，实盘买不进）。不参与任何计算。
+    df["flag"] = np.where(df["tradable"], "", "不可交易")
     if names is not None:
         df["name"] = names.reindex(df.index).fillna("")
     if industry is not None:
         df["industry"] = industry.reindex(df.index).fillna("未知").replace("", "未知")
     cols = [c for c in ("rank", "name", "industry", "score", "pct_rank",
-                        "top_frac", "tradable") if c in df.columns]
+                        "top_frac", "tradable", "flag") if c in df.columns]
     ranking = df[cols].copy()
     picks = ranking[ranking["top_frac"] & ranking["tradable"]].copy()
     if len(picks):
@@ -614,6 +687,13 @@ _LONG_TABLE_FILES = {
     "pledge": "equity_pledge_freeze.parquet",
     "notice": "profit_notice.parquet",
     "express": "profit_express.parquet",
+    # ---- 另类数据族源表（2026-09-12 接入日频主链）----
+    "restricted": "equity_restricted.parquet",
+    "margin": "margin_detail.parquet",
+    "long_hu_bang": "long_hu_bang.parquet",
+    "block_trading": "block_trading.parquet",
+    "stock_status": "history_stock_status.parquet",
+    "share_holder": "share_holder.parquet",
 }
 
 
@@ -756,40 +836,150 @@ def compute_holder_features(names: list[str],
     return {n: preprocess_panel(out[n]) for n in names}
 
 
+def _check_missing(names: list[str], panels: dict, tag: str) -> None:
+    """构建器产出覆盖校验：选择文件里的因子必须有对应构建路径。"""
+    missing = [n for n in names if n not in panels]
+    if missing:
+        raise KeyError(f"选择文件包含{tag}构建器不产出的因子: {missing}")
+
+
+def compute_style_features(names: list[str], close_adj: pd.DataFrame,
+                           close_raw: pd.DataFrame,
+                           tables: dict[str, pd.DataFrame]
+                           ) -> dict[str, pd.DataFrame]:
+    """风格族财务比率（17 个）：复用 build_alla_style_factors.build_panels（PIT）。"""
+    from scripts.builders.build_alla_style_factors import build_panels
+
+    panels = build_panels(close_adj, close_raw, tables["income"],
+                          tables["balance"], tables["cashflow"],
+                          tables["dividend"])
+    _check_missing(names, panels, "风格族")
+    log.info("风格族(财务比率): %d 个", len(names))
+    return {n: preprocess_panel(panels[n]) for n in names}
+
+
+def compute_alt_extra_features(
+        groups: dict[str, list[str]], close_adj: pd.DataFrame,
+        close_raw: pd.DataFrame, tables: dict[str, pd.DataFrame]
+        ) -> dict[str, pd.DataFrame]:
+    """另类数据族统一分派：事件/SUE质押/两融/资金流/折价股东动态/状态。
+
+    groups: {构建器标识: 该路径下的因子名列表}，标识取
+    ``event``/``sue_pledge``/``margin``/``moneyflow``/``disc_dyn``/``status``。
+    每个路径都复用对应 builders 的 ``build_panels``（与全量构建同一代码路径），
+    只对尾部 (cal_idx, codes) 重算。
+    """
+    cal_idx, codes = close_adj.index, close_adj.columns
+    out: dict[str, pd.DataFrame] = {}
+    for key, names in groups.items():
+        if not names:
+            continue
+        if key == "event":
+            from scripts.builders.build_alla_event_factors import build_panels as _bp
+            panels = _bp(cal_idx, codes, tables={
+                k: tables.get(k) for k in ("notice", "express", "restricted")})
+        elif key == "sue_pledge":
+            from scripts.builders.build_alla_sue_pledge_factors import build_panels as _bp
+            panels = _bp(cal_idx, codes, close_raw=close_raw, tables={
+                k: tables.get(k) for k in ("notice", "express", "pledge")})
+        elif key == "margin":
+            from scripts.builders.build_alla_margin_factors import build_panels as _bp
+            panels = _bp(cal_idx, codes, margin=tables.get("margin"))
+        elif key == "moneyflow":
+            from scripts.builders.build_alla_moneyflow_factors import build_panels as _bp
+            panels = _bp(cal_idx, codes, tables={
+                k: tables.get(k) for k in ("long_hu_bang", "block_trading")})
+        elif key == "disc_dyn":
+            from scripts.builders.build_alla_disc_holder_dyn import build_panels as _bp
+            panels = _bp(cal_idx, codes, close_raw=close_raw, tables={
+                "block": tables.get("block_trading"),
+                "holder": tables.get("share_holder")})
+        elif key == "status":
+            from scripts.builders.build_alla_status_factors import build_panels as _bp
+            panels = _bp(cal_idx, codes, status=tables.get("stock_status"),
+                         close_raw=close_raw)
+        else:
+            raise ValueError(f"未知另类数据族: {key}")
+        _check_missing(names, panels, key)
+        out.update({n: preprocess_panel(panels[n]) for n in names})
+        log.info("另类族(%s): %d 个", key, len(names))
+    return out
+
+
 def compute_features(names: list[str], tail: dict,
                      long_tables: dict[str, pd.DataFrame] | None = None
                      ) -> dict[str, pd.DataFrame]:
-    """按因子名分派到量价/A股/B股/B+/B++ 五条构建路径（与实验同一代码路径）。
+    """按因子名分派到 12 条构建路径（与实验同一代码路径）。
+
+    路径：量价 / 基本面 / 风格 / 质押(B+) / 构造(B++) / 股东(A) / 事件 /
+    SUE+质押深度 / 两融 / 资金流 / 折价+股东动态 / 停牌状态。
+    未登记因子直接抛 KeyError，不再兜底塞进基本面路径（旧行为会在构建器
+    深处报错，指向性差且掩盖「因子库新增来源未接线」的真实问题）。
 
     long_tables 可由调用方预先加载（_load_long_tables）供多个构建路径复用，
-    避免重复 IO；不传则按需加载。
+    避免重复 IO；不传或不全时按需补齐。
     """
+    def _pick(keys: set[str]) -> list[str]:
+        return [n for n in names if n in keys]
+
     alpha = [n for n in names if n.startswith(_ALPHA_PREFIXES)]
-    holder = [n for n in names
-              if n in (_HOLDER_NUM_KEYS | _HOLDER_TOP_KEYS)]
-    pledge = [n for n in names if n in _PLEDGE_KEYS]
-    constructed = [n for n in names if n in _CONSTRUCTED_KEYS]
-    fund = [n for n in names
-            if n not in alpha and n not in holder and n not in pledge
-            and n not in constructed]
-    log.info("特征分派: 量价 %d / B族 %d / B+ %d / B++ %d / A族 %d（共 %d）",
-             len(alpha), len(fund), len(pledge), len(constructed),
-             len(holder), len(names))
-    feats: dict[str, pd.DataFrame] = {}
-    if alpha:
-        feats.update(compute_alpha_features(alpha, tail["px"], tail["industry"]))
+    holder = _pick(_HOLDER_NUM_KEYS | _HOLDER_TOP_KEYS)
+    pledge = _pick(_PLEDGE_KEYS)
+    constructed = _pick(_CONSTRUCTED_KEYS)
+    style = _pick(_STYLE_KEYS)
+    event = _pick(_EVENT_KEYS)
+    sue_pledge = _pick(_SUE_PLEDGE_KEYS)
+    margin = _pick(_MARGIN_KEYS)
+    moneyflow = _pick(_MONEYFLOW_KEYS)
+    disc_dyn = _pick(_DISC_HOLDER_DYN_KEYS)
+    status = _pick(_STATUS_KEYS)
+    claimed = set(alpha) | set(holder) | set(pledge) | set(constructed) \
+        | set(style) | set(event) | set(sue_pledge) | set(margin) \
+        | set(moneyflow) | set(disc_dyn) | set(status)
+    fund = [n for n in names if n not in claimed]
+    log.info("特征分派: 量价 %d / 基本面 %d / 风格 %d / 质押 %d / 构造 %d / "
+             "股东 %d / 事件 %d / SUE质押 %d / 两融 %d / 资金流 %d / "
+             "折价动态 %d / 状态 %d（共 %d）",
+             len(alpha), len(fund), len(style), len(pledge), len(constructed),
+             len(holder), len(event), len(sue_pledge), len(margin),
+             len(moneyflow), len(disc_dyn), len(status), len(names))
+
     long_keys: set[str] = set()
     if fund:
         long_keys |= {"income", "balance", "cashflow", "equity", "dividend"}
+    if style:
+        long_keys |= {"income", "balance", "cashflow", "dividend"}
     if pledge:
         long_keys |= {"balance", "pledge", "notice", "express"}
     if constructed:
         long_keys |= {"income", "balance", "cashflow", "dividend"}
-    tables = long_tables if long_tables is not None \
-        else (_load_long_tables(sorted(long_keys)) if long_keys else {})
+    if event:
+        long_keys |= {"notice", "express", "restricted"}
+    if sue_pledge:
+        long_keys |= {"notice", "express", "pledge"}
+    if margin:
+        long_keys |= {"margin"}
+    if moneyflow:
+        long_keys |= {"long_hu_bang", "block_trading"}
+    if disc_dyn:
+        long_keys |= {"block_trading", "share_holder"}
+    if status:
+        long_keys |= {"stock_status"}
+    # 预加载只作复用优化：缺的键在这里补齐，避免调用方漏传导致静默缺表
+    tables = dict(long_tables) if long_tables else {}
+    todo = sorted(k for k in long_keys if k not in tables)
+    if todo:
+        tables.update(_load_long_tables(todo))
+
+    feats: dict[str, pd.DataFrame] = {}
+    if alpha:
+        feats.update(compute_alpha_features(alpha, tail["px"], tail["industry"]))
     if fund:
         feats.update(compute_fundamental_features(
             fund, tail["close_raw"], tables))
+    if style:
+        feats.update(compute_style_features(
+            style, tail["close_adj"], tail["close_raw"], tables))
     if pledge:
         feats.update(compute_pledge_features(
             pledge, tail["close_adj"], tail["close_raw"], tables))
@@ -799,6 +989,10 @@ def compute_features(names: list[str], tail: dict,
     if holder:
         feats.update(compute_holder_features(holder, tail["close_adj"].index,
                                              tail["close_adj"].columns))
+    feats.update(compute_alt_extra_features(
+        {"event": event, "sue_pledge": sue_pledge, "margin": margin,
+         "moneyflow": moneyflow, "disc_dyn": disc_dyn, "status": status},
+        tail["close_adj"], tail["close_raw"], tables))
     got = set(feats)
     if got != set(names):
         raise RuntimeError(f"特征缺失: {sorted(set(names) - got)}")
@@ -1005,14 +1199,16 @@ def run(args) -> dict:
     n_raw = int(scores.notna().sum())
 
     tradable = signal_day_tradable(tail["close_raw"], predict_date)
-    names = load_stock_names(tail["close_raw"].columns)
+    # 变量名必须与上面的特征名 names 区分：此处是「股票代码→简称」映射。
+    # 曾因同名覆盖，meta["n_features"] 被写成股票数 5689（2026-09-07 history.csv 可见）。
+    stock_names = load_stock_names(tail["close_raw"].columns)
     ind_panel = tail.get("industry")
     name_map = load_industry_names() if ind_panel is not None \
         else pd.Series(dtype=object)
     industry = industry_series(ind_panel, predict_date, name_map)
     industry = industry if len(industry) else None
     ranking, picks = build_ranking(scores, tradable, args.frac,
-                                   names=names, industry=industry)
+                                   names=stock_names, industry=industry)
     ind_table = build_industry_table(ranking) if "industry" in ranking.columns \
         else pd.DataFrame()
 
@@ -1057,6 +1253,19 @@ def run(args) -> dict:
         ind = row.get("industry", "")
         log.info("%4d  %s  %-8s  %-6s  %+.4f  %s", i, code, nm, ind,
                  row["score"], "√" if row["tradable"] else "×")
+    # P0 告警：rank 头部若混入被 tradable 剔除的股票（信号日封板/停牌等），
+    # 「排名第一」并不等于「最看好」——它们实盘买不进，分数也常落在极端叶子上。
+    _head = ranking.head(20)
+    _rej = _head[~_head["tradable"]]
+    if len(_rej):
+        log.warning(
+            "⚠ Top20 中 %d 只被 tradable 过滤（未进 picks、实盘不可买）：%s",
+            len(_rej),
+            "、".join(f"{c} {r.get('name', '')}".strip()
+                     for c, r in _rej.iterrows()))
+        log.warning(
+            "  提示：头部被剔多为信号日封板/停牌股，分数受极端叶子驱动，"
+            "不等于更强的选股能力；实际选股请以 picks 为准。")
     log.info("当日模型 Top 因子 (gain 占比):")
     for _, r in imp_table.head(6).iterrows():
         log.info("  %-24s %-12s %-6s %6.2f%%  %s", r["feature"], r["name_cn"],

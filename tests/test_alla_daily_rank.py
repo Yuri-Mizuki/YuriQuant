@@ -153,6 +153,34 @@ def test_build_ranking_annotations():
     assert "name" not in ranking2.columns and "industry" not in ranking2.columns
 
 
+def test_glossary_covers_sealed_and_alpha158_price():
+    """limit_pos 与 Alpha158 价格相对族必须有释义（报告层不再显示「未收录释义」）。"""
+    from scripts.pipelines.alla_daily_rank import lookup_glossary
+    for name in ("limit_pos", "alpha158_LOW0", "alpha158_OPEN0",
+                 "alpha158_HIGH0", "alpha158_VWAP0"):
+        cn, desc = lookup_glossary(name)
+        assert cn != name, f"{name} 缺中文名"
+        assert desc != "未收录释义", f"{name} 缺释义"
+    # 未收录的仍走兜底，不被通配误伤
+    assert lookup_glossary("no_such_factor_xyz") == ("no_such_factor_xyz", "未收录释义")
+
+
+def test_build_ranking_flag_column():
+    """flag 列：不可交易行标中文标记；列序前三不变，picks 语义不变。"""
+    from scripts.pipelines.alla_daily_rank import build_ranking
+    codes = ["c0", "c1", "c2"]
+    scores = pd.Series([3.0, 2.0, 1.0], index=codes)
+    tradable = pd.Series([False, True, True], index=codes)
+    ranking, picks = build_ranking(scores, tradable, frac=1.0)
+
+    assert ranking["flag"].tolist() == ["不可交易", "", ""]
+    assert ranking.columns[-1] == "flag"
+    assert list(ranking.columns[:3]) == ["rank", "score", "pct_rank"]
+    # picks 只含可交易者，其 flag 全为空
+    assert set(picks.index) == {"c1", "c2"}
+    assert (picks["flag"] == "").all()
+
+
 def test_industry_series():
     from scripts.pipelines.alla_daily_rank import industry_series
     d = pd.Timestamp("2026-09-04")
