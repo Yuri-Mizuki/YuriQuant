@@ -144,40 +144,74 @@ def main() -> None:
     reg = lib.list_all()
     log.info("因子库 %s: %d 个因子", args.dataset, len(reg))
 
-    # 排序键
+    # 排序键：批量入库（merge_outputs）的行没有 ic_mean，只写 ic_mean_h1/h5/h10/h20。
+    # 直接取 ic_mean 会让这批因子的 |IC| 全 NaN、排序失效——这里显式回退，
+    # 并把回退行数打出来（不静默拿另一口径冒充）。
     reg = reg.copy()
+    _ic = pd.to_numeric(reg["ic_mean"], errors="coerce") if "ic_mean" in reg.columns \
+        else pd.Series(np.nan, index=reg.index)
+    if "ic_mean_h1" in reg.columns:
+        _ic_h1 = pd.to_numeric(reg["ic_mean_h1"], errors="coerce")
+        n_fb = int((_ic.isna() & _ic_h1.notna()).sum())
+        reg["ic_mean"] = _ic.fillna(_ic_h1)
+        if n_fb:
+            log.info("ic_mean 缺失 %d 行，已回退 ic_mean_h1 口径", n_fb)
+    else:
+        reg["ic_mean"] = _ic
     reg["abs_ic"] = reg["ic_mean"].abs()
     reg = reg.sort_values("abs_ic", ascending=False).reset_index(drop=True)
 
     # ---- 分组统计 ----
-    def src_family(s: str) -> str:
-        if pd.isna(s):
+    # 这里是"按来源分组"，**不是**按库的六维 family 分组。
+    # 2026-09-12 修正：原先写作 reg["family"] = reg["source"].map(src_family)，
+    # 直接覆盖了库里 register() 打的六维标签，且 (a) source 为空时全落 unknown；
+    # (b) 原先 split(":")[0] 也会把有前缀的 source 塌缩——不过回填后的 source
+    # 口径已改为 "<因子集>:<产出脚本>:<数据集>"（前缀就是集名），故不再塌缩。
+    # 现改为独立列 source_group（来源分组），family 保持库值原样。
+    def src_family(row) -> str:
+        st = row.get("set")
+        if isinstance(st, str) and st.strip():
+            return st.strip()
+        src = row.get("source")
+        if not isinstance(src, str) or not src.strip():
             return "unknown"
-        s = str(s)
-        if s.startswith("alpha101"): return "alpha101"
-        if s.startswith("alpha158"): return "alpha158"
-        if s.startswith("alpha191"): return "alpha191"
-        if s.startswith("alpha360"): return "alpha360"
-        if s.startswith("gp"): return "gp"
-        if s.startswith("model"): return "model"
-        return s.split(":")[0]
+        for p in ("alpha101", "alpha158", "alpha191", "alpha360", "gp", "model"):
+            if src.startswith(p):
+                return p
+        parts = src.split(":")
+        if len(parts) > 1 and parts[0] in ("builders", "textmining", "paper"):
+            return parts[1]
+        return parts[0]
 
-    reg["family"] = reg["source"].map(src_family)
+    reg["source_group"] = reg.apply(src_family, axis=1)
     fam_style = {
         "alpha101": "#378ADD", "alpha158": "#1D9E75", "alpha191": "#BA7517",
         "alpha360": "#534AB7", "gp": "#D85A30", "model": "#E24B4A",
     }
+    _grp_note = {
+        "gp": "遗传规划挖掘（样本内）",
+        "model": "模型预测分数",
+        "evt": "事件驱动（AmazingData 公告/事件）",
+        "moneyflow": "资金流（龙虎榜/大宗）",
+        "margin": "两融（融资融券）",
+        "holder": "股东数据（持股/质押）",
+        "status": "状态类（停牌/涨跌停等）",
+        "fundamental": "财务 PIT 基本面",
+    }
     fam_stat = []
-    for fam, grp in reg.groupby("family"):
-        sig = int(grp["significant"].sum()) if "significant" in grp else 0
+    for fam, grp in reg.groupby("source_group"):
+        sig = int(grp["significant"].fillna(False).astype(bool).sum()) \
+            if "significant" in grp else 0
         ic = grp["ic_mean"].dropna()
         fam_stat.append({
-            "family": fam, "n": len(grp), "n_sig": sig,
+            "source_group": fam, "n": len(grp), "n_sig": sig,
             "sig_ratio": f"{sig/len(grp)*100:.0f}%",
             "ic_mean": f"{ic.abs().mean():.4f}" if len(ic) else "—",
             "top_ic": f"{grp['abs_ic'].max():.4f}" if "abs_ic" in grp else "—",
-            "note": "借用公开库（WorldQuant/101公式）" if fam.startswith("alpha")
-                    else ("遗传规划挖掘" if fam == "gp" else "模型预测分数"),
+            "n_family": int(grp["family"].fillna("").astype(str).str.strip().ne("").sum())
+                       if "family" in grp else 0,
+            "note": _grp_note.get(fam, "借用公开库（WorldQuant/101公式）"
+                                  if str(fam).startswith("alpha") else "—"),
             "color": fam_style.get(fam, "#888780"),
         })
     fam_df = pd.DataFrame(fam_stat)
@@ -192,11 +226,20 @@ def main() -> None:
 
     rows = []
     for _, r in reg.iterrows():
-        sig_tag = "显著" if r.get("significant") else "—"
-        sig_cls = "sig" if r.get("significant") else ""
+        # significant 在批量入库行是 NaN（float）——`if r.get(...)` 对 NaN 求值为
+        # True，会把 912 个从未做过显著性检验的因子全部标成"显著"。必须显式判空。
+        _sigv = r.get("significant")
+        _is_sig = bool(_sigv) if pd.notna(_sigv) else False
+        sig_tag = "显著" if _is_sig else "—"
+        sig_cls = "sig" if _is_sig else ""
+        _src = r.get("source")
+        _src = _src if isinstance(_src, str) else ""
+        _fam = r.get("family")
+        _fam = _fam if isinstance(_fam, str) else ""
         rows.append(
             f"<tr><td><b>{r['name']}</b></td>"
-            f"<td>{r.get('family','')}</td>"
+            f"<td title='{_src[:200]}'>{r.get('source_group','')}</td>"
+            f"<td>{_fam}</td>"
             f"<td class='{sig_cls}'>{sig_tag}</td>"
             f"<td>{fmt(r.get('ic_mean'))}</td>"
             f"<td>{fmt(r.get('ic_ir'))}</td>"
@@ -229,9 +272,10 @@ def main() -> None:
     # ---- HTML ----
     fam_cards = "".join(
         f"<div class='fam-card'><div class='fam-dot' style='background:{f['color']}'></div>"
-        f"<div class='fam-name'>{f['family']} <span class='cnt'>{f['n']}个</span></div>"
+        f"<div class='fam-name'>{f['source_group']} <span class='cnt'>{f['n']}个</span></div>"
         f"<div class='fam-metric'>{f['n_sig']} 显著（{f['sig_ratio']}）</div>"
         f"<div class='fam-metric'>平均|IC| {f['ic_mean']} | Top {f['top_ic']}</div>"
+        f"<div class='fam-metric'>已标因子族 {f['n_family']}/{f['n']}</div>"
         f"<div class='fam-note'>{f['note']}</div></div>"
         for _, f in fam_df.iterrows())
 
@@ -263,7 +307,7 @@ GP 因子为遗传规划挖掘（同样样本内评估）。判断因子是否�
 <div class="card"><h2>全因子检验表（{len(reg)} 行，点击表头排序 / 搜索过滤）</h2>
 <input class="search" id="fsearch" placeholder="搜索因子名 / 来源 / 公式关键词...">
 <div class="scroll"><table id="ftable">
-<thead><tr><th data-k="0">因子名</th><th data-k="1">来源</th><th>显著</th><th>IC</th><th>ICIR</th>
+<thead><tr><th data-k="0">因子名</th><th data-k="1">来源</th><th>因子族</th><th>显著</th><th>IC</th><th>ICIR</th>
 <th>NW-t</th><th>IC胜率</th><th>LS月收益</th><th>LS月Sharpe</th><th>LO月收益</th><th>换手(LS月)</th><th>公式</th></tr></thead>
 <tbody>{''.join(rows)}</tbody></table></div></div>
 

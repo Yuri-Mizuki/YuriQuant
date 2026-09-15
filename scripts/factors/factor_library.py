@@ -8,7 +8,7 @@
     list                      列出所有因子（--kind raw|composite --family --maturity）
     compare                   统一指标排名（默认按 IR；--metric ic_mean/sharpe/annual_return/max_drawdown/calmar/avg_turnover --config ls_M --top N）
     view NAME                 查看某因子全期或指定时间段回测（--start --end --config --regime 分市场状态）
-    set-tag NAME              补打/更新标签（--family --frequency --maturity --note）
+    set-tag NAME              补打/更新标签（--family --frequency --maturity --note --source）
     monitor                   生命周期监控：全期 vs 近期 IC 漂移，warning 因子排前
     report                    导出 Excel 对比报告（--names a,b,c 或 --all --config --out）
     features                  列出可作为下一轮挖掘特征（迭代）的因子
@@ -173,11 +173,12 @@ def cmd_set_tag(args):
         print(f"因子不存在: {args.name}")
         return
     ok = lib.set_tag(args.name, family=args.family, frequency=args.frequency,
-                     maturity=args.maturity, note=args.note)
+                     maturity=args.maturity, note=args.note, source=args.source)
     print(f"已更新标签: {args.name}" if ok else "更新失败")
     r = lib.list_all()
     hit = r[r["name"] == args.name].iloc[0]
-    print(f"  family={hit.get('family', '')}  frequency={hit.get('frequency', '')}"
+    print(f"  source={hit.get('source', '')}  family={hit.get('family', '')}"
+          f"  frequency={hit.get('frequency', '')}"
           f"  maturity={hit.get('maturity', '')}  note={hit.get('note', '')}")
 
 def cmd_monitor(args):
@@ -264,6 +265,8 @@ def main():
     p.add_argument("--frequency", default=None, help="信号频率：日内/日频/周频/月频/季频")
     p.add_argument("--maturity", default=None, help="成熟度：experimental/oos_verified/active/retired")
     p.add_argument("--note", default=None, help="备注（设计动机/差异化贡献）")
+    p.add_argument("--source", default=None,
+                   help="来源标注，如 build_alla_event_factors:20180701-20260716（批量入库的因子靠它回填来源）")
     p.set_defaults(func=cmd_set_tag)
 
     p = sub.add_parser("monitor", parents=[common], help="生命周期监控：全期 vs 近期 IC 漂移")

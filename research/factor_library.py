@@ -73,6 +73,182 @@ CANONICAL_CONFIGS: list = [
 _METRIC_COLS = ["annual_return", "sharpe", "sortino", "max_drawdown", "calmar", "win_rate", "avg_turnover",
                 "avg_margin_usage", "borrow_fee_drag_annual"]
 
+#: 因子族（family）受控词表——**唯一真源**（2026-09-12 统一规范）。
+#:
+#: 历史上库的 family 是两个维度的并集：风格族（动量/反转/波动率/价值/质量/成长）
+#: 与来源族（情绪/非线性组合/量价…）混用，且出现过英文缩写漂移
+#: （rnd/liq/qual/cfq/lev/pro）。这里把两者并成一个受控词表，值必须落在词表内。
+#: 比 family 更细的分类用 ``subfamily`` 列承载（不受控，自由文本）。
+FAMILY_WHITELIST: frozenset[str] = frozenset({
+    # 风格族
+    "动量", "反转", "波动率", "价值", "质量", "成长", "流动性", "拥挤度",
+    # 来源/主题族
+    "量价", "技术", "日内", "基本面", "事件", "资金流", "股东", "状态",
+    "情绪", "文本", "论文", "模型", "合成", "非线性组合",
+    # 兜底
+    "其他",
+})
+
+#: 信号频率受控词表。
+FREQUENCY_WHITELIST: frozenset[str] = frozenset({"日内", "日频", "周频", "月频", "季频"})
+
+#: 成熟度状态枚举（小写）。
+MATURITY_VALUES: frozenset[str] = frozenset(
+    {"experimental", "oos_verified", "active", "retired"})
+
+#: ``source`` 命名规范：``<prefix>:<detail>[:<scope>]``。
+#:
+#: prefix 取自本集合；detail 建议为因子集名（alpha101/evt/moneyflow…）；
+#: scope 为数据集或区间（如 ``all_a_2018_2026``）。**下游用
+#: ``source.split(":")[0]`` 做路由**（见 ``scripts/ingest/extend_factor_library.py``
+#: 的 gp/model/alpha 因子集判定），改 prefix 等于改路由键，不要随手改。
+SOURCE_PREFIXES: frozenset[str] = frozenset({
+    # 产出方（无法归到具体因子集时的兜底前缀）
+    "builders", "textmining", "paper", "mining", "synthesis", "synthesis_library",
+    # 库内既有来源前缀
+    "model", "gp", "alpha101", "alpha158", "alpha191", "alpha360", "technical",
+    "intraday", "fundamental", "events", "moneyflow", "margin", "holder", "status",
+    # 因子集名——builder 通道的**首选前缀**，与 hs300 既有口径一致
+    # （``alpha101:build_alpha_factors:20220101-20260821``）
+    "evt", "event", "sentiment", "constructed", "style", "pledge", "sue_pledge",
+    "disc_holder_dyn", "significant_synthesis",
+})
+
+#: 无法识别产出脚本时 ``source_for`` 的默认 producer 段。
+DEFAULT_PRODUCER = "builders"
+
+#: 因子集名（registry ``set`` 列 / builder 的 ``factor_stats_{set}.jsonl`` 名）
+#: → 因子族（``family`` 列）默认映射。
+#:
+#: 用途有二：① 批量入库（builder）自动补 family，免得新因子再落进"有来源无分类"；
+#: ② 历史数据回填的**唯一口径**（回填脚本 import 本表，不另立一套）。
+#: 未收录的 set 返回空串——宁可留空，也不猜。
+SET_TO_FAMILY: dict[str, str] = {
+    # 量价公式族
+    "alpha101": "量价", "alpha158": "量价", "alpha191": "量价", "alpha360": "量价",
+    # 财务基本面（含构造型/风格型）
+    "fundamental": "基本面", "constructed": "基本面", "style": "基本面",
+    "sue_pledge": "基本面",
+    # 股东（持股/质押/折价）
+    "holder": "股东", "pledge": "股东", "disc_holder_dyn": "股东",
+    # 事件与资金
+    "evt": "事件", "event": "事件",
+    "moneyflow": "资金流", "margin": "资金流",
+    # 其余
+    "status": "状态",
+    "technical": "技术", "intraday": "日内",
+    "paper": "论文", "model": "模型", "synthesis": "合成", "textmining": "文本",
+    "sentiment": "情绪",
+}
+
+
+def family_for_set(set_name: str) -> str:
+    """按因子集名推断因子族；未收录返回 ``""``（不猜）。"""
+    return SET_TO_FAMILY.get((set_name or "").strip(), "")
+
+
+def source_for(set_name: str, *, producer: str = DEFAULT_PRODUCER,
+               scope: str = "") -> str:
+    """生成规范 ``source``：``<因子集名>:<产出脚本>[:<数据集/区间>]``。
+
+    **前缀优先取因子集名，而不是通用 ``builders``**——``source.split(":")[0]``
+    在下游是被当路由键用的：
+
+    - ``scripts/ingest/extend_factor_library.py`` 用 ``src == "gp"`` /
+      ``src == "model"`` 决定要不要重算这批因子；
+    - ``scripts/archive/factor_usability_stats.py`` 按前缀做来源分组；
+    - ``research/factor_report.py`` 用前缀判定 alpha/gp/model 族。
+
+    全库统一写成 ``builders:*`` 会让这些消费者塌缩成单一来源桶（gp/model
+    路由直接失效）。因子集名不在 :data:`SOURCE_PREFIXES` 时由调用方告警。
+
+    Args:
+        set_name: 因子集名（registry ``set`` 列值）。
+        producer: 产出脚本名（如 ``build_alla_alpha_panels``）。
+        scope: 数据集名或日期区间（如 ``all_a_2018_2026``）。
+
+    >>> source_for("alpha101", producer="build_alla_alpha_panels",
+    ...            scope="all_a_2018_2026")
+    'alpha101:build_alla_alpha_panels:all_a_2018_2026'
+    """
+    parts = [x for x in ((set_name or "").strip(), (producer or "").strip(),
+                         (scope or "").strip()) if x]
+    return ":".join(parts)
+
+
+def normalize_tags(*, family: str = "", frequency: str = "", maturity: str = "",
+                   where: str = "") -> tuple[str, str, str]:
+    """把因子标签收敛到受控词表。
+
+    越界值**只告警、不静默改写**——静默改写会掩盖真实的口径漂移，而直接拒绝
+    会让历史数据无法入库。告警里带上 ``where`` 便于定位写入方。
+    """
+    fam = (family or "").strip()
+    freq = (frequency or "").strip()
+    mat = (maturity or "").strip()
+    if fam and fam not in FAMILY_WHITELIST:
+        log.warning("[%s] family=%r 不在 FAMILY_WHITELIST；新增族请同步词表", where, fam)
+    if freq and freq not in FREQUENCY_WHITELIST:
+        log.warning("[%s] frequency=%r 不在 FREQUENCY_WHITELIST", where, freq)
+    if mat and mat not in MATURITY_VALUES:
+        log.warning("[%s] maturity=%r 不在 MATURITY_VALUES", where, mat)
+    return fam, freq, mat
+
+
+#: registry 的规范列序——**唯一 schema 真源**（2026-09-12 统一规范）。
+#:
+#: 此前 ``_load_registry`` 用内联清单，缺 ``set`` / ``label`` / ``coverage`` /
+#: ``ic_mean_h1..h20`` / ``p_value_nw``；而批量入库（``merge_outputs``）只写
+#: 后几列，于是 ``all_a_2018_2026`` 有 ``set`` 列、``hs300_2025`` 没有——
+#: 同一套库出现了两套 schema。列清单收在这里，`_load_registry` 与 `_save_registry`
+#: 共用，未知列一律保留在尾部（不丢数据）。
+CANONICAL_COLUMNS: list[str] = [
+    # —— 标识与来源 ——
+    "name", "kind", "formula", "source", "dataset", "parents", "created_at",
+    # —— 六维标签子集（家族/子族/频率/成熟度；其余维放 note）——
+    # ``subfamily`` 是**细粒度**子类（不受控词表），用于 family 粗粒度化后
+    # 仍保留原始分类信息。典型场景：``family=基本面`` 下的
+    # 研发投入/财务流动性/杠杆/盈利能力/现金流质量——它们不能直接塞进
+    # ``family``，因为白名单里的「流动性」指**市场流动性**（换手率/Amihud），
+    # 与「流动比率」这类**财务流动性**不是一回事，混用即语义碰撞。
+    "family", "subfamily", "frequency", "maturity", "note",
+    # —— 批量入库（merge_outputs）自带列 ——
+    "set", "label", "coverage", "neutralized_coverage",
+    "ic_mean_h1", "ic_mean_h5", "ic_mean_h10", "ic_mean_h20",
+    # —— 检验统计 ——
+    "n_dates", "n_codes", "ic_mean", "ic_std", "ic_ir", "t_stat", "t_stat_nw",
+    "p_value_nw", "ic_win_rate", "ic_decay5", "autocorr", "significant",
+    # —— 入库前冗余预检（check_dup）——
+    "dup_checked", "dup_corr_max", "dup_top", "resid_ic", "resid_t_nw",
+] + [f"{m}_{c.key}" for c in CANONICAL_CONFIGS for m in _METRIC_COLS] + [
+    "best_sharpe", "best_config", "panel_path", "eval_path",
+]
+
+
+def _align_registry(reg: pd.DataFrame) -> pd.DataFrame:
+    """把 registry 的列集/列序对齐到 :data:`CANONICAL_COLUMNS`。
+
+    缺列补 ``NaN``（**不补 pd.NA**：那会让数值列变 object，下游
+    ``reg["ic_mean"].abs()`` 这类调用会直接炸），多余列保留在尾部不丢。
+    已对齐时原样返回——``list_all`` / ``get_panel`` 会高频走这条快速路径。
+
+    .. warning::
+       补列的循环**必须在算 ``head`` 之前**完成。2026-09-12 的写法是
+       ``head = [c for c in CANONICAL_COLUMNS if c in reg.columns]`` 先算、
+       再补列、最后 ``reg[head + tail]`` 取列——于是补出来的列（``head`` 里
+       没有、又不在 ``tail`` 里）被静默丢弃：新加的 canonical 列在旧库上
+       **永远无法落地**，表现为 ``list_all()`` 少一列却毫无告警。
+    """
+    cur = list(reg.columns)
+    n = len(CANONICAL_COLUMNS)
+    if len(cur) >= n and cur[:n] == CANONICAL_COLUMNS:
+        return reg
+    for c in CANONICAL_COLUMNS:
+        if c not in reg.columns:
+            reg[c] = np.nan
+    tail = [c for c in reg.columns if c not in CANONICAL_COLUMNS]
+    return reg[list(CANONICAL_COLUMNS) + tail]
+
 
 def _slug(name: str) -> str:
     """把因子名（可能是长公式）映射为安全的文件名片段。"""
@@ -158,24 +334,22 @@ class FactorLibrary:
     # ---- registry IO ----
     def _load_registry(self) -> pd.DataFrame:
         if self._registry_path.exists():
-            return pd.read_csv(self._registry_path, dtype={"parents": str})
-        cols = [
-            "name", "kind", "formula", "source", "dataset", "parents", "created_at",
-            # 六维标签子集（对齐因子工程实践：家族/频率/成熟度；其余维可放 note）
-            "family", "frequency", "maturity", "note",
-            "n_dates", "n_codes", "ic_mean", "ic_std", "ic_ir", "t_stat", "t_stat_nw",
-            "ic_win_rate", "ic_decay5", "autocorr", "significant",
-            # 入库前冗余预检（check_dup）
-            "dup_checked", "dup_corr_max", "dup_top", "resid_ic", "resid_t_nw",
-        ] + [f"{m}_{c.key}" for c in CANONICAL_CONFIGS for m in _METRIC_COLS] + [
-            "best_sharpe", "best_config", "panel_path", "eval_path",
-        ]
-        return pd.DataFrame(columns=cols)
+            return _align_registry(
+                pd.read_csv(self._registry_path, dtype={"parents": str}))
+        # schema 真源 = 模块级 CANONICAL_COLUMNS：空库也给完整列集，免得
+        # "新建库少几列 → 第一次批量入库后又变成另一套"
+        return pd.DataFrame(columns=list(CANONICAL_COLUMNS))
 
     def _save_registry(self, df: pd.DataFrame) -> None:
-        # 写临时文件再原子替换，避免 read-modify-write 并发入库时损坏 CSV
+        # 写临时文件再原子替换，避免 read-modify-write 并发入库时损坏 CSV。
+        # 列序统一按 CANONICAL_COLUMNS（未知列留尾部）——两条入库通道
+        # （register / merge_outputs）写出的文件因此共享同一套 schema；
+        # 编码统一 utf-8-sig，与历史 merge_outputs 产物一致（Excel 可直接读）。
+        # 走 _align_registry 而非在此重算 head/tail：列对齐只有一处实现，
+        # 免得两个函数对"缺列怎么办"理解不一致（2026-09-12 补列被丢的坑）。
+        df = _align_registry(df)
         tmp = self._registry_path.with_suffix(".csv.tmp")
-        df.to_csv(tmp, index=False)
+        df.to_csv(tmp, index=False, encoding="utf-8-sig")
         tmp.replace(self._registry_path)
 
     # ---- 注册 ----
@@ -198,6 +372,7 @@ class FactorLibrary:
         check_dup: bool = False,
         dup_corr: float = 0.7,
         reject_dup: bool = False,
+        dup_include_builder_rows: bool = False,
     ) -> dict:
         """注册一个因子：预计算 IC 序列 + 各 canonical 回测，落盘面板/评估/registry。
 
@@ -213,8 +388,9 @@ class FactorLibrary:
             short_costs: 空头腿成本模型（默认 None=引擎默认：从配置读并启用借券费，
                          修正空头腿乐观偏差；传 ShortCostModel(borrow_rate=0) 关闭）。
             deleverage: 1 倍资金约束（总保证金需求 > 1 时降杠杆）。
-            family: 因子家族标签（六维标签之一：动量/反转/波动率/价值/质量/成长/
-                    情绪/流动性/拥挤度/技术/非线性组合/其他）。
+            family: 因子族标签，取值应落在 :data:`FAMILY_WHITELIST`（风格族
+                    ＋来源族的并集，如 动量/反转/波动率/价值/质量/成长/情绪/
+                    量价/基本面/事件/资金流/股东/状态…）；越界只告警、不改写。
             frequency: 信号频率（日频/周频/月频/日内…）。
             maturity: 成熟度状态（experimental / oos_verified / active / retired）。
             note: 备注（设计动机、差异化贡献说明等）。
@@ -224,9 +400,18 @@ class FactorLibrary:
             dup_corr: 相关性阈值（> 该值判定疑似冗余；默认 0.7，与业界一致）。
             reject_dup: True 时冗余直接抛 ValueError 拒绝入库；False 仅记 warning
                         （个人研究场景默认警告，保留变体对比的灵活性）。
+            dup_include_builder_rows: 冗余预检是否把批量入库（无 ``panel_path``）
+                的因子也纳入比较。默认 False = 只比库里走过 ``register()`` 的行，
+                成本与历史上一致；True = 完整覆盖，但全库比较实测约 167 分钟。
+                无论哪种，覆盖面都会打印出来，不会静默跳过。
         Returns:
             该因子的 registry 行（dict）。
         """
+        # 标签先过受控词表（越界只告警）：登记是唯一入口，入口不校验，
+        # 后面每个消费者都得各自防漂移。
+        family, frequency, maturity = normalize_tags(
+            family=family, frequency=frequency, maturity=maturity,
+            where=f"register({name})")
         slug = _slug(name)
         panel_path = self.panels_dir / f"{slug}.parquet"
         eval_path = self.evals_dir / f"{slug}.parquet"
@@ -297,7 +482,9 @@ class FactorLibrary:
         _write_parquet_robust(eval_df, eval_path)
 
         # 4) registry 行
-        dup_row = self._run_dup_check(name, panel, returns_panel, check_dup, dup_corr, reject_dup)
+        dup_row = self._run_dup_check(name, panel, returns_panel, check_dup, dup_corr,
+                                      reject_dup,
+                                      include_builder_rows=dup_include_builder_rows)
         row = {
             "name": name,
             "kind": kind,
@@ -338,6 +525,91 @@ class FactorLibrary:
                  name, kind, ic_mean, best_sharpe, best_config)
         return row
 
+    def upsert_rows(self, rows: list[dict], *, source: str = "", family: str = "",
+                    kind: str = "raw", maturity: str = "experimental",
+                    frequency: str = "", set_name: str = "",
+                    fill_missing_only: bool = True) -> dict:
+        """批量**轻量登记**：把已有统计行并入 registry，不重算任何指标。
+
+        这是 builder 通道（``scripts/builders/common.py`` 的 ``merge_outputs``）
+        的唯一写入口——替代此前"``pd.read_csv`` → concat → ``to_csv``"的直写。
+        直写绕过库入口的后果在 2026-09-12 暴露：all_a 的 912 个因子
+        ``source`` / ``family`` / ``kind`` 全空，库 API 按这些字段筛选时
+        完全看不到它们（``select_stocks --all-raw``、``list_all(kind=)``、
+        ``extend_factor_library`` 的因子集路由全部漏掉这一批）。
+
+        与 :meth:`register` 的分工：``register`` 是完整登记（IC 序列 + 3 组
+        canonical 回测 + panel/eval 双落盘，实测约 53.7 s/因子）；本方法是
+        轻量登记，**只写 registry 行**，用于几百个候选因子的批量入库。
+
+        Args:
+            rows: 逐因子统计行（至少含 ``name``）。
+            source: 本批来源标注，形如 ``alpha101:builders:all_a_2018_2026``
+                （用 :func:`source_for` 生成，前缀必须是因子集名——见该函数
+                关于路由键的说明）。
+            family: 本批因子族（受控词表，见 :data:`FAMILY_WHITELIST`）。
+            kind: raw / composite。
+            maturity: experimental / oos_verified / active / retired。
+            frequency: 日频 / 周频 / 月频 / 日内。
+            set_name: 因子集名（alpha101/evt/moneyflow…），写入 ``set`` 列。
+            fill_missing_only: True（默认）只补空缺字段、不覆盖已有非空值——
+                builder 重跑不该把人工补过的标签冲掉。
+
+        Returns:
+            dict: ``{"before": n, "after": m, "added": a, "updated": u}``。
+        """
+        if not rows:
+            return {"before": 0, "after": 0, "added": 0, "updated": 0}
+        family, frequency, maturity = normalize_tags(
+            family=family, frequency=frequency, maturity=maturity,
+            where="upsert_rows")
+        source = (source or "").strip()
+        if source:
+            prefix = source.split(":")[0]
+            if prefix not in SOURCE_PREFIXES:
+                log.warning("upsert_rows: source 前缀 %r 不在 SOURCE_PREFIXES: %s",
+                            prefix, source)
+        else:
+            log.warning("upsert_rows: source 为空——extend_factor_library 用 "
+                        "source.split(':')[0] 路由因子集，空来源等于这批因子进不了"
+                        "「延长数据集」；请在调用处显式传入")
+
+        new_df = pd.DataFrame(rows)
+        if "name" not in new_df.columns:
+            raise ValueError("upsert_rows: rows 缺少 name 列")
+
+        batch = {"source": source, "family": family, "kind": kind,
+                 "maturity": maturity, "frequency": frequency, "set": set_name}
+        for col, val in batch.items():
+            if not val:
+                continue
+            if col not in new_df.columns:
+                new_df[col] = val
+            else:
+                new_df[col] = new_df[col].astype(object)
+                blank = new_df[col].isna() | (new_df[col].astype(str).str.strip() == "")
+                new_df.loc[blank, col] = val
+
+        reg = self._load_registry()
+        before = len(reg)
+        known = set(reg["name"])
+        n_add = int((~new_df["name"].isin(known)).sum())
+        dup = reg["name"].isin(new_df["name"])
+        keep = reg[~dup]
+        if dup.any() and fill_missing_only:
+            # 已有行：逐字段只补空缺（空串视同空缺），新行整行并入
+            old = reg[dup].set_index("name").replace(r"^\s*$", np.nan, regex=True)
+            add = new_df.set_index("name").reindex(old.index)
+            upd = old.combine_first(add).reset_index()
+        else:
+            upd = new_df
+        out = pd.concat([keep, upd], ignore_index=True)
+        self._save_registry(out)
+        log.info("轻量登记: %d -> %d 因子（新增 %d, 更新 %d）",
+                 before, len(out), n_add, int(dup.sum()))
+        return {"before": before, "after": len(out), "added": n_add,
+                "updated": int(dup.sum())}
+
     # ---- 查询 ----
     def has(self, name: str) -> bool:
         reg = self._load_registry()
@@ -359,30 +631,85 @@ class FactorLibrary:
     def list_composites(self) -> pd.DataFrame:
         return self.list_all(kind="composite")
 
+    # ---- 面板/评估路径解析（兼容两条入库通道） ----
+    @staticmethod
+    def _is_blank(v) -> bool:
+        """registry 里的空路径：NaN / None / "" / 字符串化的 "nan"。"""
+        if v is None:
+            return True
+        if isinstance(v, float) and np.isnan(v):
+            return True
+        return str(v).strip().lower() in ("", "nan", "none")
+
+    def _resolve_panel_path(self, row) -> Path | None:
+        """解析该行的因子面板路径，两条入库通道都能命中。
+
+        优先 registry 的 ``panel_path``（``register()`` 写
+        ``panels/<md5>.parquet``）；为空或文件缺失时回退
+        ``panels/<name>.parquet``——``merge_outputs()`` 的落盘口径
+        （全A builder 批量入库只落原名文件、从不写 ``panel_path``）。
+        两者都不存在返回 None，不抛异常。
+
+        历史教训（2026-09-12）：此前直接 ``Path(hit.iloc[0]["panel_path"])``，
+        扁平行该列为 NaN，``Path(nan)`` 抛 ``TypeError``，导致 912 个因子
+        在库 API 上整片不可用。
+        """
+        v = row.get("panel_path") if hasattr(row, "get") else None
+        if not self._is_blank(v):
+            p = Path(str(v))
+            if p.exists():
+                return p
+        fb = self.panels_dir / f"{row['name']}.parquet"
+        return fb if fb.exists() else None
+
+    def _resolve_eval_path(self, row) -> Path | None:
+        """同 :meth:`_resolve_panel_path`，作用于 ``evals/``。
+
+        builder 批量入库不产 eval，故这批因子返回 None（是缺数据，不是异常）。
+        """
+        v = row.get("eval_path") if hasattr(row, "get") else None
+        if not self._is_blank(v):
+            p = Path(str(v))
+            if p.exists():
+                return p
+        fb = self.evals_dir / f"{row['name']}.parquet"
+        return fb if fb.exists() else None
+
     def get_panel(self, name: str) -> pd.DataFrame | None:
         reg = self._load_registry()
         hit = reg[reg["name"] == name]
         if hit.empty:
             return None
-        p = Path(hit.iloc[0]["panel_path"])
-        return pd.read_parquet(p) if p.exists() else None
+        p = self._resolve_panel_path(hit.iloc[0])
+        return pd.read_parquet(p) if p is not None else None
 
     def _load_eval(self, name: str) -> pd.DataFrame | None:
         reg = self._load_registry()
         hit = reg[reg["name"] == name]
         if hit.empty:
             return None
-        p = Path(hit.iloc[0]["eval_path"])
-        return pd.read_parquet(p) if p.exists() else None
+        p = self._resolve_eval_path(hit.iloc[0])
+        return pd.read_parquet(p) if p is not None else None
 
     def load_library_features(self, kind: str | None = None) -> dict:
-        """返回 {name: panel}，作为下一轮挖掘的特征集（迭代用）。"""
+        """返回 {name: panel}，作为下一轮挖掘的特征集（迭代用）。
+
+        面板解析走 :meth:`_resolve_panel_path`，``register()`` 与
+        ``merge_outputs()`` 两条通道入库的因子都可见。个别因子缺面板文件时
+        跳过并记 warning（而非整库抛异常）。
+        """
         reg = self.list_all(kind=kind)
         out: dict = {}
+        missing: list[str] = []
         for _, r in reg.iterrows():
-            p = Path(r["panel_path"])
-            if p.exists():
-                out[r["name"]] = pd.read_parquet(p)
+            p = self._resolve_panel_path(r)
+            if p is None:
+                missing.append(str(r["name"]))
+                continue
+            out[str(r["name"])] = pd.read_parquet(p)
+        if missing:
+            log.warning("load_library_features: %d/%d 个因子无面板文件，已跳过（示例: %s）",
+                        len(missing), len(reg), ", ".join(missing[:5]))
         return out
 
     def significance_table(self, q: float = 0.05, exclude_model: bool = True) -> pd.DataFrame:
@@ -457,7 +784,14 @@ class FactorLibrary:
             q: ``correction="fdr"`` 时的目标 FDR 水平。
         """
         reg = self.list_all()
-        sig = reg["significant"].fillna(False).astype(bool)
+
+        def _col(name, default):
+            return reg[name] if name in reg.columns else pd.Series([default] * len(reg),
+                                                                   index=reg.index)
+
+        # 列缺失是合法的历史形态：批量入库（merge_outputs()）的库可能压根没有
+        # significant / source 列，退回默认值（不显著 / 无来源），而不是 KeyError。
+        sig = _col("significant", False).fillna(False).astype(bool)
         if correction == "fdr":
             tbl = self.significance_table(q=q, exclude_model=exclude_model)
             keep = set(tbl.loc[tbl["fdr_significant"], "name"])
@@ -467,7 +801,7 @@ class FactorLibrary:
         elif correction == "raw":
             mask = sig.copy()
             if exclude_model:
-                mask &= ~reg["source"].fillna("").str.startswith("model:")
+                mask &= ~_col("source", "").fillna("").astype(str).str.startswith("model:")
         else:
             raise ValueError(f"未知 correction: {correction}（可选 'raw' | 'fdr'）")
         sig_names = set(reg[mask]["name"])
@@ -475,8 +809,21 @@ class FactorLibrary:
             log.info("因子库: %d 个因子, significant %d 个（排除 model:* 后 %d）",
                      len(reg), int(sig.sum()), len(sig_names))
 
-        all_feats = self.load_library_features()
-        feats = {k: v for k, v in all_feats.items() if k in sig_names}
+        # 只解析显著因子自己的面板——不无条件遍历整库：既不为 900+ 个用不到的
+        # 因子付读盘成本，也不会因个别因子面板缺失把整库拖崩。
+        # 历史教训（2026-09-12）：原先写 `self.load_library_features()` 后过滤，
+        # 等价于遍历全部 938 行，扁平行 panel_path 为 NaN 时整库抛 TypeError。
+        feats: dict = {}
+        missing: list[str] = []
+        for _, r in reg[mask].iterrows():
+            p = self._resolve_panel_path(r)
+            if p is None:
+                missing.append(str(r["name"]))
+                continue
+            feats[str(r["name"])] = pd.read_parquet(p)
+        if missing:
+            log.warning("load_significant_features: %d 个显著因子无面板文件，已跳过（示例: %s）",
+                        len(missing), ", ".join(missing[:5]))
         if feats:
             sample = next(iter(feats.values()))
             log.info("加载面板 %d 个, 日期范围 %s ~ %s",
@@ -597,10 +944,12 @@ class FactorLibrary:
         if hit.empty:
             return False
         r = hit.iloc[0]
-        for p in (r.get("panel_path"), r.get("eval_path")):
-            if p and Path(p).exists():
+        # 用解析器取路径：扁平行 panel_path/eval_path 为 NaN，`Path(nan)` 抛
+        # TypeError，而 `if p` 对 NaN 恰为真——两处都得绕开（2026-09-12 修）。
+        for p in (self._resolve_panel_path(r), self._resolve_eval_path(r)):
+            if p is not None:
                 try:
-                    Path(p).unlink(missing_ok=True)
+                    p.unlink(missing_ok=True)
                 except OSError:
                     # 文件可能被占用/沙箱回收站不可用：保留文件，仅从 registry 移除
                     log.warning("因子文件删除失败（保留文件）: %s", p)
@@ -620,23 +969,40 @@ class FactorLibrary:
         return [p for p in str(parents).split("|") if p]
 
     # ---- 入库前冗余预检（对齐因子工程实践：防"因子库一锅粥"） ----
-    def _run_dup_check(self, name, panel, returns_panel, check_dup, dup_corr, reject_dup) -> dict:
+    def _run_dup_check(self, name, panel, returns_panel, check_dup, dup_corr, reject_dup,
+                       include_builder_rows: bool = False) -> dict:
         """冗余预检：与库内已有因子算截面相关 + 对最相关因子做正交残差 IC。
+
+        Args:
+            include_builder_rows: 是否把批量入库（``merge_outputs()``，没有
+                ``panel_path``）的因子也纳入比较。默认 False——它们的面板要经
+                扩展路径才找得到，而全库比较实测约 **167 分钟**（全A 938 个
+                ≈57MB 面板，单候选 10.7s，2026-09-12 实测）。开 True 即完整
+                覆盖，代价是每次入库都要等这么久。
 
         Returns:
             dict: dup_checked / dup_corr_max / dup_top / resid_ic / resid_t_nw。
             check_dup=False 时 dup_checked=False，其余为空。
+
+        历史教训（2026-09-12）：原先用 ``Path(str(r.get("panel_path", "")))``，
+        扁平行上得到字符串 ``"nan"``、``exists()`` 为 False → ``continue``，
+        912 个批量入库因子被**静默跳过**，预检实际只覆盖 20 余个正规因子，
+        而 registry 写的是 ``dup_checked=True``。现在覆盖面**一定会打印**，
+        不再用静默跳过冒充全量预检。
         """
         empty = {"dup_checked": False, "dup_corr_max": "", "dup_top": "", "resid_ic": "", "resid_t_nw": ""}
         if not check_dup:
             return empty
         hits = []
         reg = self._load_registry()
-        for _, r in reg.iterrows():
-            if r["name"] == name:
-                continue
-            p = Path(str(r.get("panel_path", "")))
-            if not p.exists():
+        candidates = [r for _, r in reg.iterrows() if r["name"] != name]
+        n_total = len(candidates)
+        if not include_builder_rows:
+            candidates = [r for r in candidates if not self._is_blank(r.get("panel_path"))]
+        n_pool = len(candidates)
+        for r in candidates:
+            p = self._resolve_panel_path(r)
+            if p is None:
                 continue
             try:
                 old = pd.read_parquet(p)
@@ -654,9 +1020,18 @@ class FactorLibrary:
             corr = ra.corrwith(rb, axis=1, method="pearson").mean()
             if not np.isnan(corr):
                 hits.append((float(corr), r["name"]))
+        if n_pool < n_total:
+            log.warning("冗余预检覆盖 %d/%d 个库内因子：%d 个批量入库因子（无 panel_path）"
+                        "未参与比较。要全量覆盖用 include_builder_rows=True"
+                        "（全库实测约 167 分钟）。",
+                        n_pool, n_total, n_total - n_pool)
         if not hits:
+            if n_pool:
+                log.warning("冗余预检可比对数为 0/%d（候选面板缺失或无重叠样本），"
+                            "dup_checked=True 只表示预检已执行、不代表已充分比较", n_pool)
             return {**empty, "dup_checked": True}
         hits.sort(reverse=True)
+        log.info("冗余预检覆盖: 实际比较 %d/%d 个库内因子", len(hits), n_total)
         top_corr, top_name = hits[0]
         resid_ic, resid_t = self._residual_ic(panel, returns_panel, top_name)
         msg = (f"因子 {name} 冗余预检: 与 {top_name} 相关 {top_corr:.2f}"
@@ -729,14 +1104,29 @@ class FactorLibrary:
 
     # ---- 标签管理（六维标签子集：家族/频率/成熟度） ----
     def set_tag(self, name: str, family: str | None = None, frequency: str | None = None,
-                maturity: str | None = None, note: str | None = None) -> bool:
-        """给因子补打/更新标签（不重算任何指标）。"""
+                maturity: str | None = None, note: str | None = None,
+                source: str | None = None) -> bool:
+        """给因子补打/更新标签（不重算任何指标）。
+
+        ``source`` 也走这里补写：批量入库（``merge_outputs()``）的因子从未经过
+        ``register()``，source 为空、又没有别的回填入口——只补 family/frequency
+        却留着 source 空着，等于"来源管理"没做。
+        """
+        # 补标签同样过受控词表；None 表示"不动这一列"，不能被规范化成空串，
+        # 否则会把已有值洗掉。
+        if any(v is not None for v in (family, frequency, maturity)):
+            _f, _fq, _m = normalize_tags(
+                family=family or "", frequency=frequency or "", maturity=maturity or "",
+                where=f"set_tag({name})")
+            family = _f if family is not None else None
+            frequency = _fq if frequency is not None else None
+            maturity = _m if maturity is not None else None
         reg = self._load_registry()
         hit = reg["name"] == name
         if not hit.any():
             return False
         for col, val in (("family", family), ("frequency", frequency),
-                         ("maturity", maturity), ("note", note)):
+                         ("maturity", maturity), ("note", note), ("source", source)):
             if val is not None:
                 if col not in reg.columns:
                     reg[col] = ""
@@ -757,15 +1147,20 @@ class FactorLibrary:
         from stats.monitor import monitor_ic_series
         reg = self._load_registry()
         rows = []
+        n_no_eval = 0
+        n_bad = 0
         for _, r in reg.iterrows():
-            p = Path(str(r.get("eval_path", "")))
-            if not p.exists():
+            p = self._resolve_eval_path(r)
+            if p is None:
+                n_no_eval += 1
                 continue
             try:
                 ic = pd.read_parquet(p)["ic"].dropna()
             except Exception:
+                n_bad += 1
                 continue
             if len(ic) < 20:
+                n_bad += 1
                 continue
             m = monitor_ic_series(ic, window=window)
             rows.append({
@@ -781,6 +1176,10 @@ class FactorLibrary:
                 "n_days": m["n_days"],
                 "status": m["status"],
             })
+        if n_no_eval or n_bad:
+            log.warning("monitor: 覆盖 %d/%d 个因子（跳过 %d 个无 eval 数据——未走 register "
+                        "入库的批量因子；%d 个 IC 样本不足或不可读）",
+                        len(rows), len(reg), n_no_eval, n_bad)
         if not rows:
             return pd.DataFrame()
         return (pd.DataFrame(rows)
@@ -875,8 +1274,8 @@ class FactorLibrary:
         panels: dict[str, pd.DataFrame] = {}
         meta: dict[str, dict] = {}
         for _, r in reg[reg["name"].isin(name_set)].iterrows():
-            p = Path(str(r.get("panel_path", "")))
-            if not p.exists():
+            p = self._resolve_panel_path(r)
+            if p is None:
                 continue
             try:
                 df = pd.read_parquet(p)

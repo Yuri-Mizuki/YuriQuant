@@ -314,6 +314,10 @@ _TESTS_ONLY_PRIVATE: set[tuple[str, str]] = {
     # 2026-09-11 把守卫改为**通用规则**后新暴露的测试白盒用例（生产侧已一并清干净）
     ("backtest.engine", "_apply_executable_mask"),
     ("research.factor_library", "_coerce_date"),
+    # 2026-09-12 因子库 schema 统一：列对齐是 registry 序列化的内部实现细节，
+    # 生产侧只有 _load_registry/_save_registry 调用；测试需直连它以逐位验证
+    # 「补出来的 canonical 列不得被丢弃」这个回归（见 test_factor_library_schema.py）。
+    ("research.factor_library", "_align_registry"),
     ("research.html_report", "_fmt"),
     ("research.html_report", "_month_cell_style"),
     ("research.html_report", "_monthly_html"),
