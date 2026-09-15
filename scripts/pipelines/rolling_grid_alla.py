@@ -247,11 +247,17 @@ def stage_prep():
     v = _panel("volume")
     raw_close = c.copy()
 
+    amt = _panel("amount")
     bf = pd.read_parquet(cache_root / "backward_factor.parquet")
     bf = bf[[x for x in c.columns if x in bf.columns]]
     f = bf.reindex(index=c.index, columns=c.columns).ffill()
     for pnl in (o, hi, lo, c):
         pnl[:] = pnl.values * f.values
+    # 次日执行价模式的执行价面板：开盘价 / 当日 VWAP（amount/volume × 后复权）
+    vwap_adj = ((amt / v.replace(0, np.nan)) * f).astype(np.float32)
+    vwap_adj = vwap_adj.replace([np.inf, -np.inf], np.nan)
+    o.astype(np.float32).to_parquet(base / "open_adj.parquet")
+    vwap_adj.to_parquet(base / "vwap_adj.parquet")
     log.info("复权面板: %d 日 × %d 股（%s ~ %s）", len(c), c.shape[1],
              c.index[0].date(), c.index[-1].date())
     c.astype(np.float32).to_parquet(base / "close_adj.parquet")
@@ -716,9 +722,45 @@ def _yearly_metrics(dr: pd.Series, bench: pd.Series) -> dict[int, dict]:
     return out
 
 
-def stage_backtest(quick: bool = False):
+def _yearly_rows(base_row: dict, dr: pd.Series, bench: pd.Series,
+                 turnover: pd.Series | None) -> list[dict]:
+    """逐年指标行：所有度量列**重算**，绝不从整体行继承。
+
+    2026-09-14 修 bug：此前 stage_backtest / stage_smallcap / stage_ensemble
+    三处都写 ``{**row, "year": year, **ym}``，而 `row` 里的
+    excess_idx / excess_eqw / ir / turnover 是**整体**口径值，
+    `_yearly_metrics` 又不返回这几个键 → 逐年表里这几列"每年完全相同"，
+    读表者会误以为各年超额/IR/换手一模一样。只保留标识列，度量列一律重算。
+    """
+    from backtest.metrics import PERIODS_PER_YEAR
+    keep = ("run_id", "model", "ensemble", "horizon", "freq", "neut",
+            "frac", "weight", "arm", "scheme")
+    out = []
+    for year, ym in _yearly_metrics(dr, bench).items():
+        idx_y = dr.index[dr.index.year == year]
+        ex = (dr.reindex(idx_y) - bench.reindex(idx_y).fillna(0.0)).dropna()
+        to_y = (turnover.reindex(idx_y).dropna() if turnover is not None
+                else pd.Series(dtype=float))
+        out.append({
+            **{k: base_row[k] for k in keep if k in base_row},
+            "year": year, **ym,
+            "excess_idx": ym["excess"],
+            "ir": (float(ex.mean() / ex.std() * np.sqrt(PERIODS_PER_YEAR))
+                   if len(ex) > 20 and ex.std() > 0 else np.nan),
+            "turnover": float(to_y.mean()) if len(to_y) else np.nan,
+        })
+    return out
+
+
+def stage_backtest(quick: bool = False, execution: str = "close"):
+    """组合回测。
+
+    execution: 成交价口径。close = T 收盘成交（默认，乐观上限）；open / vwap =
+        T+1 执行价（信号 T 收盘产生、T+1 开盘 / T+1 VWAP 算法单成交，可执行
+        口径，仅支持 h=1；产物文件名加 _{execution} 后缀与 close 口径并列）。
+    """
     from backtest.costs import default_costs
-    from backtest.engine import VectorBacktest
+    from backtest.engine import VectorBacktest, build_execution_split
     from scripts.common.portfolio_common import neutralize_panel
     from strategy.examples import TopFracLongOnly
 
@@ -728,8 +770,15 @@ def stage_backtest(quick: bool = False):
     mask = base["mask"].astype(bool)
     cov = base["cov"]
     costs = default_costs()
-    eq_dir = OUT / "equity"
+    eq_dir = OUT / ("equity" if execution == "close" else f"equity_{execution}")
     eq_dir.mkdir(parents=True, exist_ok=True)
+    fill = None
+    if execution != "close":
+        fp = OUT / "_base" / f"{execution}_adj.parquet"
+        if not fp.exists():
+            raise FileNotFoundError(f"{fp} 缺失：先跑 --stage prep 重建基础面板")
+        fill = pd.read_parquet(fp)
+        log.info("执行价口径: %s（fill=%s）", execution, fp.name)
 
     pred_files = sorted((OUT / "pred").glob("*.parquet"))
     if quick:
@@ -738,6 +787,10 @@ def stage_backtest(quick: bool = False):
     for pf in pred_files:
         mname, hs = pf.stem.split("__")
         h = int(hs[1:])
+        if execution != "close" and h != 1:
+            log.warning("[execution=%s] 跳过 h>1 组合 %s（执行价模式仅 h=1）",
+                        execution, pf.stem)
+            continue
         pred = pd.read_parquet(pf)
         oos_days = pred.index
         fwd = close.pct_change(fill_method=None) if h == 1 else \
@@ -763,15 +816,42 @@ def stage_backtest(quick: bool = False):
                     if not eq_path.exists():
                         strat = TopFracLongOnly(frac=frac, weight_mode="equal")
                         rb = None
-                        if h > 1:
-                            # h>1 一律显式调仓日（月频/双月频 + 跨度守卫剔除末段）
-                            rb = _rebalance_days_validated(oos_days, h, freq)
+                        exec_split = None
+                        sig_used = sig
+                        if execution != "close":
+                            # 次日执行价模式（仅 h=1）：信号 shift(1)（T 收盘产生的
+                            # 信号在 T+1 执行），调仓日 = 信号日次一交易日；可交易性
+                            # 改为信号预掩码——引擎 executable_mask 会把多头权重
+                            # 重归一，抹掉执行价分段
+                            if h != 1:
+                                log.warning("[execution=%s] 跳过 h>1: %s",
+                                            execution, run_id)
+                                continue
+                            sig_used = sig.shift(1).where(mask_oos)
+                            s_ = pd.Series(oos_days, index=oos_days)
+                            period = {"D": "D", "W": "W"}.get(freq, "M")
+                            firsts = s_.groupby(s_.index.to_period(period)).first()
+                            pos_ = {d: i for i, d in enumerate(oos_days)}
+                            rb = set()
+                            for t in firsts:
+                                i_ = pos_[t]
+                                if i_ + 1 < len(oos_days):
+                                    rb.add(oos_days[i_ + 1])
+                            if not rb:
+                                log.warning("[%s] 无有效调仓日，跳过", run_id)
+                                continue
+                            exec_split = build_execution_split(fill, close, rb)
                         bt = VectorBacktest(strategy=strat,
                                             rebalance_freq=("M" if freq == "2M" else freq),
                                             initial_capital=1_000_000.0, costs=costs)
                         try:
-                            res = bt.run(sig, fwd, executable_mask=mask_oos,
-                                         horizon=h, rebalance_days=rb)
+                            if execution != "close":
+                                res = bt.run(sig_used, fwd, horizon=1,
+                                             rebalance_days=rb,
+                                             execution_split=exec_split)
+                            else:
+                                res = bt.run(sig, fwd, executable_mask=mask_oos,
+                                             horizon=h, rebalance_days=rb)
                         except ValueError as e:
                             log.warning("[%s] 不可行: %s", run_id, str(e)[:100])
                             continue
@@ -800,15 +880,16 @@ def stage_backtest(quick: bool = False):
                         "beta": m["beta"], "n_days": len(eq),
                     }
                     rows_overall.append(row)
-                    for year, ym in _yearly_metrics(dr, bench_idx).items():
-                        rows_yearly.append({**row, "year": year, **ym})
+                    rows_yearly.extend(
+                        _yearly_rows(row, dr, bench_idx, eq.get("turnover")))
                     log.info("[%s] 年化=%.2f%% 超额(指数)=%+.2f%% Sharpe=%.2f 换手=%.1f%%",
                              run_id, row["annual"] * 100, row["excess_idx"] * 100,
                              row["sharpe"], row["turnover"] * 100)
 
-    pd.DataFrame(rows_overall).to_csv(OUT / "metrics_overall.csv",
+    sfx = "" if execution == "close" else f"_{execution}"
+    pd.DataFrame(rows_overall).to_csv(OUT / f"metrics_overall{sfx}.csv",
                                       index=False, encoding="utf-8-sig")
-    pd.DataFrame(rows_yearly).to_csv(OUT / "metrics_yearly.csv",
+    pd.DataFrame(rows_yearly).to_csv(OUT / f"metrics_yearly{sfx}.csv",
                                      index=False, encoding="utf-8-sig")
     log.info("backtest 完成 %.0fs（%d 组合）", time.time() - t0, len(rows_overall))
 
@@ -919,8 +1000,8 @@ def stage_smallcap(quick: bool = False):
                     "beta": m["beta"], "n_days": len(dr.dropna()),
                 }
                 rows_overall.append(row)
-                for year, ym in _yearly_metrics(dr, bench_idx).items():
-                    rows_yearly.append({**row, "year": year, **ym})
+                rows_yearly.extend(
+                    _yearly_rows(row, dr, bench_idx, res.turnover_series))
                 log.info("[%s] 年化=%.2f%% 超额(指数)=%+.2f%% 超额(等权)=%+.2f%% "
                          "Sharpe=%.2f 换手=%.1f%%", run_id, row["annual"] * 100,
                          row["excess_idx"] * 100, row["excess_eqw"] * 100,
@@ -1068,8 +1149,8 @@ def stage_ensemble(quick: bool = False):
                     "beta": m["beta"], "n_days": len(dr.dropna()),
                 }
                 rows_overall.append(row)
-                for year, ym in _yearly_metrics(dr, bench_idx).items():
-                    rows_yearly.append({**row, "year": year, **ym})
+                rows_yearly.extend(
+                    _yearly_rows(row, dr, bench_idx, res.turnover_series))
                 log.info("[%s] 年化=%.2f%% 超额(指数)=%+.2f%% 超额(等权)=%+.2f%% "
                          "Sharpe=%.2f 换手=%.1f%%", run_id, row["annual"] * 100,
                          row["excess_idx"] * 100, row["excess_eqw"] * 100,
@@ -1096,6 +1177,10 @@ def main():
                     choices=["zscore", "ortho", "mixed"],
                     help="特征预处理口径：zscore(全局截面z) / ortho(因子层行业+市值"
                          "中性化) / mixed(基本面族中性化+量价zscore)")
+    ap.add_argument("--execution", default="close", choices=["close", "open", "vwap"],
+                    help="backtest 阶段成交价口径：close(T收盘,乐观上限,默认) / "
+                         "open(T+1开盘) / vwap(T+1 VWAP算法单，可执行主口径)；"
+                         "执行价模式仅 h=1，产物加 _{execution} 后缀")
     args = ap.parse_args()
 
     global INCLUDE_FUNDAMENTAL, OUT, PANELS_DIR, NAME_DIR
@@ -1127,7 +1212,7 @@ def main():
         elif st == "predict":
             stage_predict(args.quick, only_h)
         elif st == "backtest":
-            stage_backtest(args.quick)
+            stage_backtest(args.quick, execution=args.execution)
         elif st == "smallcap":
             stage_smallcap(args.quick)
         elif st == "ensemble":

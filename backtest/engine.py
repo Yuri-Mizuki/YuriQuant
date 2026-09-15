@@ -157,6 +157,7 @@ class VectorBacktest:
         horizon: int = 1,
         rebalance_days: set | None = None,
         check_convention: bool = True,
+        execution_split: tuple[pd.DataFrame, pd.DataFrame] | None = None,
     ) -> BacktestResult:
         """执行回测。
 
@@ -186,6 +187,15 @@ class VectorBacktest:
             check_convention: h=1 时校验面板是否为 shift(-h) 指纹（末行全 NaN、
                      首行有值），是则报错防止一天错位。因子库等内部明确使用
                      shift 口径且不对齐基准算指标的场景可显式关掉。
+            execution_split: 可选 ``(隔夜收益面板, 执行日日内收益面板)``，启用
+                     **次日执行价模式**（T+1 开盘 / T+1 VWAP 等算法单成交，
+                     仅支持 h=1）。面板与 returns_panel 同索引同列：
+                       隔夜面板[执行日 E] = Fill(E)/C(E-1) - 1（旧权重先结算到
+                         执行价；非执行日 = C(E)/C(E-1) - 1）
+                       日内面板[执行日 E] = C(E)/Fill(E) - 1（新权重的当日日内
+                         收益；非执行日 = 0）
+                     执行日的结算顺序变为：旧权重结算隔夜段 → 换仓（成本按
+                     执行价计）→ 新权重结算日内段。None 时为默认 T 收盘口径。
         Returns:
             BacktestResult
 
@@ -267,6 +277,20 @@ class VectorBacktest:
                     f"用 horizon=1)，或将 rebalance_freq 调整为与 horizon 匹配的跨度。"
                 )
 
+        # 次日执行价模式（execution_split）：执行日的收益拆为
+        #   隔夜段（旧权重，Fill(E)/C(E-1)-1）+ 日内段（新权重，C(E)/Fill(E)-1）
+        # 非执行日的隔夜面板=close-to-close、日内面板=0。仅支持 h=1。
+        if execution_split is not None and horizon != 1:
+            raise NotImplementedError(
+                "execution_split（次日执行价模式）仅支持 horizon=1；"
+                "h>1 的区间几何均摊结算与执行价分段不兼容")
+        on_values = None
+        id_values = None
+        if execution_split is not None:
+            on_panel, id_panel = execution_split
+            on_values = on_panel.reindex(index=dates, columns=codes).to_numpy()
+            id_values = id_panel.reindex(index=dates, columns=codes).to_numpy()
+
         # 结算-调仓顺序：
         # h=1（收益面板按惯例传未 shift 的 close.pct_change()，第 i 行是 i-1→i 收益）：
         #   先结算后调仓——当日收益由上一调仓日设定的权重赚取，daily_returns[t]
@@ -282,7 +306,12 @@ class VectorBacktest:
 
             # 1a) h=1 结算：当前权重赚当日收益。
             if horizon == 1:
-                gross_ret = float(np.nansum(current_weights * rp_values[i]))
+                if on_values is not None:
+                    # 执行日=隔夜段 Fill/C(-1)（旧权重结算到执行价）；
+                    # 非执行日=close-to-close（on 面板已内置）。
+                    gross_ret = float(np.nansum(current_weights * on_values[i]))
+                else:
+                    gross_ret = float(np.nansum(current_weights * rp_values[i]))
                 capital *= (1 + gross_ret)
 
             # 1b) 调仓（h=1 在结算之后；h>1 在区间结算之前，保证段收益用新权重）
@@ -312,6 +341,11 @@ class VectorBacktest:
                 capital -= cost
 
                 current_weights = new_arr
+
+            # 1b+) 次日执行价模式：换仓后新权重结算执行日日内段 C/Fill - 1
+            if id_values is not None and horizon == 1:
+                r_intra = float(np.nansum(current_weights * id_values[i]))
+                capital *= (1 + r_intra)
 
             # 1c) h>1 区间结算：首日以新权重预计算整段均摊收益，区间内逐日复利
             if horizon > 1:
@@ -387,3 +421,38 @@ class VectorBacktest:
             return set(s.groupby(s.index.to_period("M")).first())
         else:
             return set(dates)
+
+
+def build_execution_split(
+    fill: pd.DataFrame,
+    close: pd.DataFrame,
+    rebalance_days: set,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """构建次日执行价模式的 (隔夜收益, 执行日日内收益) 面板，供
+    ``VectorBacktest.run(execution_split=...)`` 使用。
+
+    执行日 E = 调仓日 T 的次一交易日（T 收盘出信号，E 开盘/VWAP 执行）：
+      隔夜面板[E] = Fill(E)/C(T) - 1    旧权重结算到执行价
+      日内面板[E] = C(E)/Fill(E) - 1    新权重的 E 日内收益
+      非执行日：隔夜 = C/C(-1) - 1，日内 = 0
+
+    fill: 执行价面板（次日开盘价，或次日 VWAP = amount/volume × 后复权因子），
+          与 close 同索引同列。调仓日为窗口最后一天（无次日）时跳过。
+    """
+    days = list(close.index)
+    pos = {d: i for i, d in enumerate(days)}
+    on = close / close.shift(1) - 1.0
+    idr = pd.DataFrame(0.0, index=close.index, columns=close.columns)
+    for t in sorted(rebalance_days):
+        if t not in pos:
+            continue
+        i = pos[t]
+        if i + 1 >= len(days):
+            continue
+        e = days[i + 1]
+        if e not in fill.index:
+            continue
+        f = fill.loc[e]
+        on.loc[e] = f / close.loc[t] - 1.0
+        idr.loc[e] = close.loc[e] / f - 1.0
+    return on.astype(np.float32), idr.astype(np.float32)
