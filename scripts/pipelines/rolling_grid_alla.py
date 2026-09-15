@@ -104,9 +104,56 @@ FUNDAMENTAL_SETS = {
 # 且与 ln_mktcap 规模信息冗余；规模/流通维度由 ln_mktcap + float_ratio 覆盖。
 # 低相关基本面慢变量族（A族股东结构 + B族财务报表），统合进 DPP 候选保护
 FUNDAMENTAL_FAMILY_SETS = HOLDER_SETS | FUNDAMENTAL_SETS
+
+# ---------------------------------------------------------------------------
+# 另类数据族（2026-09-12 接入）：事件 / 资金流(含两融) / 停牌状态
+# 双重原因使其永远进不了 |IC| 前 150 候选池：
+#   ① IC 量级 0.02~0.04，而量价 |IC| 前 150 门槛 ~0.05；
+#   ② 覆盖率天然低（龙虎榜/大宗/停牌是稀疏事件，全A 覆盖 2%~40%），
+#      通用 MIN_COVERAGE=0.5 会把 IC 最强的 lhb_count_20d(7%) 全部挡掉。
+# 故单列保留席位 + 独立的低覆盖率门槛，席位按子族轮转避免强者独占。
+# ---------------------------------------------------------------------------
+ALT_EVENT_SETS = {
+    "notice_sue", "notice_profit_ttm", "notice_forecast_hit",
+    "express_profit_yoy", "express_rev_yoy", "express_reporting",
+    "unlock_ratio_20d", "sue_notice_cs", "sue_notice_20d",
+    "sue_express_cs", "sue_express_20d",
+}
+ALT_FLOW_SETS = {
+    "lhb_net_buy", "lhb_count_20d", "lhb_net_20d",
+    "block_amt_20d", "block_vol_20d", "block_disc_1d", "block_disc_20d",
+    "block_prem_20d", "margin_bal_chg_5d", "margin_bal_chg_20d",
+    "financing_chg_1d", "securities_chg_1d",
+}
+ALT_STATUS_SETS = {
+    "suspend_ratio_60d", "suspend_count_60d", "is_st", "st_days", "limit_pos",
+}
+ALT_SUBFAMILIES = (ALT_EVENT_SETS, ALT_FLOW_SETS, ALT_STATUS_SETS)
+ALT_FAMILY_SETS = ALT_EVENT_SETS | ALT_FLOW_SETS | ALT_STATUS_SETS
+ALT_MIN_COVERAGE = 0.02         # 另类族覆盖率下限（稀疏事件天然低覆盖）
+RESERVED_ALT_SLOTS = 6          # 另类族保留席位（3 子族各 2 席）
+
 # 消融开关：False 时 A+B 完全退出候选池/保留席位（对照组=纯量价）。--ablation 置 False，
 # 并把 OUT 重定向到独立目录，保证两组除「是否有基本面族」外全部同口径。
 INCLUDE_FUNDAMENTAL = True
+# 另类数据族开关：False 时事件/资金流/状态族退出候选池与保留席位
+# （复现 2026-09-12 之前的「量价+基本面」口径时置 False）。
+INCLUDE_ALT = True
+
+# ---------------------------------------------------------------------------
+# RRE 秩稳定性筛选（2026-09-14 接入）：剔除"排名天天变"的高换手因子。
+# 出处：国金 AlphaEval（系列之二十四），项目内既有实现在
+#   factor/gflownet/selection.py::select_low_corr（GFlowNet 路径）与
+#   scripts/archive/factor_screening.py::rre_filter（读 registry 的 autocorr）。
+# 本链路上 registry 的 autocorr 只有 26/937 有值（仅 register 通道产出），
+# 故此处直接从面板现算，且复用 select_features_for_year 里 DPP 已加载的
+# 采样面板（q_days[::4] × 半数列）→ 零额外 IO，口径天然 PIT。
+# ⚠️ 采样步长 RRE_STRIDE=4 交易日，故算得的是「4 交易日步长的秩自相关」，
+#    比逐日口径偏乐观，作为筛选门槛一致使用（两臂同口径）即可。
+# ---------------------------------------------------------------------------
+RRE_MIN_AUTOCORR = 0.0        # 门槛（autocorr 低于此值剔除）；0=关闭该步
+RRE_STRIDE = 4                # 自相关采样步长（与 DPP 采样网格一致）
+INCLUDE_RRE = RRE_MIN_AUTOCORR > 0.0
 FREQ_BY_HORIZON = {1: ["D", "W", "M"], 5: ["M"], 10: ["M"], 20: ["2M"]}
 NEUT_VARIANTS = [True, False]
 FRACS = [0.20, 0.10]
@@ -176,9 +223,9 @@ def stage_prep():
     from config import Config
     from data.cache import DataCache
     from data.cache_helpers import load_index_returns
-    from data.tradability import build_tradable_mask
     from data.industry import IndustryClassification
     from data.offline import OfflineQuietDataSource
+    from data.tradability import build_tradable_mask
     from factor.preprocessing import build_style_covariates
 
     t0 = time.time()
@@ -314,10 +361,53 @@ class FeatureStore:
         return {n: self.get(n) for n in names}
 
 
+def _reserve_alt(quality: pd.Series, cov_ok: pd.Series) -> list[str]:
+    """另类数据族保留席位：子族轮转 + 按 |IC| 择优 + 同值去重。
+
+    quality 已按 |IC| 降序。子族轮转保证事件/资金流/状态各有代表，否则
+    IC 较强的资金流族会独占全部席位。同值去重用于剔除公式重复的因子
+    （如 notice_profit_ttm 与 notice_forecast_hit 同源、|IC| 完全相同）。
+    """
+    per = max(1, RESERVED_ALT_SLOTS // max(1, len(ALT_SUBFAMILIES)))
+
+    def _dup(qv: float, chosen: list[str]) -> bool:
+        return any(abs(qv - float(quality[m])) < 1e-9
+                   for m in chosen if m in quality.index)
+
+    out: list[str] = []
+    for sub in ALT_SUBFAMILIES:
+        for n in quality.index:
+            if len([m for m in out if m in sub]) >= per:
+                break
+            if n not in sub or n not in cov_ok.index or n in out:
+                continue
+            if cov_ok[n] < ALT_MIN_COVERAGE:
+                continue
+            qv = float(quality[n])
+            if not np.isfinite(qv) or _dup(qv, out):
+                continue
+            out.append(n)
+    if len(out) < RESERVED_ALT_SLOTS:
+        for n in quality.index:
+            if len(out) >= RESERVED_ALT_SLOTS:
+                break
+            if n not in ALT_FAMILY_SETS or n not in cov_ok.index or n in out:
+                continue
+            if cov_ok[n] < ALT_MIN_COVERAGE:
+                continue
+            qv = float(quality[n])
+            if not np.isfinite(qv) or _dup(qv, out):
+                continue
+            out.append(n)
+    return out
+
+
 def select_features_for_year(year: int, horizon: int, ic_cache: pd.DataFrame,
                              registry: pd.DataFrame, store: FeatureStore,
                              all_days: pd.DatetimeIndex,
-                             cut: pd.Timestamp | None = None) -> list[str]:
+                             cut: pd.Timestamp | None = None,
+                             include_alt: bool = INCLUDE_ALT,
+                             include_rre: bool = INCLUDE_RRE) -> list[str]:
     """某年 OOS 用的特征：质量窗（过去 QUALITY_WINDOW 日）IC + 覆盖率 + DPP 集合去冗余。
 
     去冗余用项目正典 DPP（research.dpp_selection::dpp_select，log-det 最大化）——
@@ -349,6 +439,14 @@ def select_features_for_year(year: int, horizon: int, ic_cache: pd.DataFrame,
         _extra = [n for n in cov_ok.index
                   if n in FUNDAMENTAL_FAMILY_SETS and cov_ok[n] >= MIN_COVERAGE
                   and n not in cands and n not in reserved]
+    # 另类数据族（事件/资金流/状态）：IC 更弱且覆盖稀疏，单列保留席位 +
+    # 低覆盖率门槛；同时放进 DPP 候选池，让它们与量价在同一去冗余框架下竞争。
+    if include_alt:
+        reserved = reserved + _reserve_alt(quality, cov_ok)
+        _extra = _extra + [n for n in quality.index
+                           if n in ALT_FAMILY_SETS and n in cov_ok.index
+                           and cov_ok[n] >= ALT_MIN_COVERAGE
+                           and n not in cands and n not in reserved]
     cands = cands + _extra
     k_remain = max(0, MAX_FEATURES - len(reserved))
     if k_remain == 0:
@@ -356,11 +454,37 @@ def select_features_for_year(year: int, horizon: int, ic_cache: pd.DataFrame,
     if reserved:
         cands = [n for n in cands if n not in reserved]
 
-    sample_days = q_days[::4]
-    sample_codes = store.get(cands[0]).columns[::2]
+    sample_days = q_days[::RRE_STRIDE]
+    # 采样面板同时覆盖「候选池 + 保留席位」：RRE 需对保留席位也打分，
+    # 否则只能筛 DPP 那一半、漏掉含另类族的席位。未开 RRE 时多读的
+    # 十几个席位面板可忽略，且不改变任何选中结果。
+    sample_names = cands + [n for n in reserved if n not in cands]
+    sample_codes = store.get(sample_names[0]).columns[::2]
     sample = {n: store.get(n).reindex(index=sample_days, columns=sample_codes)
-              for n in cands}
-    corr = corr_matrix(sample, method="cross")
+              for n in sample_names}
+
+    # RRE 秩稳定性：剔除低自相关（排名天天变=高换手）因子。复用上面的采样
+    # 面板零额外 IO；席位被剔除后 k_remain 变大，缺口由 DPP 从池内补齐，
+    # 故特征总数仍为 MAX_FEATURES。
+    if include_rre:
+        from stats.ic import factor_autocorr
+        ac = pd.Series({n: factor_autocorr(sample[n]) for n in sample_names})
+        keep = set(ac[ac >= RRE_MIN_AUTOCORR].index)
+        n_cand0, n_res0 = len(cands), len(reserved)
+        n_alt_drop = sum(1 for n in reserved
+                         if n in ALT_FAMILY_SETS and n not in keep)
+        cands = [n for n in cands if n in keep]
+        reserved = [n for n in reserved if n in keep]
+        log.info("  RRE(autocorr>=%.2f): 候选剔除 %d/%d，席位剔除 %d/%d（另类 %d）",
+                 RRE_MIN_AUTOCORR, n_cand0 - len(cands), n_cand0,
+                 n_res0 - len(reserved), n_res0, n_alt_drop)
+        if not cands:
+            return reserved[:MAX_FEATURES]
+        k_remain = max(0, MAX_FEATURES - len(reserved))
+        if k_remain == 0:
+            return reserved
+
+    corr = corr_matrix({n: sample[n] for n in cands}, method="cross")
     res = dpp_select(corr, k=min(len(cands), k_remain),
                      quality=quality.reindex(cands).fillna(0.0), sigma=DPP_SIGMA)
     return reserved + res["selected"]
