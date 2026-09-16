@@ -4,10 +4,11 @@
 历史代码）。利用 TextMiningCache 增量水位：中断后重跑会自动跳过已覆盖 code。
 
 用法:
-    python -m scripts.textmining.fetch_all_a_backfill [--limit N]
+    python -m scripts.textmining.fetch_all_a_backfill [--limit N] [--batch 200]
 
-一次性把全部 missing codes 传给 get_ths_reports / get_cninfo_announcements
-（两者内部对已覆盖 code 自动短路，避免反复读全量缓存）。
+ths 研报一次性传全部 missing codes（内部对已覆盖 code 自动短路，避免反复读
+全量缓存）；巨潮业绩预告按 ``--batch`` 分批（每批结束合并落盘一次）——单次
+全量爬取耗时可达数小时，分批落盘让中断后重跑只补剩余 code，不至于全损。
 """
 from __future__ import annotations
 
@@ -79,6 +80,8 @@ def main() -> None:
                     help="跳过 ths 研报补爬，仅做巨潮业绩预告回补")
     ap.add_argument("--cninfo-begin", type=int, default=20190101,
                     help="业绩预告回补起点 YYYYMMDD（如 20180101 补 2018 年）")
+    ap.add_argument("--batch", type=int, default=200,
+                    help="业绩预告补爬分批大小（每批结束落盘一次，防长爬中断全损）")
     ap.add_argument("--cninfo-year", type=int, default=None,
                     help="非增量抓取某年全年业绩预告并合并写盘（跳过增量短路）")
     args = ap.parse_args()
@@ -110,12 +113,21 @@ def main() -> None:
         rows = _backfill_cninfo_year(cache, full, args.cninfo_year)
         print(f"  合并写盘后缓存 {rows} 行")
     else:
-        print("[2/2] 巨潮业绩预告补爬 ...")
+        print(f"[2/2] 巨潮业绩预告补爬（分批 {args.batch} 只/批）...")
         t0 = time.time()
-        ann = cache.get_cninfo_announcements(
-            codes=full, begin_date=args.cninfo_begin, end_date=20261231,
-            categories=["业绩预告"])
-        print(f"  业绩预告缓存 {len(ann)} 行 ({time.time() - t0:.0f}s)")
+        ann = None
+        n = len(full)
+        for i in range(0, n, args.batch):
+            chunk = full[i:i + args.batch]
+            ann = cache.get_cninfo_announcements(
+                codes=chunk, begin_date=args.cninfo_begin, end_date=20261231,
+                categories=["业绩预告"])
+            done = min(i + args.batch, n)
+            rate = done / max(time.time() - t0, 1)
+            print(f"  进度 {done}/{n}（{chunk[0]}~{chunk[-1]}，本批缓存后 {len(ann)} 行），"
+                  f"速率 {rate:.1f} code/s，剩余约 {(n - done) / max(rate, 0.05) / 60:.0f} 分钟")
+            time.sleep(1.0)
+        print(f"  业绩预告缓存 {len(ann) if ann is not None else 0} 行 ({time.time() - t0:.0f}s)")
     print("DONE")
 
 
