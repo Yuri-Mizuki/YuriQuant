@@ -713,3 +713,18 @@ def test_preproc_cli_default_is_ortho():
     assert SELECTION_DIR != ORTHO_SELECTION_DIR
     assert ORTHO_SELECTION_DIR.name == "selection"
     assert ORTHO_SELECTION_DIR.parent.name == "alla_rolling_ortho"
+
+
+def test_tradable_labels_default_off():
+    """训练标签掩码口径默认关闭（治本项，但要先对照实验，不得静默改变每日榜口径）。"""
+    from scripts.pipelines.alla_daily_rank import DEFAULT_TRADABLE_LABELS
+    assert DEFAULT_TRADABLE_LABELS is False
+
+
+def test_train_and_predict_threads_tradable_mask():
+    """train_and_predict 须保留 tradable_mask 参数（否则掩码开关会空转）。"""
+    import inspect
+    from scripts.pipelines.alla_daily_rank import train_and_predict
+    sig = inspect.signature(train_and_predict)
+    assert "tradable_mask" in sig.parameters
+    assert sig.parameters["tradable_mask"].default is None
