@@ -48,6 +48,11 @@
   实验的 embargo 是回测防污染隔离；实时预测不存在窥探未来，故取到最新。
 - **可交易性是信号日状态估计**：回测掩码用 T+1 状态（T+1 成交口径），实时排名
   发布时 T+1 未知，改用 T 日停牌/ST/收盘封板标注，T+1 一字板仍可能买不进。
+- **训练标签默认不含可交易掩码**（`--tradable-labels` 可开，2026-09-17 接入）：
+  默认与主实验同口径（全样本前瞻收益截面 rank）。开启后用
+  `data.tradability::build_tradable_mask` 把"买不进的样本"标签置 NaN，等价于
+  从训练集剔除 —— 这是 P0 报告 §六 P1-a 的治本项（纸面关系不该进损失函数）。
+  默认关闭的理由：它改变模型训练集，属口径变更而非缺陷修复，须先对照实验。
 - **`limit_pos` 已被硬剔除**（`EXCLUDE_FEATURES`）：该特征收益 100% 来自次日买
   不进的封板股（可交易口径正向选股 −55.6%/年），生产形态剔除后 4/4 格全项改善。
 - 跨年无当年选择文件时回退最近年份并告警（可重跑 rolling_grid_alla --stage select）。
@@ -60,6 +65,7 @@
     python scripts/pipelines/alla_daily_rank.py --exclude-features ""  # 关闭硬剔除
     python scripts/pipelines/alla_daily_rank.py --out-tag _h1h5     # 输出到旁路目录
     python scripts/pipelines/alla_daily_rank.py --preproc ortho --out-tag _ortho  # 正交化口径
+    python scripts/pipelines/alla_daily_rank.py --tradable-labels --out-tag _tl    # 标签掩码口径
     python scripts/pipelines/alla_daily_rank.py --window 750        # gbdt_w750 变体
     python scripts/pipelines/alla_daily_rank.py --install-task 17:30   # 注册每日计划任务
     python scripts/pipelines/alla_daily_rank.py --remove-task
@@ -105,6 +111,14 @@ HORIZONS: tuple[int, ...] = (1, 5)
 # 且它的收益 100% 来自买不到的封板股。生产形态（h1 单模型）剔除后 4/4 格
 # 全项改善（+0.3~1.2pp，reports/limit_pos_ablation_p1b/report.md）。
 EXCLUDE_FEATURES: tuple[str, ...] = ("limit_pos",)
+# 训练标签口径（2026-09-17 接入，P0 报告 §六 P1-a 的治本项）：
+#   False（默认）= 标签 = 全样本前瞻收益截面 rank —— 现行口径，零回归；
+#   True         = 标签掩掉"买不进的样本"（``data.tradability::build_tradable_mask``
+#                  的 T+1 成交口径掩码置 NaN，等价于从训练集剔除）。
+# 为什么：无掩码时标签把"T 日封涨停 → T+1 继续封板"的**买不进**收益当监督信号
+# （reports/limit_pos_tradable_p0/report.md）。掩码在尾部面板上实时构建 ——
+# ``tail`` 已含 ``bwd``（后复权因子）与 ``close_adj``，无需离线面板。
+DEFAULT_TRADABLE_LABELS = False
 DEFAULT_WINDOW = 500           # gbdt 滚动训练窗（--window 750 = gbdt_w750 变体）
 MIN_TRAIN = 250                # 最少训练日（同实验）
 WARMUP = 260                   # alpha 公式最大回看 250 日 + 缓冲
@@ -1207,19 +1221,25 @@ def _rank_average_single_day(panels: list[pd.DataFrame],
 
 def train_and_predict(feats: dict, close_adj: pd.DataFrame,
                       predict_date: pd.Timestamp, window: int,
-                      horizon: int = HORIZON
+                      horizon: int = HORIZON,
+                      tradable_mask: pd.DataFrame | None = None
                       ) -> tuple[pd.Series, dict, "LGBMPredictor"]:
     """gbdt 在最近 window 个有效标签日重训 → 预测 predict_date 截面。
 
     标签 = h{horizon} 未来收益截面 rank；最后有效标签日 = 预测日前一交易日（其收益到
     预测日收盘，发布时点已知，无窥探）。返回 (score 截面, 训练段元信息, 预测器)
     ——预测器供解释功能取特征重要性与 SHAP 归因。
+
+    ``tradable_mask``（T+1 成交口径）：给定时把买不进的样本标签置 NaN，等价于
+    从训练集剔除（``LGBMPredictor.fit`` 内 ``~np.isnan(y)`` 自然跳过）。
+    默认 None = 现行口径。
     """
     from model.labels import build_labels
     from model.params import DEFAULT_MODEL_PARAMS
     from model.predictor import LGBMPredictor
 
-    labels, _embargo = build_labels(close_adj, horizon=horizon, mode="rank")
+    labels, _embargo = build_labels(close_adj, horizon=horizon, mode="rank",
+                                    tradable_mask=tradable_mask)
     valid = labels.index[labels.notna().any(axis=1)]
     valid = valid[valid < predict_date]
     tr = valid[-window:]
@@ -1455,6 +1475,16 @@ def run(args) -> dict:
     feats_all = compute_features(names_all, tail, long_tables=long_tables)
     close_adj = tail["close_adj"]
 
+    # 训练标签口径（默认关闭）：可交易掩码在**尾部面板**上实时构建（T+1 成交口径），
+    # 与实验侧 build_tradable_mask 同一函数、同一掩码语义（防两套口径漂移）。
+    lab_mask = None
+    if args.tradable_labels:
+        from data.tradability import build_tradable_mask
+        lab_mask = build_tradable_mask(close_adj, bwd=tail.get("bwd"))
+        log.info("+++ 训练标签：可交易掩码口径（不可交易占比 %.2f%%，掩掉 %s 个 日×股）",
+                 100.0 * float((~lab_mask).to_numpy().mean()),
+                 f"{int((~lab_mask).to_numpy().sum()):,}")
+
     preds, per_h_meta, predictors = [], [], {}
     for h in horizons:
         feats_h = {k: feats_all[k] for k in sel[h]["names"] if k in feats_all}
@@ -1463,7 +1493,8 @@ def run(args) -> dict:
             log.warning("h%d 有 %d 个特征未产出（构建失败），已忽略: %s",
                         h, len(missing_h), missing_h)
         pred_h, meta_h, mdl_h = train_and_predict(
-            feats_h, close_adj, predict_date, args.window, horizon=h)
+            feats_h, close_adj, predict_date, args.window, horizon=h,
+            tradable_mask=lab_mask)
         # 幽灵股守卫：掩掉未上市/无行情/特征不可用的股票（同实验 stage_predict）
         valid_h = existence_mask(feats_h, close_adj, pd.DatetimeIndex([predict_date]))
         pred_h = pred_h.where(valid_h.iloc[0])
@@ -1611,6 +1642,10 @@ def main() -> None:
                          "MAD→行业+log市值中性化→zscore，与主实验 panels_neu 同流程、"
                          "自动改用 ortho 臂特征清单；北交所无行业分类故被排除）或 "
                          "zscore（原始面板 + 截面 zscore，2026-09-16 前默认）")
+    ap.add_argument("--tradable-labels", action="store_true",
+                    default=DEFAULT_TRADABLE_LABELS,
+                    help="训练标签掩掉买不进的样本（T+1 成交口径可交易掩码，"
+                         "P0 §六 P1-a 治本项）；默认关闭 = 现行口径")
     ap.add_argument("--out-tag", default="", metavar="TAG",
                     help="输出目录后缀（如 _h1h5 → reports/alla_daily_h1h5）；"
                          "默认空 = 写生产目录 reports/alla_daily")

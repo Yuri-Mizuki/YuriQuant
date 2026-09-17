@@ -62,7 +62,9 @@ def _mp_cfg() -> dict:
         rebalance_freq="M", neutralize=False,
         selection_cut="auto",
         train_window=500, n_folds=4, quality_window=500,
-        benchmark="000001.SH")
+        benchmark="000001.SH",
+        tradable_labels=False,   # True = 训练标签掩掉买不进的样本（P0 §六 P1-a）
+    )
     defaults.update({k: v for k, v in cfg.items() if v is not None})
     return defaults
 
@@ -104,8 +106,11 @@ def build_ensemble_panel(cfg: dict, base: dict, force_retrain: bool):
         test_days = test_days[test_days <= cut]
 
     preds: dict[int, pd.DataFrame] = {}
+    # 缓存文件名编入标签口径：否则换 --tradable-labels 后会静默复用旧口径预测
+    # （与 2026-09-12 alt 族实装后 pred 未重跑同类的 exists-skip 陷阱）
+    lab_tag = "_tl" if cfg.get("tradable_labels") else ""
     for h in cfg["ensemble_horizons"]:
-        cache_path = OUT_DIR / f"pred_h{h}.parquet"
+        cache_path = OUT_DIR / f"pred_h{h}{lab_tag}.parquet"
         if force_retrain or not cache_path.exists():
             registry = pd.read_csv(RG.ds_root() / "registry.csv")
             ic_cache = pd.read_parquet(RG.ds_root() / f"ic_h{h}.parquet")
@@ -115,7 +120,9 @@ def build_ensemble_panel(cfg: dict, base: dict, force_retrain: bool):
                 year + 1, h, ic_cache, registry, store, all_days, cut=sel_cut)
             feats = {k: v.reindex(index=all_days, columns=close.columns)
                      for k, v in store.get_many(names).items()}
-            labels, _embargo = build_labels(close, horizon=h, mode="rank")
+            labels, _embargo = build_labels(
+                close, horizon=h, mode="rank",
+                tradable_mask=(base["mask"] if cfg.get("tradable_labels") else None))
             params = dict(DEFAULT_MODEL_PARAMS[cfg["model"]])
             pred = RG.rolling_window_oos(
                 PREDICTORS["gbdt"], params, feats, labels,
@@ -162,9 +169,14 @@ def main():
                         help="先重建 _base 基础面板（日线有更新后需要）")
     parser.add_argument("--no-train", action="store_true",
                         help="复用上次预测缓存（快速回测/选股）")
+    parser.add_argument("--tradable-labels", action="store_true",
+                        help="训练标签掩掉买不进的样本（T+1 成交口径）；"
+                             "默认关闭 = 主实验现行口径")
     args = parser.parse_args()
 
     cfg = _mp_cfg()
+    if args.tradable_labels:
+        cfg["tradable_labels"] = True
     if args.frac is not None:
         cfg["frac"] = args.frac
     if args.freq is not None:
