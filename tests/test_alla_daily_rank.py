@@ -45,6 +45,69 @@ def test_load_selection_exact_and_fallback(tmp_path):
         load_selection(pd.Timestamp("2027-03-02"), tmp_path / "empty")
 
 
+def test_load_selection_horizon_and_exclude(tmp_path):
+    """h1/h5 各读各自清单；exclude 是**硬剔除**（不轮转回填），空清单报错。"""
+    from scripts.pipelines.alla_daily_rank import load_selection
+    (tmp_path / "y2026__h1.json").write_text(
+        json.dumps(["alpha158_KLEN", "limit_pos", "bp"]), encoding="utf-8")
+    (tmp_path / "y2026__h5.json").write_text(
+        json.dumps(["alpha158_KLEN", "bp"]), encoding="utf-8")
+
+    # 默认读 h1 全量；显式 horizon=5 读 h5 清单（两者独立）
+    got1, _ = load_selection(pd.Timestamp("2026-09-04"), tmp_path)
+    assert got1 == ["alpha158_KLEN", "limit_pos", "bp"]
+    got5, _ = load_selection(pd.Timestamp("2026-09-04"), tmp_path, horizon=5)
+    assert got5 == ["alpha158_KLEN", "bp"]
+
+    # exclude 硬剔除：命中即移除，顺序保持
+    got_ex, _ = load_selection(pd.Timestamp("2026-09-04"), tmp_path,
+                               exclude=("limit_pos",))
+    assert got_ex == ["alpha158_KLEN", "bp"]
+    # 名单里没有的名字 = 空操作（跨 horizon 名单本就不同，不告警）
+    got_noop, _ = load_selection(pd.Timestamp("2026-09-04"), tmp_path,
+                                 horizon=5, exclude=("limit_pos",))
+    assert got_noop == ["alpha158_KLEN", "bp"]
+    # 默认 exclude=() → 与不传等价（零回归）
+    got_none, _ = load_selection(pd.Timestamp("2026-09-04"), tmp_path,
+                                 exclude=())
+    assert got_none == got1
+    # 全部被剔除 → 明确报错，不静默返回空清单
+    with pytest.raises(ValueError, match="清单为空"):
+        load_selection(pd.Timestamp("2026-09-04"), tmp_path,
+                       exclude=("alpha158_KLEN", "limit_pos", "bp"))
+
+
+def test_rank_average_matches_experiment():
+    """单日秩平均必须与实验侧 `rolling_grid_alla::_rank_average` 同口径。
+
+    生产链不能跨模块 import 私有名（tests/test_layering 拦截），故各写一份实现；
+    本测试用随机面板在**单日**情形上逐位比对两边输出，防口径漂移。
+    只覆盖主路径（交集 >= 30 只）：真实单日截面 5000 只，实验侧 `len(ok) < 30`
+    的退化分支在生产链不可达，刻意不镜像（那份实现是"禁止凑数"的兜底）。
+    """
+    import importlib
+    rg = importlib.import_module("scripts.pipelines.rolling_grid_alla")
+    from scripts.pipelines.alla_daily_rank import _rank_average_single_day
+
+    rng = np.random.default_rng(0)
+    d = pd.Timestamp("2026-09-04")
+    codes = [f"c{i:03d}" for i in range(120)]
+    a = pd.DataFrame(rng.normal(size=(1, 120)), index=[d], columns=codes)
+    b = pd.DataFrame(rng.normal(size=(1, 120)), index=[d], columns=codes)
+    # 故意造缺失：a 缺 3 只、b 缺另 2 只 → 交集口径须一致
+    a.iloc[0, :3] = np.nan
+    b.iloc[0, 4:6] = np.nan
+
+    got = _rank_average_single_day([a, b])
+    exp = rg._rank_average([a, b]).loc[d]
+    pd.testing.assert_series_equal(got, exp.astype(np.float32), check_names=False)
+
+    # 仅一个面板 < min_panels=2 → 全 NaN（不做单模型退化）
+    only = _rank_average_single_day([a])
+    assert only.isna().all() and isinstance(only, pd.Series)
+    assert len(only) == 120
+
+
 def _make_status(parquet_path: Path, predict_date: pd.Timestamp):
     codes = ["c0", "c1", "c2", "c3", "c4", "c5"]
     raw_close = pd.Series([10.0, 11.0, 12.0, 13.0, 14.0, 15.0], index=codes)
@@ -130,27 +193,41 @@ def test_build_ranking():
 
 
 def test_build_ranking_annotations():
+    """两级行业标注（industry_series 产物）+ 旧 Series 口径兼容。"""
     from scripts.pipelines.alla_daily_rank import build_ranking
     codes = ["c0", "c1", "c2", "c3"]
     scores = pd.Series([4.0, 3.0, 2.0, 1.0], index=codes)
     tradable = pd.Series(True, index=codes)
     names = pd.Series({"c0": "贵州茅台", "c1": "宁德时代", "c3": "中国平安"})
-    industry = pd.Series({"c0": "食品饮料", "c1": "电力设备", "c2": "电子"})
+    industry = pd.DataFrame({
+        "industry_l2": pd.Series({"c0": "白酒Ⅱ", "c1": "电池", "c2": "半导体"}),
+        "industry_l1": pd.Series({"c0": "食品饮料", "c1": "电力设备", "c2": "电子"}),
+    })
 
     ranking, picks = build_ranking(scores, tradable, frac=0.5,
                                    names=names, industry=industry)
     # 名称列：缺失的 c2 填空串
     assert ranking.loc["c0", "name"] == "贵州茅台"
     assert ranking.loc["c2", "name"] == ""
-    # 行业列：缺失/空值 → "未知"
-    assert ranking.loc["c3", "industry"] == "未知"
-    assert ranking.loc["c2", "industry"] == "电子"
-    # 列顺序：rank/name/industry 在最前，picks 继承标注列
-    assert list(ranking.columns[:3]) == ["rank", "name", "industry"]
-    assert {"name", "industry"} <= set(picks.columns)
+    # 二级列：缺失 → "二级未知"（与一级的 "未知" 区分）；一级列：缺失 → "未知"
+    assert ranking.loc["c3", "industry_l2"] == "二级未知"
+    assert ranking.loc["c3", "industry_l1"] == "未知"
+    assert ranking.loc["c2", "industry_l2"] == "半导体"
+    assert ranking.loc["c2", "industry_l1"] == "电子"
+    # 列顺序：rank/name 在最前，二级先于一级
+    assert list(ranking.columns[:4]) == ["rank", "name", "industry_l2", "industry_l1"]
+    assert {"name", "industry_l2", "industry_l1"} <= set(picks.columns)
+    # 旧口径兼容：传 Series → 落为 industry_l1，二级列空串
+    legacy = pd.Series({"c0": "食品饮料", "c1": "电力设备"})
+    ranking_legacy, _ = build_ranking(scores, tradable, frac=0.5,
+                                      names=names, industry=legacy)
+    assert ranking_legacy.loc["c0", "industry_l1"] == "食品饮料"
+    assert (ranking_legacy["industry_l2"] == "").all()
     # 不传标注 → 无对应列
     ranking2, _ = build_ranking(scores, tradable, frac=0.5)
-    assert "name" not in ranking2.columns and "industry" not in ranking2.columns
+    assert "name" not in ranking2.columns
+    assert "industry_l1" not in ranking2.columns
+    assert "industry_l2" not in ranking2.columns
 
 
 def test_glossary_covers_sealed_and_alpha158_price():
@@ -182,6 +259,7 @@ def test_build_ranking_flag_column():
 
 
 def test_industry_series():
+    """返回两级 DataFrame；无二级输入时二级列空串（下游落 "二级未知"）。"""
     from scripts.pipelines.alla_daily_rank import industry_series
     d = pd.Timestamp("2026-09-04")
     panel = pd.DataFrame(
@@ -189,41 +267,56 @@ def test_industry_series():
         index=pd.DatetimeIndex([d]))
     name_map = pd.Series({"801120": "食品饮料", "801760": "电力设备"})
     got = industry_series(panel, d, name_map)
-    assert got["c0"] == "食品饮料" and got["c1"] == "电力设备"
+    assert list(got.columns) == ["industry_l1", "industry_l2"]
+    assert got.loc["c0", "industry_l1"] == "食品饮料"
+    assert got.loc["c1", "industry_l1"] == "电力设备"
+    # 无二级面板 → 二级列统一空串
+    assert (got["industry_l2"] == "").all()
     # 无行业归属的股票不出现在返回中（下游 reindex 后落为 NaN → "未知"）
     assert "c2" not in got.index
     # 缺名表 → 回退行业代码
     got2 = industry_series(panel, d, pd.Series(dtype=object))
-    assert got2["c0"] == "801120"
+    assert got2.loc["c0", "industry_l1"] == "801120"
+    # 带二级面板 → 二级列填中文名
+    panel_l2 = pd.DataFrame({"c0": ["801121"], "c1": ["801761"]},
+                            index=pd.DatetimeIndex([d]))
+    got3 = industry_series(panel, d, name_map, panel_l2=panel_l2,
+                           name_map_l2=pd.Series({"801121": "白酒Ⅱ"}))
+    assert got3.loc["c0", "industry_l2"] == "白酒Ⅱ"
+    # 名表缺该二级代码 → 回退代码
+    assert got3.loc["c1", "industry_l2"] == "801761"
     # 空面板 / 非预测日 → 空
     assert industry_series(None, d, name_map).empty
     assert industry_series(panel, d + pd.Timedelta(days=1), name_map).empty
 
 
 def test_build_industry_table():
+    """按申万**二级**聚合，附一级归属列（组内众数）。"""
     from scripts.pipelines.alla_daily_rank import build_industry_table
     codes = ["c0", "c1", "c2", "c3", "c4"]
     ranking = pd.DataFrame({
         "rank": range(1, 6),
         "name": ["龙头A", "龙头B", "", "", ""],
-        "industry": ["食品饮料", "食品饮料", "电子", "电子", "电子"],
+        "industry_l2": ["白酒Ⅱ", "白酒Ⅱ", "半导体", "半导体", "半导体"],
+        "industry_l1": ["食品饮料", "食品饮料", "电子", "电子", "电子"],
         "score": [3.0, 1.0, 0.5, 0.0, -0.5],
         "pct_rank": [1.0, 0.8, 0.6, 0.4, 0.2],
         "top_frac": [True, False, True, False, False],
     }, index=codes)
 
     out = build_industry_table(ranking)
-    # 按 mean_score 降序：食品饮料 mean=2.0 > 电子 mean=0.0
-    assert list(out.index) == ["食品饮料", "电子"]
+    # 按 mean_score 降序：白酒Ⅱ mean=2.0 > 半导体 mean=0.0
+    assert list(out.index) == ["白酒Ⅱ", "半导体"]
     assert list(out["rank"]) == [1, 2]
-    assert out.loc["食品饮料", "n_stocks"] == 2
-    assert out.loc["食品饮料", "mean_score"] == pytest.approx(2.0)
-    assert out.loc["电子", "top_frac_share"] == pytest.approx(1 / 3, abs=5e-5)
+    assert list(out["industry_l1"]) == ["食品饮料", "电子"]
+    assert out.loc["白酒Ⅱ", "n_stocks"] == 2
+    assert out.loc["白酒Ⅱ", "mean_score"] == pytest.approx(2.0)
+    assert out.loc["半导体", "top_frac_share"] == pytest.approx(1 / 3, abs=5e-5)
     # top_stock = 行业内全A排名最高的成员（带名称时 "code 名称"）
-    assert out.loc["食品饮料", "top_stock"] == "c0 龙头A"
-    assert out.loc["电子", "top_stock"] == "c2"
-    # 无行业列 → 全部并入"未知"一行
-    out2 = build_industry_table(ranking.drop(columns=["industry"]))
+    assert out.loc["白酒Ⅱ", "top_stock"] == "c0 龙头A"
+    assert out.loc["半导体", "top_stock"] == "c2"
+    # 无二级列 → 全部并入"未知"一行
+    out2 = build_industry_table(ranking.drop(columns=["industry_l2"]))
     assert list(out2.index) == ["未知"] and out2.loc["未知", "n_stocks"] == 5
 
 
@@ -321,7 +414,12 @@ def test_write_outputs(tmp_path):
 
 
 def test_write_latest_locked(tmp_path, monkeypatch):
-    """latest 副本被外部进程占用时：告警并继续，不中断主输出。"""
+    """latest 副本原子替换被占用时：降级直接覆写（告警），不中断主输出。
+
+    2026-09-17 语义变更：旧行为是 `os.replace` 失败即返回 False；现降级为直写
+    （文件本身仍可写，实测 Windows 下被共享读打开时 replace 报 WinError 5 但 write
+    成功），避免 6 分钟计算为最后一步写盘白跑。彻底写不进才返回 False。
+    """
     import scripts.pipelines.alla_daily_rank as mod
     d = pd.Timestamp("2026-09-04")
     ranking = pd.DataFrame({
@@ -333,12 +431,23 @@ def test_write_latest_locked(tmp_path, monkeypatch):
     def _boom(src, dst):
         raise PermissionError(13, "used by another process", str(dst))
 
-    # 单个副本：被占用 → 返回 False 不抛异常（仅本块内劫持 os.replace）
+    # 单个副本：replace 被占用 → 降级直写成功（内容确已落盘）
     with monkeypatch.context() as m:
         m.setattr(mod.os, "replace", _boom)
         src = tmp_path / "x.csv"
         src.write_text("a", encoding="utf-8-sig")
-        assert mod._write_latest(tmp_path / "latest_ranking.csv", src) is False
+        dst = tmp_path / "latest_ranking.csv"
+        assert mod._write_latest(dst, src) is True
+        assert dst.read_text(encoding="utf-8-sig") == "a"
+
+    # 连直写也失败 → 返回 False（不抛异常）
+    def _boom_write(*a, **k):
+        raise PermissionError(13, "denied")
+
+    with monkeypatch.context() as m:
+        m.setattr(mod.os, "replace", _boom)
+        m.setattr(type(dst), "write_text", _boom_write, raising=False)
+        assert mod._write_latest(dst, src) is False
 
     # 整体输出：latest 副本失败（已内部吞掉）不中断，主文件照常产出
     monkeypatch.setattr(mod, "_write_latest", lambda p, src: False)
@@ -453,7 +562,8 @@ def test_explain_stocks():
                 "alpha158_KLEN": pd.Series({"c0": 1.0, "c1": -2.0}),
                 "alpha360_VOLUME48": pd.Series({"c0": 0.5, "c1": 0.3})}
     ranking = pd.DataFrame({"rank": [1, 2], "name": ["股A", "股B"],
-                            "industry": ["食品饮料", "电子"],
+                            "industry_l2": ["白酒Ⅱ", "半导体"],
+                            "industry_l1": ["食品饮料", "电子"],
                             "score": [2.0, 1.0]}, index=codes)
     out = explain_stocks(contrib, z_scores, ranking, n_factors=2)
     assert list(out["code"]) == codes
@@ -466,8 +576,12 @@ def test_explain_stocks():
     assert out.loc[1, "drv1_feature"] == "alpha158_KLEN"
     assert out.loc[1, "drv1_name"] == "K线长度"
     assert "低值看多" in out.loc[1, "summary"]
+    # 行业两列随排名表带出（二级在前）
+    assert list(out["industry_l2"]) == ["白酒Ⅱ", "半导体"]
+    assert list(out["industry_l1"]) == ["食品饮料", "电子"]
     # 列集合固定：code + 标注 + 2 组驱动 + summary
-    assert list(out.columns) == ["code", "name", "industry", "rank", "score",
+    assert list(out.columns) == ["code", "name", "industry_l2", "industry_l1",
+                                 "rank", "score",
                                  "drv1_feature", "drv1_name", "drv1_contrib", "drv1_z",
                                  "drv2_feature", "drv2_name", "drv2_contrib", "drv2_z",
                                  "summary"]
@@ -480,7 +594,8 @@ def test_build_leaders():
     ranking = pd.DataFrame({
         "rank": list(range(1, 7)),   # 全A名次（build_ranking 产物），应被层内名次替换
         "name": [f"股{i}" for i in range(6)],
-        "industry": ["电子"] * 6,
+        "industry_l2": ["半导体"] * 6,
+        "industry_l1": ["电子"] * 6,
         "score": [2.0, 1.8, 1.5, 1.2, 0.9, 0.5],
         "tradable": [True] * 6,
     }, index=codes)
@@ -496,8 +611,8 @@ def test_build_leaders():
     # 小票 c0/c5 被市值分层排除
     assert "c5" not in out.index and "c0" not in out.index
     # 列集合固定
-    assert list(out.columns) == ["rank", "cap_rank", "name", "industry",
-                                 "mktcap", "score", "tradable"]
+    assert list(out.columns) == ["rank", "cap_rank", "name", "industry_l2",
+                                 "industry_l1", "mktcap", "score", "tradable"]
 
 
 def test_compute_market_cap_scale(tmp_path):
@@ -521,3 +636,80 @@ def test_compute_market_cap_scale(tmp_path):
     assert list(cap.columns) == codes
     assert cap.iloc[0, 0] == pytest.approx(100.0)   # 10元 × 10亿股 / 1e8
     assert cap.iloc[0, 1] == pytest.approx(200.0)   # 20元 × 10亿股 / 1e8
+
+
+def test_preproc_switch_zero_regression():
+    """面板变换钩子：默认（未设）== 旧 zscore 口径；设置后生效；清除后逐位回归。
+
+    对应「消融开关必须零回归」：不传参 == 旧行为一字不差。
+    """
+    from scripts.pipelines.alla_daily_rank import (
+        preprocess_panel, set_panel_transform)
+    idx = pd.bdate_range("2024-01-01", periods=3)
+    p = pd.DataFrame({"a": [1.0, 2.0, 3.0], "b": [2.0, 4.0, 6.0],
+                      "c": [3.0, 3.0, 3.0]}, index=idx)
+    base = preprocess_panel(p)
+    try:
+        set_panel_transform(lambda x: x * 0.0 + 7.0)
+        assert (preprocess_panel(p) == 7.0).all().all()
+    finally:
+        set_panel_transform(None)
+    pd.testing.assert_frame_equal(preprocess_panel(p), base)
+
+
+def test_ortho_transform_matches_preprocess_factor():
+    """make_ortho_transform 与 panels_neu 构建口径（build_alla_factor_neutralized）逐位一致。"""
+    from factor.preprocessing import preprocess_factor
+    from scripts.pipelines.alla_daily_rank import make_ortho_transform
+
+    idx = pd.bdate_range("2024-01-01", periods=4)
+    cols = [f"s{i}" for i in range(12)]
+    rng = np.random.default_rng(0)
+    p = pd.DataFrame(rng.normal(size=(4, 12)), index=idx, columns=cols)
+    mc = pd.DataFrame(rng.uniform(1e8, 1e11, size=(4, 12)), index=idx,
+                      columns=cols)
+    ind = pd.DataFrame(
+        rng.choice(["801010.SI", "801080.SI"], size=(4, 12)), index=idx,
+        columns=cols)
+
+    p32 = p.astype(np.float32).replace([np.inf, -np.inf], np.nan)
+    want = preprocess_factor(p32, market_cap_panel=mc, industry_panel=ind)
+    want = (want.replace([np.inf, -np.inf], np.nan).astype(np.float32)
+            .clip(-10.0, 10.0))
+    got = make_ortho_transform(mc, ind)(p)
+    pd.testing.assert_frame_equal(got, want)
+    assert got.dtypes.unique()[0] == np.float32
+    # 中性化确实动了值（否则等于没接上）
+    assert not np.allclose(got.to_numpy(), p32.to_numpy(), equal_nan=True)
+
+
+def test_ortho_transform_tolerates_unaligned_covariates():
+    """协变量面板列/日期多于因子面板时自动重对齐（不 IndexingError）。
+
+    实测事故（2026-09-17）：`_base/market_cap` 5801 列 vs 因子面板 5683 列 →
+    neutralize 内按行布尔掩码直接崩（Unalignable boolean Series）。
+    """
+    from scripts.pipelines.alla_daily_rank import make_ortho_transform
+
+    idx = pd.bdate_range("2024-01-01", periods=3)
+    cols = [f"s{i}" for i in range(6)]
+    extra_cols = cols + ["ghost"]
+    rng = np.random.default_rng(1)
+    p = pd.DataFrame(rng.normal(size=(3, 6)), index=idx, columns=cols)
+    mc = pd.DataFrame(rng.uniform(1e8, 1e11, size=(3, 7)), index=idx,
+                      columns=extra_cols)
+    ind = pd.DataFrame(rng.choice(["801010.SI"], size=(3, 7)), index=idx,
+                       columns=extra_cols)
+    out = make_ortho_transform(mc, ind)(p)
+    assert list(out.columns) == cols
+    assert out.notna().to_numpy().any()
+
+
+def test_preproc_cli_default_is_ortho():
+    """CLI 默认必须是 ortho + ortho 选择目录（2026-09-17 口径切换，防静默回退）。"""
+    from scripts.pipelines.alla_daily_rank import (
+        DEFAULT_PREPROC, ORTHO_SELECTION_DIR, SELECTION_DIR)
+    assert DEFAULT_PREPROC == "ortho"
+    assert SELECTION_DIR != ORTHO_SELECTION_DIR
+    assert ORTHO_SELECTION_DIR.name == "selection"
+    assert ORTHO_SELECTION_DIR.parent.name == "alla_rolling_ortho"

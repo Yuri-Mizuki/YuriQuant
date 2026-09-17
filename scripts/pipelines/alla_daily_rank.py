@@ -1,10 +1,24 @@
-"""全A滚动模型每日选股排名 —— alla_rolling 最优方案（gbdt h1×M raw Top10%）的生产化推理。
+"""全A滚动模型每日选股排名 —— 主实验信号形态（gbdt h1+h5 秩平均 × M raw Top10%）的生产化推理。
 
-实验背景（reports/alla_rolling，2026-09-01 交付 + 2026-09-07 退市股修复后重跑）：
-最优方案 = 全A + 每年特征选择（50个量价/基本面因子，reports/alla_rolling/selection/
-y{year}__h1.json）+ gbdt（超参沿用 model.params.DEFAULT_MODEL_PARAMS）+
-h=1 rank 标签 + 500 日滚动训练窗 + raw（不中性化）Top10% 等权、月频调仓，
-年超额 vs 上证 +9.1%（9 年中 7 年为正，README 正典方案）。
+实验背景（reports/alla_rolling、reports/alla_rolling_ortho、reports/prod_pipeline_gap）：
+- 主实验（ortho 臂）口径 = 全A + 因子层正交化 + 每年特征选择 +
+  **gbdt h1+h5 截面秩平均** + 500 日滚动训练窗 + raw Top10% 等权、月频调仓，
+  2018–2026 OOS 年化 15.52% / 超额上证 +13.29% / Sharpe 0.631。
+- 本脚本对齐其中**不依赖面板层**的两项（2026-09-17 实测 +3.06pp 缺口拆解）：
+  ① h1+h5 秩平均（**+1.28pp/年**，且降换手 78%→71%）；② 硬剔除 `limit_pos`。
+  因子层正交化（+1.77pp）**已实现、2026-09-17 起为默认**（`--preproc ortho`）：在实时
+  面板上跑同一套 `factor.preprocessing::preprocess_factor`（MAD → 行业哑变量 +
+  log 市值中性化 → zscore → ±10），并自动切到 ortho 臂特征清单；**不依赖离线
+  `panels_neu`**（那份落后生产链 11 个交易日、且不含 09-12 接入的另类族）。
+  ✅ 口径一致性已实测（2026-09-17，见 reports/prod_pipeline_gap/align_check_20260917.md）：
+  ① 市值口径差异（实时 vs `_base`）对**全部 85 个在产特征**的面板影响
+     秩相关 median 0.999936 / min 0.9517（唯一显著异常为 `ln_mktcap` 本身）；
+  ② 出榜链 ortho 榜与主实验 ortho 臂 pred 末日非 NaN 数及板块构成吻合
+     （5195 vs 5196；两者 BJ 均为 0）。
+  ⚠️ 边界：行业面板 `cov_industry` 不覆盖北交所 → 中性化时 BJ 股被整体排除，
+  ortho 口径下北交所（337 只）不出现在榜上 —— **与主实验 ortho 臂一致**（非本链特有）。
+  ⚠️ 缺口分解（report.md §2）的 2×2 收益数字仍基于离线 `panels_neu` 回测；
+  本链是"同流程、不同数据源"，面板等价性已实测但**年化未重跑**。
 
 本脚本每天做的事（与实验同一代码路径，无新增调参）：
 
@@ -13,25 +27,39 @@ h=1 rank 标签 + 500 日滚动训练窗 + raw（不中性化）Top10% 等权、
   3. 只重算当年入选的 ~50 个因子（量价走 factor.alphaXXX 注册表；基本面/风格/
      股东/质押/构造/事件/SUE/两融/资金流/折价动态/停牌状态等族复用
      scripts.builders 的 build_panels 入口），截面 zscore + ±10 剪裁（与
-     FeatureStore 同口径）；
-  4. gbdt 在最近 500 个有效标签日上重训，预测最新截面；
-  5. 幽灵股守卫（existence_mask）+ 信号日可交易性标注（停牌/ST/封板）；
+     FeatureStore 同口径）；h1/h5 清单取**并集只算一次**再切分；
+  4. 每个 horizon 各自重训 gbdt（500 日窗）并预测最新截面，再逐股取截面百分位
+     秩平均（`_rank_average_single_day`，与实验 `_rank_average` 同口径）；
+  5. 幽灵股守卫（existence_mask，逐 horizon）+ 信号日可交易性标注（停牌/ST/封板）；
   6. 输出全A排名 CSV + Top10% 持仓候选 + history 追加（reports/alla_daily/）。
 
 口径披露（与实验的差异，均为如实可知的边界）：
 - **尾部重算而非全历史拼接**：后复权因子随分红除权漂移，全历史拼接会产生复权
   基准断层。本脚本对训练窗与预测截面用同一次重算（同一复权基准），内部自洽；
-  不改写冻结的 all_a_2018_2026 实验数据集。
+  不改写冻结的 all_a_2026 实验数据集。
+- **面板层默认已正交化**（`--preproc ortho`，2026-09-17 起）：特征走实时重算面板 +
+  `preprocess_factor`（MAD → 行业+log市值中性化 → zscore → ±10），**与离线
+  `panels_neu` 同流程、非同数据源**；实测面板等价（85 特征秩相关 median 0.999936）。
+  传 `--preproc zscore` 回到原始面板 + zscore（旧生产口径，2026-09-16 前默认）。
+- **北交所不出现在 ortho 榜上**：`cov_industry` 无 BJ 行业分类 → 中性化整体排除
+  （实测：主实验 ortho 臂 pred 末日 BJ 计数同样为 0）。需要 BJ 时用
+  `--preproc zscore`（该口径 BJ 保留，337 只有分）。
 - **训练段用发布时点已知的全部标签**（最后有效标签日 = 预测日前一交易日）。
   实验的 embargo 是回测防污染隔离；实时预测不存在窥探未来，故取到最新。
 - **可交易性是信号日状态估计**：回测掩码用 T+1 状态（T+1 成交口径），实时排名
   发布时 T+1 未知，改用 T 日停牌/ST/收盘封板标注，T+1 一字板仍可能买不进。
+- **`limit_pos` 已被硬剔除**（`EXCLUDE_FEATURES`）：该特征收益 100% 来自次日买
+  不进的封板股（可交易口径正向选股 −55.6%/年），生产形态剔除后 4/4 格全项改善。
 - 跨年无当年选择文件时回退最近年份并告警（可重跑 rolling_grid_alla --stage select）。
 
 用法:
     python scripts/pipelines/alla_daily_rank.py                     # 全流程（含数据更新）
     python scripts/pipelines/alla_daily_rank.py --skip-update       # 离线/数据已更新
     python scripts/pipelines/alla_daily_rank.py --date 20260904     # 指定预测日（默认最新）
+    python scripts/pipelines/alla_daily_rank.py --horizons 1        # 回退 h1 单模型口径
+    python scripts/pipelines/alla_daily_rank.py --exclude-features ""  # 关闭硬剔除
+    python scripts/pipelines/alla_daily_rank.py --out-tag _h1h5     # 输出到旁路目录
+    python scripts/pipelines/alla_daily_rank.py --preproc ortho --out-tag _ortho  # 正交化口径
     python scripts/pipelines/alla_daily_rank.py --window 750        # gbdt_w750 变体
     python scripts/pipelines/alla_daily_rank.py --install-task 17:30   # 注册每日计划任务
     python scripts/pipelines/alla_daily_rank.py --remove-task
@@ -66,13 +94,32 @@ log = setup_logging("alla_daily_rank")
 # ---------------------------------------------------------------------------
 # 配置（参数与 rolling_grid_alla 实验单一真源对齐）
 # ---------------------------------------------------------------------------
-HORIZON = 1                    # 实验最优 horizon（h1×M raw Top10%）
+HORIZON = 1                    # 单模型臂口径（--horizons 1）；也是 tail_n_days 的视野项
+# 集成臂口径：gbdt h1 + h5 截面秩平均（主实验信号形态 `ens_h1h5`）。
+# 实验实测（reports/prod_pipeline_gap/report.md）：zscore 臂内 h1+h5 比 h1 单模型
+# +1.28pp/年，且降换手（78%→71%）；信号秩相关仅 0.828，是两套互补信号。
+HORIZONS: tuple[int, ...] = (1, 5)
+# 硬剔除的特征（生产 selection 层面，先于四条入选路径）；空元组 = 不剔除。
+# `limit_pos`（封板位置）实测：可交易口径 IC 为负、正向选股全池 +71.1%/年 vs
+# 池内 −55.6%/年（纸面缺口 +126.7pp，reports/limit_pos_tradable_p0/report.md），
+# 且它的收益 100% 来自买不到的封板股。生产形态（h1 单模型）剔除后 4/4 格
+# 全项改善（+0.3~1.2pp，reports/limit_pos_ablation_p1b/report.md）。
+EXCLUDE_FEATURES: tuple[str, ...] = ("limit_pos",)
 DEFAULT_WINDOW = 500           # gbdt 滚动训练窗（--window 750 = gbdt_w750 变体）
 MIN_TRAIN = 250                # 最少训练日（同实验）
 WARMUP = 260                   # alpha 公式最大回看 250 日 + 缓冲
 TAIL_BUFFER = 40               # 停牌缺口/月末等额外缓冲
 DEFAULT_FRAC = 0.10            # Top10% 持仓候选口径
+# 面板预处理口径（`--preproc`）：
+#   `ortho`（默认，2026-09-17 起）= 因子层正交化：MAD 去极值 → 行业哑变量 +
+#               log 市值中性化 → zscore → ±10，与主实验 `panels_neu` 同流程
+#               （factor.preprocessing::preprocess_factor），自动配 ortho 臂特征清单；
+#   `zscore` = 原始面板 + 截面 zscore + ±10 剪裁（2026-09-16 前默认，同 `panels`）。
+DEFAULT_PREPROC = "ortho"
 SELECTION_DIR = ROOT / "reports" / "alla_rolling" / "selection"
+# ortho 臂的特征清单（按 `panels_neu` 的质量窗 IC 选）—— 必须与 `--preproc ortho` 同用，
+# 否则「清单按中性化面板选、输入却是原始面板」口径错配（reports/prod_pipeline_gap §5.3）。
+ORTHO_SELECTION_DIR = ROOT / "reports" / "alla_rolling_ortho" / "selection"
 OUT_DIR = ROOT / "reports" / "alla_daily"
 TASK_NAME = "YuriQuant AllaDailyRank"
 # 计划任务用的 Python（沿用 monitor_performance 约定：YQ_SYSTEM_PY 可配置）
@@ -238,33 +285,97 @@ def tail_n_days(window: int) -> int:
     return window + WARMUP + HORIZON + TAIL_BUFFER
 
 
+# 面板变换钩子：默认 None = 旧行为（zscore + ±10）。`--preproc ortho` 时由 run()
+# 换成 `make_ortho_transform(...)` 的闭包 —— 9 条特征构建路径的 `preprocess_panel`
+# 调用点无需逐个改（分支多必漏，见 reports/prod_pipeline_gap §4）。
+_PANEL_TRANSFORM = None  # Callable[[pd.DataFrame], pd.DataFrame] | None
+
+
+def set_panel_transform(fn) -> None:
+    """设置/清除面板变换（None = 恢复默认 zscore 口径）。零回归：不设置即旧行为。"""
+    global _PANEL_TRANSFORM
+    _PANEL_TRANSFORM = fn
+
+
+def make_ortho_transform(market_cap_panel: pd.DataFrame,
+                         industry_panel: pd.DataFrame | None):
+    """构造因子层正交化变换（与主实验 `panels_neu` 同流程）。
+
+    逐日截面：MAD 去极值 → 行业哑变量 + log 市值中性化（取残差）→ zscore → ±10 剪裁。
+    与 ``build_alla_factor_neutralized::_process_one`` 逐字同口径，差别仅在市值/行业
+    面板来源（出榜链实时构造 vs 离线 `_base`，见 reports/prod_pipeline_gap §5.5）。
+    """
+    from factor.preprocessing import preprocess_factor
+
+    def _transform(p: pd.DataFrame) -> pd.DataFrame:
+        p = p.astype(np.float32).replace([np.inf, -np.inf], np.nan)
+        # 协变量必须与因子面板**逐列对齐**：neutralize 按行取 panel.loc[d] 与
+        # market_cap_panel.loc[d] 做布尔掩码，列不一致会 IndexingError ——
+        # 2026-09-17 实测踩到（_base 市值面板 5801 列 vs 因子面板 5683 列）。
+        # 与 build_alla_factor_neutralized::_process_one 的 reindex 同口径。
+        idx = p.index.intersection(market_cap_panel.index)
+        mc = market_cap_panel.reindex(index=idx, columns=p.columns)
+        ind = (industry_panel.reindex(index=idx, columns=p.columns)
+               if industry_panel is not None else None)
+        x = preprocess_factor(p.reindex(index=idx), market_cap_panel=mc,
+                              industry_panel=ind)
+        x = x.replace([np.inf, -np.inf], np.nan).astype(np.float32)
+        return x.clip(-10.0, 10.0)
+
+    return _transform
+
+
 def preprocess_panel(p: pd.DataFrame) -> pd.DataFrame:
     """因子面板统一口径：float32 → inf→NaN → 截面 zscore → ±10 剪裁。
 
     与 FeatureStore 读取冻结面板时的变换一致（astype 先于 replace，防 float64
     巨值溢出成 float32 inf 后漏杀，见 build_alla_alpha_panels 2026-09-01 教训）。
+    ``--preproc ortho`` 下由 `_PANEL_TRANSFORM` 换成正交化，签名与调用点不变。
     """
+    if _PANEL_TRANSFORM is not None:
+        return _PANEL_TRANSFORM(p)
     from factor.preprocessing import standardize_zscore
     p = p.astype(np.float32).replace([np.inf, -np.inf], np.nan)
     return standardize_zscore(p).clip(-10.0, 10.0).astype(np.float32)
 
 
 def load_selection(predict_date: pd.Timestamp,
-                   sel_dir: Path | None = None) -> tuple[list[str], int]:
-    """当年 h1 特征选择文件；跨年缺失时回退最近年份（告警）。"""
+                   sel_dir: Path | None = None,
+                   horizon: int = HORIZON,
+                   exclude: tuple[str, ...] = ()) -> tuple[list[str], int]:
+    """当年 `y{year}__h{horizon}.json` 特征选择；跨年缺失时回退最近年份（告警）。
+
+    ``exclude`` 在**读入后硬剔除**（不走实验侧 `select_features_for_year(exclude=)`，
+    即不做"保留席位轮转回填"）—— 生产只消费落盘清单，剔除后特征数会少于 50。
+    h1/h5 各有独立清单（实验口径：每个 horizon 用各自的质量窗 IC 选出的特征）。
+    """
     d = sel_dir or SELECTION_DIR
-    p = d / f"y{predict_date.year}__h{HORIZON}.json"
+    p = d / f"y{predict_date.year}__h{horizon}.json"
     if p.exists():
-        return json.loads(p.read_text(encoding="utf-8")), predict_date.year
-    cands = sorted(d.glob(f"y*__h{HORIZON}.json"))
-    if not cands:
-        raise FileNotFoundError(f"{d} 下无任何 y*__h{HORIZON}.json 选择文件")
-    p = cands[-1]
-    sel_year = int(p.name[1:5])
-    log.warning("y%d__h%d.json 不存在，回退最近年份 %d 的特征选择"
-                "（如需当年口径：python scripts/pipelines/rolling_grid_alla.py --stage select）",
-                predict_date.year, HORIZON, sel_year)
-    return json.loads(p.read_text(encoding="utf-8")), sel_year
+        names, sel_year = json.loads(p.read_text(encoding="utf-8")), predict_date.year
+    else:
+        cands = sorted(d.glob(f"y*__h{horizon}.json"))
+        if not cands:
+            raise FileNotFoundError(
+                f"{d} 下无任何 y*__h{horizon}.json 选择文件")
+        p = cands[-1]
+        sel_year = int(p.name[1:5])
+        log.warning("y%d__h%d.json 不存在，回退最近年份 %d 的特征选择"
+                    "（如需当年口径：python scripts/pipelines/"
+                    "rolling_grid_alla.py --stage select）",
+                    predict_date.year, horizon, sel_year)
+        names = json.loads(p.read_text(encoding="utf-8"))
+
+    if exclude:
+        dropped = [n for n in names if n in set(exclude)]
+        if dropped:
+            names = [n for n in names if n not in set(exclude)]
+            log.info("h%d 特征硬剔除 %s → %d 个（原 %d 个）",
+                     horizon, dropped, len(names), len(names) + len(dropped))
+        # 剔除名单里的名字若不在清单中，视为空操作（不告警：跨 horizon 名单本就不同）
+    if not names:
+        raise ValueError(f"h{horizon} 特征清单为空（剔除后）")
+    return names, sel_year
 
 
 def _limit_from_daily(close_raw: pd.DataFrame, predict_date: pd.Timestamp,
@@ -400,29 +511,50 @@ def load_industry_names(cache_root: str | None = None, level: int = 1) -> pd.Ser
 
 
 def industry_series(panel: pd.DataFrame | None, predict_date: pd.Timestamp,
-                    name_map: pd.Series) -> pd.Series:
-    """行业归属面板预测日行 → 每股行业标注（中文名优先，缺名表时回退行业代码）。
+                    name_map: pd.Series,
+                    panel_l2: pd.DataFrame | None = None,
+                    name_map_l2: pd.Series | None = None) -> pd.DataFrame:
+    """行业归属面板预测日行 → 每股行业标注（两列：二级 + 一级）。
 
-    panel: (date × code) → industry_code（load_tail 的 industry 键）；
-    name_map: industry_code → 中文名（load_industry_names，可为空）。
-    返回 index=code、values=中文名|行业代码 的 Series；无行业归属的股票
-    不在返回中（下游 reindex 后落为 NaN → "未知"）。
+    panel: (date × code) → industry_code（load_tail 的 industry 键，申万一级）；
+    name_map: industry_code → 中文名（load_industry_names，可为空）；
+    panel_l2 / name_map_l2: 申万二级同构输入（可选）。
+    返回 DataFrame(index=code)，列：
+      - ``industry_l2``: 申万二级行业中文名（无二级输入/该股缺失 → 空串）；
+      - ``industry_l1``: 申万一级行业中文名（缺名表时回退行业代码）。
+    无一级归属的股票不在返回中（下游 reindex 后落为 NaN → "未知"）。
     """
     if panel is None or panel.empty or predict_date not in panel.index:
-        return pd.Series(dtype=object)
+        return pd.DataFrame()
     codes = panel.loc[predict_date].dropna().astype(str)
     if name_map is None or name_map.empty:
-        return codes
-    return codes.map(name_map.astype(str)).fillna(codes)
+        l1 = codes
+    else:
+        l1 = codes.map(name_map.astype(str)).fillna(codes)
+    out = pd.DataFrame({"industry_l1": l1})
+
+    has_l2 = (panel_l2 is not None and not panel_l2.empty
+              and predict_date in panel_l2.index
+              and name_map_l2 is not None and not name_map_l2.empty)
+    if not has_l2:
+        out["industry_l2"] = ""
+        return out
+    l2_codes = panel_l2.loc[predict_date].dropna().astype(str)
+    l2 = l2_codes.map(name_map_l2.astype(str)).fillna(l2_codes)
+    out["industry_l2"] = l2.reindex(out.index).fillna("")
+    return out
 
 
 def build_ranking(scores: pd.Series, tradable: pd.Series, frac: float,
                   names: pd.Series | None = None,
-                  industry: pd.Series | None = None,
+                  industry: pd.DataFrame | pd.Series | None = None,
                   ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """分数 → 排名表 + 持仓候选（top-frac 且信号日可交易，等权参考权重）。
 
-    names / industry 为可选标注列（每股中文名 / 申万一级行业中文名）。
+    names 为可选「股票代码→简称」标注列；industry 可选：
+      - DataFrame（industry_series 新口径）：须含 ``industry_l2``（二级，可空串）
+        与 ``industry_l1``（一级）两列，输出同名列；
+      - Series（旧口径，兼容历史调用）：单列行业标注，输出为 ``industry_l1``。
     """
     df = pd.DataFrame({"score": scores.dropna().sort_values(ascending=False)})
     df["rank"] = np.arange(1, len(df) + 1)
@@ -436,9 +568,18 @@ def build_ranking(scores: pd.Series, tradable: pd.Series, frac: float,
     if names is not None:
         df["name"] = names.reindex(df.index).fillna("")
     if industry is not None:
-        df["industry"] = industry.reindex(df.index).fillna("未知").replace("", "未知")
-    cols = [c for c in ("rank", "name", "industry", "score", "pct_rank",
-                        "top_frac", "tradable", "flag") if c in df.columns]
+        if isinstance(industry, pd.DataFrame):
+            df["industry_l2"] = industry["industry_l2"].reindex(df.index) \
+                .fillna("").replace("", "二级未知")
+            df["industry_l1"] = industry["industry_l1"].reindex(df.index) \
+                .fillna("未知").replace("", "未知")
+        else:
+            df["industry_l2"] = ""
+            df["industry_l1"] = industry.reindex(df.index) \
+                .fillna("未知").replace("", "未知")
+    cols = [c for c in ("rank", "name", "industry_l2", "industry_l1", "score",
+                        "pct_rank", "top_frac", "tradable", "flag")
+            if c in df.columns]
     ranking = df[cols].copy()
     picks = ranking[ranking["top_frac"] & ranking["tradable"]].copy()
     if len(picks):
@@ -447,17 +588,19 @@ def build_ranking(scores: pd.Series, tradable: pd.Series, frac: float,
 
 
 def build_industry_table(ranking: pd.DataFrame) -> pd.DataFrame:
-    """行业板块排名：按申万一级行业聚合个股模型分数。
+    """行业板块排名：按申万二级行业聚合个股模型分数。
 
     行业排序按 mean_score（行业内全部有分股票的截面 z 分数均值——即模型
     对该板块的整体看多程度）；top_frac_share = 行业内进入全A Top-frac 的
     股票占比，与全局 frac（默认 10%）比较可知板块的超/低配强度。
+    输出行索引为二级中文名（无二级归属的股票并入 "未知"），并附 ``industry_l1``
+    一级归属列（取组内众数），便于二级→一级上卷。
     """
     df = ranking.copy()
-    if "industry" not in df.columns:
-        df["industry"] = "未知"
-    df["industry"] = df["industry"].fillna("未知")
-    g = df.groupby("industry")
+    if "industry_l2" not in df.columns:
+        df["industry_l2"] = ""
+    df["industry_l2"] = df["industry_l2"].fillna("未知").replace("", "未知")
+    g = df.groupby("industry_l2")
     out = pd.DataFrame({
         "n_stocks": g.size(),
         "mean_score": g["score"].mean(),
@@ -465,20 +608,25 @@ def build_industry_table(ranking: pd.DataFrame) -> pd.DataFrame:
         "mean_pct_rank": g["pct_rank"].mean(),
         "n_top_frac": g["top_frac"].sum().astype(int),
     })
+    # 一级归属：组内众数（二级在申万体系下唯一挂靠一级，众数即真值）
+    if "industry_l1" in df.columns:
+        out["industry_l1"] = g["industry_l1"] \
+            .agg(lambda s: s.dropna().mode().iat[0]
+                 if len(s.dropna().mode()) else "未知")
     out["top_frac_share"] = (out["n_top_frac"] / out["n_stocks"]).round(4)
     # 行业内第一名（全A排名最高的成员）
     order = df.sort_values("score", ascending=False)
-    firsts = order.drop_duplicates("industry", keep="first")
+    firsts = order.drop_duplicates("industry_l2", keep="first")
     has_name = "name" in firsts.columns
     labels = pd.Series(
         [f"{code} {nm}" if has_name and isinstance(nm, str) and nm else str(code)
          for code, nm in zip(firsts.index,
                              firsts["name"] if has_name else [""] * len(firsts))],
-        index=firsts["industry"].values)
+        index=firsts["industry_l2"].values)
     out["top_stock"] = labels
     out = out.sort_values("mean_score", ascending=False)
     out.insert(0, "rank", np.arange(1, len(out) + 1))
-    out.index.name = "industry"
+    out.index.name = "industry_l2"
     return out
 
 
@@ -505,8 +653,9 @@ def explain_stocks(contrib: pd.DataFrame, z_scores: dict[str, pd.Series],
     z_scores: {因子名: 预测日截面 z}（preprocess_panel 后值，0=截面均值）
     ranking: 已排序排名表（含 name/industry/score 标注列）
 
-    输出列：code/name/industry/rank/score + drv{i}_feature/name_cn/contrib/z
-    + summary（"主要驱动：A(z=+2.1)、B(z=+1.8)；拖累：C(z=-1.2)"）。
+    输出列：code/name/industry_l2/industry_l1/rank/score
+    + drv{i}_feature/name_cn/contrib/z + summary（"主要驱动：A(z=+2.1)、
+    B(z=+1.8)；拖累：C(z=-1.2)"）。
     """
     feat_cols = [c for c in contrib.columns if c != "bias"]
 
@@ -541,7 +690,8 @@ def explain_stocks(contrib: pd.DataFrame, z_scores: dict[str, pd.Series],
         if dns:
             bits.append("拖累：" + "、".join(_note(p) for p in dns))
         out = {"code": code,
-               **{k: row.get(k, "") for k in ("name", "industry", "rank", "score")}}
+               **{k: row.get(k, "") for k in
+                  ("name", "industry_l2", "industry_l1", "rank", "score")}}
         for i, p in enumerate(drv, 1):
             out[f"drv{i}_feature"] = p["feature"]
             out[f"drv{i}_name"] = p["name_cn"]
@@ -549,7 +699,7 @@ def explain_stocks(contrib: pd.DataFrame, z_scores: dict[str, pd.Series],
             out[f"drv{i}_z"] = p["z"]
         out["summary"] = "；".join(bits)
         rows.append(out)
-    cols = ["code", "name", "industry", "rank", "score"]
+    cols = ["code", "name", "industry_l2", "industry_l1", "rank", "score"]
     for i in range(1, n_factors + 1):
         cols += [f"drv{i}_feature", f"drv{i}_name", f"drv{i}_contrib", f"drv{i}_z"]
     cols.append("summary")
@@ -583,18 +733,32 @@ def run_data_update(max_attempts: int = 3) -> None:
       未到收盘确认时刻自动把终点回退到上一交易日，防半拉日入缓存）。
     - 失败重试：SDK 拉大表偶发瞬时失败（2026-09-08 实测资产负债表 retry×3 挂）；
       各表水位独立推进，重试即增量续拉，代价小。
+    - **总预算 + 降级不阻塞（2026-09-16 事故后新增）**：整条数据更新有墙钟预算
+      （``fetch.update_total_timeout_s``，默认 1800s）。超时/连续失败时**不再 raise**，
+      而是改用已推进的缓存继续出榜——数据更新的卡死不应阻塞当日排名产出。
+      等价于手工 ``--skip-update``（09-16 当晚即靠此路径 7 分钟出榜）。
     """
+    from config import Config
+
     cmd = [sys.executable, "-m", "scripts.ingest.update_data", "--pool", "all_a",
            "--no-minute"]
+    timeout_s = int(Config.get().get("fetch", {}).get("update_total_timeout_s", 1800))
     for attempt in range(1, max_attempts + 1):
-        log.info("数据更新(第 %d/%d 次): %s", attempt, max_attempts, " ".join(cmd))
-        proc = subprocess.run(cmd, cwd=ROOT)
+        log.info("数据更新(第 %d/%d 次，预算 %ds): %s",
+                 attempt, max_attempts, timeout_s, " ".join(cmd))
+        try:
+            proc = subprocess.run(cmd, cwd=ROOT, timeout=timeout_s)
+        except subprocess.TimeoutExpired:
+            log.warning("数据更新超过 %ds 预算已被终止；改用其已推进的缓存继续出榜"
+                        "（各表水位独立，下次运行自动续拉）", timeout_s)
+            return
         if proc.returncode == 0:
             return
         log.warning("数据更新失败（exit=%d）", proc.returncode)
         if attempt < max_attempts:
             time.sleep(60)
-    raise RuntimeError(f"数据更新连续 {max_attempts} 次失败：{' '.join(cmd)}")
+    log.warning("数据更新连续 %d 次失败；改用现有缓存继续出榜（predict_date 以缓存"
+                "最新交易日为准，见后续日志与 history.csv）", max_attempts)
 
 
 def load_tail(predict_date: pd.Timestamp | None, n_days: int) -> dict:
@@ -639,12 +803,19 @@ def load_tail(predict_date: pd.Timestamp | None, n_days: int) -> dict:
              tail_dates[0].date(), tail_dates[-1].date(), predict_date.date())
 
     industry = None
+    industry_l2 = None
     try:
         cache = DataCache(OfflineQuietDataSource())
         industry = IndustryClassification(cache, level=1).get_industry_panel(
             list(c.columns), c.index)
         if industry.isna().all().all():
             industry = None
+        # 二级行业面板（细分行排名用）：文件不存在时 IndustryClassification
+        # 返回全 NaN 面板 → 置 None 退回一级口径。
+        ind2 = IndustryClassification(cache, level=2).get_industry_panel(
+            list(c.columns), c.index)
+        if not ind2.isna().all().all():
+            industry_l2 = ind2
     except Exception as e:  # noqa: BLE001
         log.warning("行业面板不可用（%s），IndNeutralize 退化为恒等", str(e)[:80])
 
@@ -654,6 +825,7 @@ def load_tail(predict_date: pd.Timestamp | None, n_days: int) -> dict:
           "vwap": vwap}
     return {"px": px, "close_adj": c.astype(np.float32),
             "close_raw": raw_close, "bwd": f, "industry": industry,
+            "industry_l2": industry_l2,
             "predict_date": predict_date}
 
 
@@ -772,8 +944,8 @@ def build_leaders(ranking: pd.DataFrame, mktcap: pd.Series,
     sub["cap_rank"] = cap_rank.reindex(sub.index)
     sub = sub.sort_values("score", ascending=False)
     sub.insert(0, "rank", np.arange(1, len(sub) + 1))
-    cols = [c for c in ("rank", "cap_rank", "name", "industry", "mktcap", "score",
-                        "tradable") if c in sub.columns]
+    cols = [c for c in ("rank", "cap_rank", "name", "industry_l2", "industry_l1",
+                        "mktcap", "score", "tradable") if c in sub.columns]
     return sub.head(top_k)[cols].copy()
 
 
@@ -1002,65 +1174,85 @@ def compute_features(names: list[str], tail: dict,
 # ---------------------------------------------------------------------------
 # 训练与预测
 # ---------------------------------------------------------------------------
+def _rank_average_single_day(panels: list[pd.DataFrame],
+                             min_panels: int = 2) -> pd.DataFrame:
+    """单日截面秩平均（集成臂 h1+h5 合成）。
+
+    与实验侧 ``rolling_grid_alla::_rank_average`` 的**单日**情形同口径：对每只
+    股票取其在各模型预测中的截面百分位秩，仅在**有效模型数 >= min_panels** 且
+    该股在所有入选模型里都有预测（取交集）时求均值，否则不输出。
+
+    生产链只需要预测日一个截面，故不复用实验侧逐日实现（那会 import 跨模块
+    私有名，被 ``tests/test_layering`` 拦截）；一致性由
+    ``tests/test_alla_daily_rank.py::test_rank_average_matches_experiment`` 锁死。
+    """
+    valid_codes = None
+    ranks = []
+    for p in panels:
+        row = p.iloc[0] if len(p) else None
+        if row is None:
+            continue
+        r = row.rank(pct=True)
+        r = r[~row.isna()]
+        ranks.append(r)
+        valid_codes = r.index if valid_codes is None else valid_codes.intersection(r.index)
+    # 返回全列（未入选者 NaN），与实验侧面板同形 —— 下游 build_ranking 会 dropna
+    out = pd.Series(np.nan, index=panels[0].columns, dtype="float32")
+    if len(ranks) < min_panels or valid_codes is None or not len(valid_codes):
+        return out
+    sub = pd.concat([r.reindex(valid_codes) for r in ranks], axis=1).dropna(axis=0)
+    out.loc[sub.index] = sub.mean(axis=1).astype(np.float32)
+    return out
+
+
 def train_and_predict(feats: dict, close_adj: pd.DataFrame,
-                      predict_date: pd.Timestamp, window: int
+                      predict_date: pd.Timestamp, window: int,
+                      horizon: int = HORIZON
                       ) -> tuple[pd.Series, dict, "LGBMPredictor"]:
     """gbdt 在最近 window 个有效标签日重训 → 预测 predict_date 截面。
 
-    标签 = h1 未来收益截面 rank；最后有效标签日 = 预测日前一交易日（其收益到
+    标签 = h{horizon} 未来收益截面 rank；最后有效标签日 = 预测日前一交易日（其收益到
     预测日收盘，发布时点已知，无窥探）。返回 (score 截面, 训练段元信息, 预测器)
     ——预测器供解释功能取特征重要性与 SHAP 归因。
     """
     from model.labels import build_labels
-    from model.predictor import LGBMPredictor
     from model.params import DEFAULT_MODEL_PARAMS
+    from model.predictor import LGBMPredictor
 
-    labels, _embargo = build_labels(close_adj, horizon=HORIZON, mode="rank")
+    labels, _embargo = build_labels(close_adj, horizon=horizon, mode="rank")
     valid = labels.index[labels.notna().any(axis=1)]
     valid = valid[valid < predict_date]
     tr = valid[-window:]
     if len(tr) < MIN_TRAIN:
         raise ValueError(f"训练段不足 {MIN_TRAIN} 日（现 {len(tr)}）")
-    log.info("训练: %d 日（%s ~ %s，窗=%d）→ 预测 %s", len(tr), tr[0].date(),
-             tr[-1].date(), window, predict_date.date())
+    log.info("训练 h%d: %d 日（%s ~ %s，窗=%d）→ 预测 %s", horizon, len(tr),
+             tr[0].date(), tr[-1].date(), window, predict_date.date())
 
     p = LGBMPredictor(**DEFAULT_MODEL_PARAMS["gbdt"])
     p.fit({k: v.loc[tr] for k, v in feats.items()}, labels.loc[tr])
     pred = p.predict({k: v.loc[[predict_date]] for k, v in feats.items()})
     meta = {"n_train_days": len(tr), "train_begin": str(tr[0].date()),
-            "train_end": str(tr[-1].date()), "window": window}
+            "train_end": str(tr[-1].date()), "window": window,
+            "horizon": horizon}
     return pred.iloc[0], meta, p
 
 
 # ---------------------------------------------------------------------------
 # 输出
 # ---------------------------------------------------------------------------
-def _write_latest(p: Path, src: Path) -> bool:
-    """latest 稳定副本：临时文件 + 原子替换；目标被占用时告警不中断。
+def _atomic_or_direct(path: Path, write) -> bool:
+    """优先原子替换（tmp + os.replace），被占用时降级为直接覆写。
 
-    latest_*.csv 只是当日主输出（ranking_{ds}.csv 等）的稳定路径副本，
-    被外部进程（如预览/同步）短暂独占时不应拖垮整次运行。
+    Windows 陷阱：目标被其他进程以共享读打开（IDE / Excel / 预览面板）且未
+    授予 FILE_SHARE_DELETE 权限时，``os.replace`` 报 WinError 5；**但文件本身
+    仍可写**（实测 ``cp`` / ``to_csv`` 直写成功）。旧行为是整轮运行失败——
+    6 分钟计算只为最后一步写盘白跑（2026-09-17 实测：编辑器持有 ranking /
+    picks 句柄 → 出榜流程 raise）。故降级为直接覆写（牺牲原子性换取不中断），
+    并告警提示存在半写风险。
     """
+    tmp = path.with_name(path.name + ".tmp")
     try:
-        tmp = p.with_name(p.name + ".tmp")
-        tmp.write_text(src.read_text(encoding="utf-8-sig"), encoding="utf-8-sig")
-        os.replace(tmp, p)
-        return True
-    except OSError as e:
-        try:
-            tmp.unlink(missing_ok=True)
-        except OSError:
-            pass
-        log.warning("latest 副本 %s 未更新（不影响当日主输出）: %s",
-                    p.name, str(e)[:100])
-        return False
-
-
-def _write_table(path: Path, df: pd.DataFrame) -> bool:
-    """主 CSV 原子写入：临时文件 + os.replace；目标被占用时返回 False。"""
-    try:
-        tmp = path.with_name(path.name + ".tmp")
-        df.to_csv(tmp, encoding="utf-8-sig")
+        write(tmp)
         os.replace(tmp, path)
         return True
     except OSError:
@@ -1068,7 +1260,32 @@ def _write_table(path: Path, df: pd.DataFrame) -> bool:
             tmp.unlink(missing_ok=True)
         except OSError:
             pass
+    try:
+        write(path)
+        log.warning("%s 原子替换被占用阻挡，已降级为直接覆写（存在半写风险）",
+                    path.name)
+        return True
+    except OSError:
         return False
+
+
+def _write_latest(p: Path, src: Path) -> bool:
+    """latest 稳定副本写入（原子优先、占用降级）；彻底失败时告警不中断。
+
+    latest_*.csv 只是当日主输出（ranking_{ds}.csv 等）的稳定路径副本，
+    被外部进程（如预览/同步）短暂独占时不应拖垮整次运行。
+    """
+    ok = _atomic_or_direct(
+        p, lambda t: t.write_text(src.read_text(encoding="utf-8-sig"),
+                                  encoding="utf-8-sig"))
+    if not ok:
+        log.warning("latest 副本 %s 未更新（不影响当日主输出）", p.name)
+    return ok
+
+
+def _write_table(path: Path, df: pd.DataFrame) -> bool:
+    """主 CSV 写入（原子优先、占用降级）；彻底失败时返回 False。"""
+    return _atomic_or_direct(path, lambda t: df.to_csv(t, encoding="utf-8-sig"))
 
 
 def write_outputs(ranking: pd.DataFrame, picks: pd.DataFrame,
@@ -1143,6 +1360,23 @@ def write_outputs(ranking: pd.DataFrame, picks: pd.DataFrame,
 # ---------------------------------------------------------------------------
 # 计划任务（沿用 monitor_performance 的 schtasks 模式）
 # ---------------------------------------------------------------------------
+def _run_schtasks(cmd: str) -> str:
+    """跑 schtasks 并回显输出。
+
+    中文 Windows 下 schtasks 输出为 GBK，``text=True``（默认 utf-8）会
+    UnicodeDecodeError —— 2026-09-17 实测：任务其实已建好，但异常栈把成功回显吞了，
+    看起来像注册失败。故按编码逐个尝试解码。
+    """
+    proc = subprocess.run(cmd, shell=True, capture_output=True)
+    raw = (proc.stdout or b"") + (proc.stderr or b"")
+    for enc in ("utf-8", "gbk", "cp1252"):
+        try:
+            return raw.decode(enc).strip()
+        except UnicodeDecodeError:
+            continue
+    return raw.decode("utf-8", errors="replace").strip()
+
+
 def install_task(time_str: str) -> str:
     """注册/更新每日计划任务（默认跑全流程含数据更新）。"""
     py = Path(SYSTEM_PY).resolve()
@@ -1150,16 +1384,12 @@ def install_task(time_str: str) -> str:
     tr = f'\\"{py}\\" \\"{script}\\"'
     cmd = (f'schtasks /Create /F /TN "{TASK_NAME}" /SC DAILY /ST {time_str} '
            f'/TR "{tr}"')
-    proc = subprocess.run(cmd, shell=True, capture_output=True, text=True)
-    out = (proc.stdout or "") + (proc.stderr or "")
-    return f"cmd: {cmd}\n{out.strip()}"
+    return f"cmd: {cmd}\n{_run_schtasks(cmd)}"
 
 
 def remove_task() -> str:
     cmd = f'schtasks /Delete /F /TN "{TASK_NAME}"'
-    proc = subprocess.run(cmd, shell=True, capture_output=True, text=True)
-    out = (proc.stdout or "") + (proc.stderr or "")
-    return f"cmd: {cmd}\n{out.strip()}"
+    return f"cmd: {cmd}\n{_run_schtasks(cmd)}"
 
 
 # ---------------------------------------------------------------------------
@@ -1175,27 +1405,87 @@ def run(args) -> dict:
     tail = load_tail(pd.Timestamp(str(args.date)) if args.date else None,
                      tail_n_days(args.window))
     predict_date = tail["predict_date"]
-    names, sel_year = load_selection(predict_date)
-    log.info("特征选择: %d 个（选择年份 %d）", len(names), sel_year)
+    horizons = tuple(args.horizons)
+    exclude = tuple(args.exclude_features)
+    out_dir = OUT_DIR if not args.out_tag \
+        else OUT_DIR.with_name(OUT_DIR.name + args.out_tag)
+
+    preproc = str(getattr(args, "preproc", DEFAULT_PREPROC))
+    sel_dir = ORTHO_SELECTION_DIR if preproc == "ortho" else SELECTION_DIR
+
+    # 每个 horizon 读各自的落盘清单（实验口径：h1/h5 的质量窗 IC 不同，清单不同）
+    sel: dict[int, dict] = {}
+    for h in horizons:
+        names_h, year_h = load_selection(predict_date, sel_dir=sel_dir,
+                                         horizon=h, exclude=exclude)
+        sel[h] = {"names": names_h, "year": year_h}
+        log.info("h%d 特征选择: %d 个（选择年份 %d）", h, len(names_h), year_h)
+    names_all = sorted({n for d_ in sel.values() for n in d_["names"]})
+    log.info("口径: preproc=%s | horizons=%s | 硬剔除=%s | 特征并集 %d 个 | 输出 → %s",
+             preproc, list(horizons), list(exclude) or "无", len(names_all),
+             out_dir.name)
 
     # 预加载基本面长表：compute_features 与龙头股市值面板共用一次 IO
     long_keys: set[str] = set()
-    if any(n in (_HOLDER_NUM_KEYS | _HOLDER_TOP_KEYS) for n in names):
+    if any(n in (_HOLDER_NUM_KEYS | _HOLDER_TOP_KEYS) for n in names_all):
         long_keys |= {"income", "balance", "cashflow", "equity", "dividend"}
-    if any(n in _PLEDGE_KEYS for n in names):
+    if any(n in _PLEDGE_KEYS for n in names_all):
         long_keys |= {"balance", "pledge", "notice", "express"}
-    if any(n in _CONSTRUCTED_KEYS for n in names):
+    if any(n in _CONSTRUCTED_KEYS for n in names_all):
         long_keys |= {"income", "balance", "cashflow", "dividend"}
+    if preproc == "ortho":
+        long_keys.add("balance")   # 正交化需要 TOT_SHARE × 未复权收盘 的市值面板
     long_tables = _load_long_tables(sorted(long_keys))
 
-    feats = compute_features(names, tail, long_tables=long_tables)
+    # 正交化协变量面板：行业取自 tail["industry"]（与实验 cov_industry 同源
+    # IndustryClassification level=1）；市值实时构造 —— 股本源与离线 `_base` 不同源
+    # （balance.TOT_SHARE vs equity_structure 事件表），见 prod_pipeline_gap §5.5。
+    cap_panel = None
+    if preproc == "ortho":
+        cap_panel = compute_market_cap(tail["close_raw"], long_tables)
+        set_panel_transform(make_ortho_transform(cap_panel, tail.get("industry")))
+        log.info("面板口径: 因子层正交化（MAD→行业+log市值中性化→zscore）| "
+                 "市值面板 %d×%d | 行业面板 %s",
+                 *cap_panel.shape,
+                 "可用" if tail.get("industry") is not None else "缺失(退化为仅市值)")
+    else:
+        set_panel_transform(None)
+
+    # 特征按并集**只算一次**，再按各 horizon 的子集切分（IO/计算与单模型臂同量级）
+    feats_all = compute_features(names_all, tail, long_tables=long_tables)
     close_adj = tail["close_adj"]
 
-    scores, train_meta, predictor = train_and_predict(feats, close_adj,
-                                                      predict_date, args.window)
-    # 幽灵股守卫：掩掉未上市/无行情/特征不可用的股票（同实验 stage_predict）
-    valid = existence_mask(feats, close_adj, pd.DatetimeIndex([predict_date]))
-    scores = scores.where(valid.iloc[0])
+    preds, per_h_meta, predictors = [], [], {}
+    for h in horizons:
+        feats_h = {k: feats_all[k] for k in sel[h]["names"] if k in feats_all}
+        missing_h = [k for k in sel[h]["names"] if k not in feats_all]
+        if missing_h:
+            log.warning("h%d 有 %d 个特征未产出（构建失败），已忽略: %s",
+                        h, len(missing_h), missing_h)
+        pred_h, meta_h, mdl_h = train_and_predict(
+            feats_h, close_adj, predict_date, args.window, horizon=h)
+        # 幽灵股守卫：掩掉未上市/无行情/特征不可用的股票（同实验 stage_predict）
+        valid_h = existence_mask(feats_h, close_adj, pd.DatetimeIndex([predict_date]))
+        pred_h = pred_h.where(valid_h.iloc[0])
+        log.info("h%d 可用股票 %d", h, int(pred_h.notna().sum()))
+        preds.append(pred_h.to_frame().T)
+        per_h_meta.append(meta_h)
+        predictors[h] = (mdl_h, feats_h)
+
+    if len(horizons) == 1:
+        scores = preds[0].iloc[0]
+        ens_tag = "none"
+    else:
+        scores = _rank_average_single_day(preds)
+        ens_tag = "+".join(f"h{h}" for h in horizons) + "_rank_avg"
+        log.info("集成 %s → 单日截面秩平均，有效股票 %d（各臂交集口径）",
+                 ens_tag, int(scores.notna().sum()))
+    # 解释口径固定 h1（不在集成里时取首个 horizon）：SHAP/重要性只对单模型有意义
+    expl_h = 1 if 1 in predictors else horizons[0]
+    predictor, feats = predictors[expl_h]
+    train_meta = {"horizons": list(horizons), "excluded_features": list(exclude),
+                  "ensemble": ens_tag, "explain_horizon": expl_h,
+                  "per_horizon": per_h_meta}
     n_raw = int(scores.notna().sum())
 
     tradable = signal_day_tradable(tail["close_raw"], predict_date)
@@ -1205,11 +1495,17 @@ def run(args) -> dict:
     ind_panel = tail.get("industry")
     name_map = load_industry_names() if ind_panel is not None \
         else pd.Series(dtype=object)
-    industry = industry_series(ind_panel, predict_date, name_map)
+    ind_panel_l2 = tail.get("industry_l2")
+    name_map_l2 = load_industry_names(level=2) if ind_panel_l2 is not None \
+        else pd.Series(dtype=object)
+    if name_map_l2.empty:
+        ind_panel_l2 = None  # 名表缺失 → 拼合无意义，整体退回一级口径
+    industry = industry_series(ind_panel, predict_date, name_map,
+                               panel_l2=ind_panel_l2, name_map_l2=name_map_l2)
     industry = industry if len(industry) else None
     ranking, picks = build_ranking(scores, tradable, args.frac,
                                    names=stock_names, industry=industry)
-    ind_table = build_industry_table(ranking) if "industry" in ranking.columns \
+    ind_table = build_industry_table(ranking) if "industry_l2" in ranking.columns \
         else pd.DataFrame()
 
     # 选股解释：模型级（当日特征重要性）+ 个股级（Top20 SHAP 归因）
@@ -1222,15 +1518,19 @@ def run(args) -> dict:
     log.info("解释: 特征重要性 %d 个 | Top%d SHAP 归因完成",
              len(imp_table), len(explain_top))
 
-    # 龙头股视图：市值前 200 中模型分最高的 20 只
-    cap_panel = compute_market_cap(tail["close_raw"], long_tables)
+    # 龙头股视图：市值前 200 中模型分最高的 20 只（ortho 口径下前面已算过，复用）
+    if cap_panel is None:
+        cap_panel = compute_market_cap(tail["close_raw"], long_tables)
     mktcap = cap_panel.loc[predict_date]
     leaders_table = build_leaders(ranking, mktcap)
     log.info("龙头视图: 市值前 200 中模型 Top%d（市值口径 TOT_SHARE×收盘）",
              len(leaders_table))
 
-    meta = {"model": "gbdt", **train_meta, "frac": args.frac,
-            "n_features": len(names), "selection_year": sel_year,
+    meta = {"model": "gbdt", **train_meta, "frac": args.frac, "preproc": preproc,
+            "selection_dir": sel_dir.name,
+            "n_features": len(sel[expl_h]["names"]),
+            "n_features_union": len(names_all),
+            "selection_year": sel[expl_h]["year"],
             "n_scored": n_raw, "n_top_frac": int(ranking["top_frac"].sum()),
             "n_picks": len(picks),
             "n_industries": 0 if ind_table.empty else len(ind_table),
@@ -1240,7 +1540,8 @@ def run(args) -> dict:
                           industry_table=ind_table,
                           feature_importance=imp_table,
                           explain_top=explain_top,
-                          leaders=leaders_table)
+                          leaders=leaders_table,
+                          out_dir=out_dir)
 
     log.info("=" * 70)
     log.info("预测日 %s: 有分股票 %d | top%.0f%% %d | 可交易候选 %d | 行业 %d | 耗时 %.0fs",
@@ -1250,7 +1551,7 @@ def run(args) -> dict:
     log.info("Top 20 预览 (code, name, 行业, score, 可交易):")
     for i, (code, row) in enumerate(ranking.head(20).iterrows(), 1):
         nm = row.get("name", "")
-        ind = row.get("industry", "")
+        ind = row.get("industry_l2", "") or row.get("industry_l1", "")
         log.info("%4d  %s  %-8s  %-6s  %+.4f  %s", i, code, nm, ind,
                  row["score"], "√" if row["tradable"] else "×")
     # P0 告警：rank 头部若混入被 tradable 剔除的股票（信号日封板/停牌等），
@@ -1295,10 +1596,33 @@ def main() -> None:
                     help=f"滚动训练窗（默认 {DEFAULT_WINDOW}；750 = gbdt_w750 变体）")
     ap.add_argument("--frac", type=float, default=DEFAULT_FRAC,
                     help=f"持仓候选分位（默认 {DEFAULT_FRAC}）")
+    ap.add_argument("--horizons", default=",".join(str(h) for h in HORIZONS),
+                    metavar="H[,H...]",
+                    help="集成 horizon 列表（逗号分隔）。默认 "
+                         f"{'+'.join('h' + str(h) for h in HORIZONS)} 截面秩平均"
+                         "（主实验信号形态）；传 1 回到 h1 单模型口径")
+    ap.add_argument("--exclude-features", default=",".join(EXCLUDE_FEATURES),
+                    metavar="F[,F...]",
+                    help=f"硬剔除的特征名（逗号分隔）。默认 "
+                         f"{','.join(EXCLUDE_FEATURES) or '无'}；传空串 '' 关闭剔除")
+    ap.add_argument("--preproc", choices=("zscore", "ortho"),
+                    default=DEFAULT_PREPROC,
+                    help="面板预处理口径：ortho（默认，因子层正交化 "
+                         "MAD→行业+log市值中性化→zscore，与主实验 panels_neu 同流程、"
+                         "自动改用 ortho 臂特征清单；北交所无行业分类故被排除）或 "
+                         "zscore（原始面板 + 截面 zscore，2026-09-16 前默认）")
+    ap.add_argument("--out-tag", default="", metavar="TAG",
+                    help="输出目录后缀（如 _h1h5 → reports/alla_daily_h1h5）；"
+                         "默认空 = 写生产目录 reports/alla_daily")
     ap.add_argument("--install-task", nargs="?", const="17:30", default=None,
                     metavar="HH:MM", help="注册每日 Windows 计划任务并退出")
     ap.add_argument("--remove-task", action="store_true", help="删除计划任务并退出")
     args = ap.parse_args()
+    args.horizons = tuple(int(x) for x in str(args.horizons).split(",") if x.strip())
+    args.exclude_features = tuple(
+        x.strip() for x in str(args.exclude_features).split(",") if x.strip())
+    if not args.horizons:
+        ap.error("--horizons 不能为空")
     if args.install_task:
         print(install_task(args.install_task))
         return
