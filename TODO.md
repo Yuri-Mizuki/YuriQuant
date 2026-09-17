@@ -49,8 +49,29 @@
   与实验 OOS 面板末日截面 Spearman 0.92 验证一致性；`--install-task` 注册每日
   计划任务（`YuriQuant AllaDailyRank`）。已知边界：训练段用发布时点已知标签
   （实时无未来可窥）；可交易性为信号日状态估计；跨年回退最近年份特征选择并告警。
+- [x] **出榜链口径对齐主实验最优方案**（2026-09-17 完成，
+  `scripts/pipelines/alla_daily_rank.py`）：出榜链此前只补了 h1+h5 秩平均，缺
+  因子层正交化（缺口 3.06pp 中的 1.77pp）。本次新增 `--preproc {zscore,ortho}`，
+  **默认已切 `ortho`**（实时面板跑 `preprocess_factor`：MAD→行业+log市值中性化
+  →zscore→±10，并自动用 ortho 臂特征清单），`--preproc zscore` 回退旧口径。
+  证据（`reports/prod_pipeline_gap/align_check_20260917.md`）：① 面板等价性——
+  市值口径差异对**全部 85 个在产特征**影响秩相关 median 0.999936 / min 0.9517
+  （唯一显著异常是 `ln_mktcap` 本身），故**不必重跑离线 `panels_neu`**；
+  ② 端到端——出榜链 ortho 榜与主实验 ortho 臂 pred 末日非 NaN 数/板块构成吻合
+  （5195 vs 5196；两者 BJ 均为 0）。**已知边界**：`cov_industry` 无北交所分类 →
+  ortho 口径下 BJ 337 只不入榜（与主实验 ortho 臂一致，非本链特有）。
+  ⚠️ 耗时 **~60 分钟**（正交化逐日截面回归 6 倍于 h1h5 的 589s）——后续可对
+  `neutralize` 的逐日循环向量化优化。
+- [x] **修复每日计划任务静默失败**（2026-09-17）：`YuriQuant AllaDailyRank` 的 TR
+  仍指向 09-11 重构前的 `scripts\alla_daily_rank.py`，自 09-12 起每天 `rc=2`
+  （实测"can't open file"）——`reports/alla_daily/` 09-12~09-16 的榜实为手工产出。
+  已用 `--install-task 17:30` 重注册（TR 指向 `scripts\pipelines\`）；顺带修
+  `install_task`/`remove_task` 用 `text=True` 读 GBK schtasks 输出抛
+  `UnicodeDecodeError`、把"创建成功"吞成异常栈的误导性 bug。
 - [ ] **全A实验的后续深挖**：① h5/h10 特征不足问题已由 DPP 去冗余解决
-  （每期选满 50 特征），余下：验证 ortho 正交化口径（panels_neu 已建，predict 未跑）；
+  （每期选满 50 特征）；ortho 正交化口径**出榜链已对齐（见上）**，
+  余：主实验 ortho 臂的 alt 口径 `stage_predict/stage_backtest` 重跑
+  （09-12 接入另类族后被 exists 静默跳过，产物停在 09-07）；
   ② 全A数据集纳入正式因子库监控（all_a_2018_2026 目前为轻量 registry）；
   ③ ~~2026-09-02 盘中数据整日重拉~~（2026-09-08 由 alla_daily_rank 全流程运行
   顺带完成，daily_all_a 缓存已到 20260907）；

@@ -173,7 +173,7 @@ mock 落 `reports/models_mock`，真实落 `reports/models`。
 | **调仓频率精修** | `scripts/evaluation/freq_tune.py` | gbdt+中性化+Top20% 上放开 h×freq 网格，验证换手吞噬收益 → `reports/freq_tune/`；h1×M 最优，日频超额 −40% |
 | **多年度 OOS 稳健性** | `scripts/evaluation/multiyear_oos.py` | gbdt/ridge/ranker × h1/h5 × D/W/M，2023/2024/2025 分年 walk-forward（特征定型期固定防前视）→ `reports/multiyear/`；h1×M 唯一三年一致稳健解 |
 | **全A多年度滚动训练** | `scripts/pipelines/rolling_grid_alla.py` + `rolling_grid_report.py` | 全A 5549 股 × 798 公因子（all_a_2018_2026 数据集）2018~2026 分年 walk-forward 网格：horizon{1,5,10,20}×频率×模型/超参×中性化×集中度 = 120 组合 → `reports/alla_rolling/report.html`；h1+月/周频+gbdt 一致最优（Top10% raw 年化 14.0%、超额上证 +11.8%、正超额 7~8/9 年），日频成本全灭，风格中性化在全A上反而稀释 alpha（与 HS300 结论相反） |
-| **全A每日选股排名（生产化推理）** | `scripts/pipelines/alla_daily_rank.py` | 上述最优方案（gbdt h1×M raw Top10%）的每日盘后推理：数据增量更新 → 尾部重算当年入选 50 因子（同一复权基准自洽）→ 500 日窗重训 → 全A排名 + Top10% 可交易候选 → `reports/alla_daily/`；与实验 OOS 面板末日截面 Spearman 0.92；`--install-task 17:30` 注册每日计划任务 |
+| **全A每日选股排名（生产化推理）** | `scripts/pipelines/alla_daily_rank.py` | **主实验最优口径**（因子层正交化 + gbdt h1+h5 截面秩平均）× 月频 raw Top10% 的每日盘后推理：数据增量更新 → 尾部重算当年入选 ~50 因子（同一复权基准自洽）→ 500 日窗重训 → 全A排名 + Top10% 可交易候选 → `reports/alla_daily/`；**2026-09-17 起默认口径 = 主实验 ortho 臂**（`--preproc ortho`，正交化 + ortho 清单），`--preproc zscore` 回退旧口径；对齐证据见 `reports/prod_pipeline_gap/align_check_20260917.md`（含面板等价性 85 特征秩相关 median 0.9999）；⚠️ 旧 h1 口径"与实验末日截面 Spearman 0.92"（2026-09-08）未在新口径下重测；⚠️ 行业面板不覆盖北交所 → ortho 口径下 BJ 不入榜（与主实验一致）；`--install-task 17:30` 注册每日计划任务（**全流程约 60 分钟**，正交化逐日截面回归占大头） |
 | **全A超额归因与显著性复核** | `scripts/pipelines/alla_excess_attribution.py`（2026-09-08） | 复跑主策略取每日权重：对上证超额 +10.2%/年中约一半来自风格敞口（β=1.10、R²=0.61），对全A等权纯选股 α=+5.1%/年（t=2.14 显著）；Brinson（申万一级）：主动收益 +35.6% = 选择 +64.1% + 配置 −15.5% + 交互 −12.3%——超额全部来自行业内选股。回测指标同步新增 `sharpe_t_stat` / `years_to_prove`=(1.96/\|SR\|)² / `excess_t_stat`（主策略 8.35 年：Sharpe t=1.69、超额 t=1.947 压线）→ `reports/alla_attribution/`，网格报告已含 t 列 |
 | **论文复现因子族（awesome 21 式）** | `factor/paper_factors.py` + `scripts/factors/build_paper_factors.py`（2026-09-08） | awesome-systematic-trading 复现库 61 策略中 21 个可在 A 股数据面实现者翻译入库（all_a_2018_2026 达 900 因子）：短期反转 IC=0.038/t=11.3、低波 t=8.2、价值 t=8.5、研发强度 t=5.6、质量/FSCORE t≈4.4 显著为正；月频动量族为负（A 股动量反转复现）→ registry `source=paper:awesome-systematic-trading:*` |
 | **日内研究** | `scripts/evaluation/intraday_analysis.py` | 隔夜 vs 日内收益分解、成交量/波动率时段效应 → `reports/intraday_analysis_{year}.png`、`intraday_summary_{year}.csv` |
@@ -441,17 +441,19 @@ Top10% 选股清单 `picks_YYYY-MM-DD.csv`。参数真源在 `config/settings.ya
 结果落 `reports/model_portfolio/`。旧版 HS300 口径
 （单模型+信号层中性化）已退役，函数保留为 legacy 供 buffer_tune/freq_tune 复用。
 
-### 全A每日模型选股排名（最优方案生产化推理，2026-09-08）
+### 全A每日模型选股排名（最优方案生产化推理，2026-09-08；口径 2026-09-17 对齐主实验）
 
 ```bash
-python scripts/pipelines/alla_daily_rank.py                    # 全流程：更新数据→重训→排名（~5分钟）
+python scripts/pipelines/alla_daily_rank.py                    # 全流程：更新数据→重训→排名（正交化口径 ~60 分钟）
 python scripts/pipelines/alla_daily_rank.py --skip-update      # 离线（数据已更新）
+python scripts/pipelines/alla_daily_rank.py --preproc zscore   # 回退旧口径（原始面板+zscore，北交所保留）
 python scripts/pipelines/alla_daily_rank.py --window 750       # gbdt_w750 变体
 python scripts/pipelines/alla_daily_rank.py --install-task 17:30   # 注册每日盘后 Windows 计划任务
 python scripts/pipelines/alla_daily_rank.py --remove-task
 ```
 
-把全A滚动实验的最优方案（gbdt h1 + 当年入选 50 因子 + 500 日窗 + raw Top10%）
+把全A滚动实验的**最优口径**（因子层正交化 + gbdt **h1+h5 截面秩平均** +
+当年入选 ~50 因子 + 500 日窗 + raw Top10%）
 变成每日盘后一条命令：增量更新全A缓存（盘中运行由 update_data 的守卫自动把
 拉取终点回退到上一交易日，防当日半拉K线进缓存——2026-09-02 事故的对策；
 SDK 拉表瞬时失败自动重试 3 次）
@@ -463,7 +465,11 @@ B+族商誉质押/B++族构造/A族股东复用 oneoff 构建器；训练窗与�
 （Top10% 可交易候选，等权参考）、`history.csv`（逐日漂移监控）、
 `latest_ranking.csv`（稳定路径副本）。口径披露：训练段用发布时点已知的全部
 标签（实时预测无未来可窥，实验的 embargo 是回测隔离）；可交易性为信号日
-状态估计（T+1 一字板不可预知）；跨年无当年选择文件时回退最近年份并告警。
+状态估计（T+1 一字板不可预知）；跨年无当年选择文件时回退最近年份并告警；
+**面板口径 2026-09-17 起对齐主实验 ortho 臂**（实时正交化，不依赖离线
+`panels_neu`；面板等价性实测 85 特征秩相关 median 0.9999），`--preproc zscore`
+可回退；**北交所无行业分类 → ortho 口径下不入榜**（与主实验 ortho 臂一致，
+影响 337 只，需 BJ 时用 `--preproc zscore`）。
 
 > 顺带修复数据层一个实际 bug（2026-09-08）：`DataCache.get_calendar` 在
 > `end=None` 时永不回源，本地日历被历史某次显式 end 调用封顶（实测卡在
