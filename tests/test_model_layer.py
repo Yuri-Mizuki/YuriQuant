@@ -14,7 +14,7 @@ import pandas as pd
 import pytest
 
 from model.features import build_feature_set
-from model.labels import build_labels, forward_returns
+from model.labels import build_label_pair, build_labels, forward_returns
 from model.predictor import (
     PREDICTORS,
     RidgePredictor,
@@ -132,6 +132,50 @@ class TestLabels:
         ref, _ = build_labels(close, horizon=5, mode="rank")
         pd.testing.assert_frame_equal(labels, ref)
         assert embargo == 5
+
+    def test_tradable_mask_none_is_zero_regression(self, market):
+        """不传掩码 = 历史行为逐位一致（零回归，防静默改口径）。"""
+        close, _ = market
+        ref, _ = build_labels(close, horizon=5, mode="rank")
+        out, _ = build_labels(close, horizon=5, mode="rank", tradable_mask=None)
+        pd.testing.assert_frame_equal(out, ref)
+
+    def test_tradable_mask_nans_only_untradable_cells(self, market):
+        """掩码 False 处置 NaN；同行的其它股票、以及 rank 定义都不得被重排。"""
+        close, _ = market
+        ref, _ = build_labels(close, horizon=5, mode="rank")
+        mask = pd.DataFrame(True, index=close.index, columns=close.columns)
+        mask.iloc[100, 3] = False
+        out, _ = build_labels(close, horizon=5, mode="rank", tradable_mask=mask)
+
+        assert np.isnan(out.iloc[100, 3])
+        # 除被掩处外逐位一致 —— 尤其同行其它股票仍保持"全样本 rank"值
+        patched = out.copy()
+        patched.iloc[100, 3] = ref.iloc[100, 3]
+        pd.testing.assert_frame_equal(patched, ref)
+
+    def test_tradable_mask_missing_cells_are_tradable(self, market):
+        """掩码未覆盖的 (date, code) 保守视为可交易（与回测 fillna(True) 同口径）。"""
+        close, _ = market
+        ref, _ = build_labels(close, horizon=5, mode="rank")
+        mask = pd.DataFrame(True, index=close.index[:5], columns=close.columns[:2])
+        out, _ = build_labels(close, horizon=5, mode="rank", tradable_mask=mask)
+        pd.testing.assert_frame_equal(out, ref)
+
+    def test_tradable_mask_all_false_raises(self, market):
+        close, _ = market
+        mask = pd.DataFrame(False, index=close.index, columns=close.columns)
+        with pytest.raises(ValueError, match="tradable_mask"):
+            build_labels(close, horizon=5, mode="rank", tradable_mask=mask)
+
+    def test_label_pair_mask_touches_labels_only(self, market):
+        """build_label_pair 的掩码只作用于标签，原始收益面板保持完整。"""
+        close, _ = market
+        mask = pd.DataFrame(True, index=close.index, columns=close.columns)
+        mask.iloc[100, 3] = False
+        labels, fwd = build_label_pair(close, horizon=5, tradable_mask=mask)
+        assert np.isnan(labels.iloc[100, 3])
+        assert fwd.notna().sum().sum() == forward_returns(close, 5).notna().sum().sum()
 
     def test_invalid_mode_raises(self, market):
         close, _ = market
