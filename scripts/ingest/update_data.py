@@ -24,8 +24,11 @@
 from __future__ import annotations
 
 import argparse
+import subprocess
 import sys
 from pathlib import Path
+
+import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
@@ -49,6 +52,71 @@ def _parse_minute_arg(raw: str | None) -> list[int] | None:
     from data.datasource import validate_minute_period
     parts = [p.strip() for p in raw.split(",") if p.strip()]
     return [validate_minute_period(int(p)) for p in parts]
+
+
+# ---- 状态表（涨跌停/停牌/ST/除权标记）拉取：子进程隔离 + 硬超时 ----
+# 2026-09-16 事故：SDK 该接口当晚 hang 住，17:58 启动的那轮在此步骤挂了 40+ 分钟，
+# 进程最终被杀、当日排名未能产出（18:43 改走 --skip-update 才在 7 分钟内出榜）。
+# 根因是 **hang 而非 raise**：cache._batched_status_fetch 的 `for attempt in (1,2,3)`
+# 只在抛异常时生效，而 datasource 层直调 SDK、全链路无 timeout，挂住后没有可中断点。
+# 对策：整步交给独立子进程（scripts.ingest.fetch_status_batched，每批即落盘），
+# 主进程用 subprocess timeout 兜底——超时 kill 得掉，且已拉批次不丢（断点续拉）。
+
+
+def _status_incremental_begin(begin: int, target_date: int) -> int:
+    """状态表增量起点 = 本地已覆盖的最后日期 + 1 天；无缓存时回退 begin。
+
+    只读 parquet 索引（``columns=[]``，不读数值列）——85MB 表约 0.1s。
+    返回值 > target_date 表示本地已覆盖到目标日，调用方应跳过拉取。
+    """
+    p = Path(str(Config.cache()["root"])) / "history_stock_status.parquet"
+    if not p.exists():
+        return begin
+    try:
+        idx = pd.read_parquet(p, columns=[]).index
+        if len(idx) == 0:
+            return begin
+        last = int(pd.Timestamp(idx.get_level_values("date").max()).strftime("%Y%m%d"))
+    except Exception:  # noqa: BLE001 - 索引不可读时保守走全量补拉
+        return begin
+    return int((pd.Timestamp(str(last)) + pd.Timedelta(days=1)).strftime("%Y%m%d"))
+
+
+def fetch_status_table(begin: int, target_date: int, cfg) -> None:
+    """拉取历史涨跌停/停牌/ST 状态表（子进程 + 硬超时，失败不阻断主流程）。
+
+    非关键路径：失败仅使下游降级——可交易掩码漏拒（方向保守，不错杀）、
+    状态特征当日缺失、信号日可交易改用日线行情推断涨跌停。
+    """
+    st_cfg = cfg.get("fetch", {}).get("status_table", {}) or {}
+    if not st_cfg.get("enabled", True):
+        log.info("状态表拉取已禁用（fetch.status_table.enabled=false），跳过")
+        return
+    st_begin = _status_incremental_begin(begin, target_date)
+    if st_begin > target_date:
+        log.info("状态表已覆盖至 %s，跳过拉取", target_date)
+        return
+    timeout_s = int(st_cfg.get("timeout_s", 300))
+    batch = int(st_cfg.get("batch", 200))
+    log.info("拉取历史涨跌停/停牌状态: %s -> %s（子进程，预算 %ds，%d 只/批）",
+             st_begin, target_date, timeout_s, batch)
+    cmd = [sys.executable, "-m", "scripts.ingest.fetch_status_batched",
+           "--begin", str(st_begin), "--end", str(target_date), "--batch", str(batch)]
+    try:
+        proc = subprocess.run(cmd, cwd=ROOT, timeout=timeout_s)
+    except subprocess.TimeoutExpired:
+        log.warning("状态表拉取超过 %ds 预算，子进程已终止（已落盘批次保留）。"
+                    "下游降级：掩码漏拒、信号日可交易用日线推断涨跌停。"
+                    "重跑本脚本或 `python -m scripts.ingest.fetch_status_batched` 可断点续拉",
+                    timeout_s)
+        return
+    except Exception as exc:  # noqa: BLE001 - 非关键步骤，任何异常都不阻断主流程
+        log.warning("状态表拉取异常（保留旧缓存，不影响核心行情数据）: %s", exc)
+        return
+    if proc.returncode != 0:
+        log.warning("状态表拉取子进程 exit=%d（保留旧缓存，下游降级）", proc.returncode)
+    else:
+        log.info("状态表拉取完成")
 
 # 股票池 -> 指数代码 / 池名（2026-08-26 池隔离扩展）
 _POOL_INDEX = {"hs300": "000300.SH", "zz500": "000905.SH", "zz1000": "000852.SH"}
@@ -169,19 +237,19 @@ def main():
         log.info("%d 分钟K线行数: %d, 代码数: %d", period, len(mk), n_codes)
 
     # 5. 复权因子（单次复权因子 + 累积后复权因子）
-    log.info("拉取复权因子 ...")
-    adj = cache.get_adj_factor(codes)
+    # upto=target_date：本地宽表已覆盖目标日则短路、不访问数据源。SDK 的复权
+    # 因子接口没有日期参数（每次回源都是全量拉取并覆写 h5，实测约 6 分钟），
+    # 同日重跑（补跑/重试）直接复用本地，避免重复付出这份代价。
+    log.info("拉取复权因子(目标 %s，本地已覆盖则跳过) ...", target_date)
+    adj = cache.get_adj_factor(codes, upto=target_date)
     log.info("单次复权因子行数: %d, 列数: %d", len(adj), adj.shape[1])
-    backward = cache.get_backward_factor(codes)
+    backward = cache.get_backward_factor(codes, upto=target_date)
     log.info("后复权因子行数: %d, 列数: %d", len(backward), backward.shape[1])
 
     # 6. 历史涨跌停/停牌/ST 状态（非关键：失败仅降级过滤能力，不阻断后续）
-    log.info("拉取历史涨跌停/停牌状态: %s -> %s", begin, target_date)
-    try:
-        status = cache.get_history_stock_status(codes, begin, target_date)
-        log.info("历史状态行数: %d", len(status))
-    except Exception as exc:
-        log.warning("历史状态拉取失败（保留旧缓存，不影响核心行情数据）: %s", exc)
+    # 走子进程 + 硬超时：SDK 该接口会 hang 而非抛异常，进程内重试对 hang 无效
+    # （2026-09-16 事故，详见 fetch_status_table 文档）。
+    fetch_status_table(begin, target_date, cfg)
 
     # 7. 行业分类（因子行业中性化用）
     industry_level = int(cfg.get("preprocessing", {}).get("industry_level", 1))

@@ -135,7 +135,32 @@ class DataCache:
         return h
 
     # ---- 缓存模式：宽表全量刷新（index=date, columns=code）----
-    def _refresh_wide_table(self, filename: str, codes: list[str], fetch_fn) -> pd.DataFrame:
+    def _wide_table_last_date(self, p: Path) -> int | None:
+        """宽表本地已覆盖的最后日期（YYYYMMDD）。
+
+        只读 parquet 索引（``columns=[]``）、**不读数值列**——405MB 的宽表取
+        索引仅约 0.3s。用作"是否需要回源"的短路判据（见 _refresh_wide_table）。
+        """
+        if not p.exists():
+            return None
+        try:
+            idx = pd.read_parquet(p, columns=[]).index
+        except Exception:
+            return None
+        if len(idx) == 0:
+            return None
+        try:
+            return int(pd.Timestamp(idx.max()).strftime("%Y%m%d"))
+        except (ValueError, TypeError):
+            return None
+
+    def _refresh_wide_table(
+        self,
+        filename: str,
+        codes: list[str],
+        fetch_fn,
+        upto: int | None = None,
+    ) -> pd.DataFrame:
         """本地列全保留 + 从数据源全量拉取 + 按列去重落盘。
 
         用于 SDK 自身已维护增量缓存、调用方每次总是传整个 code_list 的场景
@@ -144,16 +169,41 @@ class DataCache:
         本地列**不**按本次请求的 codes 过滤：窄池请求（如每日增量更新只传
         当期成分并集）若过滤落盘，会永久丢弃历史成员的复权因子列，下次
         重建因子面板时这些股票的后复权价全变 NaN（幸存者偏差）。
+
+        upto: 目标日期（YYYYMMDD）。本地表已覆盖该日期时短路返回本地数据、
+            **完全不访问数据源**。复权因子的 SDK 接口没有日期参数（签名只有
+            code_list/local_path/is_local），SDK 侧每次调用都是全量拉取并覆写
+            自己的 h5（实测单次约 6 分钟、峰值内存约 2.8GB）——因此"本地已
+            覆盖目标日"是唯一可用的短路条件：同日重复运行（重跑/补跑）不必
+            重拉。不传（None）时保持原行为，总是回源。
         """
         p = self._root / filename
         local_df = pd.DataFrame()
         if p.exists():
             local_df = pd.read_parquet(p)
 
+        if upto is not None:
+            last = self._wide_table_last_date(p)
+            if last is not None and last >= int(upto):
+                cols = [c for c in codes if c in local_df.columns]
+                return local_df[cols].sort_index() if cols else local_df
+
         new_df = fetch_fn(codes)
         if not new_df.empty:
-            combined = pd.concat([local_df, new_df], axis=1)
-            combined = combined.loc[:, ~combined.columns.duplicated(keep="last")]
+            # 内存友好合并：只并 local 独有列。
+            # 原实现 ``pd.concat([local, new], axis=1)`` 会在 5807 列上把两份
+            # 405MB 宽表整份复制、再做一次布尔掩码全量拷贝（峰值约 2.8GB），是
+            # 2026-09-16 两次静默死亡（疑似 OOM）的直接原因。列集合、列顺序与
+            # 索引语义（union）均与原实现逐位等价——同名列以 new 为准，等价于
+            # 原先的 duplicated(keep="last")（见 scripts/oneoff/
+            # _probe_wide_table_merge_eq.py，14 组穷举输入 max|Δ|=0）。
+            local_only = local_df.columns.difference(new_df.columns, sort=False)
+            if not len(local_only) and bool(local_df.index.isin(new_df.index).all()):
+                # 快路径：new 已覆盖 local 的全部列与行——零拷贝，不并表
+                combined = new_df
+            else:
+                # local 有独有列、或独有日期：并表（索引取 union，与旧实现一致）
+                combined = pd.concat([local_df[local_only], new_df], axis=1)
             combined.to_parquet(p, compression="snappy")
             local_df = combined
         cols = [c for c in codes if c in local_df.columns]
@@ -436,15 +486,27 @@ class DataCache:
         )
 
     # ---- 复权因子 ----
-    def get_adj_factor(self, code_list: Iterable[str]) -> pd.DataFrame:
-        codes = list(code_list)
-        return self._refresh_wide_table("adj_factor.parquet", codes, self._ds.get_adj_factor)
+    def get_adj_factor(self, code_list: Iterable[str],
+                       upto: int | None = None) -> pd.DataFrame:
+        """单次复权因子宽表（index=date, columns=code）。
 
-    def get_backward_factor(self, code_list: Iterable[str]) -> pd.DataFrame:
-        """累积后复权因子，缓存模式同 get_adj_factor（宽表全量刷新）。"""
+        upto: 目标日期 YYYYMMDD；本地已覆盖该日期则短路、不访问数据源
+            （SDK 接口无日期参数，每次回源都是全量拉取，见 _refresh_wide_table）。
+        """
         codes = list(code_list)
         return self._refresh_wide_table(
-            "backward_factor.parquet", codes, self._ds.get_backward_factor
+            "adj_factor.parquet", codes, self._ds.get_adj_factor, upto=upto
+        )
+
+    def get_backward_factor(self, code_list: Iterable[str],
+                            upto: int | None = None) -> pd.DataFrame:
+        """累积后复权因子，缓存模式同 get_adj_factor（宽表全量刷新）。
+
+        upto 语义同 get_adj_factor：本地已覆盖目标日期则短路不回源。
+        """
+        codes = list(code_list)
+        return self._refresh_wide_table(
+            "backward_factor.parquet", codes, self._ds.get_backward_factor, upto=upto
         )
 
     # ---- 历史涨跌停/停牌/ST ----
