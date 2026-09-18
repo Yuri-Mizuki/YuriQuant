@@ -46,22 +46,19 @@ log = setup_logging("mine_im_combos")
 PREFIX = "gp_im_"
 
 
-def load_im_panels(source: str = "im_independent") -> tuple[dict, dict]:
-    """从因子库取 im_* 面板与公式说明；im_independent 只取独立显著 17 个。"""
-    from research.factor_library import FactorLibrary
+def load_im_panels(source: str = "im_independent",
+                   dataset: str = "hs300_2022_2025") -> tuple[dict, dict]:
+    """从因子库取 im_* 面板与公式说明；im_independent 只取独立显著 17 个。
 
-    lib = FactorLibrary(dataset="hs300_2022_2025")
-    reg = lib.list_all()
-    reg = reg[reg["name"].str.startswith("im_")]
-    if source == "im_independent":
-        chk = pd.read_csv(Path("reports/intraday_stat_checkup.csv"))
-        ok = set(chk[(chk["dup_corr1"] < 0.5) & (chk["t_stat_nw"].abs() > 2)]["name"])
-        reg = reg[reg["name"].isin(ok)]
-        log.info("独立显著筛选: %d/%d 个 im_* 入选终端集", len(reg), 42)
-    panels = {n: lib.get_panel(n) for n in reg["name"]}
-    panels = {n: p for n, p in panels.items() if p is not None and p.notna().any().any()}
-    docs = dict(zip(reg["name"], reg["formula"]))
-    return panels, docs
+    2026-09-16：实现已上移 ``scripts.common.e2e_common.load_im_panels``，
+    与 ``scripts.factors.run_gflownet_phase1``（GFlowNet 接分钟特征）共用同一
+    份筛选口径，避免两条链路漂移；此处只保留入口。搬迁等价性由
+    ``scripts.oneoff._probe_im_loader_equiv`` 逐位验证（17/42 面板 max|Δ|=0、
+    md5 一致）。
+    """
+    from scripts.common.e2e_common import load_im_panels as _load
+
+    return _load(source, dataset)
 
 
 def main() -> None:
