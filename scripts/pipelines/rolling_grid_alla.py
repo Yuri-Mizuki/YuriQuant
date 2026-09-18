@@ -139,6 +139,22 @@ INCLUDE_FUNDAMENTAL = True
 # 另类数据族开关：False 时事件/资金流/状态族退出候选池与保留席位
 # （复现 2026-09-12 之前的「量价+基本面」口径时置 False）。
 INCLUDE_ALT = True
+# 特征硬剔除表（消融臂，2026-09-17 接入）：名字进此集合的特征在 select 阶段
+# 被完全排除（候选池 + 全部保留席位）。默认空集 = 主实验零改动。
+# 首次用途：量化 limit_pos（封板位置）的 OOS 净贡献——P0 已证其在可交易口径下
+# |IC| 反而放大（−0.0515 / t=−20.2），须用同口径消融臂而非事后归因。
+# CLI: --exclude-features limit_pos [--out-tag nolp]
+EXCLUDE_FEATURES: set[str] = set()
+
+# 训练标签口径（2026-09-17 接入，P0 报告 §六 P1-a 的治本项）：
+#   False（默认）= 标签 = 全样本前瞻收益截面 rank —— 主实验现行口径，零回归；
+#   True         = 标签掩掉"买不进的样本"（T+1 成交口径 tradable_mask 为 False
+#                  处置 NaN，等价于从训练集剔除）。
+# 为什么需要：无掩码时标签把"T 日封涨停 → T+1 继续封板"的**买不进**收益当监督
+# 信号，模型学出"高封板位置 → 高收益"的纸面关系（limit_pos 可交易口径 IC 为负
+# 却拿到 Top1 权重；reports/limit_pos_tradable_p0/report.md）。治本位置在标签层。
+# CLI: --tradable-labels（须配 --out-tag 防覆盖主实验产物）
+USE_TRADABLE_LABELS: bool = False
 
 # ---------------------------------------------------------------------------
 # RRE 秩稳定性筛选（2026-09-14 接入）：剔除"排名天天变"的高换手因子。
@@ -218,6 +234,57 @@ def _shares_panel(eq: pd.DataFrame, index, columns) -> pd.DataFrame:
     return out * 10000.0
 
 
+def _warn_duplicate_base(base: Path) -> None:
+    """prep 前检查：其他臂的 _base 是否与本臂完全相同（只读，永不阻断）。
+
+    `stage_prep()` 的输出与 `--preproc` / `--ablation` 无关，因此各臂的 `_base/`
+    内容字节级相同、纯属重复（实测四臂 14 文件 md5 全等）。历史教训：删臂时
+    主产物删干净了，`_base/` 却因每次 prep 都重建而长期潜伏（`mixed`/`nofund`
+    各残留 446MB）。这里只做提示，不自动删除——删除仍由人工确认。
+
+    代价：md5 一遍约 446MB × N 臂，数秒级；仅在 prep 时发生，可接受。
+    """
+    import hashlib
+
+    def _digest(fp: Path) -> str:
+        h = hashlib.md5()
+        with open(fp, "rb") as fh:
+            while True:
+                b = fh.read(1 << 20)
+                if not b:
+                    break
+                h.update(b)
+        return h.hexdigest()
+
+    reports = Path("reports")
+    if not reports.is_dir():
+        return
+    # 只比对一个有代表性的中等大小文件，避免全量 md5 拖慢 prep
+    probe = "tradable_mask.parquet"
+    mine = base / probe
+    if not mine.exists():
+        return  # 本臂首建，无重复可言
+    my_sum = _digest(mine)
+
+    dups: list[str] = []
+    mine_resolved = base.resolve()
+    for arm_dir in sorted(p for p in reports.iterdir() if p.is_dir()):
+        other = arm_dir / "_base"
+        # 用 resolve() 比较，避免相对/绝对、`..`、大小写等写法差异导致自比较失效
+        if other.resolve() == mine_resolved or not (other / probe).exists():
+            continue
+        if _digest(other / probe) == my_sum:
+            dups.append(arm_dir.name)
+
+    if dups:
+        log.warning(
+            "⚠️ %s/_base 与以下臂的 _base 内容相同（纯重复，可安全删除以省 %s 每份）：%s。"
+            " 结论：prep 产物与 --preproc 无关，各臂 _base 必然一致；"
+            "已归档的臂可在确认无引用后删除其 _base/。",
+            OUT.name, "约 446MB", ", ".join(dups),
+        )
+
+
 def stage_prep():
     """构建回测所需基础面板：复权价、风格协变量、可执行掩码、基准。"""
     from config import Config
@@ -230,6 +297,7 @@ def stage_prep():
 
     t0 = time.time()
     base = OUT / "_base"
+    _warn_duplicate_base(base)
     base.mkdir(parents=True, exist_ok=True)
     cache_root = Path(str(Config.cache()["root"]))
 
@@ -413,13 +481,19 @@ def select_features_for_year(year: int, horizon: int, ic_cache: pd.DataFrame,
                              all_days: pd.DatetimeIndex,
                              cut: pd.Timestamp | None = None,
                              include_alt: bool = INCLUDE_ALT,
-                             include_rre: bool = INCLUDE_RRE) -> list[str]:
+                             include_rre: bool = INCLUDE_RRE,
+                             exclude: set[str] | None = None) -> list[str]:
     """某年 OOS 用的特征：质量窗（过去 QUALITY_WINDOW 日）IC + 覆盖率 + DPP 集合去冗余。
 
     去冗余用项目正典 DPP（research.dpp_selection::dpp_select，log-det 最大化）——
     研报国金 AlphaEval 框架确认：DPP 是收益端增益来源（图表40），两两贪心去重
     （pairwise_dedup）遇三角相关结构会连锁误杀、长 horizon 只剩 3~16 个特征，
     替换为 DPP 后在 h≥5 能跨族保留互补特征。
+
+    exclude: 硬剔除的特征名（消融臂用，默认 None = 原行为零改动）。剔除在 ``quality``
+        上做一次即覆盖三条入选路径——DPP 候选池 ``cands``、基本面保留席位、
+        ``_reserve_alt`` 另类席位、以及两处 ``_extra`` 兜底，四者均以
+        ``quality.index`` 为源，故不会从旁路漏回。
     """
     from research.dpp_selection import corr_matrix, dpp_select
 
@@ -429,6 +503,17 @@ def select_features_for_year(year: int, horizon: int, ic_cache: pd.DataFrame,
     q_days = all_days[all_days <= cut][-QUALITY_WINDOW:]
     ic_q = ic_cache.loc[ic_cache.index.intersection(q_days)]
     quality = ic_q.mean().abs().sort_values(ascending=False)
+
+    # 消融：硬剔除指定特征（在 quality 上 drop 一次即覆盖全部入选路径）。
+    # 记录被剔者在当期 |IC| 榜的原位次——若它本就在候选区外，剔除是空操作，
+    # 报告里须如实呈现（否则会把「本来没选」误读成「剔了没影响」）。
+    if exclude:
+        _hit = [n for n in exclude if n in quality.index]
+        if _hit:
+            log.info("  exclude 剔除 %d/%d：%s（当期 |IC| 榜位次 %s）",
+                     len(_hit), len(exclude), _hit,
+                     {n: int(quality.index.get_loc(n)) + 1 for n in _hit})
+        quality = quality.drop(index=_hit)
 
     cov_ok = registry.set_index("name")["coverage"]
     cands = [n for n in quality.index
@@ -515,7 +600,8 @@ def stage_select(quick: bool = False):
             if out.exists():
                 continue
             feats = select_features_for_year(year, h, ic_cache, registry,
-                                             store, all_days)
+                                             store, all_days,
+                                             exclude=EXCLUDE_FEATURES)
             out.write_text(json.dumps(feats, ensure_ascii=False, indent=1),
                            encoding="utf-8")
             log.info("选择 y%d h%d: %d 特征（%.0fs）", year, h, len(feats),
@@ -595,8 +681,12 @@ def stage_predict(quick: bool = False, only_horizons: list[int] | None = None):
 
     pred_dir = OUT / "pred"
     pred_dir.mkdir(parents=True, exist_ok=True)
+    lab_mask = base["mask"] if USE_TRADABLE_LABELS else None
+    if lab_mask is not None:
+        log.info("+++ 训练标签用可交易掩码（T+1 成交口径）：掩掉买不进的样本")
     for h in horizons:
-        labels, _embargo = build_labels(close, horizon=h, mode="rank")
+        labels, _embargo = build_labels(close, horizon=h, mode="rank",
+                                        tradable_mask=lab_mask)
         fwd = close.pct_change(h, fill_method=None).shift(-h)
         for mname, mcfg in models.items():
             if mcfg.get("h1_only") and h != 1:
@@ -615,7 +705,8 @@ def stage_predict(quick: bool = False, only_horizons: list[int] | None = None):
                     sel_dir = OUT / "selection"
                     sel_dir.mkdir(parents=True, exist_ok=True)
                     feats_names = select_features_for_year(
-                        year, h, ic_cache, registry, store, all_days)
+                        year, h, ic_cache, registry, store, all_days,
+                        exclude=EXCLUDE_FEATURES)
                     sel_path.write_text(json.dumps(feats_names, ensure_ascii=False),
                                         encoding="utf-8")
                 feats_names = json.loads(sel_path.read_text(encoding="utf-8"))
@@ -1181,9 +1272,24 @@ def main():
                     help="backtest 阶段成交价口径：close(T收盘,乐观上限,默认) / "
                          "open(T+1开盘) / vwap(T+1 VWAP算法单，可执行主口径)；"
                          "执行价模式仅 h=1，产物加 _{execution} 后缀")
+    ap.add_argument("--exclude-features", default=None,
+                    help="消融臂：逗号分隔的特征名，select 阶段硬剔除"
+                         "（候选池 + 全部保留席位）；须配 --out-tag 防覆盖主实验")
+    ap.add_argument("--tradable-labels", action="store_true",
+                    help="训练标签掩掉买不进的样本（T+1 成交口径可交易掩码）；"
+                         "默认关闭 = 主实验现行口径。须配 --out-tag 防覆盖")
+    ap.add_argument("--out-tag", default=None,
+                    help="消融臂输出目录后缀 -> reports/alla_rolling_<tag>")
     args = ap.parse_args()
 
-    global INCLUDE_FUNDAMENTAL, OUT, PANELS_DIR, NAME_DIR
+    global INCLUDE_FUNDAMENTAL, OUT, PANELS_DIR, NAME_DIR, EXCLUDE_FEATURES
+    global USE_TRADABLE_LABELS
+    if args.tradable_labels:
+        if not args.out_tag:
+            ap.error("--tradable-labels 须配 --out-tag："
+                     "否则会覆盖主实验 pred/（exists-skip 不会重跑，静默混口径）")
+        USE_TRADABLE_LABELS = True
+        log.info("+++ 训练标签：可交易掩码口径（治本，P0 §六 P1-a）")
     if args.ablation:
         INCLUDE_FUNDAMENTAL = False
         OUT = Path("reports") / "alla_rolling_nofund"
@@ -1198,6 +1304,13 @@ def main():
         NAME_DIR = {n: _neu for n in FUNDAMENTAL_FAMILY_SETS | {"float_mktcap"}}
         log.info("+++ 混合口径：基本面/股东族 %d 因子 -> panels_neu，量价 -> panels，"
                  "输出 -> %s", len(NAME_DIR), OUT)
+    if args.exclude_features:
+        EXCLUDE_FEATURES.update(
+            n.strip() for n in args.exclude_features.split(",") if n.strip())
+        log.info("+++ 消融臂：select 阶段硬剔除 %s", sorted(EXCLUDE_FEATURES))
+    if args.out_tag:
+        OUT = Path("reports") / f"alla_rolling_{args.out_tag}"
+        log.info("+++ 输出重定向 -> %s（防覆盖主实验产物）", OUT)
 
     OUT.mkdir(parents=True, exist_ok=True)
     stages = [args.stage] if args.stage != "all" else \

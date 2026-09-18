@@ -133,6 +133,63 @@ def test_load_base_guard(tmp_path, monkeypatch):
     assert base["close"].index[0] == pd.Timestamp("2018-01-01")
 
 
+def test_warn_duplicate_base_detects_identical_arms(tmp_path, monkeypatch):
+    """各臂 _base 字节相同 → 只警告、不阻断、不删除（2026-09-16 新增守卫）。"""
+    from scripts.pipelines import rolling_grid_alla as R
+
+    reports = tmp_path / "reports"
+    arm_a = reports / "alla_rolling"
+    arm_b = reports / "alla_rolling_ortho"
+    for arm in (arm_a, arm_b):
+        _make_base(arm)          # 两份内容完全相同（同函数生成）
+    assert (arm_a / "_base" / "tradable_mask.parquet").exists()
+
+    monkeypatch.chdir(tmp_path)  # `_warn_duplicate_base` 用相对路径 Path("reports")
+    monkeypatch.setattr(R, "OUT", arm_b)
+
+    records = []
+
+    class _Sink:
+        def warning(self, msg, *a):
+            records.append(msg % a if a else msg)
+
+    monkeypatch.setattr(R, "log", _Sink())
+    R._warn_duplicate_base(arm_b / "_base")
+
+    assert records, "相同内容应产生警告"
+    assert "alla_rolling" in records[0]
+    # 关键：只警告，两臂文件都还在（本函数永不删除）
+    assert (arm_a / "_base" / "tradable_mask.parquet").exists()
+    assert (arm_b / "_base" / "tradable_mask.parquet").exists()
+
+
+def test_warn_duplicate_base_silent_when_no_sibling(tmp_path, monkeypatch):
+    """无同内容兄弟臂 / 本臂首建 → 静默返回，不误报。"""
+    from scripts.pipelines import rolling_grid_alla as R
+
+    reports = tmp_path / "reports"
+    arm = reports / "alla_rolling"
+    arm.mkdir(parents=True)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(R, "OUT", arm)
+
+    records = []
+
+    class _Sink:
+        def warning(self, msg, *a):
+            records.append(msg % a if a else msg)
+
+    monkeypatch.setattr(R, "log", _Sink())
+    # 本臂 _base 还不存在（首建）
+    R._warn_duplicate_base(arm / "_base")
+    assert records == []
+
+    # 建好本臂但无兄弟臂
+    _make_base(arm)
+    R._warn_duplicate_base(arm / "_base")
+    assert records == []
+
+
 def test_reserve_alt_subfamily_cov_and_dedup():
     """另类族保留席位：子族轮转 + 低覆盖率门槛 + 同值去重。"""
     from scripts.pipelines import rolling_grid_alla as R
@@ -211,6 +268,56 @@ def test_select_features_alt_slots_enter_selection(tmp_path):
     assert "lhb_count_20d" not in off
     # 覆盖率达标者仍能走通用候选池（本就合理，不属席位保护范围）
     assert set(off) <= {"m0", "m1", "m2", "limit_pos", "notice_sue"}
+
+
+def test_tradable_labels_switch_default_off():
+    """训练标签掩码开关默认关闭（同 exclude 的零回归纪律：不静默改主实验口径）。"""
+    from scripts.pipelines import rolling_grid_alla as R
+    assert R.USE_TRADABLE_LABELS is False
+
+
+def test_select_features_exclude_hard_drops_all_paths(tmp_path):
+    """exclude 硬剔除覆盖候选池 + 保留席位；默认 None 时逐字零改动。
+
+    消融臂正确性的前提：剔除一个**本来未入选**的特征必须结果逐字不变 ——
+    否则「净贡献 = 0」这类结论会被选择噪声污染（ortho 臂正是这种极限情形）。
+    """
+    from scripts.pipelines import rolling_grid_alla as R
+
+    days = pd.bdate_range("2016-07-01", "2018-12-31")
+    codes = [f"c{i}" for i in range(6)]
+    rng = np.random.default_rng(11)
+    ics = {"m0": 0.090, "m1": 0.080, "limit_pos": 0.026, "notice_sue": 0.007}
+    ic_cache = pd.DataFrame(
+        {n: np.full(len(days), v) for n, v in ics.items()}, index=days)
+
+    panels_dir = tmp_path / "panels"
+    panels_dir.mkdir()
+    for n in ics:
+        pd.DataFrame(rng.normal(size=(len(days), len(codes))),
+                     index=days, columns=codes).astype(np.float32).to_parquet(
+            panels_dir / f"{n}.parquet")
+    registry = pd.DataFrame({"name": list(ics),
+                             "coverage": [1.0, 1.0, 0.734, 0.768]})
+    store = R.FeatureStore(panels_dir)
+
+    base = R.select_features_for_year(2018, 1, ic_cache, registry, store, days)
+    assert "limit_pos" in base                     # 另类族保留席位的入选者
+
+    exc = R.select_features_for_year(2018, 1, ic_cache, registry, store, days,
+                                     exclude={"limit_pos"})
+    assert "limit_pos" not in exc                  # 候选池与席位两条路径都堵住
+    assert set(exc) == set(base) - {"limit_pos"}   # 小池无替补，其余逐字保持
+
+    # 剔除本来未入选的名字 = 空操作（ortho 臂的极限情形，净贡献须为精确 0）
+    assert R.select_features_for_year(
+        2018, 1, ic_cache, registry, store, days,
+        exclude={"never_in_pool_x"}) == base
+    # 显式空集 / None 与基线一致
+    assert R.select_features_for_year(
+        2018, 1, ic_cache, registry, store, days, exclude=None) == base
+    assert R.select_features_for_year(
+        2018, 1, ic_cache, registry, store, days, exclude=set()) == base
 
 
 def test_alla_daily_dispatch_keys_disjoint():
