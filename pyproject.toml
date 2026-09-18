@@ -45,6 +45,12 @@ rl = [
     "stable-baselines3>=2.2",
     "sb3-contrib>=2.2",
 ]
+report = [
+    # 仅 scripts/reporting/md_to_email_html.py 用（邮件正文 markdown→HTML）。
+    # 2026-09-18 补声明：此前是隐式依赖 —— 系统解释器里恰好装了、.venv 里没有，
+    # 换机器/重建 venv 会以 ModuleNotFoundError 炸在发信前一步。
+    "markdown>=3.5",
+]
 dev = [
     "pytest>=8.0",
     "ruff>=0.6",
