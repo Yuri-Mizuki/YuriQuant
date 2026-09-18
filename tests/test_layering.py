@@ -309,6 +309,9 @@ _TESTS_ONLY_PRIVATE: set[tuple[str, str]] = {
     ("scripts.pipelines.alla_daily_rank", "_HOLDER_NUM_KEYS"),
     ("scripts.pipelines.alla_daily_rank", "_HOLDER_TOP_KEYS"),
     ("scripts.pipelines.alla_daily_rank", "_PLEDGE_KEYS"),
+    # 2026-09-17：单日秩平均（生产集成臂）与实验侧 `_rank_average` 同口径但不可
+    # 跨模块 import 私有名，故各写一份；test_alla_daily_rank 逐位比对两者输出。
+    ("scripts.pipelines.alla_daily_rank", "_rank_average_single_day"),
     ("scripts.factors.mine_factors", "_apply_gtja_preset"),
     ("scripts.pipelines.e2e_backtest", "_enforce_caps"),
     # 2026-09-11 把守卫改为**通用规则**后新暴露的测试白盒用例（生产侧已一并清干净）

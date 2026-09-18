@@ -644,6 +644,81 @@ def build_industry_table(ranking: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def _industry_top_label(df: pd.DataFrame, col: str) -> pd.Series:
+    """行业内模型分最高的成员 → ``"code 名称"``（index = 行业中文名）。
+
+    空输入或无 ``score`` 列返回空 Series；``name`` 缺失/为空时只给代码（不留尾随空格）。
+    股票代码优先取 ``code`` 列、否则回退用 index —— ``build_ranking`` 的输出以
+    index=code，但从 CSV 回读的 ranking 把 code 放在普通列里（index 退化为 RangeIndex），
+    此时若仍用 index 会静默写出名次数字（实测踩过：``"38 武进不锈"``）。
+    """
+    if df.empty or "score" not in df.columns:
+        return pd.Series(dtype=object)
+    firsts = df.sort_values("score", ascending=False) \
+        .drop_duplicates(col, keep="first")
+    has_name = "name" in firsts.columns
+    codes = firsts["code"] if "code" in firsts.columns else firsts.index
+    labels = [
+        f"{code} {nm}".strip() if has_name and isinstance(nm, str) and nm
+        else str(code)
+        for code, nm in zip(codes,
+                            firsts["name"] if has_name else [""] * len(firsts))
+    ]
+    return pd.Series(labels, index=firsts[col].values)
+
+
+def build_industry_table_l1(ranking: pd.DataFrame) -> pd.DataFrame:
+    """一级行业排名：申万一级聚合（``build_industry_table`` 的上卷版）。
+
+    与二级版**同口径**——``mean_score`` = 行业内全部有分股票的模型分数均值（即模型
+    对该板块的整体看多程度），``top_frac_share`` = 行业内进入全A Top-frac 的占比，
+    与全局 frac（默认 10%）比较可知板块的超/低配强度。差别只在聚合键与方法语义：
+    二级是细分视角、一级是板块视角，两者不是组内加权平均的关系。
+
+    相比二级版多给**可交易口径**三列：
+
+      - ``n_picks`` / ``pick_share``：组内 ``top_frac & tradable`` 的只数与占比
+        （口径与 ``build_ranking`` 的 picks 完全一致）；缺 ``tradable`` 列时记 0；
+      - ``top_stock_tradable``：组内**可交易**成员中的最高分。
+
+    理由：``top_stock`` 与二级版同口径取**全池**第一名，会命中 ST / 停牌
+    （实测 2026-09-17 有 11 个一级行业的组内第一是 ST，如房地产=ST云城、
+    医药生物=ST南新），实盘只能参考 ``top_stock_tradable``。
+
+    输出行索引为一级中文名（无归属的并入 "未知"），列序见 ``write_outputs`` 落盘结构。
+    """
+    df = ranking.copy()
+    if "industry_l1" not in df.columns:
+        df["industry_l1"] = ""
+    df["industry_l1"] = df["industry_l1"].fillna("未知").replace("", "未知")
+    # picks 口径与 build_ranking 一致：top_frac 且 tradable；缺列时不臆造可交易性
+    if "tradable" in df.columns:
+        df["_is_pick"] = df["top_frac"].astype(bool) & df["tradable"].astype(bool)
+    else:
+        df["_is_pick"] = False
+    g = df.groupby("industry_l1")
+    out = pd.DataFrame({
+        "n_stocks": g.size(),
+        "mean_score": g["score"].mean(),
+        "median_score": g["score"].median(),
+        "mean_pct_rank": g["pct_rank"].mean(),
+        "n_top_frac": g["top_frac"].sum().astype(int),
+    })
+    out["top_frac_share"] = (out["n_top_frac"] / out["n_stocks"]).round(4)
+    out["top_stock"] = _industry_top_label(df, "industry_l1").reindex(out.index) \
+        .fillna("")
+    out["n_picks"] = g["_is_pick"].sum().astype(int)
+    out["pick_share"] = (out["n_picks"] / out["n_stocks"]).round(4)
+    tradable_df = df[df["tradable"].astype(bool)] if "tradable" in df.columns \
+        else df.iloc[:0]
+    out["top_stock_tradable"] = _industry_top_label(tradable_df, "industry_l1") \
+        .reindex(out.index).fillna("")
+    out = out.sort_values("mean_score", ascending=False)
+    out.insert(0, "rank", np.arange(1, len(out) + 1))
+    out.index.name = "industry_l1"
+    return out
+
+
 def explain_features(importance: pd.Series) -> pd.DataFrame:
     """模型级：gain 特征重要性 → 排序表（中文名/释义/因子族/归一化贡献）。"""
     df = pd.DataFrame({"feature": importance.index.astype(str)})
@@ -1311,11 +1386,16 @@ def _write_table(path: Path, df: pd.DataFrame) -> bool:
 def write_outputs(ranking: pd.DataFrame, picks: pd.DataFrame,
                   predict_date: pd.Timestamp, meta: dict,
                   industry_table: pd.DataFrame | None = None,
+                  industry_table_l1: pd.DataFrame | None = None,
                   feature_importance: pd.DataFrame | None = None,
                   explain_top: pd.DataFrame | None = None,
                   leaders: pd.DataFrame | None = None,
                   out_dir: Path | None = None):
-    """排名/持仓/行业排名/解释 CSV + latest 稳定路径副本，返回文件路径 dict。"""
+    """排名/持仓/行业排名（二级+一级）/解释 CSV + latest 稳定路径副本。
+
+    返回文件路径 dict（键：ranking/picks/industry/industry_l1/feature_importance/
+    explain_top/leaders，仅含实际落盘的项）。
+    """
     d = out_dir or OUT_DIR
     d.mkdir(parents=True, exist_ok=True)
     ds = predict_date.strftime("%Y%m%d")
@@ -1339,6 +1419,15 @@ def write_outputs(ranking: pd.DataFrame, picks: pd.DataFrame,
             raise PermissionError(
                 f"行业排名写入失败：{ind_path.name} 被其他进程占用，请关闭后重跑")
         _write_latest(d / "latest_industry_rank.csv", ind_path)
+
+    ind_l1_path = None
+    if industry_table_l1 is not None and len(industry_table_l1):
+        ind_l1_path = d / f"industry_rank_l1_{ds}.csv"
+        industry_table_l1.index.name = "industry"
+        if not _write_table(ind_l1_path, industry_table_l1):
+            raise PermissionError(
+                f"一级行业排名写入失败：{ind_l1_path.name} 被其他进程占用，请关闭后重跑")
+        _write_latest(d / "latest_industry_rank_l1.csv", ind_l1_path)
 
     imp_path = None
     if feature_importance is not None and len(feature_importance):
@@ -1368,6 +1457,8 @@ def write_outputs(ranking: pd.DataFrame, picks: pd.DataFrame,
     paths = {"ranking": str(rank_path), "picks": str(picks_path)}
     if ind_path is not None:
         paths["industry"] = str(ind_path)
+    if ind_l1_path is not None:
+        paths["industry_l1"] = str(ind_l1_path)
     if imp_path is not None:
         paths["feature_importance"] = str(imp_path)
     if exp_path is not None:
@@ -1538,6 +1629,9 @@ def run(args) -> dict:
                                    names=stock_names, industry=industry)
     ind_table = build_industry_table(ranking) if "industry_l2" in ranking.columns \
         else pd.DataFrame()
+    # 一级行业表（上卷）：与二级表同源同口径，缺 industry_l1 列时跳过
+    ind_table_l1 = build_industry_table_l1(ranking) \
+        if "industry_l1" in ranking.columns else pd.DataFrame()
 
     # 选股解释：模型级（当日特征重要性）+ 个股级（Top20 SHAP 归因）
     imp_table = explain_features(predictor.feature_importance("gain"))
@@ -1569,6 +1663,7 @@ def run(args) -> dict:
             "runtime_sec": round(time.time() - t0, 1)}
     paths = write_outputs(ranking, picks, predict_date, meta,
                           industry_table=ind_table,
+                          industry_table_l1=ind_table_l1,
                           feature_importance=imp_table,
                           explain_top=explain_top,
                           leaders=leaders_table,
@@ -1579,6 +1674,8 @@ def run(args) -> dict:
              predict_date.date(), n_raw, args.frac * 100,
              meta["n_top_frac"], len(picks), meta["n_industries"],
              time.time() - t0)
+    log.info("行业表: 申万二级 %d 行 | 申万一级 %d 行",
+             len(ind_table), len(ind_table_l1))
     log.info("Top 20 预览 (code, name, 行业, score, 可交易):")
     for i, (code, row) in enumerate(ranking.head(20).iterrows(), 1):
         nm = row.get("name", "")
@@ -1608,6 +1705,8 @@ def run(args) -> dict:
     out_msg = f"输出: {paths['ranking']} | {paths['picks']}"
     if "industry" in paths:
         out_msg += f" | 行业排名: {paths['industry']}"
+    if "industry_l1" in paths:
+        out_msg += f" | 一级行业: {paths['industry_l1']}"
     if "feature_importance" in paths:
         out_msg += f" | 特征重要性: {paths['feature_importance']}"
     if "explain_top" in paths:

@@ -320,6 +320,78 @@ def test_build_industry_table():
     assert list(out2.index) == ["未知"] and out2.loc["未知", "n_stocks"] == 5
 
 
+def test_build_industry_table_l1():
+    """一级行业上卷：同口径聚合 + 可交易口径两列 + 缺列时的退化。"""
+    from scripts.pipelines.alla_daily_rank import build_industry_table_l1
+    codes = ["c0", "c1", "c2", "c3", "c4"]
+    ranking = pd.DataFrame({
+        "rank": range(1, 6),
+        "name": ["龙头A", "龙头B", "", "", ""],
+        "industry_l2": ["白酒Ⅱ", "白酒Ⅱ", "半导体", "半导体", "半导体"],
+        "industry_l1": ["食品饮料", "食品饮料", "电子", "电子", "电子"],
+        "score": [3.0, 1.0, 0.5, 0.0, -0.5],
+        "pct_rank": [1.0, 0.8, 0.6, 0.4, 0.2],
+        "top_frac": [True, True, True, False, False],
+        "tradable": [False, True, True, True, True],
+    }, index=codes)
+
+    out = build_industry_table_l1(ranking)
+    # mean_score：食品饮料 (3.0+1.0)/2 = 2.0 > 电子 0.0
+    assert list(out.index) == ["食品饮料", "电子"]
+    assert list(out["rank"]) == [1, 2]
+    assert out.loc["食品饮料", "n_stocks"] == 2
+    assert out.loc["食品饮料", "mean_score"] == pytest.approx(2.0)
+    assert out.loc["电子", "top_frac_share"] == pytest.approx(1 / 3, abs=5e-5)
+    # top_stock = 全池第一（c0 不可交易仍可入选）；可交易龙头跳过 c0 取 c1
+    assert out.loc["食品饮料", "top_stock"] == "c0 龙头A"
+    assert out.loc["食品饮料", "top_stock_tradable"] == "c1 龙头B"
+    # picks 口径 = top_frac & tradable：c0 被 tradable 剔，只剩 c1
+    assert out.loc["食品饮料", "n_picks"] == 1
+    assert out.loc["电子", "n_picks"] == 1
+    assert out.loc["食品饮料", "pick_share"] == pytest.approx(0.5)
+    # 缺 tradable 列 → 不臆造可交易性（n_picks=0、可交易龙头为空）
+    out2 = build_industry_table_l1(ranking.drop(columns=["tradable"]))
+    assert list(out2["n_picks"]) == [0, 0]
+    assert list(out2["top_stock_tradable"]) == ["", ""]
+    # 缺 industry_l1 列 → 全部并入"未知"一行
+    out3 = build_industry_table_l1(ranking.drop(columns=["industry_l1"]))
+    assert list(out3.index) == ["未知"] and out3.loc["未知", "n_stocks"] == 5
+    # CSV 回读场景：index 退化为 RangeIndex、code 落到列里 → 仍须用 code 而非名次
+    from_csv = ranking.copy()
+    from_csv.insert(0, "code", from_csv.index)
+    from_csv.index = pd.RangeIndex(len(from_csv))
+    out4 = build_industry_table_l1(from_csv)
+    assert out4.loc["食品饮料", "top_stock"] == "c0 龙头A"
+    assert out4.loc["电子", "top_stock"] == "c2"
+
+
+def test_write_outputs_industry_l1(tmp_path):
+    """一级行业表落盘：industry_rank_l1_<ds>.csv + latest 副本 + paths 键。"""
+    from scripts.pipelines.alla_daily_rank import write_outputs
+    d = pd.Timestamp("2026-09-04")
+    ranking = pd.DataFrame({
+        "rank": [1, 2], "name": ["贵州茅台", "宁德时代"],
+        "industry_l1": ["食品饮料", "电力设备"],
+        "score": [3.0, 1.0], "pct_rank": [1.0, 0.9],
+        "top_frac": [True, True], "tradable": [True, True],
+    }, index=["c0", "c1"])
+    ind_l1 = pd.DataFrame({"rank": [1], "n_stocks": [1], "mean_score": [3.0]},
+                          index=["食品饮料"])
+    paths = write_outputs(ranking, ranking.copy(), d, {"n_scored": 2},
+                          industry_table_l1=ind_l1, out_dir=tmp_path)
+    assert paths["industry_l1"].endswith("industry_rank_l1_20260904.csv")
+    assert (tmp_path / "latest_industry_rank_l1.csv").exists()
+    # 首列名统一为 industry（与二级表一致）
+    back = pd.read_csv(tmp_path / "industry_rank_l1_20260904.csv")
+    assert back.columns[0] == "industry"
+    assert back.loc[0, "industry"] == "食品饮料"
+    # 不传 → 不产出该键、不生成文件（换目录，避免命中上一份产物）
+    sub = tmp_path / "no_l1"
+    paths2 = write_outputs(ranking, ranking.copy(), d, {}, out_dir=sub)
+    assert "industry_l1" not in paths2
+    assert not (sub / "industry_rank_l1_20260904.csv").exists()
+
+
 def _mk_daily(tmp_path) -> Path:
     """构造最小 daily_all_a.parquet（主板/创业板/北交所 × 2 日）。"""
     root = tmp_path
@@ -643,8 +715,7 @@ def test_preproc_switch_zero_regression():
 
     对应「消融开关必须零回归」：不传参 == 旧行为一字不差。
     """
-    from scripts.pipelines.alla_daily_rank import (
-        preprocess_panel, set_panel_transform)
+    from scripts.pipelines.alla_daily_rank import preprocess_panel, set_panel_transform
     idx = pd.bdate_range("2024-01-01", periods=3)
     p = pd.DataFrame({"a": [1.0, 2.0, 3.0], "b": [2.0, 4.0, 6.0],
                       "c": [3.0, 3.0, 3.0]}, index=idx)
@@ -708,7 +779,10 @@ def test_ortho_transform_tolerates_unaligned_covariates():
 def test_preproc_cli_default_is_ortho():
     """CLI 默认必须是 ortho + ortho 选择目录（2026-09-17 口径切换，防静默回退）。"""
     from scripts.pipelines.alla_daily_rank import (
-        DEFAULT_PREPROC, ORTHO_SELECTION_DIR, SELECTION_DIR)
+        DEFAULT_PREPROC,
+        ORTHO_SELECTION_DIR,
+        SELECTION_DIR,
+    )
     assert DEFAULT_PREPROC == "ortho"
     assert SELECTION_DIR != ORTHO_SELECTION_DIR
     assert ORTHO_SELECTION_DIR.name == "selection"
@@ -724,6 +798,7 @@ def test_tradable_labels_default_off():
 def test_train_and_predict_threads_tradable_mask():
     """train_and_predict 须保留 tradable_mask 参数（否则掩码开关会空转）。"""
     import inspect
+
     from scripts.pipelines.alla_daily_rank import train_and_predict
     sig = inspect.signature(train_and_predict)
     assert "tradable_mask" in sig.parameters
