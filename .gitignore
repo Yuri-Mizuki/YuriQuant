@@ -64,6 +64,7 @@ etf-rotation-plan/
 
 # One-off scratch dirs created by ad-hoc commands
 reports/.pytest_tmp*/
+/_tmp/
 
 # OS
 Thumbs.db
