@@ -412,6 +412,10 @@ class AlphaPool:
 
         self.formulas: list[str] = []           # 池内公式
         self.factor_panels: list[pd.DataFrame] = []
+        # 每个公式的来源（"llm" = 大模型初始/注入池，"rl" = RL 自行挖掘）。
+        # 研报的「定期去弱留强」只剔除 **RL 生成的较差因子**（drop_rl_n），
+        # 不剔除大模型注入的因子 —— 没有来源标记就无法区分两者。
+        self.origins: list[str] = []
         self.weights: np.ndarray = np.array([], dtype=float)
         # 池最优组合评估指标。研报由 LLM 初始池保证非零；P0 空池起始 0.0，
         # 避免 -inf 毒化奖励（所有 no_pool 都返回 0 而非负无穷）
@@ -529,15 +533,19 @@ class AlphaPool:
         self._ic_cache[formula] = mean_abs_ic
         return mean_abs_ic
 
-    def _add_factor(self, formula: str, fp: pd.DataFrame) -> float:
+    def _add_factor(self, formula: str, fp: pd.DataFrame,
+                    origin: str = "rl") -> float:
         """入池并重优化权重，返回新组合评估指标 new_obj。"""
         if len(self.formulas) >= self.capacity:
             ic_scores = [self._factor_ic(f) for f in self.formulas]
             worst_idx = int(np.argmin(ic_scores))
             self.formulas.pop(worst_idx)
             self.factor_panels.pop(worst_idx)
+            if worst_idx < len(self.origins):
+                self.origins.pop(worst_idx)
         self.formulas.append(formula)
         self.factor_panels.append(fp)
+        self.origins.append(origin)
         self.weights = self.optimize_weights(self.factor_panels)
         new_obj = abs(self._objective(self.factor_panels, self.weights))
         self.best_obj = max(self.best_obj, new_obj)
@@ -546,11 +554,13 @@ class AlphaPool:
     # ------------------------------------------------------------------
     # 外部评估接口：返回 (状态, 奖励)
     # ------------------------------------------------------------------
-    def evaluate(self, formula: str, fp: Optional[pd.DataFrame] = None
-                 ) -> tuple[str, float]:
+    def evaluate(self, formula: str, fp: Optional[pd.DataFrame] = None,
+                 origin: str = "rl") -> tuple[str, float]:
         """评估一个因子，返回 (status, reward)。
 
         status ∈ {"invalid", "empty", "fail_cache", "no_pool", "pooled"}。
+        ``origin`` 标记来源（"rl" = RL 生成，"llm" = 大模型生成），入池时随公式
+        一起记账，供 :meth:`drop_worst` 按来源去弱留强。
         """
         if formula in self.fail_cache:
             return "fail_cache", self.best_obj
@@ -576,8 +586,49 @@ class AlphaPool:
             ic_scores = [self._factor_ic(f) for f in self.formulas]
             if mean_abs_ic <= min(ic_scores):
                 return "no_pool", self.best_obj
-        new_obj = self._add_factor(formula, fp)
+        new_obj = self._add_factor(formula, fp, origin=origin)
         return "pooled", new_obj
+
+    # ------------------------------------------------------------------
+    # 去弱留强（研报 AI97「大模型定期更新因子池」的落地原语）
+    # ------------------------------------------------------------------
+    def origin_counts(self) -> dict[str, int]:
+        """池内各来源的因子数。"""
+        out: dict[str, int] = {}
+        for o in self.origins:
+            out[o] = out.get(o, 0) + 1
+        return out
+
+    def drop_worst(self, origin: Optional[str] = None,
+                   n: int = 5) -> list[str]:
+        """剔除池内 |IC| 最差的 ``n`` 个因子（可按来源过滤），返回被剔除的公式。
+
+        研报超参 ``drop_rl_n=5`` = "每次丢弃多少个 **RL 模型生成的** 较差因子"，
+        故默认调用方式是 ``drop_worst(origin="rl", n=drop_rl_n)`` —— 大模型注入的
+        因子不被本轮淘汰，避免"刚注入就被踢"。
+
+        行为：
+        - 剔除后**重新优化组合权重**（池结构变了，旧权重不再最优）；
+        - ``best_obj`` **不回退**（它是历史最优，研报的奖励档位依赖它单调不减）；
+        - 池内因子数不足 ``n`` 时有多少踢多少（不补位、不报错）。
+        """
+        idx = [i for i, o in enumerate(self.origins)
+               if origin is None or o == origin]
+        if not idx or n <= 0:
+            return []
+        scores = [(self._factor_ic(self.formulas[i]), i) for i in idx]
+        scores.sort(key=lambda t: t[0])                 # |IC| 升序 → 最差在前
+        drop = sorted(i for _s, i in scores[:n])
+        dropped = [self.formulas[i] for i in drop]
+        for i in reversed(drop):                        # 逆序删，索引不漂移
+            self.formulas.pop(i)
+            self.factor_panels.pop(i)
+            self.origins.pop(i)
+        if self.factor_panels:
+            self.weights = self.optimize_weights(self.factor_panels)
+        else:
+            self.weights = np.array([], dtype=float)
+        return dropped
 
     def stats(self) -> dict:
         return {
@@ -585,5 +636,7 @@ class AlphaPool:
             "best_obj": self.best_obj,
             "formulas": list(self.formulas),
             "weights": list(self.weights),
+            "origins": list(self.origins),
+            "origin_counts": self.origin_counts(),
             "fail_cache_size": len(self.fail_cache),
         }

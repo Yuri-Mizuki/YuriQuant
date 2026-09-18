@@ -97,6 +97,14 @@ def parse_formula(
             return ("feat", token)
         if re.fullmatch(r"-?\d+", token):
             return ("const", int(token))
+        # 小数字面量（2026-09-16 修复）：此前只认整数，``0.5`` / ``-0.01`` 这类 token
+        # 落到下面的"宽容回退"被当成**特征名** → panel 取值 KeyError → 整条公式判
+        # 无效。研报 AI97 的 13 个常数里有 3 个是小数（0.5 / -0.5 / -0.01），
+        # ``AlphaPool`` 的 ``_fmt_const`` 会把它们原样写进 RPN 公式串，等于该 token
+        # 空间有 23% 永远拿 -1 奖励。保留整数分支不动（避免 2 → 2.0 改变缓存键与
+        # 下游算子行为），小数单独走 float。
+        if re.fullmatch(r"-?(?:\d+\.\d*|\.\d+)", token):
+            return ("const", float(token))
         if token.endswith(")") and "(" in token:
             name, _, inner = token[:-1].partition("(")
             name = name.strip()
