@@ -13,6 +13,21 @@
 - ``pca``         : 主成分提取，取前 k 个成分（消除共线性冗余）
 - ``orthogonal``  : 逐层回归正交化（Gram-Schmidt），再按 IC 加权组合
 
+**华泰多因子系列10 口径补齐（2026-09-16）**：研报《因子合成方法实证分析》
+的六种方法中，下面四种此前缺失，现已补齐（口径核对报告
+``reports/口径核对_AI39_多因子10.md`` 第二节）：
+
+- ``synthesize_ic_ir_max`` : **最大化 IC_IR** —— ``w = Σ⁻¹·ĪC``，
+  Σ 为历史 IC 协方差矩阵，可带 ``w ≥ 0`` 约束（研报主力方法）
+- ``synthesize_ic_max``    : **最大化 IC** —— ``w = V⁻¹·ĪC``，
+  V 为**当前截面因子值**相关系数阵
+- ``half_life_weights``    : 半衰加权 ``w_t = 2^((t−T−1)/H)``（可作用于上两者）
+- ``ic_weighted(weight_by="equal")`` : 等权法
+
+与研报的差异（**对比时必须披露**）：项目所有历史量（IC 均值 / IC 协方差）
+均**只用训练段**估计，研报未讨论该防未来函数处理；研报的「历史因子收益率」
+是 WLS 回归产物，本项目无该链路（详见核对报告 2.4）。
+
 所有合成函数输出复合因子面板（date × code），可直接送入回测引擎
 （VectorBacktest）。复合因子本身在返回前会再做一次截面标准化，便于横向比较。
 
@@ -149,9 +164,15 @@ def synthesize_ic_weighted(
     weight_by: str = "ic_abs",
     returns_panel: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
-    """按 |IC|（或 IR / 原始 IC 符号）加权线性组合。
+    """按 |IC|（或 IR / 等权）加权线性组合。
 
     每个因子先按自身 IC 符号对齐（高值=高收益），再加权求和后标准化。
+
+    ``weight_by``：
+    - ``"ic_abs"``（默认）：|IC| 加权
+    - ``"ir"``：|IR| 加权
+    - ``"ic_signed"``：带符号 IC（已对齐，均为正）
+    - ``"equal"``：**等权 1/N**（研报六方法之一的「等权法」，2026-09-16 补）
     """
     if not components:
         raise ValueError("components 为空")
@@ -163,6 +184,8 @@ def synthesize_ic_weighted(
         w = np.array([abs(c.ir) for c in comps])
     elif weight_by == "ic_signed":
         w = np.array([c.ic for c in comps])  # 已对齐符号，均为正
+    elif weight_by == "equal":
+        w = np.ones(len(comps))                       # 等权：不依赖任何历史量
     else:
         raise ValueError(f"未知 weight_by: {weight_by}")
 
@@ -173,6 +196,45 @@ def synthesize_ic_weighted(
 
     composite = sum(wi * c.panel.fillna(0.0) for wi, c in zip(w, comps))
     return standardize_zscore(composite)
+
+
+# ===========================================================================
+# 1b) 半衰加权（研报 w_t = 2^((t−T−1)/H)）
+# ===========================================================================
+def half_life_weights(
+    dates,
+    half_life: float,
+    *,
+    as_of=None,
+) -> np.ndarray:
+    """半衰权重序列（研报口径）。
+
+    研报定义 ``w_t = 2^((t−T−1)/H)``：``t`` 为距今第 t 期（``t`` 越大越近），
+    ``H`` 为半衰期。令最近一期（``t = T``）权重为 1，则距今 k 期的权重为
+    ``2^(−k/H)`` —— ``k = H`` 时恰为 0.5，这就是"半衰"的含义。
+
+    Args:
+        dates: 升序（或任意序，内部按序对齐）的日期序列。只有**顺序**重要，
+            值的绝对大小不重要。
+        half_life: 半衰期 H，单位为「期数」（月频合成时 H 就是月数）。
+        as_of: 权重锚点（"距今"的参照期）。``None`` 表示最末期。
+
+    Returns:
+        ``np.ndarray``，与 ``dates`` **同序**的权重，最近期=1 并向后衰减。
+        返回未归一化权重（调用方按需归一化；归一化不改变线性组合方向）。
+
+    Notes:
+        研报的 T 是回看窗口长度，即只取最近 T 期参与加权。本项目把"取窗口"
+        交给调用方（先切 ``dates`` 再调本函数），避免两个职责混在一个函数里。
+    """
+    idx = pd.Index(dates)
+    if len(idx) == 0:
+        return np.zeros(0, dtype=float)
+    pos = pd.Series(np.arange(len(idx)), index=idx)
+    ref = pos.iloc[-1] if as_of is None else pos.get(pd.Timestamp(as_of), pos.iloc[-1])
+    # k = 距锚点的期数（>=0 表示在锚点之前）
+    k = (ref - pos).to_numpy(dtype=float)
+    return np.power(2.0, -k / float(half_life))
 
 
 # ===========================================================================
@@ -266,6 +328,269 @@ def synthesize_pca(
 
     composite = pd.DataFrame(composite_long.reshape(len(idx), len(cols)), index=idx, columns=cols)
     return standardize_zscore(composite)
+
+
+# ===========================================================================
+# 2b) 最大化 IC_IR / 最大化 IC（华泰多因子系列10 的两个主力方法）
+# ===========================================================================
+def solve_synthesis_weights(
+    objective_w: np.ndarray,
+    cov_like: np.ndarray,
+    *,
+    long_only: bool,
+    ridge: float = 1e-8,
+) -> np.ndarray:
+    """解 ``max_w w'·objective_w  s.t.  w'·cov_like·w = 1``（或 w ≥ 0 时同式）。
+
+    解析解为 ``w = cov_like⁻¹ · objective_w``（归一化不改变线性组合方向）。
+    协方差阵可能奇异（因子数 ≥ 期数，或因子高度共线），故：
+    1. 先试 **Cholesky**（最快、要求正定）；
+    2. 失败退 **伪逆**（`pinv`，自动处理奇异 + 最小范数解）；
+    3. 再加 ``ridge`` 到对角线兜底数值稳定性。
+
+    ``long_only=True`` 时把负权重截为 0 并重归一 —— 研报对最大化 IC_IR 明确
+    要求 ``w ≥ 0``；本项目用"截断 + 重归一"近似（非严格 QP 解，见函数 docstring
+    的边界说明）。
+    """
+    C = np.asarray(cov_like, dtype=float)
+    m = np.asarray(objective_w, dtype=float)
+    if C.size == 0 or m.size == 0:
+        return np.zeros_like(m)
+    C = (C + C.T) / 2.0                              # 对称化（数值误差可能破坏对称）
+    if ridge > 0:
+        C = C + float(ridge) * np.eye(C.shape[0])
+
+    w: np.ndarray | None = None
+    try:
+        L = np.linalg.cholesky(C)
+        # C w = m  →  L L' w = m  →  两次三角求解
+        y = np.linalg.solve(L, m)
+        w = np.linalg.solve(L.T, y)
+    except np.linalg.LinAlgError:
+        w = None
+    if w is None or not np.all(np.isfinite(w)) or np.allclose(w, 0.0):
+        w = np.linalg.pinv(C) @ m                    # 奇异 → 伪逆（最小范数解）
+
+    if long_only:
+        w = np.maximum(w, 0.0)                       # 截断负权重（研报 w ≥ 0）
+    s = float(np.abs(w).sum())
+    if s <= 0 or not np.all(np.isfinite(w)):
+        # 全被截没了（如 objective_w 与 Σ⁻¹ 方向完全相反）→ 退化为等权
+        return np.ones_like(m) / max(len(m), 1)
+    return w / s
+
+
+def ic_matrix_from_components(
+    components: list[CompositeInput],
+    returns_panel: pd.DataFrame | None,
+    train_dates,
+    *,
+    half_life: float | None = None,
+) -> pd.DataFrame:
+    """各因子的**逐期 IC 序列矩阵**（index=date, columns=因子名）。
+
+    这是最大化 IC_IR 的 ``Σ`` 的来源：研报 ``Σ`` = 历史 IC 协方差阵，
+    即本函数输出按行求协方差。
+
+    只用 ``train_dates`` 内的收益 —— 与 ``rebuild_train_weights`` 同一防未来函数
+    口径（项目惯例，研报未讨论）。``half_life`` 不为 None 时对**日期方向**做加权
+    （权重见 ``half_life_weights``），用于加权协方差 / 加权 IC 均值。
+    """
+    if returns_panel is None:
+        raise ValueError("最大化 IC_IR 需要 returns_panel（Σ 来自历史 IC 序列）")
+    if train_dates is None:
+        raise ValueError("最大化 IC_IR 需要 train_dates（ĪC 与 Σ 只允许用训练段估计）")
+    rts_tr = returns_panel.loc[train_dates]
+    cols: dict[str, pd.Series] = {}
+    for c in components:
+        panel_tr = c.panel.loc[train_dates]
+        panel_tr = panel_tr.reindex(columns=rts_tr.columns)
+        cols[c.name] = calc_ic_series(panel_tr, rts_tr)
+    ic = pd.DataFrame(cols)
+    if half_life is not None and len(ic) > 0:
+        wts = half_life_weights(ic.index, half_life)
+        ic = ic.mul(wts, axis=0)
+    return ic
+
+
+def synthesize_ic_ir_max(
+    components: list[CompositeInput],
+    returns_panel: pd.DataFrame,
+    train_dates,
+    *,
+    long_only: bool = True,
+    half_life: float | None = None,
+    shrinkage: float = 0.5,
+    returns_diagnostics: bool = False,
+):
+    """**最大化 IC_IR** 合成（研报口径：``w = Σ⁻¹·ĪC``）。
+
+    研报《多因子系列10》的主力方法之一。记各因子历史 IC 序列的均值为 ``ĪC``、
+    协方差阵为 ``Σ``，则最大化组合 IC_IR（≈ ``ĪC'w / √(w'Σw)``）的权重为
+    ``w = Σ⁻¹·ĪC``。研报额外要求 ``w ≥ 0``（不允许做空因子）。
+
+    Args:
+        components: 参与合成的因子（已标准化）。
+        returns_panel: 未来收益面板（date × code）。
+        train_dates: **训练段日期**——``ĪC`` 与 ``Σ`` 只在此段估计
+            （防未来函数，项目口径；研报未讨论）。
+        long_only: 是否施加 ``w ≥ 0``。研报对最大化 IC_IR 要求该约束。
+        half_life: 半衰期 H（期数）。给定时对 IC 序列做半衰加权
+            （``w_t = 2^((t−T−1)/H)``），即"历史 IC 半衰加权 + 最大化 IC_IR"。
+        shrinkage: Σ 的收缩强度（0~1）。因子数 ≥ 期数时 Σ 必然奇异，
+            收缩到对角可改善条件数。默认 0.5（**自拟参数，研报只提到用压缩估计**）。
+        returns_diagnostics: 为 True 时额外返回诊断字典。
+
+    Returns:
+        ``composite`` 面板；``returns_diagnostics=True`` 时返回
+        ``(composite, diag)``，diag 含 ``weights`` / ``ic_mean`` / ``n_periods`` /
+        ``cond``（Σ 条件数）/ ``long_only`` / ``shrinkage`` / ``sign_flipped``。
+
+    **符号口径（2026-09-16 修正）**：``ĪC`` 是按**符号对齐后**的因子面板重算的，
+    因此 ``mu ≥ 0`` 恒成立，``w`` 是"对齐基"下的权重。原始 IC 为负的因子，
+    其面板在内部被取负，故 ``weights[name] > 0`` 表示**看多该因子的对齐方向**
+    （= 看空其原始方向）。诊断里的 ``sign_flipped[name]`` 显式标出哪些因子被
+    翻转，避免调用方按原始方向误读权重符号。
+
+    **复现边界（引用时必须披露）**：
+    1. 研报用"**压缩估计协方差**"，未指明具体估计器；本项目用
+       ``shrinkage · diag(Σ) + (1−shrinkage) · Σ`` 的对角收缩（自拟）。
+    2. ``w ≥ 0`` 用"**截断负权重后重归一**"近似，**不是带约束 QP 的精确解**。
+       截断会破坏 ``Σ⁻¹`` 的最优性（截断后目标值 ≤ 原解）—— 这是刻意的工程取舍：
+       因子数通常为个位数，重归一后的解与 QP 解在同一量级，且免去 cvxpy 依赖。
+       需要精确解时用 :func:`optimize.solver.solve_portfolio` 的带约束 QP。
+    3. 研报的 T 扫描（T ∈ {3,6,9,12,24,36} 个月）由调用方切 ``train_dates`` 实现。
+    """
+    if not components:
+        raise ValueError("components 为空")
+    comps = [_align_sign_by_ic(c) for c in components]
+    sign_flipped = {c0.name: bool(c0.ic < 0) for c0 in components}
+    ic = ic_matrix_from_components(comps, returns_panel, train_dates,
+                                    half_life=half_life)
+    ic = ic.dropna(how="any")                       # 只保留全部因子都有 IC 的期
+    if len(ic) < 3:
+        raise ValueError(f"训练段有效 IC 期数不足（{len(ic)} < 3），无法估计 Σ")
+
+    mu = ic.mean(axis=0).to_numpy(dtype=float)      # ĪC
+    S = np.cov(ic.to_numpy(dtype=float), rowvar=False)
+    S = np.atleast_2d(S)
+    if half_life is not None:
+        # 半衰加权已在 _ic_matrix 里乘到 IC 上；加权均值/协方差需按权重归一
+        wts = half_life_weights(ic.index, half_life)
+        wts = wts / wts.sum()
+        X = ic.to_numpy(dtype=float)
+        mu = (X * wts[:, None]).sum(axis=0)
+        Xc = X - mu
+        S = (Xc * wts[:, None]).T @ Xc / max(1.0 - (wts ** 2).sum(), 1e-12)
+
+    # 收缩到对角（改善条件数；因子数 ≥ 期数时 Σ 必奇异）
+    d = np.diag(np.diag(S))
+    S_shrunk = float(shrinkage) * d + (1.0 - float(shrinkage)) * S
+
+    w = solve_synthesis_weights(mu, S_shrunk, long_only=long_only)
+    idx = comps[0].panel.index.intersection(np.asarray(returns_panel.index))
+    cols = comps[0].panel.columns
+    for c in comps[1:]:
+        idx = idx.intersection(c.panel.index)
+        cols = cols.intersection(c.panel.columns)
+    composite = sum(wi * c.panel.reindex(index=idx, columns=cols).fillna(0.0)
+                    for wi, c in zip(w, comps))
+    composite = standardize_zscore(composite)
+
+    if not returns_diagnostics:
+        return composite
+    cond = float(np.linalg.cond(S_shrunk)) if S_shrunk.size else float("nan")
+    return composite, {
+        "method": "ic_ir_max", "weights": dict(zip([c.name for c in comps], w)),
+        "ic_mean": dict(zip([c.name for c in comps], mu)),
+        "n_periods": int(len(ic)), "cond": cond,
+        "long_only": bool(long_only), "half_life": half_life,
+        "shrinkage": float(shrinkage),
+        # weights 为"对齐基"权重：sign_flipped[name]=True 表示该因子面板内部被取负，
+        # 故 weights>0 等价于看空其原始方向（2026-09-16 补，防误读符号）。
+        "sign_flipped": sign_flipped,
+    }
+
+
+def synthesize_ic_max(
+    components: list[CompositeInput],
+    returns_panel: pd.DataFrame | None = None,
+    train_dates=None,
+    *,
+    long_only: bool = False,
+    returns_diagnostics: bool = False,
+):
+    """**最大化 IC** 合成（研报口径：``w = V⁻¹·ĪC``）。
+
+    与最大化 IC_IR 的关键区别在 ``V`` 的来源：研报的 ``V`` 是
+    **当前截面因子值相关系数阵**（不是历史 IC 协方差阵）。直观上，
+    IC_IR 法关心"因子 IC 序列的稳定性"，IC 法关心"因子之间的当期共线性"——
+    共线性越强，``V⁻¹`` 越倾向于压低冗余因子的权重。
+
+    Args:
+        components: 参与合成的因子（已标准化）。
+        returns_panel: 未来收益面板；**仅用于 ĪC 的估计**。
+        train_dates: **训练段日期**（ĪC 只在此段估计）。``None`` 表示用
+            ``returns_panel`` 全部日期 —— **仅在明确只传训练段面板时使用**；
+            直接传含测试段的完整收益面板而不给 train_dates 会引入未来函数。
+        long_only: 是否施加 ``w ≥ 0``（研报**只对 IC_IR 法**要求该约束，
+            IC 法默认 False）。
+        returns_diagnostics: 同 :func:`synthesize_ic_ir_max`。
+
+    **复现边界**：研报未指明 ``V`` 的估计期次与是否压缩，本实现取**决策时点**
+    （``panels.index[-1]``，通常为训练段末）截面 + 与 IC_IR 相同的对角收缩
+    （0.5，自拟）。
+
+    **两种防未来函数口径（2026-09-16 补齐）**：
+    1. ``ĪC`` 只由 ``train_dates`` 段估计（与 :func:`synthesize_ic_ir_max` 一致）；
+    2. ``V`` 只取决策时点单截面，不铺全样本（原实现用全样本 → 已修复）。
+    """
+    if not components:
+        raise ValueError("components 为空")
+    comps = [_align_sign_by_ic(c) for c in components]
+    sign_flipped = {c0.name: bool(c0.ic < 0) for c0 in components}
+
+    # ĪC：只由训练段估计
+    if returns_panel is not None:
+        seg = returns_panel.index if train_dates is None else train_dates
+        ic = ic_matrix_from_components(comps, returns_panel,
+                                        seg).dropna(how="any")
+        mu = ic.mean(axis=0).to_numpy(dtype=float) if len(ic) else \
+            np.array([c.ic for c in comps], dtype=float)
+    else:
+        mu = np.array([c.ic for c in comps], dtype=float)
+
+    # V：**决策时点**（训练段末）的截面因子值相关阵。
+    # 2026-09-16 修复：原实现用 long_matrix(comps, None) 铺全样本 → V 隐式含测试段
+    # 截面结构（look-ahead），与 docstring 声明的"训练段末"不符。现显式取末截面。
+    last_date = comps[0].panel.index[-1]
+    snap = [CompositeInput(name=c.name, panel=c.panel.loc[[last_date]], ic=c.ic, ir=c.ir)
+            for c in comps]
+    X, _obs, (idx, cols) = long_matrix(snap, None)
+    V = np.corrcoef(np.nan_to_num(X, nan=0.0), rowvar=False)
+    V = np.atleast_2d(V)
+    V = np.nan_to_num(V, nan=0.0)
+    np.fill_diagonal(V, 1.0)
+    V_shrunk = 0.5 * np.eye(V.shape[0]) + 0.5 * V      # 对角收缩（自拟，同 IC_IR）
+
+    w = solve_synthesis_weights(mu, V_shrunk, long_only=long_only)
+    # 组合面板仍然用**全样本**因子值（权重只由训练段/决策时点定，无未来函数）
+    Xf, _obs2, (idx_f, cols_f) = long_matrix(comps, None)
+    idx, cols = idx_f, cols_f
+    composite = sum(wi * c.panel.reindex(index=idx, columns=cols).fillna(0.0)
+                    for wi, c in zip(w, comps))
+    composite = standardize_zscore(composite)
+
+    if not returns_diagnostics:
+        return composite
+    return composite, {
+        "method": "ic_max", "weights": dict(zip([c.name for c in comps], w)),
+        "ic_mean": dict(zip([c.name for c in comps], mu)),
+        "cond": float(np.linalg.cond(V_shrunk)) if V_shrunk.size else float("nan"),
+        "long_only": bool(long_only),
+        "as_of": last_date,                 # V 的估计时点（决策时点）
+        "sign_flipped": sign_flipped,
+    }
 
 
 # ===========================================================================
