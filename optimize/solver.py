@@ -242,6 +242,7 @@ def solve_portfolio(
     style_tolerance: float = 1e-5,
     prev_weights: pd.Series | None = None,
     max_turnover: float | None = None,
+    max_weight_change: float | None = None,
     turnover_penalty: float = 0.0,
     quadratic_cost: float = 0.0,
     budget: float = 1.0,
@@ -261,7 +262,12 @@ def solve_portfolio(
         Sigma: (N, N) 半正定协方差（estimate_covariance / rolling_covariance 产出）。
         method: "min_var" | "tev"（需 benchmark）| "mvo" | "risk_parity"
                 | "bl"（Black-Litterman：均衡先验 + 观点 → 后验 μ_BL 进目标）。
-        risk_aversion: λ，越大越保守。
+        risk_aversion: λ。mvo/tev/bl 的目标为 ``min w'Σw − λ·score'w``——λ 越大
+            **越激进**（放大 alpha 项、容忍更多方差）。注意与华泰 AI39
+            「max r'x − λ·x'Σx」的**风险厌恶** λ 恰为倒数关系
+            （λ_本项目 ≈ 1/λ_AI39），且 _alpha_score 是 rank pct（无量纲），
+            λ 有效量级与研报完全不同——研报 λ 网格数值不可照抄
+            （另见 solve_lambda_grid 与口径核对报告 1.3）。
         benchmark: tev 的基准权重 w_b。
         max_weight / min_weight: 个股上限 / 微仓过滤（非凸 → 近似后处理）。
         industry_map / industry_target / industry_deviation: 行业约束（等式或相对偏离区间）。
@@ -269,6 +275,12 @@ def solve_portfolio(
         style_tolerance: 风格中性化容忍度。
         prev_weights: 上一期权重。
         max_turnover: 单边换手率硬约束（0.5·Σ|Δw| ≤ max_turnover，回测口径）。
+        max_weight_change: **逐股**权重变动上限 |w − w0| ≤ δ（华泰 AI39 对齐项①，
+            2026-09-18）。研报控换手的主手段是单股跳变上限（δ=0.3），与组合级
+            max_turnover 互补（前者控单股、后者控总量）。需配 prev_weights，
+            缺省 None = 不启用。⚠️ 不可持仓（alpha NaN）股票权重被强制 0，
+            若其上期权重 > δ 则问题不可行（求解器抛 RuntimeError）——
+            δ 须给足退出空间，或由调用方先处理退出持仓。
         turnover_penalty: 线性冲击成本系数 κ₁·Σ|Δw|（进目标）。
         quadratic_cost: 二次冲击成本系数 κ₂·ΣΔw²（进目标；与线性项组成
             Almgren-Chriss 风格成本惩罚——完整多期最优执行留 P3）。
@@ -329,7 +341,12 @@ def solve_portfolio(
         known = ind.notna()
         if known.any():
             inds = ind[known].unique()
-            tgt = pd.Series(industry_target or {}, dtype=float).reindex(inds).fillna(0.0)
+            # ⚠️ 不能写 `industry_target or {}`：对 Series 输入会触发真值歧义
+            # ValueError（签名声称支持 Series，2026-09-18 修——AI39 基准行业
+            # 目标辅助函数返回 Series 时首触此路径）。
+            raw = {} if industry_target is None or len(industry_target) == 0 \
+                else industry_target
+            tgt = pd.Series(raw, dtype=float).reindex(inds).fillna(0.0)
             if tgt.sum() > 0:
                 tgt = tgt / tgt.sum() * budget  # 归一到预算
             else:
@@ -391,6 +408,11 @@ def solve_portfolio(
         if max_turnover is not None and max_turnover > 0:
             # 单边换手 = 0.5·Σ|Δw|，与回测 turnover 口径一致
             constraints.append(cp.sum(cp.abs(w - w0)) <= 2.0 * max_turnover)
+        if max_weight_change is not None and max_weight_change > 0:
+            # 逐股权重变动上限（AI39 对齐项①）：研报控的是单股跳变 |w−w0|≤δ
+            # （δ=0.3），与组合级换手互补。NaN 股票强制 0 权重与该约束的相容性
+            # 见 docstring ⚠️（上期权重 > δ 的退出持仓会导致不可行）。
+            constraints.append(cp.abs(w - w0) <= max_weight_change)
         if turnover_penalty and turnover_penalty > 0:
             obj_parts.append(turnover_penalty * cp.sum(cp.abs(w - w0)))
         if quadratic_cost and quadratic_cost > 0:
@@ -421,6 +443,7 @@ def solve_portfolio(
                 prev_weights is not None
                 and (
                     (max_turnover is not None and max_turnover > 0)
+                    or (max_weight_change is not None and max_weight_change > 0)
                     or turnover_penalty > 0
                     or quadratic_cost > 0
                 )
@@ -442,6 +465,62 @@ def solve_portfolio(
         out[nan_mask] = 0.0  # 不可持仓股票强制精确 0（OSQP 数值上仅近似满足）
     if min_weight is not None and min_weight > 0:
         out = _filter_min_weight(out, min_weight)
+    return out
+
+
+def industry_target_from_benchmark(
+    benchmark: pd.Series,
+    industry_map: Mapping[str, str] | pd.Series,
+) -> pd.Series:
+    """把基准权重按行业聚合 → 行业中性目标（华泰 AI39 对齐项②，2026-09-18）。
+
+    研报（AI39）的行业中性是「组合行业权重 = **基准**行业权重」（主动权重空间
+    ``X_ind·(w−w_b) = 0``）。:func:`solve_portfolio` 的 ``industry_target`` 此前
+    只能手工给，缺省行为是**等权**目标——在指增场景会引入额外的行业偏离
+    （口径核对报告 reports/docs/consistency_checks/口径核对_AI39_多因子10.md 1.3）。
+    本函数从基准权重生成行业目标，喂回 ``industry_target`` 即完成对齐::
+
+        solve_portfolio(..., industry_map=ind,
+                        industry_target=industry_target_from_benchmark(w_b, ind))
+
+    缺行业映射的股票不计入任何行业组；solve_portfolio 随后会把这些目标归一化到
+    全预算（既有行为）——等于把未知行业的基准权重摊到其余行业。若需严格口径，
+    industry_map 应覆盖基准全部成分。
+    """
+    if benchmark is None or len(benchmark) == 0:
+        return pd.Series(dtype=float)
+    ind = pd.Series(industry_map, dtype=object).reindex(benchmark.index)
+    df = pd.DataFrame({"w": benchmark.astype(float), "ind": ind}).dropna(subset=["ind"])
+    if df.empty:
+        return pd.Series(dtype=float)
+    return df.groupby("ind")["w"].sum().sort_values(ascending=False)
+
+
+#: 研报（AI39 测试 1）的 λ 网格。**数值不可照抄**——见 solve_lambda_grid。
+AI39_LAMBDA_GRID: tuple[float, ...] = (0.0, 0.2, 0.5, 1.0, 2.0)
+
+
+def solve_lambda_grid(
+    alpha: pd.Series,
+    Sigma: np.ndarray,
+    *,
+    method: str = "mvo",
+    grid: tuple[float, ...] = AI39_LAMBDA_GRID,
+    **kwargs: Any,
+) -> dict[float, pd.Series]:
+    """λ 网格遍历（华泰 AI39 对齐项③，2026-09-18）：每个 λ 解一次组合，返回 {λ: 权重}。
+
+    研报测试 1 扫 ``λ ∈ {0, 0.2, 0.5, 1, 2}``，但**λ 数值不可照抄**：研报目标里的
+    r 是预期收益，本项目 ``_alpha_score`` 是 rank pct（0..1 无量纲），λ·score 项与
+    ``w'Σw`` 的相对量级随 alpha 口径而变——有效区间须按本项目口径重新标定
+    （口径核对报告 1.3 第 3 条）。网格只保留「λ=0 纯最小方差 → 逐步加大 alpha」
+    的结构语义。其余 kwargs 原样透传 :func:`solve_portfolio`。
+    """
+    out: dict[float, pd.Series] = {}
+    for lam in grid:
+        out[float(lam)] = solve_portfolio(
+            alpha, Sigma, method=method, risk_aversion=float(lam), **kwargs
+        )
     return out
 
 
@@ -476,6 +555,7 @@ def optimize_weights_qp(
     tau: float = 0.05,
     delta: float = 2.5,
     rp_refine: bool = True,
+    max_weight_change: float | None = None,
     **kwargs: Any,
 ) -> pd.DataFrame:
     """面板级求解器组合优化（与 optimize_weights 同签名风格、同输出约定）。
@@ -495,8 +575,8 @@ def optimize_weights_qp(
         views / market_weights / tau / delta: Black-Litterman（method="bl" 时生效）。
         quadratic_cost: A-C 二次冲击成本系数（与 turnover_penalty 线性项组合）。
         prev_weights: 面板级 DataFrame 时取**上一期输出权重**（滚动持仓）；
-            Series 时每期广播。仅 max_turnover / turnover_penalty / quadratic_cost
-            启用时生效。
+            Series 时每期广播。仅 max_turnover / max_weight_change /
+            turnover_penalty / quadratic_cost 启用时生效。
     Returns:
         DataFrame(date×code) 权重；窗口样本不足的截面输出全 0（空仓，等价无法开仓）。
     """
@@ -509,6 +589,7 @@ def optimize_weights_qp(
     prev_series: pd.Series | None = None
     turnover_on = (
         (max_turnover is not None and max_turnover > 0)
+        or (max_weight_change is not None and max_weight_change > 0)
         or (turnover_penalty and turnover_penalty > 0)
         or (quadratic_cost and quadratic_cost > 0)
     )
@@ -549,6 +630,7 @@ def optimize_weights_qp(
                 industry_deviation=industry_deviation,
                 style_exposures=style_b, style_tolerance=style_tolerance,
                 prev_weights=pv, max_turnover=max_turnover,
+                max_weight_change=max_weight_change,
                 turnover_penalty=turnover_penalty, quadratic_cost=quadratic_cost,
                 budget=budget, allow_short=allow_short,
                 short_limit=short_limit, gross_limit=gross_limit,

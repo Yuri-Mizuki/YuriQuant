@@ -554,3 +554,116 @@ def test_min_weight_long_short_filter():
                         allow_short=True, short_limit=0.5, min_weight=0.03)
     nz = w[w != 0]
     assert (nz.abs() >= 0.03 - 1e-9).all()
+
+
+# ===========================================================================
+# 华泰 AI39 对齐三件套（2026-09-18）：基准行业目标 / 逐股变动上限 / λ 网格
+# 依据：reports/docs/consistency_checks/口径核对_AI39_多因子10.md 1.3
+# ===========================================================================
+def test_industry_target_from_benchmark_aggregates():
+    """基准权重按行业聚合；缺行业映射的股票不计入任何组。"""
+    from optimize.solver import industry_target_from_benchmark
+
+    wb = pd.Series([0.4, 0.3, 0.2, 0.1], index=["A", "B", "C", "D"])
+    ind = pd.Series({"A": "银行", "B": "银行", "C": "医药"})  # D 缺映射
+    tgt = industry_target_from_benchmark(wb, ind)
+    assert tgt["银行"] == pytest.approx(0.7)
+    assert tgt["医药"] == pytest.approx(0.2)
+    assert set(tgt.index) == {"银行", "医药"}
+
+
+def test_solve_portfolio_benchmark_industry_target_binds():
+    """喂基准行业目标后，各行业权重 = 基准占比 × 预算（≠ 等权目标）。"""
+    from optimize.solver import industry_target_from_benchmark
+
+    rng = np.random.default_rng(11)
+    codes = [f"{600000 + i:06d}.SH" for i in range(6)]
+    rets = pd.DataFrame(rng.normal(0, 0.02, (120, 6)), columns=codes)
+    Sigma = estimate_covariance(rets)
+    alpha = pd.Series(rng.normal(size=6), index=codes)
+    ind_map = pd.Series(["银行"] * 3 + ["医药"] * 3, index=codes)
+    wb = pd.Series([0.3, 0.2, 0.1, 0.2, 0.15, 0.05], index=codes)
+
+    tgt = industry_target_from_benchmark(wb, ind_map)
+    w = solve_portfolio(alpha, Sigma, method="mvo", industry_map=ind_map,
+                        industry_target=tgt)
+    bank = w[ind_map == "银行"].sum()
+    pharma = w[ind_map == "医药"].sum()
+    assert bank == pytest.approx(0.6, abs=1e-4)
+    assert pharma == pytest.approx(0.4, abs=1e-4)
+
+    # 等权目标（缺省行为）会给 0.5/0.5 —— 与基准目标可分辨，证明对齐实际生效
+    w_eq = solve_portfolio(alpha, Sigma, method="mvo", industry_map=ind_map)
+    assert w_eq[ind_map == "银行"].sum() == pytest.approx(0.5, abs=1e-4)
+
+
+def test_max_weight_change_binds_single_stock():
+    """逐股 |w−w0|≤δ 生效且确实收紧（无约束解的偏离更大）。"""
+    f, rets = _mock_panel(n_days=150, n_codes=20, seed=3)
+    Sigma = estimate_covariance(rets)
+    alpha = f.iloc[100]
+    w0 = pd.Series(0.0, index=alpha.index)
+    w0.iloc[:5] = 0.2                       # 上期持仓集中在 5 只
+
+    w_free = solve_portfolio(alpha, Sigma, method="mvo", prev_weights=w0)
+    w_cap = solve_portfolio(alpha, Sigma, method="mvo", prev_weights=w0,
+                            max_weight_change=0.05)
+    dev_free = (w_free - w0).abs().max()
+    dev_cap = (w_cap - w0).abs().max()
+    assert dev_cap <= 0.05 + 1e-4
+    assert dev_cap < dev_free - 1e-3        # 约束起了实际作用，不是空转
+
+
+def test_max_weight_change_coexists_with_turnover():
+    """逐股 δ 与组合级换手约束同时给：可行且两者都满足。"""
+    f, rets = _mock_panel(n_days=150, n_codes=20, seed=13)
+    Sigma = estimate_covariance(rets)
+    alpha = f.iloc[100]
+    w0 = pd.Series(1.0 / 20, index=alpha.index)
+    w = solve_portfolio(alpha, Sigma, method="mvo", prev_weights=w0,
+                        max_turnover=0.2, max_weight_change=0.03)
+    assert abs(w.sum() - 1.0) < 1e-4
+    assert (w - w0).abs().max() <= 0.03 + 1e-3
+    assert 0.5 * (w - w0).abs().sum() <= 0.2 + 1e-3
+
+
+def test_qp_wrapper_max_weight_change_passthrough():
+    """面板级透传：滚动求解中每行相对其约束基线（上一行输出 / 静态 Series）
+    的逐股变动 ≤ δ。空仓行（窗口不足）不约束，且会把基线重置回静态 Series。"""
+    f, rets = _mock_panel(n_days=160, n_codes=10, seed=4)
+    w = optimize_weights_qp(
+        f, rets, method="mvo", window=60, min_periods=40,
+        prev_weights=pd.Series(0.1, index=f.columns),
+        max_weight_change=0.02,
+    )
+    baseline = pd.Series(0.1, index=f.columns)
+    n_solved = 0
+    for t in w.index:
+        row = w.loc[t]
+        if row.abs().sum() == 0:            # 空仓行：不约束，基线重置
+            baseline = pd.Series(0.1, index=f.columns)
+            continue
+        assert (row - baseline).abs().max() <= 0.02 + 1e-3, t
+        baseline = row
+        n_solved += 1
+    assert n_solved > 0
+
+
+def test_solve_lambda_grid_risk_monotone():
+    """项目 mvo 语义：λ 放大 alpha 项（min w'Σw − λ·score'w）→ 方差随 λ 不减；
+    λ=0 退化为纯最小方差。与 AI39 的风险厌恶 λ 恰为倒数关系（见 solver docstring）。"""
+    from optimize.solver import solve_lambda_grid
+
+    f, rets = _mock_panel(n_days=150, n_codes=20, seed=5)
+    Sigma = estimate_covariance(rets)
+    alpha = f.iloc[100]
+    grid = solve_lambda_grid(alpha, Sigma, method="mvo")
+    assert set(grid) == {0.0, 0.2, 0.5, 1.0, 2.0}
+
+    var = {lam: float(w.values @ Sigma @ w.values) for lam, w in grid.items()}
+    vals = [var[lam] for lam in sorted(var)]
+    assert all(vals[i + 1] >= vals[i] - 1e-10 for i in range(len(vals) - 1))
+
+    w_minvar = solve_portfolio(alpha, Sigma, method="min_var")
+    v0 = float(w_minvar.values @ Sigma @ w_minvar.values)
+    assert var[0.0] == pytest.approx(v0, abs=1e-6)
