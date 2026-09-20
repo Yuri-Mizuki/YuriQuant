@@ -111,7 +111,7 @@ SOURCE_PREFIXES: frozenset[str] = frozenset({
     # 因子集名——builder 通道的**首选前缀**，与 hs300 既有口径一致
     # （``alpha101:build_alpha_factors:20220101-20260821``）
     "evt", "event", "sentiment", "constructed", "style", "pledge", "sue_pledge",
-    "disc_holder_dyn", "significant_synthesis",
+    "disc_holder_dyn", "holder_dyn", "significant_synthesis",
 })
 
 #: 无法识别产出脚本时 ``source_for`` 的默认 producer 段。
@@ -129,8 +129,8 @@ SET_TO_FAMILY: dict[str, str] = {
     # 财务基本面（含构造型/风格型）
     "fundamental": "基本面", "constructed": "基本面", "style": "基本面",
     "sue_pledge": "基本面",
-    # 股东（持股/质押/折价）
-    "holder": "股东", "pledge": "股东", "disc_holder_dyn": "股东",
+    # 股东（持股/质押/折价；holder_dyn = 增减持/内部人交易等**动态**持股，2026-09-20 另类数据 P0）
+    "holder": "股东", "pledge": "股东", "disc_holder_dyn": "股东", "holder_dyn": "股东",
     # 事件与资金
     "evt": "事件", "event": "事件",
     "moneyflow": "资金流", "margin": "资金流",
