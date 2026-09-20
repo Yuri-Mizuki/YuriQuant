@@ -51,6 +51,17 @@ report = [
     # 换机器/重建 venv 会以 ModuleNotFoundError 炸在发信前一步。
     "markdown>=3.5",
 ]
+altdata = [
+    # 另类数据抓取（data/altdata/）。2026-09-20 声明：此前 akshare 只装在系统
+    # Python 3.12（无锁环境），.venv 里没有 —— 换机器/重建 venv 会
+    # ModuleNotFoundError 炸在抓取第一行。
+    # 依赖面已 dry-run 验证：新增 15 包，.venv 的 pandas 3.0.5 / numpy 2.5.2
+    # 保持不变，零降级零冲突。
+    # py-mini-racer：Step 1b 的巨潮 sysapi 通道需要它跑 cninfo.js 生成
+    # Accept-Enckey 动态码（akshare 内部已带 js 文件，不用自己逆向）。
+    "akshare>=1.18",
+    "py-mini-racer>=0.6",
+]
 dev = [
     "pytest>=8.0",
     "ruff>=0.6",
