@@ -13,99 +13,34 @@
 
 ## 一、研究验证欠账（最高优先级——影响结论可信度）
 
-口径变更后，以下历史实验结论需重跑才能继续引用：
+> 2026-09-20 清理：本节原 12 项中 10 项已完成，压缩归档于节末；清理前的
+> 条目全文见提交 `e70ac96` 的 TODO.md 与附录历史交付记录。以下为全部剩余。
 
-- [x] **重跑 `scripts/evaluation/multiyear_oos.py`**（2026-09-01 完成，620s）：README 已标注
-  "h>1 结论基于回测引擎 bug 下的伪结果"。修复后重跑结论：**h1×M 仍是唯一
-  三年一致稳健的频率解**（gbdt +5.5%±1.7%、ranker +5.4%±4.6%，均 3/3 年正超额；
-  h1×W/D 与 h5×M 全负，ridge 全负）。注意待查：脚本 `oos_ic` 为原始预测 vs
-  收益的 IC（h1 全模型为负 −0.1~−0.36），而策略交易中性化后信号——两口径
-  方向相反，需核对 IC 口径或将其并入"信号强度"研究问题。
-- [x] **重跑 `scripts/evaluation/freq_tune.py`**（2026-09-01 完成）：修复后引擎下重新生成。
-  h=1 排名不变（M +6.1% > W −8.9% > D −40.6%），h5×M 从伪结果（Sharpe −3.1）
-  修正为超额 −16.6%/Sharpe 0.95——h1×M 仍最优但差幅可信。
-  修复前旧结果存档于 `reports/freq_tune/freq_tune_prefix_engine_fix_20260825.csv`。
 - [ ] **重跑 e2e 族报告对齐年化口径**：`perf_stats` 年化 244→252 后，
   `reports/e2e_backtest/`、`reports/investment_report/` 中 e2e 链路历史数字
-  与现行口径存在 ~3% 系统性偏移。
-- [x] **攻"跑输全池基准"的研究问题——全A滚动训练实验**（2026-09-01 完成，
-  `scripts/pipelines/rolling_grid_alla.py` → `reports/alla_rolling/report.html`）：
-  全A 5549 股 × 798 公因子 × 2018~2026 分年 walk-forward 网格
-  （horizon×频率×模型×超参×中性化×集中度，120 组合）。**选股宽度是关键答案**：
-  全A Top10%~20% 等权多头显著跑赢等权基准（gbdt h1×M raw Top10% 年化 14.0%，
-  超额上证 +11.8%/年、超额全A等权 +5.2%/年；gbdt_deep h1×W raw Top10% 正超额
-  8/9 年）——HS300 top-50 集中持仓跑输的旧问题在"更宽股票池 + 更分散持仓"下
-  方向反转。h1 短视野 + 月/周频 + gbdt 系模型是一致稳健解；日频换手成本全灭；
-  h>1 受长 horizon 特征去冗余后特征数不足拖累（详见报告披露⑥）。
-- [x] **全A实验数据卫生修复**（2026-09-07 完成）：① 退市股回补——按 SDK 历史清单
-  （沪深A 2015 至今含退市 ∪ 当前全A）补齐 238 只退市类代码的 K 线/股本/复权因子，
-  全链路重建后幸存者偏差消除，头部配置超额回落 ~2pp（量级合理、排序不变）；
-  ② 状态表全量重拉（修复 2019-2021 覆盖锯齿）；③ 基本面面板 32 只 ETF 列剔除 +
-  IC 重算；④ 2026-09-02 半拉日全链路裁剪（水位回退自愈）。
-- [x] **最优方案生产化每日推理**（2026-09-08 完成，`scripts/pipelines/alla_daily_rank.py`）：
-  全A滚动实验最优方案（gbdt h1 + 当年入选 50 因子 + 500 日窗 + raw Top10%）的
-  每日盘后推理——增量数据更新 → 尾部重算因子（同一复权基准自洽，不改写冻结
-  数据集）→ 重训预测最新截面 → 全A排名 + Top10% 可交易候选 → `reports/alla_daily/`；
-  与实验 OOS 面板末日截面 Spearman 0.92 验证一致性；`--install-task` 注册每日
-  计划任务（`YuriQuant AllaDailyRank`）。已知边界：训练段用发布时点已知标签
-  （实时无未来可窥）；可交易性为信号日状态估计；跨年回退最近年份特征选择并告警。
-- [x] **出榜链口径对齐主实验最优方案**（2026-09-17 完成，
-  `scripts/pipelines/alla_daily_rank.py`）：出榜链此前只补了 h1+h5 秩平均，缺
-  因子层正交化（缺口 3.06pp 中的 1.77pp）。本次新增 `--preproc {zscore,ortho}`，
-  **默认已切 `ortho`**（实时面板跑 `preprocess_factor`：MAD→行业+log市值中性化
-  →zscore→±10，并自动用 ortho 臂特征清单），`--preproc zscore` 回退旧口径。
-  证据（`reports/prod_pipeline_gap/align_check_20260917.md`）：① 面板等价性——
-  市值口径差异对**全部 85 个在产特征**影响秩相关 median 0.999936 / min 0.9517
-  （唯一显著异常是 `ln_mktcap` 本身），故**不必重跑离线 `panels_neu`**；
-  ② 端到端——出榜链 ortho 榜与主实验 ortho 臂 pred 末日非 NaN 数/板块构成吻合
-  （5195 vs 5196；两者 BJ 均为 0）。**已知边界**：`cov_industry` 无北交所分类 →
-  ortho 口径下 BJ 337 只不入榜（与主实验 ortho 臂一致，非本链特有）。
-  ⚠️ 耗时 **~60 分钟**（正交化逐日截面回归 6 倍于 h1h5 的 589s）。**向量化已落地**
-  （2026-09-20）：`neutralize` 默认切 numpy 外壳，与旧逐日实现 `max|Δ| = 0`（逐位
-  一致），`preprocess_factor` 全流程 **2.96x**（86 因子 22.05 → 7.45 分钟）；更快的
-  `neutralize_grouped`（**8.3x**）因解法换为 pinv-on-X'X、条件数平方（`max|Δ|`
-  1e-12~1e-8，截面名次位移实测 0）**保持 opt-in，未设默认**——要切默认须先跑一次
-  端到端出榜对照。证据：`reports/neutralize_vectorization/report.md`。
-- [x] **修复每日计划任务静默失败**（2026-09-17）：`YuriQuant AllaDailyRank` 的 TR
-  仍指向 09-11 重构前的 `scripts\alla_daily_rank.py`，自 09-12 起每天 `rc=2`
-  （实测"can't open file"）——`reports/alla_daily/` 09-12~09-16 的榜实为手工产出。
-  已用 `--install-task 17:30` 重注册（TR 指向 `scripts\pipelines\`）；顺带修
-  `install_task`/`remove_task` 用 `text=True` 读 GBK schtasks 输出抛
-  `UnicodeDecodeError`、把"创建成功"吞成异常栈的误导性 bug。
-- [ ] **全A实验的后续深挖**：① h5/h10 特征不足问题已由 DPP 去冗余解决
-  （每期选满 50 特征）；ortho 正交化口径**出榜链已对齐（见上）**，
-  余：主实验 ortho 臂的 alt 口径 `stage_predict/stage_backtest` 重跑
-  （09-12 接入另类族后被 exists 静默跳过，产物停在 09-07）；
-  ② 全A数据集纳入正式因子库监控（all_a_2018_2026 目前为轻量 registry）；
-  ③ ~~2026-09-02 盘中数据整日重拉~~（2026-09-08 由 alla_daily_rank 全流程运行
-  顺带完成，daily_all_a 缓存已到 20260907）；
-  ④ 数据层 bug 已修（2026-09-08）：`DataCache.get_calendar` 在 end=None 时
-  永不回源，日历被历史显式 end 封顶后"更新到最新"永远看不到新交易日
-  （实测卡 20260902）——改为 end=None 语义=覆盖到今天，附回归测试。
+  与现行口径存在 ~3% 系统性偏移。已挂好机器队列末尾。
+- [ ] **全A实验后续深挖（剩余两项）**：
+  - [ ] ortho 臂 alt 口径 `stage_predict/stage_backtest` 重跑（09-12 接入
+    另类族后被 exists 静默跳过，产物停在 09-07）。已挂好机器队列末尾。
+  - [ ] all_a_2018_2026 数据集纳入正式因子库监控（目前为轻量 registry）。
 
-- [x] **全A超额收益来源复核（α/β 分解 + Brinson 行业归因）**（2026-09-08 完成，
-  `scripts/pipelines/alla_excess_attribution.py` → `reports/alla_attribution/`）：复跑主策略
-  （gbdt h1×M×raw Top10%）取每日权重后归因。结论：① 对上证的超额 +10.2%/年中
-  约 一半来自风格敞口——对上证 β=1.10、R²=0.61（小盘暴露），剔除后 α=+11.2%/年
-  但 t=1.89 未过显著线；对全A等权（自然基准）β≈0.97、R²=0.93，**纯选股 α=+5.1%/年、
-  t=2.14 显著**（p=0.033）；② Brinson（vs 全A等权，申万一级）：累计主动收益 +35.6%
-  = 选择 +64.1% + 配置 −15.5% + 交互 −12.3%——**超额几乎全部来自行业内选股，
-  行业配置是拖累**。
-- [x] **超额与夏普的统计显著性检验进回测指标**（2026-09-08 完成）：`calc_all_metrics`
-  新增 `sharpe_t_stat`（日收益均值 Newey-West t）/ `years_to_prove` = (1.96/|SR|)²
-  （paperswithbacktest 复现口径：证明策略所需年限）/ `excess_t_stat`（超额均值 t 检验），
-  HTML 明细/对比表与 `metrics_overall.csv`、`rolling_grid` 报告同步。主策略实测：
-  8.35 年样本 Sharpe 0.515 → t=1.69（未过 1.96，证明需 14.5 年）、超额 t=1.947
-  （恰好压线）—— headline 年化的统计证据比直觉弱，引用时须带 t 值。
-- [x] **论文复现因子族入库（awesome-systematic-trading 21 式）**（2026-09-08 完成，
-  `factor/paper_factors.py` + `scripts/factors/build_paper_factors.py`）：61 个已复现策略中
-  筛出可在 A 股数据面实现的 21 个，翻译为截面因子入 all_a_2018_2026（879→900），
-  全部走 PIT + IC/NW-t + canonical 回测标准流程。A 股实测速览：短期反转
-  （IC=0.038, t=11.3）、公告期反转（t=3.2）、低波（t=8.2）、价值 BP（t=8.5）、
-  研发强度（t=5.6）、盈利质量/FSCORE（t≈4.4）显著为正；**月频动量族为负**
-  （一致动量 t=−3.0、动量×波动 t=−8.0，A 股动量反转经典结论复现）；BAB/应计
-  （资产负债表法）/资产增长不显著。待办：`dup_checked=False`（冗余预检未自动跑，
-  pap_value_bp 与库内 bp 同构，待库报告确认相关性）。
+### 已完成归档（2026-09-20 压缩，一行一条）
+
+- [x] 重跑 multiyear_oos（09-01，620s）：h1×M 是唯一三年一致稳健解
+- [x] 重跑 freq_tune（09-01）：h1 排序不变，h5×M 伪结果修正
+- [x] 全A滚动训练实验（09-01）：选股宽度是"跑输基准"的答案——Top10% 等权
+  超额全A等权 +5.2%/年，gbdt h1×M 一致稳健
+- [x] 全A数据卫生修复（09-07）：退市股回补 238 只（幸存者偏差消除，超额
+  回落 ~2pp 排序不变）、状态表重拉、ETF 列剔除、半拉日裁剪
+- [x] 生产化每日推理 `alla_daily_rank`（09-08，含计划任务注册）
+- [x] 出榜链口径对齐主实验 ortho（09-17）
+- [x] 每日计划任务静默失败修复（09-17）
+- [x] 全A超额来源复核（09-08）：对全A等权纯选股 α=+5.1%/年，对上证超额
+  约半数为小盘风格敞口
+- [x] 超额/夏普显著性检验进回测指标（09-08）
+- [x] 论文复现因子族入库（09-08，awesome-systematic-trading 21 式）
+
+---
 
 ## 二、研究功能缺口（新能力）
 
@@ -139,65 +74,38 @@
   （内存友好合并+upto 短路）、状态表分片落盘 + 子进程硬超时
   （settings fetch.status_table）。
 
-- [ ] **分钟频因子挖掘 pipeline**（数据层已建，2026-09-09）：
-  - [x] 数据层：`data/intraday.py` MinutePanelStore——parquet 分钟长表 → 按年分区
-    MemMap 稠密面板 `[日,bar,码]`（全市场 GB 级不进内存，参照 Alpha掘金 24 的
-    MemMap+年份切片方案）；`DataCache.read_minute_kline` 只读入口；
-    `scripts/factors/build_minute_panel.py`（--features/--demo-ic）。hs300 2022–2026
-    已物化（1085 日 × 48 bar × 339 码，覆盖 88%）。
-  - [x] 特征层：`factor/intraday_features.py`——tsfresh 风格向量化"分钟→日频"
-    统计特征 42 个（动量/分布/波动/形态自相关/量价/蜡烛，Alpha掘金 22 的降维
-    路线）。初测 IC 方向符合预期：尾盘动量反转（mom_last_bar IC=-0.058,
-    t=-18.6）、低波效应（vol_rv IC=-0.035）、深跌反转（ret_min IC=+0.030）。
-  - [ ] 挖掘层：把 42 特征接入 GP/GFlowNet 日频挖掘框架（Alpha掘金 22 的
-    "降维后复用日频框架"）；涨跌停/ST 可执行性处理对齐
-    build_intraday_factors 口径。
-  - [x] 第一层单因子体检（2026-09-09 完成）：`scripts/factors/build_intraday_stat_factors.py`
-    ——除权除息日掩码（1754 格）→ zscore 入库 hs300_2022_2025（42 个 im_*，
-    821→863）；批量冗余体检（vs 库内 821 因子逐日秩相关 + top1 正交残差 IC，
-    报告 `reports/intraday_stat_checkup.csv`；`daily_rank_corr_mean` 有 corrwith
-    对拍测试）。结论：37/42 NW-t 显著；**最大增量=尾盘分钟动量反转**
-    （im_mom_last_bar IC=-0.061 t_nw=-23.4，全库最高相关仅 0.19；
-    im_mom_close30_ret t_nw=-14.2 相关 0.30）——现有日频库完全缺失该信息。
-    冗余 3 个完全同构（vol_range≈KLEN、pos_in_range≈KSFT2、ret_mean≈KMID，
-    corr>0.95）、波动率族与 KLEN 0.78-0.80 边缘；高相关但残差显著含增量：
-    pv_vwap_dev(resid t=-7.4)、vol_rsj(3.6)、pv_ret_vol_corr(3.5)、
-    am/pm 时段差(6.1)。独立且显著 17 个——第二层挖掘的原料优先选这批。
-  - [x] A/B 对照（2026-09-14，证据链完整）：
-    月频 `oneoff/_p0_intraday_ab.py`（--tag 多窗口）×3 窗口 + 日频频率匹配
-    `oneoff/_p0_intraday_ab_daily.py`（freq=D/h1，全 42 个 im_*，含安慰剂臂）。
-    **结论：日内因子有效，提升是真实信息而非模型容量效应**——
-    (a) 月频 3 窗口 Sharpe 差全部为正：+0.18 / +0.38 / +0.32
-    （bt-start 2023-07 窗口 t=1.87）；日频 0.421→0.583（+0.16）。
-    (b) 安慰剂对照（im_* 日期打乱注入，同列数同分布）：placebo 0.291 <
-    no_im 0.421 < with_im 0.583——假信号使模型变差、真信号变好，
-    with_im−placebo=+2.07bp/日(t=1.28)，排除"多特征列"伪阳性。
-    (c) IC 期限结构：尾盘动量纯次日信号（h2 衰减 95%+），h1 下进选 rank2。
-    边界：单窗口 t 0.8~1.9 未达 p<0.05（方向一致但样本重叠）；分钟数据仅
-    hs300，**全A 主模型（alla_ortho）的检验待 all_a 分钟数据拉取**。
-    换手：D 频日均 0.66（buffer/混合 horizon 是现成的改进抓手）。
-  - [x] 第二层 GP 组合挖掘（2026-09-14 完成）：`scripts/factors/mine_im_combos.py`
-    ——17 个独立显著 im_* 为终端集，pop300/gen15/sample_step2，gen11 早停，
-    6 公式入库 gp_im_*（三重过拟合守卫：train/OOS 同号 + OOS≥30%·train + t 排序）。
-    **诚实结论：管线跑通但当前终端集下组合增益≈0**——GP 被 t=-23 的尾盘动量
-    吸引，6/6 公式全部围绕 im_mom_last_bar/close30 的代数重述
-    （与单因子相关 0.65~0.98），IC 上限 6.0%≈单因子 5.9%，无新信息带。
-    印证：信号在时段动量类，但其余 16 终端量级低一档成"陪跑"。
-  - [ ] 第三层扩原料（挖掘反馈闭环：GP 高频选中→时段动量切细）：
-    时段切片矩阵化（20 分钟窗 × 动量/波动/量）、量价 lead-lag、
-    tsfresh 计算器移植（能量比/峰值/fft）、事件日条件化（公告日首日日内行为，
-    与文本挖掘 PEAD 线交叉）；扩完重跑 mine_im_combos 看组合上限是否抬升。
-  - [ ] 扩展：all_a 池物化（~5500 码 × 48 bar 需验证 MemMap 分块性能）；
-    1 分钟档位（存储×5，需评估磁盘）。
-- [ ] **生产级执行**：实盘下单对接、实时行情驱动（当前为日频 + 盘后信号；
-  "信号→次日执行"的滑点假设未经真实成交验证）。
-- [ ] **文本挖掘合规化**：当前依赖同花顺/巨潮爬虫（页面变更即断），
-  生产化需对接 iFinD/Wind/Choice 等商业源，或明确接受"研究性补充"定位。
-- [ ] **在线 dashboard**：报告均为静态 HTML，无增量刷新的监控页面。
+### 剩余缺口
+
+- [ ] **分钟频挖掘第三层扩原料**：时段切片矩阵化（20 分钟窗 × 动量/波动/量）、
+  量价 lead-lag、tsfresh 计算器移植、事件日条件化（与文本 PEAD 线交叉）；
+  扩完重跑 mine_im_combos 看组合上限是否抬升（二层结论：增益≈0，信号在
+  时段动量，原料不够）。
+- [ ] **分钟频扩容（资源墙）**：all_a 池物化（~5500 码 × 48 bar，MemMap
+  分块性能待验）、1 分钟档位（存储 ×5）；先跑吞吐探针估成本。
+- [ ] **生产级执行**：实盘下单对接、实时行情驱动（当前日频盘后信号，
+  "信号→次日执行"滑点假设未经真实成交验证）。
+- [ ] **文本挖掘合规化**：同花顺/巨潮爬虫依赖（页面变更即断），生产化需
+  商业数据源或明确"研究性补充"定位。
+- [ ] **在线 dashboard**：报告均为静态 HTML，无增量刷新监控页面。
+
+### 已完成归档（分钟频一/二层链，2026-09-20 压缩）
+
+- [x] 数据层 MinutePanelStore + 特征层 42 个 im_* + 单因子体检（09-09：
+  37/42 显著，尾盘动量反转 t=-23.4 为全库最大增量）+ A/B 对照（09-14：
+  with_im 0.583 vs placebo 0.291，日内因子真实有效）+ GP 二层挖掘
+  （09-14：6 公式入库但**组合增益≈0**，全部围绕尾盘动量代数重述）+
+  挖掘层接入 GP/GFlowNet（09-14 `mine_im_combos` / 09-16 `--feat-source`，
+  原"挖掘层"待办就此关闭）。
+
+---
 
 ## 三、工程层剩余债务
 
-### 2026-09-20 新增债项（RL/统计层批次带入）
+> 2026-09-20 清理：本节原 20 项已全部完成（六轮工程整改 + 口径统一七批 +
+> cli_common 推广 + HTML 模板收编 + 超长文件拆分等），压缩归档于节末；
+> 清理前全文见提交 `e70ac96`。
+
+### 剩余（5 项）
 
 - [ ] **.venv 缺 rl 依赖**：gymnasium/sb3 等只在系统解释器
   （D:/Python/Python312）可用，.venv 跑不了 RL 测试（test_ai97_llm_pool /
@@ -211,508 +119,21 @@
   deflate_best 作为固定出报告环节。
 - [ ] **邮件链路 Skills 化**（可选，速读批借鉴）：build_daily_email_body
   的口径约束固化 + 渐进式披露；技能总量控制在上限 20–30 内。
-
-### 3.1 结构性（应先做）
-
-- [x] **实验脚本私有函数倒挂残余**：`cpcv_eval.py` / `cpcv_h1_eval.py` /
-  `ml_algorithm_compare.py` 仍 import `ml_synthesis_experiment` 的
-  `_eval_row` / `_px_panels` / `_fit_predict_valid` / `_monthly_ic` 等私有函数
-  （P3 仅解掉了 `_classic_features`）。公共函数应迁至 `e2e_common` 或独立模块。
-  - **2026-09-11 第三批补齐另两类遗漏**：`data/cache_helpers` 的
-    `_pit_universe_codes`（被 **6** 个 scripts 引用）/ `_apply_membership_mask`
-    （**4** 个）+ `factor/genetic_mining` 的 5 个适应度组件
-    （`_ls_net_stats` / `_monthly_forward_returns` / `_mutual_info_series` /
-    `_top_excess_series` / `_htai_preprocess`，共 4 个 scripts 引用）此前漏解，
-    已全部公开化；新增 AST 守卫防回潮。见 3.1 末尾「口径统一第三批」。
-- [x] **最小 CI**：无 `.github/workflows`。加最简 GitHub Actions
-  （pytest + ruff check + tests/test_layering.py 门禁），
-  把口径守卫和分层守卫变成强制约束（测试漂移到无法收集才被发现，
-  根因就是无 CI）。
-  - 2026-09-10 收敛范围：push/PR 只留 Ruff 真 bug 规则 + 三个分层守卫
-    （约 1 分钟）；全量 pytest 移出 push 流程 → 仅手动触发的
-    `full-tests.yml`。原因：全量要 7 分钟、依赖 `reports/` 等不入库产物
-    （CI 上只能靠 skip 兜住），且含已知 flaky 的 risk_parity 数值测试
-    （`test_solver.py`，SCS 近似解波动），每次 push 都报红纯噪声。
-  - 2026-09-10 后续（`7ea73c1`）：去掉 torch 后快检查降到 60 秒；随后两个
-    工作流**都改为仅 `workflow_dispatch`**（`Fast checks (manual)` /
-    `Full tests (manual)`），push 不再触发任何 CI —— 从源头消除红叉、失败
-    邮件与等待。代价：自动检查彻底消失，改为手动触发或本机全量 pytest。
-
-- [x] **口径分裂第一批（2026-09-10 完成）**：删 `scripts/run_backtest.py`
-  （跨层混用收益面板、已被口径守卫拦下跑不起来）；可交易性掩码收敛到
-  `data/tradability.py` 单模块（删死代码 `build_executable_mask`）；
-  交易成本真源上提到 `settings.yaml` 顶层 `costs` 段 + `Config.costs()`
-  （原 `backtest` 段万1/5bp 与 `model_portfolio` 段万3/10bp 差 2~3 倍、
-  不可比）。新增 `tests/test_tradability.py` / `tests/test_cost_config.py`
-  锁死两种口径的唯一语义差别。全量 629 passed（基线 618）。详见
-  `.workbuddy/memory/2026-09-10.md`。
-
-- [x] **口径统一第二批（2026-09-10 架构审计立项；四项待拍板决策与"权重生产
-  唯一入口"已于 2026-09-11 全部落定）**：
-
-  - [x] **显著性判定收口（2026-09-10 完成，`24837bb`）**：新增
-    `stats/significance.py` 作为"判定层"单一真源（与 `stats/robust_stats` 的
-    "估计层"分工）——`t_pvalue`（t→双侧 p）/ `benjamini_hochberg`（BH-FDR）/
-    `mean_inference`（一步式 OLS+NW 两套 t/p）。先前散落的实现全部改走它：
-    `factor/mining.py` 的私有 `_benjamini_hochberg` 与 worker/串行两条路径
-    各自内联的 p 值公式、`research/factor_analysis.py`、`research/attribution.py`、
-    `model/evaluation.py`（2 处）的内联 p 值公式。
-    **两处检验族本就不同**，故保留两种语义、但共用一个实现：批量挖掘族 =
-    这一批候选 → BH-FDR(q=0.05)；单因子入库无族 → 存原始 NW 显著性，
-    并**新增 `p_value_nw` 列**把原始 p 落盘 + 提供
-    `FactorLibrary.significance_table(q)` /
-    `load_significant_features(correction="fdr")` 在"整库"这个族上校正。
-    默认仍走 raw，**不改动已落盘结论**。
-    实测切换代价（hs300_2025 的 244 因子）：raw 显著 **84** → 整库 BH-FDR(q=0.05)
-    **62**（22 个会翻）；hs300_2022_2025 的 862 个：397 → 339。
-    **决策（2026-09-11）：默认保持 raw，FDR 降到报告层并排展示**。
-    `research/report_pipeline.collect_factor_library` 与
-    `scripts/reporting/factor_library_full_report.py` 已接入 `significance_table`，
-    同时显示 raw / 整库 FDR 两个计数。理由：
-    ① 全仓 `load_significant_features` 只有 3 个消费点（`e2e_common` /
-    `diagnose_neutralized_compare` / 一个测试），**主实验（全A滚动主线
-    `rolling_grid_alla` → `alla_daily_rank`）不读因子库**——它用预构建的
-    alpha panels，换默认只会静默改 e2e 家族数字、破坏可比性；
-    ② 因子库是**累积库**（GP / GFlowNet / exhaustive / 论文复现 / 手工因子
-    多轮混入），不是同一次多重检验的"族"，整库 BH-FDR 的族语义本身不严谨；
-    ③ raw 与 FDR 回答不同问题（单因子自身有无 alpha vs 这批候选里有多少是
-    真的），并排展示即可，不该互相替代。
-  - [x] **统计 / 预处理 / 绩效原语收口（2026-09-10，`859494e` + `1a83d77`）**：
-    - **rank IC**：`factor/gflownet/reward.rank_ic_series` 改为
-      `stats.ic.calc_ic_series` 的薄封装（此前自实现一份）。`calc_ic_series`
-      新增 `returns_rank` 参数承载原性能捷径，并把"**捷径不总是等价**"的边界
-      写进 docstring + 用测试钉住：因子**整行**缺失（窗口预热）不影响；
-      **行内散点**缺失才分叉，30% 散点缺失时日均 IC 差约 1.1e-2
-      （IC 量级 3e-2~5e-2，**同阶**）。
-      **决策（2026-09-11）：维持现状**——训练走捷径、入库/评估走 canonical，
-      并把该分层**显式声明**（`factor/gflownet/reward.py` 模块 docstring 新增
-      「IC 口径分层」段，`parallel.py` 模块头与 `run_gflownet_phase1.py` 调用处
-      各加一处指引）。理由：训练奖励只是 batch 内的**相对排序**信号（决定哪些
-      公式进 hof），1e-2 偏差不改变公式间相对次序，而重跑 Phase 0/1 代价大且
-      破坏既有结论可比性；写进因子库的 IC 本来就是 canonical
-      （`FactorLibrary.register` → `calc_ic_series` 不传 `returns_rank`）。
-      **两处数字不可直接对比**，已写进 docstring。
-    - **市值中性化**：向量化版上移为 `factor/preprocessing.neutralize_single`
-      （含截距），`reward.neutralize_market_cap` 改为薄封装，新旧 max|Δ| = 0。
-      **决策（2026-09-11）：补 ones 列**。`neutralize` 在**无行业哑变量**时
-      （未传行业，或当天样本不足以容纳行业哑变量而被丢弃）补一列 `_intercept`；
-      含行业哑变量时**不补**（其列和已是全 1 向量、已 span 截距，重复加列会共线）。
-      至此与含截距的 `neutralize_single` 口径一致，消除了"同名市值中性化存在
-      两个口径"的分裂。
-      **影响面实测**（`scripts/oneoff/probe_size_only_exposure.py`，真实 HS300
-      1853 个交易日 × 520 股）：因样本不足而降级到 size-only 的天数 **= 0**
-      （行业面板 100% 交易日覆盖、93.2% 非 NaN），故只有"完全没传行业"的调用方
-      受影响，**主实验不受影响**（主线信号层主口径 `raw`、对照 `neut` 传市值+行业、
-      因子层 `panels_neu` 走 `preprocess_factor(mc, ind)` 两者同传）。
-      原 characterization 测试已改写为 `test_neutralize_size_only_matches_with_intercept_version`。
-    - **内联 t 统计量（2026-09-11 决策：全部收口）**：此前记的"5 处"是**漏数**
-      ——搜索模式用了 `np.sqrt(n)`，而真实写法多为 `np.sqrt(len(ic))`。以宽模式
-      复查后实际 **13 处**：`factor/synthesis.py`（`composite_stats`）、
-      `factor/genetic_mining.py`（`_seg_ic_stats` / `:1129` / `:1669`）、
-      `research/factor_analysis.py`（`standard_factor_summary`）、
-      `research/attribution.py`（`fama_macbeth` 的 `t_ols`）、
-      `scripts/archive/compare_htai_fitness.py`、`scripts/archive/compare_ml_synthesis.py`、
-      `scripts/evaluation/gp_tune_budget.py`（2 处）、`scripts/evaluation/walk_forward.py`（2 处）、
-      `scripts/factors/build_minute_panel.py`。全部改走 `mean_inference(robust=False)`，
-      并保住旧的 `n < 2 → 0.0` 边界（`mean_inference` 该情况返回 NaN）。
-      等价性探针 `scripts/oneoff/probe_ols_t_unify.py`：A 型（调用方均已 dropna）
-      **9/10 逐位一致**，唯一分叉是**常数序列**——旧写法因 pandas `Series.std()`
-      对全等值返回 7e-18（`s > 0` 保护失效）给出 ~2e16 的荒谬值，统一实现走
-      `np.std(ddof=1)` 给精确 0.0，属**修复**（IC 序列逐日截面相关，几乎不可能恒定）。
-      两个例外：① `build_minute_panel.py` 旧写法**分子 skipna、分母却用含 NaN 的
-      `len(ic)`**，两者本就不匹配，收口必然改数（已在代码注释中标注）；
-      ② `attribution` 的 `se_ols` 是标准误、不是 t，保留。
-      **是否补 NW 列 → 决策：不补**。这 13 处的 t 只用于报告 / 诊断输出，不参与
-      因子库显著判定、不进任何回测收益；补 NW 只改 CSV schema 而无实际收益。
-      新增静态守卫 `tests/test_significance.py::test_no_inline_ols_t_left_in_repo`
-      防回潮（只匹配 `X / (Y / np.sqrt(n))` 的除法嵌套，标准误 `sd / np.sqrt(n)`
-      不算），并有 5 个函数级测试锁定各入口 == `mean_inference`。
-    - **顺带修复（2026-09-11，a 项实跑真实因子库时暴露）**：
-      `stats.significance.t_pvalue` 只支持标量 `df`，而 `significance_table` 对
-      缺 `p_value_nw` 的旧行用 `df = n_dates - 1`（**数组**）补算 →
-      `not np.isfinite(df)` 对数组直接抛 ValueError。构造出的临时库每个因子都带
-      p 值，该分支一直没被测到，**真实库一跑就炸**（hs300_2025 有 244 行旧数据）。
-      已支持数组 `df`（语义与标量一致：有限且 >0 → t 分布；有限但 <=0 → NaN；
-      非有限 → 正态近似），并加回归测试 `test_t_pvalue_supports_array_df` /
-      `test_missing_pvalue_nw_is_backfilled`；顺手加固 `n_dates` 缺列时的回退。
-      修复后实测 raw→FDR：**hs300_2025 244 个 84→62**、
-      **hs300_2022_2025 863 个 397→337**。
-    - **绩效指标**：`scripts/e2e_backtest.perf_stats`（5 个脚本消费）的三个基础量
-      改调 `backtest.metrics` 原语，逐位一致；保留两处报告层独有约定
-      （短样本 <0.3 年不年化、月胜率——与 metrics 的日胜率不是同一指标）。
-      ⚠️ 唯一数字变化：`max_drawdown` 由负值改**正值**（全库其余口径均取正值），
-      报告渲染由 `-38.7%` 变 `38.7%`，幅度不变。
-    - 收益面板构造 3 处（`cli_common.returns_from_daily` /
-      `data/cache_helpers` / `build_panel` 内联）——**注意**：这不是"要统一成
-      一套写法"，IC 口径与引擎口径是分层设计、数学等价（`A = B.shift(-1)`），
-      只需保证"每个口径一份实现 + 跨层显式声明"，见 MEMORY.md 收益面板条。
-    - **反例（不要动）**：`strategy.constraints.neutralize_industry`（2026-09-11
-      自 `optimize/portfolio.py` 下沉）是**权重级**投影，与因子级残差中性化范畴
-      不同，不算重复。
-  - [x] **确定权重生产的唯一入口（2026-09-11 完成，方案 A）**：
-    诊断结论是**不合并模块，而是统一契约 + 消除真重复**。逐函数核对后，
-    `strategy/` 与 `optimize/` 的重叠面**只有 2 处、约 12 行**：
-    `optimize_weights(method="equal_topk")` ↔ `TopKLongOnly`、
-    `method="factor_weighted"` ↔（strategy 层无对应物）。其余 133 行
-    （行业中性投影 / 上下限 / 换手收缩）是 strategy 完全没有的能力，
-    `solver.py` 的 QP/HRP/BL 与 `risk.py` 的风险分解更无从重叠。
-    **不合并的三条理由**：① 依赖重量不对称——`backtest/engine.py:32` 只 import
-    `strategy.base`（零三方依赖），而 `optimize.solver` 要 cvxpy，合并会让回测
-    引擎背重依赖；② 契约粒度不同（单截面 `Series→Series` vs 面板
-    `DataFrame→DataFrame`）；③ 层次不同（业界 alpha → 组合构建 → 执行）。
-    落地：新建 `strategy/constraints.py`（面板级纯函数真源 =
-    `build_signal_weights` / `neutralize_industry` / `apply_bounds` /
-    `apply_turnover` / `apply_constraints`），`optimize/portfolio.py` 退化为
-    **薄门面**（不再持有任何独立实现）；探针
-    `scripts/oneoff/probe_portfolio_move.py` 穷举 72 个约束组合验证新旧
-    **max|Δ|=0**（纯搬迁）。契约显性化：`PrecomputedWeightsStrategy` 从
-    `optimize.multi_period` 导出为公开适配器并补 docstring——它是"优化产物 →
-    `Strategy` 契约 → 回测引擎"的唯一通道。守卫：`tests/test_layering.py`
-    加 strategy 层依赖守卫（不得 import optimize/backtest 及 cvxpy 等重依赖）+
-    约束真源守卫；新增 `tests/test_constraints.py`（16 例）。
-    **⚠️ 一处刻意不合并**：`equal_topk` 与 `TopKLongOnly` 的 **tie-break 不同**
-    —— 前者 `rank(method="first")`（按列序**确定性**），后者 `sort_values()`
-    （quicksort，**不稳定**）。探针 `scripts/oneoff/probe_tie_at_topk.py` 实测
-    真实因子库（HS300 2025，40 面板 / 46930 截面）**4.4% 的截面**在 top-k 边界
-    存在 tie（两个离散型因子接近 100%），委托会改这些截面的持仓集合，且是
-    **向不确定实现退化**，故保留确定性实现并写进 docstring。
-    **新发现（2026-09-11 第三批已完成）**：同一 tie 隐患也在
-    `TopFracLongOnly` / `BufferedTopFracLongOnly` 等**主线用到的策略类**里
-    （`sort_values()` 不稳定 → 同输入在不同平台/版本可能选出不同股票）。
-    第三批已统一为 `rank(ascending=False, method="first")`（列序确定性），
-    详见 3.1 末尾「口径统一第三批」。
-  - [x] **`factor/synthesis.py` 归属倒挂（2026-09-11 完成，`a6a166c`）**：
-    诊断发现该模块是**两类职责混装**——`ic_weighted` / `pca` / `orthogonal` /
-    `build_components` 是**确定性因子组合**（挖掘闭环最后一环、直接喂因子库），
-    而 `synthesize_stacking` 系列拟合**有监督模型**（ridge / LightGBM /
-    LambdaRank + 时序 CV），是模型层的活。故**未整体搬迁**（会把因子组合错放进
-    模型层，并让 `synthesize_library` / `gflownet_library_ingest` 这些纯因子库
-    ingest 反向依赖 model），改为**按职责拆分**：
-    - 新增 `model/stacking.py`：四个 stacking 合成器 + 私有辅助
-      （`_make_target` / `_time_fold_masks` / `_inner_split_by_day` /
-      `_rank_ic_by_day`）原样迁入；探针 `scripts/oneoff/probe_stacking_move.py`
-      对四个合成器与折掩码逐位验证 **max|Δ|=0**（真正的纯搬运）；
-    - `factor/synthesis.py` 只留确定性组合；`_long_matrix` 因被跨层复用提升为
-      公开 `long_matrix`（与 `model.predictor._long_matrix` 同口径声明）；
-    - **依赖方向固定为 model → factor**（与 `model/predictor.py` 早已 import
-      `factor.cv` / `factor.preprocessing` 一致），`factor/` 不得反向依赖 model。
-    改动面：`model/training.py` + 4 个脚本（`compare_ml_synthesis` /
-    `gflownet_library_ingest` / `synthesize_factors` / `synthesize_library`）的
-    import 站点；`model/features.py` / `model/predictor.py` / `factor/cv.py` /
-    `factor/__init__.py` 的交叉引用注释；新建 `tests/test_stacking.py`（stacking
-    + 时序 CV 测试迁入），`tests/test_synthesis.py` 只留因子层，共享 fixture
-    `synth_parts` 上移 `tests/conftest.py`；`tests/test_layering.py` 新增两条守卫
-    （factor ↛ model；stacking 实现必须在 model 且 factor 不得留转发口）。
-    **顺带修复**：`tests/test_metrics.py` 上一批重复追加了同一批 3 个测试
-    （F811 重定义 → pytest 静默去重，等于测试从未真正跑；CI 快检查的
-    `ruff --select F811` 会红），已去重（`7a75235`）。
-  - 备注：第二批动的是**口径与依赖边界**，与本批"先跑全量测试定基线、
-    改完对比"的做法一致；建议一次只动一项并单独提交，便于定位是哪一项
-    改变了哪些数字。
-
-- [x] **口径统一第三批 —— 工程卫生（2026-09-11 完成，五项独立提交）**：
-  基线：全量 **692 passed**（2411s / 40min，串行；改前跑通终态）。改后收集 **712**。
-
-  - [x] **① tie-break 确定化（`1bd9100`）**：`TopKLongShort` / `TopKLongOnly` /
-    `TopFracLongOnly` 由 `vals.sort_values()`（quicksort，不稳定）改为
-    `rank(ascending=False, method="first")`（列序确定性），与
-    `strategy.constraints.build_signal_weights` 及 `BufferedTopFracLongOnly`
-    统一为全仓唯一 tie 规则。
-    **影响面实测**（`scripts/oneoff/probe_tie_stable_sort.py` +
-    `probe_alla_tie_impact.py`）：① 因子库面板（HS300 2025，40 面板 / 46930 截面）
-    约 **4.4%** 截面在 top-k 边界并列，且几乎每个并列截面新旧持仓集合不同，
-    最坏 Jaccard = 0（top-k 全换）——**离散型因子链路需按新口径重跑**；
-    ② 主实验（全A正交化 ens_h1h5，2107 日 × 5801 股）tie 率 4.95%、月频调仓日
-    8.57%，但差异日平均 Jaccard 0.995、对称差仅 **2.0 只**（占持仓 0.5%），
-    月频调仓换手 0.7303 → **0.7303（零变化）** → **主实验数字不变**，属可复现性加固。
-    顺带修复：`TopKLongOnly` 空截面 `1.0/0` 抛 ZeroDivisionError；旧实现
-    `index[-0:]` 等价于全部索引（k=0 时给出 inf 权重）。
-    新增 `tests/test_strategy_tie.py`（10 例）。
-  - [x] **② scripts 层中性化去重（`6ebc6ae`）**：核查确认三份同名实现
-    （`e2e_common.neutralize_predictions` / `optimize_e2e.neutralize_predictions_local`
-    / `run_model_portfolio.neutralize_panel`）**都走 `factor.preprocessing.neutralize`
-    同一真源，不存在口径分裂**。真正的问题是 `scripts/pipelines/run_model_portfolio.py`
-    这个**实验入口脚本被主实验/生产反向 import**：`DEFAULT_MODEL_PARAMS`
-    → `model/params.py`（`037324e`）、`default_costs` → `backtest/costs.py`
-    （`47b6976`）、4 个 legacy 组件（`neutralize_panel` /
-    `load_index_benchmark` / `build_style_covariates_panel` / `build_model_panel`）
-    → 新建 `scripts/common/portfolio_common.py`（`6ebc6ae`）。共 17 个 import 站点改向。
-    守卫：`test_model_params_live_in_model_layer` /
-    `test_default_costs_source_is_the_backtest_layer` /
-    `test_experiment_entry_scripts_are_not_imported_by_other_scripts`。
-    **遗留**：`run_model_portfolio` 仍 import `rolling_grid_alla`（复用其
-    `FeatureStore` / `select_features_for_year`，属"管线组件复用"），未纳入守卫
-    目标，待评估是否把该管线件也下沉。
-  - [x] **③ 私有函数倒挂收口（`acdb07e`）**：`data/cache_helpers` 2 个
-    （`pit_universe_codes` / `apply_membership_mask`）+ `factor/genetic_mining`
-    5 个（`ls_net_stats` / `monthly_forward_returns` / `mutual_info_series` /
-    `top_excess_series` / `htai_preprocess`）公开化，10 个 scripts + 测试站点改向。
-    仍保留私有（**仅测试白盒引用**）：`_adjust_crowding` / `_restore_crowding` /
-    `_dedup_hof_by_correlation` / `_ensure_creator` / `_seg_ic_stats`。
-    守卫 `test_no_private_import_from_factor_and_data`（AST 解析，scripts 层一律
-    禁 import 下划线名；tests 层白名单）。
-  - [x] **④ 文本链路 IC 口径核查（仅核查，代码改动按纪律延后）**：探针
-    `scripts/oneoff/probe_text_ic_convention.py` 在真实文本因子数据上实测
-    `evaluate_senti.rank_ic_stats`（月度）/ `evaluate_sue_txt.rank_ic`（季度末）
-    与 `stats.ic.calc_ic_series` **逐位一致**（共同有效期 max|ΔIC| 分别为
-    2.8e-17 / 5.6e-17，期数 92/92、32/32 完全对齐）→ **无实质分叉**。
-    三条真实差异（非数值分叉，需声明）：① 无显式「有效观测 <5 门槛」（canonical
-    剔、legacy 只靠 `.corr()` 对 <2 样本返 NaN 兜底，本数据恰好未触发但 2~4 只
-    股票的期会漏网 → 潜在假显著性）；② `evaluate_sue_txt.rank_ic` 的字段
-    `n_months` 实际是**期数**且粒度是**季度末**（32 期 ≈ 8 年季度），命名误导；
-    ③ 年化常数：senti 月度若误用 `calc_ir` 的 ×√252 得 ICIR 1.996（正确 ×√12
-    = 0.436，虚高 4.6 倍），legacy 用不年化的 mean/std 规避了误用但使两条线
-    ICIR 不可比。**延后原因**：`scripts/textmining/*` 正被另一会话编辑
-    （8 个文件未提交），现在改会污染他会话的 diff。待其落地后补 <5 门槛 + 修字段名。
-  - [x] **⑤ P2 清洁项（`1e36456`）**：删死代码 `factor/synthesis.py::_align_sign`
-    （全仓零引用，活的是 `_align_sign_by_ic`）；**cvxpy 真·惰性导入**
-    （`optimize/solver.py` 原模块级 try/except 名为"延迟"实则在 `import optimize`
-    时执行，冷启 7.3s → 改 `_require_cvxpy()` 函数内按需加载）；
-    **`optimize/__init__` 惰性导入**（PEP 562 `__getattr__` + `__dir__`，
-    `import optimize` **10.2s → 0.02s**，cvxpy/openpyxl/scipy.stats 均不再进
-    `sys.modules`）。新增 `tests/test_optimize_lazy_import.py`（4 例，含干净子进程
-    验证）。**核实为误报**：`optimize/multi_period.py:26` 的 print 位于模块
-    docstring 的「用法」示例中；AST 扫描全部核心包真实 print 调用数 **= 0**。
-    **纠正审计前提**：11.7s 导入开销里 cvxpy 只占约 2s，其余是
-    `stats.ic→scipy.stats`(4.0s) + `research.xlsx_report→openpyxl`(2.4s) +
-    pandas(2.7s)。
-
-- [x] **口径统一第四批 —— 结构卫生 + 文档合一（2026-09-11 完成，四项独立提交，
-  `ff060a5` / `8cdca30` / `c84ee4d` / `a03d36b`，已推送）**：
-
-  用户给的问题清单经 AST 核查后**有 5 处与实测不符**（已逐条纠正，见各项）：
-
-  - [x] **① 归档 7 个零引用一次性脚本（`ff060a5`）**：`compare_htai_fitness` /
-    `compare_ml_synthesis` / `diagnose_factor_vs_model` /
-    `diagnose_neutralized_compare` / `gtja_discipline_eval` /
-    `ml_algorithm_compare` / `ml_synthesis_experiment` 移入 `scripts/archive/`。
-    **刻意不走 `scripts/oneoff/`**：该目录整目录 gitignored（62 文件 / 0 跟踪），
-    移过去等于从版本控制删除，而这 7 个里 5 个**支撑已引用结论**（报告23 四象限 /
-    华泰·GTJA 复现对照 / 合成对比 / 算法对比），丢弃会毁掉可复现性。
-    scripts 根 64 → 57，archive 5 → 12（git 记为 rename，历史保留）。
-    **顺带修一处潜伏 bug**：脚本用 `Path(__file__).resolve().parents[1]` 作
-    project root——在 `scripts/` 下恰为仓库根，移入 `scripts/archive/` 后变成
-    `scripts/`，非 cwd 调用即 `from factor...` 失败。10 个文件改 `parents[2]`
-    （含 archive 里原本就写错的 daily_pipeline / factor_usability_stats /
-    dpp_library_compare），2 个补 bootstrap。
-  - [x] **② 报告渲染收口（`8cdca30`）**：**审计推翻了原假设——公共层早已存在**
-    （`research/html_report.py` 的 `page` / `BASE_CSS` / `render_table` /
-    `base_js` / `SORT_JS` / `svg_sparkline` / `embed_image_b64`）。6 个"各写一套
-    CSS"的脚本与 BASE_CSS **逐字节相同的声明 = 0 个**（逐选择器比对：body/h1/h2/
-    .card/table/th/td 配色字号字体全不同）→ 删了只改视觉、无功能收益，
-    **刻意不动**。真正绕开 `page()` 自拼外壳的是另外 **3 个**脚本
-    （`jq_style_report` / `rolling_grid_report` / `alla_excess_attribution`），
-    已收编；自拼外壳模块 4 → **1**（仅基座）。`page()` 新增 `extra_css=`
-    （BASE_CSS 在前、增量在后的**组合**语义），补上"继承而非替换"的缺口。
-    **端到端等价验证**：实跑重生成 `rolling_grid_report` 与重构前产物比对——
-    `<style>` 块**逐字节一致**；body 仅 3 处差异且全可解释（1 行空白 / 时间戳 /
-    canvas id）。⚠️ 顺带发现原有非确定性：`cid = "chart_" + str(abs(hash(title))
-    % 10**8)` —— Python 字符串 hash 每进程随机 → 报告 HTML 不可字节复现
-    （**未修，留作独立项**）。
-  - [x] **③ 常量收口（`c84ee4d`）**：用户口径"只收同概念重复 + 项目级策略"。
-    审计纠正：`ETF_CANDIDATES` **已收口**在 `data/etf_universe.py`；
-    `MIN_PERIODS` 在 `monitoring/crowding`(重叠交易日) 与
-    `compare_portfolio_methods`(协方差最少期数) 是**两个不同概念**，合并会造成
-    假耦合 → 均不动。真正的散落是 **对照基准 5 处且取值各不相同**（同名字面量、
-    不同用途）→ 新增顶层 `benchmarks` 段 + `Config.benchmarks()` 按**用途**分键
-    （default / all_a / etf / report_a_share），**刻意不合并成一个值**。
-    3 个脚本改读 config，逐项验等（取值全部不变）。
-    同类倒挂补漏：`rolling_grid_alla._existence_mask` → `existence_mask`
-    （被生产 `alla_daily_rank` 用）、`build_intraday_factors._minute_frame` /
-    `_ex_div_keys`、`build_fundamental_factors._add_ttm_yoy` 公开化；
-    守卫纳管模块表扩到 7 个 scripts 模块。
-    新增 `test_frozen_recipe_stays_consistent_across_layers`：把"冻结配方"三处
-    声明（settings.model_portfolio ↔ rolling_grid_alla ↔ alla_daily_rank）
-    钉死，此前只靠注释约定一致。
-  - [x] **④ 文档合一（`a03d36b`）**：README 的「待建 / 已知缺口」169 行
-    （含 3 段已完成流水账）**无损迁入 `TODO.md` 附录「历史交付记录」**；
-    README 替换为指针。该节开头 4 条「待建」bullet 未随迁（逐条核对确认
-    §二已有对应条目，避免两处维护，附录头已注明）。三份文档互相加链并各自声明
-    唯一真源。**顺带修 README 三类失真**：3 个失效引用
-    （`ml_synthesis_round2` / `ml_decay_diagnosis` / `ml_window_compare` 文件已不存在）、
-    「公共库」表只列 2 个而**实测 19 个 scripts 根模块被跨模块 import**
-    （另有 textmining 10 / oneoff 5 / data_tools 1）、scripts 索引未随归档同步。
-    体量：README 50.6KB → **37.8KB（−25%）**。
-
-#### 🔴 第四批审计新发现（① 已于同日修复）
-
-- [x] **生产脚本依赖 gitignored 目录（真缺陷，已修 `8b634fa`）**：
-  `scripts/pipelines/alla_daily_rank.py`（生产每日推理，Windows 计划任务
-  `YuriQuant AllaDailyRank`）有 **6 处** `from scripts.oneoff.* import`，而
-  `.gitignore:41` 忽略整个 `scripts/oneoff/` → **干净 clone / 生产环境必然
-  ImportError**。已按 `scripts/oneoff/README.md` 自己的规则修复（"被其他模块
-  import 的脚本不放这里"）：**P0+P1 共 22 个模块**迁入新建的**受跟踪**
-  `scripts/builders/`（13 个因子面板构建器 + 8 个数据回补器 + 1 个编排器）。
-  依赖闭包由一次性脚本 `scripts/oneoff/_audit_oneoff_closure.py` 实算（生产直接依赖的
-  恰好 5 个、1666 行、自成闭包）。⚠️ 该脚本已随 2026-09-11「一次性工具清理」删除，
-  结论见 `.workbuddy/memory/2026-09-11.md`。顺带公开化 7 个跨模块私有名。
-  守卫：`test_no_tracked_code_imports_gitignored_dirs`（AST 版，替代原 xfail）。
-- [x] **私有名倒挂（已由守卫泛化一并清干净，`3c32279`）**：守卫从"逐模块列表"
-  改为**通用 AST 规则**后一次扫出 18 处，其中 **5 处在生产代码**
-  （`factor/operators.safe_div` / `monitoring/metrics.pick_baseline` /
-  `optimize/solver.to_psd` / `research/factor_report.fig_to_b64`），
-  全部公开化；13 处 tests 白盒登记进白名单。改名前核过 `op_registry()` 走
-  `OpSpec.name`（显式字符串）、因子库 registry 无该字符串 → 对公式解析零影响。
-- [x] **报告 HTML 不可字节复现**（2026-09-11 第七批③修复）：`rolling_grid_report`
-  的 canvas id 改用 `hashlib.md5(title)` 摘要，同输入产物字节可复现。
 - [ ] **其余 scripts 层私有名跨模块 import**：仅剩 `scripts/textmining/*`
-  内部互引（另一会话在改，守卫已按前缀豁免）。待其落地后把豁免项清零。
-- [x] **根目录 5 个 `_probe_*.py`（已清理）**（`_probe_cols` / `_probe_pledge` /
-  `_probe_quality` / `_probe_senti_artifacts` / `_probe_status`）：被
-  `.gitignore:38 /_*.py` 覆盖、未跟踪、零引用；一次性数据探查，答案已消费。
-  2026-09-11 经用户确认后删除（走回收站）。连同清理的还有：`scripts/oneoff/` 里
-  17 个搬迁/收口用的一次性工具 + 2 个迁移前参照副本（`_old_*_ref.py`）、
-  `reports/_tmp/`（35 项测试日志与临时产物）、工具缓存（`__pycache__` ×18 /
-  `.pytest_cache` / `.ruff_cache`）、`.trae-html-share-packages/`（IDE 缓存）、
-  `etf-rotation-plan/`（8-26 HTML 方案产物）。
-  **保守保留**：`scripts/oneoff/` 里的 12 个 `probe_*.py` 与历史实验脚本
-  —— 它们背后的数字进了 memory/报告，是结论的可复现场景。
-- [x] **`strategy/enhanced.py` 零 import**（2026-09-11 删除）：复核全仓零引用后
-  删除（git 历史保留，`IndexEnhancedLongOnly` 如需复活可从历史找回）。
-- [x] **疑似双实现**：`scripts/factors/build_fundamental_factors._add_single_quarter`
-  （HS300 单池）与 `scripts/builders/build_alla_fundamental_factors.add_single_quarter`
-  （全A）——**2026-09-11 第七批已收敛**（等价性探针证实逐位一致后合一，
-  见第七批②）。
+  （他会话管辖，不动）。
 
-- [x] **口径统一第五批 —— scripts/ 全量重排（2026-09-11 完成，已推送）**：
+### 已完成归档（2026-09-20 压缩）
 
-  用户问"scripts 里的脚本是不是很多很乱，清理/合并冗余，按功能归类"。**先审计再动手**，
-  结论与预期相反：**没有垃圾可删**，问题在结构。三项检查一致——
-  ① 全文件近似重复（函数名 Jaccard ≥ 0.5 且共同 ≥ 4）：**0 对**；
-  ② 零被 import **且**无 `__main__`（死代码硬嫌疑）31 个，**30 个在 gitignored 的
-  `scripts/oneoff/`**（不在仓库里），唯一 tracked 的是 `archive/factor_usability_stats.py`
-  （README 已注明"无 main，功能被覆盖"）；
-  ③ 我推测的两个"冗余"**都被推翻**：`generate_report.py` 是
-  `research.report_pipeline.generate_research_report` 的 **CLI 薄壳**（47 行，非重复实现）；
-  `select_stocks`（`research.factor_library` + `strategy.examples`，因子库层）与
-  `e2e_stock_picks`（`factor.classic` + `model.labels`，模型层）**分层不同**。
+- [x] 六轮工程整改 P0–P5（2026-08-29 基线）：stats 公共层、scripts 收敛、
+  521 测试全绿
+- [x] 口径统一第一~七批（09-10~09-11）：run_backtest 删除、四项决策拍板、
+  权重生产入口定案、scripts 全量重排、同名指标公式对齐、分层收口、
+  HTML 字节复现
+- [x] 私有名倒挂清零（守卫泛化）、根目录 probe 脚本清理、零引用模块删除
+- [x] cli_common 推广、HTML 报告模板收编（8 套收敛）、超长文件/函数拆分、
+  核心 print→logging、最小 CI
 
-  → **"很乱"的真实来源 = root 扁平（56 个平铺）**，故做物理归类。
-
-  - [x] **7 个功能子目录**：`common`(3 公共库) / `ingest`(5 数据更新·回补·体检) /
-    `factors`(15 构建·合成·入库·挖掘) / `pipelines`(6 主实验·生产·端到端) /
-    `portfolio`(6 组合·信号·执行) / `evaluation`(11 回测·评估·调参) /
-    `reporting`(10 报告·归因·监控)。root **56 → 1**（只剩 `__init__.py`）。
-    `builders` / `textmining` / `archive` / `data_tools` / `oneoff` 不动。
-  - [x] **命名避坑（关键）**：**不用** `scripts/data/` 与 `scripts/reports/` ——
-    与顶层 `data/` 包、`reports/` 产物目录同名；以「文件路径」调用脚本时解释器会把
-    脚本所在目录放进 `sys.path[0]`，`import data` 会被 `scripts/data/` **劫持**。
-    故改用 **`ingest/`** 与 **`reporting/`**。已实测 `python scripts/ingest/update_data.py`
-    与 `python -m scripts.ingest.update_data` 两条路径都通。
-  - [x] **改写面**：56 次移动 + 7 个新 `__init__.py` + 48 个文件的 ROOT 引导
-    `parents[1]` → `parents[2]`（多一层）+ 全仓**140 个文件**的引用改写。
-  - [x] **搬迁脚本的两处盲区（首次跑测才发现，已修）**：纯文本正则漏了两种写法——
-    ① `Path(...) / "scripts" / "x.py"`（分段字符串，非连续 `scripts/x.py`）；
-    ② `from scripts import x`。共 7 处（5 个测试 + 2 个**计划任务注册代码**：
-    `alla_daily_rank.install_task` / `monitor_performance.task_scheduler_cmd`
-    里的 `script = (ROOT / "scripts" / ...)` —— 不修则重注册指向不存在的路径）。
-    另修 `test_layering` 的入口守卫正则（原 `scripts\.run_model_portfolio` 在搬迁后
-    **静默失效**）。
-  - [x] **最终校验**：全仓扫描所有 `scripts/<path>.py` 与 `scripts.<mod>` 引用并
-    **逐个验证目标文件真实存在** → 失效引用 0（`oneoff` 与历史注释除外）；
-    56 个新位置模块全部可 import 且 ROOT 正确；`textmining`(22) / `builders`(22) /
-    `data_tools`(3) 导入全绿；定向测试 70 passed。**基线**：搬迁前全量
-    `722 passed, 0 failed`（24m11s）。
-  - [ ] 🚨 **待用户执行**：计划任务的路径**内嵌在 Windows 任务里**，搬目录后必须重注册
-    （本 agent 的 shell 被安全策略禁用 `schtasks.exe`）：
-    `python -m scripts.pipelines.alla_daily_rank --install-task <HH:MM>`，
-    以及 `python -m scripts.reporting.monitor_performance ...`（`YuriQuant Monitor`）。
-
-- [x] **口径统一第六批 —— 报告/评估层"同名指标不同公式"对齐（2026-09-11 完成，
-  四项 + 守卫扩面）**。审计发现残留的口径分裂集中在报告与评估脚本（既有守卫
-  只匹配 OLS-t 的除法形状，管不到年化常数与相关口径）：
-
-  - [x] **`scripts/reporting/factor_explorer_report`**：`icir` / `ls_sharpe`
-    自算误用 ×√12（月频年化因子）于**日频** IC 与日收益，比 registry 落盘值
-    （`calc_ir` / `backtest.metrics`，×√252）系统性低 ~4.6 倍。改为优先读
-    registry（`ic_ir` / `sharpe_ls_M`），缺列时按同口径现算。因子浏览器数字
-    大幅上修属修复。前端 JS 的 ×√12（rangeMetrics）作用于**月度** IC 序列，
-    口径正确，刻意不动。
-  - [x] **`scripts/evaluation/cpcv_h1_eval`**：`ic_ir` 由未年化 mean/std 改
-    `calc_ir`（此前同名字段与 rolling_grid 差 √252 倍）；手搓 `2*(1-t.cdf)` 与
-    `ttest_1samp` 改走 `t_pvalue` / `mean_inference(robust=False)`（数学逐位
-    等价，无数字变化）。⚠️ **存量 `reports/cpcv_h1/` 产物为旧口径（ic_ir 未
-    年化），下次重跑覆盖**。
-  - [x] **`scripts/reporting/jq_style_report`**：Sharpe 由算术口径
-    （mean/sd·√252）改 `backtest.metrics.sharpe_ratio`（几何超额，与 §一引用的
-    0.515 同口径，数值有变）；α 由几何恒等式 `ann − β·b_ann` 改
-    `research.attribution.alpha_beta` 的 OLS 回归年化截距（附 NW t，数值有变）；
-    IR / vol / ann / calmar 改走 metrics（逐位等价）。头部配置重生成实测：
-    Sharpe 0.57、α +9.99%/年、β 0.96——与 alla_attribution（β≈0.97）可互相对照。
-  - [x] **`research/factor_library._residual_ic`**：冗余预检的残差 IC 由原始
-    Pearson 改 **Rank IC**（对齐 `calc_ic_series` 的 spearman 全库口径）。
-    存量 registry 行的 `resid_ic` / `resid_t_nw` 为旧口径，重新注册后按新口径
-    覆盖。`test_factor_library_mgmt`（同面板 → 残差≈0 断言）不受影响。
-  - [x] **守卫扩面**：`test_no_inline_ols_t_left_in_repo` 扫描包扩至
-    backtest / optimize / data / strategy（先核查无存量命中）。相关测试
-    60 passed + ruff F/E 全绿。
-
-- [x] **口径统一第七批 —— 分层收口 + 重复实现收敛（2026-09-11 完成）**。
-  架构审计（三路并行：包依赖矩阵 / scripts 层一致性 / 重复实现与口径）定位
-  三类守卫空白，逐项收口：
-
-  - [x] **① 上层包对 research 的模块级依赖清零 + 守卫**：`optimize/risk`
-    （α/β + Brinson + 基准对照）、`monitoring/metrics`（中性化 IC）、
-    `monitoring/runner`（HTML 报告）原为**模块级** import research——生产入口
-    `import monitoring` 被连带拖起 matplotlib/openpyxl/scipy。全部降为函数级
-    按需引用；`monitoring/runner` 的 `PERIODS_PER_YEAR` 改从真源 `stats` 取
-    （原经 backtest.metrics 绕行）；`monitoring/metrics` 的 scipy 也降函数级。
-    实测：`import research` 重依赖链清零（~0.0s）、`import monitoring` 1.9s
-    → 0.0s（首次触达监控计算时才付 scipy）。新守卫
-    `test_no_module_level_research_import_in_lower_layers`（AST 区分模块级
-    与函数级，规则 13）防回潮。`model→research` 两处本就是函数级，纳入守卫面。
-  - [x] **② 基本面双实现收敛（探针先行）**：`add_single_quarter` / `add_ttm_yoy`
-    在 HS300 与全A builder 各一份拷贝。按纪律先写**等价性探针**（合成 2 码 ×
-    8 季报长表、含缺失值）：两版逐位一致（max|Δ|=0）→ 合一到新真源
-    `scripts/common/fundamental_common.py`（取 factors 版：含缺字段告警 +
-    完整 docstring），两个入口脚本改引用；探针固化为
-    `tests/test_fundamental_common.py`（4 例：Q1 不扣减 / 跨年 Q2 扣减 /
-    TTM+YoY / 缺字段容错）。`_dividend_factors` 两版**机制不同**
-    （build_pit_panel vs _event_pit）语义相同 → 刻意不合并。
-  - [x] **③ builders/ 家族去重（11 文件手术）**：`merge_outputs` / 
-    `fuse_horizon_ic` 各 11 份拷贝（差异仅 stats jsonl 文件名与两个开关）、
-    `ffill_pit_multi` 4 份、`KEEP_FROM`/`HORIZONS`/`IC_CODE_STRIDE` 常量
-    11 份 → 收敛到新真源 `scripts/builders/common.py`（含 `load_close_adj`
-    单一构建入口，走 Config 缓存根）。status 版的漂移（内联重建 close_adj、
-    硬编码 `e:/data/parquet`）就此消灭。全 F-class（F401/F811/F821）回到
-    基线、12 模块全部可 import。
-  - [x] **④ 生产脚本反向依赖测试包**：`scripts/common/cli_common` 与
-    `intraday_analysis` 的 `--mock` 分支经 `from tests.conftest import
-    MockDataSource` 依赖测试夹具 → **MockDataSource 整体下沉
-    `data/mock.py`**（数据源 mock 属数据层能力），conftest 保留同名转发，
-    `scripts/` 对 `tests` 的引用清零。
-  - [x] **⑤ 零碎**：`gp_tune_budget` 删自引用 import；`research/__init__`
-    改 PEP 562 惰性加载（与 optimize 同配方，`import research` 不再付
-    matplotlib/openpyxl/scipy 全款）；`data/textmining/source_cninfo` 删
-    `to_code6/to_code_std` 逐字拷贝、委托 `source_ths` 真源（fetch.py 本就是
-    该模式）；`rolling_grid_report` canvas id `abs(hash(title))` →
-    `hashlib.md5`（HTML 字节可复现，④ 报告渲染收口遗留项）；README 3 处
-    失效/误导引用（build_* 旧路径、backtest_two_periods 归属、不存在的
-    train_htai_rl_p0）；`strategy/enhanced.py` 零引用删除。
-  - [x] **刻意不动（记录在案）**：`builders/*` 的 `load_panels` 8 份模板
-    （各返回元组形状不同，统一签名后再合）；`dedup_corr=0.7` 5 处字面量与
-    discipline 日期字面量（分散于 model/research/rl/实验入口，语义同但收口
-    需动函数默认值求值序，低收益）；`_dividend_factors` 双机制；builders/
-    gflownet/data_tools 的 print 输出（控制台工具定位，TODO 3.2 已有
-    cli_common 推广总条目）。
-
-### 3.2 机械性（可批量清理）
-- [x] **cli_common 推广**（骨架已建、采用率 <15%）：
-  - 53 处 `logging.basicConfig` 手写样板 → `setup_logging()`（仅 scripts 层）
-  - 22 处手写 `--real`/`--mock` add_argument → `add_real_mock_args()`
-- [x] **HTML 报告模板收编**：8 套各自内嵌的模板（`monitoring/runner.py` 的
-  317 行 `generate_html_report` 与 `research/html_report.py` 同名异构、
-  `investment_report` / `factor_explorer_report` / `factor_library_full_report` /
-  `risk_decomposition_report` / `run_etf_rotation` / `report_pipeline`）。
-  以 `research/html_report.py` 为基座统一，顺带拆掉超长函数。
-- [x] **超长文件/函数拆分**：
-  - `factor/genetic_mining.py` 1692 行（`run_gp_mining` 单函数 ~301 行）
-  - `factor/alpha191.py` 1273 行（公式库，可辩护）
-  - `scripts/factors/mine_factors.py` 800 行、`scripts/reporting/factor_explorer_report.py` 的
-    `build_factor_data` ~493 行
-- [x] **核心包卫生**：25 处 `print(` → logging（factor 15、data 8）；
-  10 处 `except: pass` 静默吞异常逐个审查。
-- [x] **依赖锁文件**：当前仅 `>=` 下界，加 lock（pip-tools / uv）保证可复现。
+---
 
 ## 四、低优先级（知情即可）
 
