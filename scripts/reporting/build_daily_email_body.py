@@ -109,6 +109,92 @@ def md_table(headers: list[str], rows: list[list[str]]) -> str:
     return "\n".join(out)
 
 
+# ---------------------------------------------------------------------------
+# 组合风格暴露（读 reports/monitoring/production_ic_daily.csv）
+# ---------------------------------------------------------------------------
+#: 风格键 → 中文标签（顺序即展示顺序）
+STYLE_LABELS = (("size", "市值"), ("mom", "20日动量"),
+                ("vol", "20日波动率"), ("turn", "20日换手率"))
+#: z 是「横截面 rank 百分位」标准化后的值（rank~U(0,1)，均值 .5、标准差 1/√12），
+#: 因此可无损还原为分位：pct = 0.5 + z / √12。
+_Z_TO_PCT = 1.0 / (12 ** 0.5)
+
+
+def load_style_exposure(ds: str,
+                        path: Path) -> dict | None:
+    """读逐日 IC/暴露台账中 ``ds`` 那一行；缺失/落后时返回 None 或降级标记。
+
+    返回 ``{z, ic_full, ic_recent, ic_neu_recent, n_days, stale}``。
+    ``z`` 为组合持仓在各风格上的横截面分位（0~1）。
+    """
+    if not path.exists():
+        return None
+    try:
+        df = pd.read_csv(path)
+    except Exception:
+        return None
+    if df.empty or "predict_date" not in df.columns:
+        return None
+    df = df.copy()
+    df["ds"] = pd.to_datetime(df["predict_date"]).dt.strftime("%Y%m%d")
+    cur = df[df["ds"] == ds]
+    row = cur.iloc[-1] if len(cur) else df.iloc[-1]
+    z = {}
+    for k, _ in STYLE_LABELS:
+        v = row.get(f"z_{k}")
+        if v is not None and v == v:
+            z[k] = min(max(0.5 + float(v) * _Z_TO_PCT, 0.0), 1.0)
+    if not z:
+        return None
+    ic = df["ic_raw"].dropna() if "ic_raw" in df.columns else pd.Series(dtype=float)
+    neu = df["ic_neutral"].dropna() if "ic_neutral" in df.columns else pd.Series(dtype=float)
+    n_live = int((df.get("source") == "live").sum()) if "source" in df.columns else 0
+    return {
+        "z": z,
+        "ds_row": str(row["ds"]),
+        "stale": str(row["ds"]) != ds,
+        "ic_full": float(ic.mean()) if len(ic) else None,
+        "ic_recent": float(ic.tail(60).mean()) if len(ic) else None,
+        "ic_n": int(len(ic)),
+        "n_live": n_live,
+        "ic_neu_recent": float(neu.tail(60).mean()) if len(neu) else None,
+    }
+
+
+def render_exposure_block(e: dict, ds: str) -> list[str]:
+    """组合风格暴露 + 近期 IC 的一小段（压成 2 行，不新增编号小节）。"""
+    parts = [f"{lab} **{e['z'][k]:.0%}**" for k, lab in STYLE_LABELS if k in e["z"]]
+    low = [lab for k, lab in STYLE_LABELS
+           if k in e["z"] and e["z"][k] < 0.4]
+    high = [lab for k, lab in STYLE_LABELS
+            if k in e["z"] and e["z"][k] > 0.6]
+    if len(low) > len(high):
+        tilt = "偏「" + " · ".join(f"低{t}" for t in low) + "」"
+    elif high:
+        tilt = "偏「" + " · ".join(f"高{t}" for t in high) + "」"
+    else:
+        tilt = "接近市场中位，无明显风格倾斜"
+
+    out = [f"**组合风格暴露**（模型 Top10% 等权组合持仓在全市场的横截面分位，"
+           f"50% = 中位）：{' · '.join(parts)} —— {tilt}。"]
+    if e["ic_recent"] is not None:
+        extra = ""
+        if e.get("n_live"):
+            extra = f"，其中 {e['n_live']} 日为实盘每日记录、其余为 2018 年起回测重放"
+        ic_note = (f"**近期表现**：已有 {e['ic_n']} 个交易日的次日 IC 记录{extra}，"
+                   f"近 60 日均值 {e['ic_recent']:+.3f}"
+                   f"（全期 {e['ic_full']:+.3f}）")
+        if e["ic_neu_recent"] is not None:
+            ic_note += f"，剥离风格后 {e['ic_neu_recent']:+.3f}"
+        ic_note += "；单日 IC 方差极大（±0.3 常见），判断失效要看多日累积而非单日。"
+        out.append(ic_note)
+    if e["stale"]:
+        out.append(f"> ⚠️ 风格暴露取的是 **{fmt_day(e['ds_row'])}** 的截面"
+                   f"（当日 {fmt_day(ds)} 尚无记录），仅供参考。")
+    out.append("")
+    return out
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--ds", required=True, help="预测日 YYYYMMDD")
@@ -121,6 +207,9 @@ def main() -> int:
                     help="HTML 版输出路径（默认与 --out 同名 .html）。发邮件应发 HTML 版，"
                          "见 md_to_email_html 的说明：.md 会被 CLI 当 Markdown 发，客户端不渲染")
     ap.add_argument("--no-html", action="store_true", help="不生成 HTML 版")
+    ap.add_argument("--exposure-csv", default="reports/monitoring/production_ic_daily.csv",
+                    help="逐日 IC/风格暴露台账（由 scripts/reporting/monitor_production_ic.py"
+                         " 产出）；文件缺失时第一节不展示风格暴露，不阻断")
     args = ap.parse_args()
 
     ds = args.ds
@@ -222,6 +311,10 @@ def main() -> int:
         desc += "分散，无行业出现 2 席及以上"
     lines.append(f"**主线特征**：{desc}。")
     lines.append("")
+    # ---- 一之二、组合风格暴露（事前可算，不需未来收益）----
+    expo = load_style_exposure(ds, Path(args.exposure_csv))
+    if expo:
+        lines.extend(render_exposure_block(expo, ds))
     lines.append("---")
     lines.append("")
 
@@ -397,6 +490,11 @@ def main() -> int:
     cav.append("**行业表口径**：二级表按 `industry_l2` 聚合，一级表（第三节）是把同一批"
                "个股分数按 `industry_l1` **上卷** —— 不是另一次打分；两表的 `top_stock` 均为"
                "组内**全池**第一名（可能落在 ST/停牌上），一级表另给可交易口径列。")
+    cav.append("**风格暴露**：「组合风格暴露」是模型的**固有属性**，不是当日信号 —— "
+               "组合结构性偏小市值 / 低波动 / 低流动性。风格逆向滚动时组合会跑输，"
+               "而同期选股的**相对**排序（中性化 IC）可能仍然有效；"
+               "把风格逆风误判成模型失效会导致错误的调参。口径见 "
+               "`reports/monitoring/production_ic_daily.csv`。")
     # 状态表降级检测
     try:
         st = pd.read_parquet(STATUS)
