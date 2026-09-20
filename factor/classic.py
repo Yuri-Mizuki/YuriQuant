@@ -171,3 +171,184 @@ def compute_classic_features(px: dict[str, pd.DataFrame]) -> dict[str, pd.DataFr
         "range20": (px["high"] - px["low"]).rolling(20).mean() / (close + 1e-12),
     }
     return {k: standardize_zscore(v) for k, v in feats.items()}
+
+
+# ===========================================================================
+# 银河 0608 特征族（时序截面三层预测报告附录表 12，2026-09-20 接入）
+# ---------------------------------------------------------------------------
+# 依据：reports/docs/research_notes/银河0608_研读_时序截面三层预测与QP口径.md。
+# 三组特征 + 分组差异化预处理（研报 §2.4）：
+# - G1 形态类：保留原始尺度与方向（不标准化）；
+# - G1 动量/技术/相对强弱类：50 期滚动窗口内时序 Z-score（研报口径）；
+# - G2 风险 / G3 量价：50 期滚动窗口内时序 Z-score（"相对自身历史的偏离"）。
+# 与 compute_classic_features 的截面 Z-score 不同：银河族是**时序**标准化
+# （每只股票相对自身历史），这是研报"分组差异化预处理"的核心。
+# 频率口径：日线 mult=1（研报小时线 mult=4，公式同源）。
+# ===========================================================================
+def _rolling_zscore(panel: pd.DataFrame, win: int = 50) -> pd.DataFrame:
+    """时序滚动 Z-score：每只股票相对自身过去 win 期的均值/标准差。"""
+    mu = panel.rolling(win, min_periods=win // 2).mean()
+    sd = panel.rolling(win, min_periods=win // 2).std()
+    return (panel - mu) / (sd + 1e-8)
+
+
+def _rsi(close: pd.DataFrame, n: int = 14) -> pd.DataFrame:
+    """Wilders RSI。"""
+    diff = close.diff()
+    up = diff.clip(lower=0.0).ewm(alpha=1.0 / n, adjust=False).mean()
+    dn = (-diff).clip(lower=0.0).ewm(alpha=1.0 / n, adjust=False).mean()
+    rs = up / (dn + 1e-12)
+    return 100.0 - 100.0 / (1.0 + rs)
+
+
+def _kdj_j(high: pd.DataFrame, low: pd.DataFrame, close: pd.DataFrame,
+           n: int = 9) -> pd.DataFrame:
+    """KDJ 的 J 值（9,3,3 参数）。"""
+    llv = low.rolling(n, min_periods=1).min()
+    hhv = high.rolling(n, min_periods=1).max()
+    rsv = (close - llv) / (hhv - llv + 1e-12) * 100.0
+    k = rsv.ewm(com=2.0, adjust=False).mean()
+    d = k.ewm(com=2.0, adjust=False).mean()
+    return 3.0 * k - 2.0 * d
+
+
+def compute_galaxy_features(px: dict[str, pd.DataFrame],
+                            index_close: pd.Series | pd.DataFrame,
+                            win: int = 50) -> dict[str, pd.DataFrame]:
+    """银河 0608 特征族（约 30 个，三组，分组差异化预处理）。
+
+    Args:
+        px: {open/high/low/close/volume/amount: date×code 面板}。
+        index_close: 基准指数收盘（Series 或单列 DataFrame；excess/beta/idvol
+            的基准——项目无指数权重面板时可用成分等权组合收盘作代理，
+            调用方须在产出中注明该替代口径）。
+        win: 滚动标准化窗口（研报 50 期）。
+
+    Returns:
+        {name: date×code 面板}；name 前缀 g1_/g2_/g3_ 标记特征组。
+        均为**时序**口径（未经截面标准化）——下游如需截面可比自行 zscore。
+    """
+    close, open_, high, low = px["close"], px["open"], px["high"], px["low"]
+    volume, amount = px["volume"], px["amount"]
+    ret1 = close.pct_change(fill_method=None)
+    idx = index_close if isinstance(index_close, pd.Series) \
+        else index_close.iloc[:, 0]
+    idx_ret = idx.pct_change(fill_method=None).reindex(close.index)
+
+    # ---- G1 形态（原始尺度，不标准化）----
+    g1_shape = {
+        "g1_body": (close - open_) / close,
+        "g1_range": (high - low) / close,
+        "g1_upper_shadow": (high - np.maximum(open_, close)) / close,
+        "g1_lower_shadow": (np.minimum(open_, close) - low) / close,
+        "g1_body_ratio": (close - open_) / (high - low + 1e-12),
+    }
+    # ---- G1 收益/动量（50 期滚动 zscore）----
+    g1_mom = {
+        "g1_return": _rolling_zscore(ret1, win),
+        "g1_mom_3": _rolling_zscore(ret1.rolling(3).sum(), win),
+        "g1_mom_6": _rolling_zscore(ret1.rolling(6).sum(), win),
+        "g1_mom_12": _rolling_zscore(ret1.rolling(12).sum(), win),
+        "g1_mom_24": _rolling_zscore(ret1.rolling(24).sum(), win),
+        "g1_mom_48": _rolling_zscore(ret1.rolling(48).sum(), win),
+        "g1_mom_diff_6_24": _rolling_zscore(
+            ret1.rolling(6).sum() - ret1.rolling(24).sum(), win),
+        "g1_ma_gap_5": _rolling_zscore(np.log(close / (close.rolling(5).mean() + 1e-12)), win),
+        "g1_ma_gap_20": _rolling_zscore(np.log(close / (close.rolling(20).mean() + 1e-12)), win),
+        "g1_rsi_14": _rolling_zscore(_rsi(close, 14), win),
+        "g1_kdj_j": _rolling_zscore(_kdj_j(high, low, close, 9), win),
+    }
+    # ---- G1 相对强弱（基准=传入指数口径）----
+    excess_ret1 = ret1.sub(idx_ret, axis=0)
+    g1_rel = {
+        "g1_excess_ret_1": _rolling_zscore(excess_ret1, win),
+        "g1_excess_mom_6": _rolling_zscore(excess_ret1.rolling(6).sum(), win),
+        "g1_excess_mom_24": _rolling_zscore(excess_ret1.rolling(24).sum(), win),
+    }
+    betas = {}
+    for n in (24, 80):
+        cov = ret1.rolling(n).cov(idx_ret)
+        var = idx_ret.rolling(n).var()
+        betas[f"g1_beta_{n}"] = cov.div(var + 1e-12, axis=0)
+    g1_rel.update(betas)
+
+    # ---- G2 风险波动/路径（50 期滚动 zscore）----
+    down_ret = ret1.clip(upper=0.0)          # 研报 min(return,0)：正收益记 0 非 NaN
+    g2 = {
+        "g2_ret_std_6": _rolling_zscore(ret1.rolling(6).std(), win),
+        "g2_ret_std_24": _rolling_zscore(ret1.rolling(24).std(), win),
+                "g2_downvol_24": _rolling_zscore(down_ret.rolling(24).std(), win),
+        "g2_mdd_24": _rolling_zscore(
+            close / close.rolling(24).max() - 1.0, win),
+        "g2_ret_min_24": _rolling_zscore(ret1.rolling(24).min(), win),
+        "g2_ret_max_24": _rolling_zscore(ret1.rolling(24).max(), win),
+    }
+    for n in (24, 80):
+        beta_n = ret1.rolling(n).cov(idx_ret).div(
+            idx_ret.rolling(n).var() + 1e-12, axis=0)
+        resid = ret1.sub(beta_n.mul(idx_ret, axis=0))
+        g2[f"g2_idvol_{n}"] = _rolling_zscore(resid.rolling(n).std(), win)
+
+    # ---- G3 量价资金（50 期滚动 zscore）----
+    g3 = {
+        "g3_log_vol": _rolling_zscore(np.log(volume + 1.0), win),
+        "g3_log_amount": _rolling_zscore(np.log(amount + 1.0), win),
+        "g3_rv_6": _rolling_zscore(
+            volume / (volume.rolling(6).mean() + 1e-12), win),
+        "g3_rv_24": _rolling_zscore(
+            volume / (volume.rolling(24).mean() + 1e-12), win),
+        "g3_vpr_6": _rolling_zscore(ret1.rolling(6).corr(volume.pct_change(
+            fill_method=None)), win),
+        "g3_vpr_24": _rolling_zscore(ret1.rolling(24).corr(volume.pct_change(
+            fill_method=None)), win),
+        "g3_flow_24": _rolling_zscore(
+            (amount * np.sign(ret1)).rolling(24).sum(), win),
+    }
+
+    out: dict[str, pd.DataFrame] = {}
+    out.update(g1_shape)
+    out.update(g1_mom)
+    out.update(g1_rel)
+    out.update(g2)
+    out.update(g3)
+    return out
+
+
+def build_galaxy_labels(px: dict[str, pd.DataFrame],
+                        index_close: pd.Series | pd.DataFrame,
+                        *,
+                        ret_win: int = 22,
+                        mdd_win: int = 66) -> dict[str, pd.DataFrame]:
+    """银河 0608 三标签（附录表 2）：alpha/sharpe（22 日）+ max_drawdown（66 日）。
+
+    - ``label_alpha_{ret_win}``：窗口内相对基准的累计超额收益（截面 zscore）；
+    - ``label_sharpe_{ret_win}``：窗口内**超额收益**的均值/标准差（截面 zscore）；
+    - ``label_mdd_{mdd_win}``：窗口内价格最大回撤（**负值，越接近 0 越好**；
+      截面 zscore）——与研报"取负绝对值使方向统一为越大越好"一致。
+
+    全部为**前视面板**（date 日的值含 date 之后的信息），仅用于训练标签；
+    防未来函数由调用方保证"训练段不越界"。
+    """
+    from factor.preprocessing import standardize_zscore
+
+    close = px["close"]
+    idx = index_close if isinstance(index_close, pd.Series) \
+        else index_close.iloc[:, 0]
+    idx_ret = idx.pct_change(fill_method=None).reindex(close.index)
+    ret1 = close.pct_change(fill_method=None)
+    ex = ret1.sub(idx_ret, axis=0)
+
+    fwd_ex = ex.shift(-1).rolling(ret_win).sum().shift(-(ret_win - 1))
+    fwd_ex_std = ex.shift(-1).rolling(ret_win).std().shift(-(ret_win - 1))
+    fwd_mdd = (close.shift(-1)
+               .rolling(mdd_win).max().shift(-(mdd_win - 1)))
+    # 窗口内最低点相对窗口首日（=当前日）前收的回撤：min(close_future)/close - 1
+    fut_min = close.shift(-1).rolling(mdd_win).min().shift(-(mdd_win - 1))
+    fwd_mdd = fut_min / close - 1.0
+
+    return {
+        f"label_alpha_{ret_win}": standardize_zscore(fwd_ex),
+        f"label_sharpe_{ret_win}": standardize_zscore(
+            fwd_ex / (fwd_ex_std + 1e-12)),
+        f"label_mdd_{mdd_win}": standardize_zscore(fwd_mdd),
+    }
