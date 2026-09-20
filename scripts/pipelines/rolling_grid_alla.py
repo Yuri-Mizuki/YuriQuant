@@ -176,7 +176,8 @@ FRACS = [0.20, 0.10]
 BENCH_INDEX = Config.benchmarks()["all_a"]   # 上证指数（全A 组合对照；真源 config.benchmarks）
 
 # 子网格 smallcap：聚焦验证 A股小盘溢价 + 集中度 + 信号加权。
-SC_MODEL = "gbdt"               # 全网格核心最优形态
+SC_MODEL_DEFAULT = "gbdt"       # 子网格出厂模型（--sc-model 可覆盖，如 ens_h1h5）
+SC_MODEL = SC_MODEL_DEFAULT
 SC_HORIZON = 1
 SC_FREQ = "M"
 SC_FRACS = [0.20, 0.10, 0.05]
@@ -1011,12 +1012,16 @@ def stage_smallcap(quick: bool = False):
     """聚焦子网格：验证 A股小盘溢价 × 集中度 × 信号加权 的增厚空间。
 
     锁全网格核心最优形态（SC_MODEL×SC_HORIZON×SC_FREQ），扫描：
-      - 中性化口径：raw（不中性）/ inds（**只行业中性**、保留市值/小盘暴露）
-        —— 当前主线 neut 把 log市值一同回归清零，抹平小盘溢价；inds 只压平
-        行业集中、保留小盘，是本子网格验证的核心改动。
+      - 中性化口径四臂：raw（不中性）/ inds（只行业中性，保留市值）
+        / style（**只中性化量价风格 mom/vol/turn，保留市值与行业**）
+        / neut（五因子全上，把 log 市值一同回归清零）
+        —— raw→style→neut 两段差 = 量价风格贡献 / 市值贡献。
       - frac：{0.20, 0.10, 0.05}，越集中 alpha 浓度越高、波动也越大；
       - weight：equal（等权）/ factor（按信号强度加权，强信号更大仓位）。
-    共 2×3×2=12 个组合。产出 equity_smallcap/*。csv + metrics_smallcap.csv。
+    共 4×3×2=24 个组合。产出 equity_smallcap/*.csv + metrics_smallcap*.csv。
+
+    SC_MODEL 可用 ``--sc-model`` 覆盖（生产口径为 ens_h1h5）；覆盖时产物加
+    ``__<model>`` 后缀，避免覆盖出厂 gbdt 子网格的多臂对照表。
 
     推断对齐：h=1 日频收益，月频调仓（M），小盘换手高——成本用项目固化
     default_costs（对小盘滑点略乐观，结论仅作方向参考）。
@@ -1046,11 +1051,29 @@ def stage_smallcap(quick: bool = False):
     bench_idx = base["bench_index"].reindex(oos_days).fillna(0.0)
     bench_eqw = base["bench_eqw"].reindex(oos_days).fillna(0.0)
 
-    # 中性化口径：raw 原信号；inds 只回归行业哑变量（跳过 size/动量/波动/换手）
+    # 中性化口径四臂（2026-09-18 补第 4 臂）：
+    #   raw   不中性化（保留全部风格暴露）
+    #   inds  只回归行业哑变量（保留 size + 量价风格）
+    #   style **只回归量价风格 mom/vol/turn**，保留 size 与行业暴露
+    #   neut  五因子全上（size + industry + mom + vol + turn）= 历史主线口径
+    # 为什么要补 style：历史只测过 raw / inds / neut 三档，而 neut 把 log 市值
+    # 一并清零，−6.4pp 的年化超额损失被笼统归给「抹平小盘溢价」（代码注释假设，
+    # 从未实测）。raw→style→neut 的两段差可把该损失拆成
+    # 「量价风格贡献（raw→style）」与「市值贡献（style→neut）」。
     sig_variants = {"raw": pred}
     if cov.get("industry") is not None:
         sig_variants["inds"] = neutralize(
             pred, market_cap_panel=None, industry_panel=cov["industry"])
+    style_keys = [k for k in ("mom", "vol", "turn") if cov.get(k) is not None]
+    if style_keys:
+        sig_variants["style"] = neutralize(
+            pred, market_cap_panel=None, industry_panel=None,
+            extra_covariates={k: cov[k] for k in style_keys})
+    if cov.get("size") is not None and style_keys:
+        sig_variants["neut"] = neutralize(
+            pred, market_cap_panel=cov["size"],
+            industry_panel=cov.get("industry"),
+            extra_covariates={k: cov[k] for k in style_keys})
     log.info("[smallcap] 信号变体: %s", list(sig_variants))
 
     rb = None  # h=1 用引擎默认月频日历调仓
@@ -1098,11 +1121,13 @@ def stage_smallcap(quick: bool = False):
                          row["excess_idx"] * 100, row["excess_eqw"] * 100,
                          row["sharpe"], row["turnover"] * 100)
 
-    pd.DataFrame(rows_overall).to_csv(OUT / "metrics_smallcap.csv",
+    sfx = "" if SC_MODEL == SC_MODEL_DEFAULT else f"__{SC_MODEL}"
+    pd.DataFrame(rows_overall).to_csv(OUT / f"metrics_smallcap{sfx}.csv",
                                       index=False, encoding="utf-8-sig")
-    pd.DataFrame(rows_yearly).to_csv(OUT / "metrics_smallcap_yearly.csv",
+    pd.DataFrame(rows_yearly).to_csv(OUT / f"metrics_smallcap{sfx}_yearly.csv",
                                      index=False, encoding="utf-8-sig")
-    log.info("smallcap 完成 %.0fs（%d 组合）", time.time() - t0, len(rows_overall))
+    log.info("smallcap 完成 %.0fs（%d 组合, model=%s）",
+             time.time() - t0, len(rows_overall), SC_MODEL)
 
 
 def _rank_average(panels: list[pd.DataFrame], min_panels: int = 2) -> pd.DataFrame:
@@ -1280,10 +1305,17 @@ def main():
                          "默认关闭 = 主实验现行口径。须配 --out-tag 防覆盖")
     ap.add_argument("--out-tag", default=None,
                     help="消融臂输出目录后缀 -> reports/alla_rolling_<tag>")
+    ap.add_argument("--sc-model", default=None,
+                    help="smallcap 子网格信号模型（默认 gbdt）；覆盖时指标产物加"
+                         " __<model> 后缀，避免覆盖出厂子网格对照表")
     args = ap.parse_args()
 
     global INCLUDE_FUNDAMENTAL, OUT, PANELS_DIR, NAME_DIR, EXCLUDE_FEATURES
-    global USE_TRADABLE_LABELS
+    global USE_TRADABLE_LABELS, SC_MODEL
+    if args.sc_model:
+        SC_MODEL = args.sc_model
+        log.info("+++ smallcap 信号模型 -> %s（产物加 __%s 后缀）",
+                 SC_MODEL, SC_MODEL)
     if args.tradable_labels:
         if not args.out_tag:
             ap.error("--tradable-labels 须配 --out-tag："
