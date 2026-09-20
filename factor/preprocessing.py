@@ -74,6 +74,29 @@ def standardize_rank(panel: pd.DataFrame) -> pd.DataFrame:
 # ===========================================================================
 # 中性化
 # ===========================================================================
+# neutralize 的实现选择（2026-09-20）：
+#   "batch"（默认）= :func:`neutralize_batch`：一次性 numpy 预计算 + 逐日 lstsq，
+#                    与历史逐日 pandas 版**逐位一致**（真实全A面板 max|Δ| = 0），
+#                    实测 2.6x（86 因子 23.3 → 6.4 分钟）。
+#   "loop"        = 历史实现，保留为回退（复现旧结果 / 排查异常时用）。
+# 想要更激进的加速（8.3x，代价见 :func:`neutralize_grouped` 的 docstring）
+# 请显式调用 neutralize_grouped，**不改默认**。
+_NEUTRALIZE_IMPL = "batch"
+
+
+def set_neutralize_impl(name: str) -> None:
+    """切换 :func:`neutralize` 的实现：``"batch"``（默认）或 ``"loop"``。"""
+    global _NEUTRALIZE_IMPL
+    if name not in ("batch", "loop"):
+        raise ValueError(f"未知的 neutralize 实现: {name}")
+    _NEUTRALIZE_IMPL = name
+
+
+def get_neutralize_impl() -> str:
+    """:func:`neutralize` 当前使用的实现名。"""
+    return _NEUTRALIZE_IMPL
+
+
 def neutralize(
     panel: pd.DataFrame,
     market_cap_panel: pd.DataFrame | None = None,
@@ -112,6 +135,13 @@ def neutralize(
     if (market_cap_panel is None and industry_panel is None
             and not extra_covariates):
         return panel
+
+    if _NEUTRALIZE_IMPL != "loop":
+        return neutralize_batch(
+            panel, market_cap_panel=market_cap_panel,
+            industry_panel=industry_panel, log_market_cap=log_market_cap,
+            min_samples_size_only=min_samples_size_only,
+            rank_margin=rank_margin, extra_covariates=extra_covariates)
 
     result = pd.DataFrame(np.nan, index=panel.index, columns=panel.columns)
 
@@ -192,6 +222,422 @@ def neutralize(
         result.loc[d, codes_valid] = resid
 
     return result
+
+
+def neutralize_batch(
+    panel: pd.DataFrame,
+    market_cap_panel: pd.DataFrame | None = None,
+    industry_panel: pd.DataFrame | None = None,
+    log_market_cap: bool = True,
+    min_samples_size_only: int = 2,
+    rank_margin: int = 3,
+    extra_covariates: dict[str, pd.DataFrame] | None = None,
+) -> pd.DataFrame:
+    """:func:`neutralize` 的向量化等价实现（**逐日 lstsq 保留**，只砍 pandas 外壳）。
+
+    与 :func:`neutralize` 的区别仅在实现路径，口径逐条对齐：
+
+    - **样本掩码**逐日一致：``y``/市值/行业/协变量的缺失位置同样被剔除；
+      某天不在某个协变量面板的 index 里时，该协变量**当天整体不参与**
+      （老实现是 ``d not in panel.index`` 就不加这一项，不是置 NaN）。
+    - **设计矩阵逐元素相同**：``[size] + [当天出现行业的哑变量(升序)] + [协变量]
+      + [截距(仅当无行业时)]``，列顺序与 ``pd.get_dummies(drop_first=False)`` 一致。
+    - **降级判据相同**：``n_valid >= (n_size + n_行业 + n_协变量) + rank_margin``，
+      其中 ``n_行业`` 用**当天实际出现的行业数**（不是全局行业数），
+      因此"样本不足 → 丢行业"的触发天与老实现完全一致。
+    - **求解器相同**：仍逐日 ``np.linalg.lstsq(..., rcond=None)``，输入 dtype 也
+      保持在 float64（老实现 ``y[valid].astype(float)`` / ``size[valid].astype(float)``；
+      市值先按 float32 取 log 再升位，与生产 float32 面板同精度）。
+
+    因此残差应与 :func:`neutralize` **逐位一致**（``max|Δ| = 0``），由
+    ``scripts/oneoff/probe_neutralize_batch.py`` 在真实面板上锁定。
+
+    性能：真实全A形态（801 日 × 5801 只 × 31 行业）下，逐日 ``lstsq`` 只占
+    总耗时 ~41%，其余 ~59% 是 pandas 的逐日取行 / ``get_dummies`` /
+    ``column_stack`` / ``result.loc[d, codes] = resid`` 写回。本函数把这四块
+    换成一次性的 numpy 预计算 + 逐日切片，实测单因子 16.5s → 见探针输出。
+
+    Args / Returns 同 :func:`neutralize`。
+    """
+    if (market_cap_panel is None and industry_panel is None
+            and not extra_covariates):
+        return panel
+
+    index = panel.index
+    columns = panel.columns
+    n_day, n_code = panel.shape
+
+    # ---- 因变量：保留原 dtype（生产为 float32），逐日再升 float64 ----
+    y_arr = panel.to_numpy()
+    y_na = panel.isna().to_numpy()
+
+    # ---- 市值：int 提升为 float；log 在**原浮点精度**上算（与老实现同）----
+    size = None
+    mc_day = None
+    if market_cap_panel is not None:
+        raw = market_cap_panel.reindex(index=index, columns=columns).to_numpy()
+        if not np.issubdtype(raw.dtype, np.floating):
+            raw = raw.astype(np.float64)
+        if log_market_cap:
+            nonpos = ~(raw > 0)          # NaN / 0 / 负值 → 置 NaN（同 mc.where(mc>0)）
+            if nonpos.any():
+                raw = raw.copy()
+                raw[nonpos] = np.nan
+            with np.errstate(divide="ignore", invalid="ignore"):
+                size = np.log(raw)
+        else:
+            size = raw
+        mc_day = index.isin(market_cap_panel.index)
+
+    # ---- 行业：整数编码；编码按**全局排序**，保证逐日列序 = get_dummies 的子序列 ----
+    IND = None
+    ind_day = None
+    if industry_panel is not None:
+        flat = industry_panel.reindex(index=index, columns=columns).to_numpy().ravel()
+        codes, _ = pd.factorize(flat, sort=True)   # NaN → -1，且不计入类别
+        IND = codes.reshape(n_day, n_code)
+        ind_day = index.isin(industry_panel.index)
+
+    # ---- 额外协变量：逐面板 reindex，保留原浮点精度 ----
+    ex_arrays: dict[str, np.ndarray] = {}
+    ex_day: dict[str, np.ndarray] = {}
+    if extra_covariates:
+        for nm, ep in extra_covariates.items():
+            a = ep.reindex(index=index, columns=columns).to_numpy()
+            if not np.issubdtype(a.dtype, np.floating):
+                a = a.astype(np.float64)
+            ex_arrays[nm] = a
+            ex_day[nm] = index.isin(ep.index)
+
+    out = np.full((n_day, n_code), np.nan, dtype=np.float64)
+    for i in range(n_day):
+        has_mc = size is not None and mc_day[i]
+        has_ind = IND is not None and ind_day[i]
+        ex_here = [nm for nm in ex_arrays if ex_day[nm][i]]
+
+        valid = ~y_na[i]
+        if has_mc:
+            valid &= ~np.isnan(size[i])
+        if has_ind:
+            valid &= IND[i] >= 0
+        for nm in ex_here:
+            valid &= ~np.isnan(ex_arrays[nm][i])
+
+        n_valid = int(valid.sum())
+        if n_valid < min_samples_size_only:
+            continue  # 该天全部保持 NaN
+
+        y_valid = y_arr[i][valid].astype(np.float64)
+
+        cols_list: list[np.ndarray] = []
+        if has_mc:
+            cols_list.append(size[i][valid].astype(np.float64))
+
+        has_industry = False
+        if has_ind:
+            ids = IND[i][valid]
+            present = np.unique(ids)
+            n_params = len(cols_list) + present.size + len(ex_here)
+            if n_valid >= n_params + rank_margin:
+                for k in present:
+                    cols_list.append((ids == k).astype(np.float64))
+                has_industry = True
+
+        for nm in ex_here:
+            cols_list.append(ex_arrays[nm][i][valid].astype(np.float64))
+
+        if not cols_list:
+            out[i, valid] = y_valid
+            continue
+
+        if not has_industry:
+            cols_list.append(np.ones(n_valid, dtype=np.float64))
+
+        x_matrix = np.column_stack(cols_list)
+        beta, *_ = np.linalg.lstsq(x_matrix, y_valid, rcond=None)
+        out[i, valid] = y_valid - x_matrix @ beta
+
+    return pd.DataFrame(out, index=index, columns=columns)
+
+
+def neutralize_grouped(
+    panel: pd.DataFrame,
+    market_cap_panel: pd.DataFrame | None = None,
+    industry_panel: pd.DataFrame | None = None,
+    log_market_cap: bool = True,
+    min_samples_size_only: int = 2,
+    rank_margin: int = 3,
+    extra_covariates: dict[str, pd.DataFrame] | None = None,
+    rcond: float = 1e-12,
+) -> pd.DataFrame:
+    """完全向量化的 neutralize：``(日, 行业)`` 分组聚合 + 批量伪逆，**零 python 循环**。
+
+    与前两个实现的关系（三者语义对齐，差别在解法与数值行为）::
+
+        neutralize          → 默认分发到 neutralize_batch（逐位一致）
+        neutralize_batch    纯 numpy 外壳 + 逐日 lstsq        max|Δ| = 0（严格逐位）
+        neutralize_grouped  分组聚合 + 批量 pinv(A) @ b        max|Δ| ≈ 1e-14~1e-8
+
+    为什么能去掉循环
+    ----------------
+    行业哑变量是 one-hot，每行恰有一个 1，于是设计矩阵 ``X = [size, D, extras]``
+    的 ``X'X`` / ``X'y`` 全部退化成**分组求和**：
+
+        D'D = diag(n_k)          D'size = Σ_{i∈k} size_i      D'y = Σ_{i∈k} y_i
+
+    这些用 ``np.bincount`` 按 ``(day, industry)`` 一次算完（O(n)，与行业数无关），
+    当天没出现的行业列填 0。零列不改变 ``col(X)``，而最小二乘残差只取决于列空间，
+    故残差等价；"样本不足丢行业"的降级判据仍按**当天出现的行业数**计算，
+    降级天行业列整块清零、截距列激活（正是老实现补 ones 的语义）；
+    "一个回归变量都没有"的天把 A/b 整块清零（β = 0 → 残差 = y，对齐老实现的
+    ``if not cols: 返回原值``）。
+
+    ⚠ 代价（**必须显式接受**）
+    -------------------------
+    解法从 "SVD on X" 变成 "pinv on X'X"，条件数被**平方**，因此残差与
+    :func:`neutralize` **不是逐位相同**：
+
+    - 合成边界用例（16 组，含降级 / 缺日 / 极小面板）：``max|Δ| ≤ 2.2e-13``；
+    - 真实全A面板（801×5801）：``max|Δ|`` ≈ 1e-12 ~ 1.1e-8，
+      其中 1e-8 那档来自 ``κ(X)² ≈ 2.8e5`` 的放大（实测 κ(X) 中位 527、max 561）；
+    - **截面名次位移实测为 0**（对 5801 只全池做 rank 比对，全 801 天 max 位移 0 名）。
+
+    因此它适合"面板大、调用次数多、只关心名次/信号形态"的场景；
+    需要与历史结果严格对齐（复现实验、审计口径）时用默认的 :func:`neutralize`。
+
+    ``rcond`` 是 ``A = X'X`` 上伪逆的相对阈值。注意它作用在 X'X 上等价于在 X 上
+    放大成 ``√rcond``，与 ``lstsq(rcond=None)``（``eps·n``）语义不同；
+    实测在 κ(X) ≤ 561 的真实面板上该参数从 1e-8 到 0 结果完全一致，
+    仅在人为构造的病态用例里才有影响。
+
+    性能（真实 801 日 × 5801 只 × 31 行业，单因子）：
+
+    ==================  ========  =========
+    实现                耗时      相对加速
+    ==================  ========  =========
+    neutralize(loop)    16.5s     1.0x
+    neutralize_batch     5.4s     3.0x
+    neutralize_grouped   1.4s     8.3x（86 因子外推 16.6 → 2.0 分钟）
+    ==================  ========  =========
+
+    等价性与计时由 ``scripts/oneoff/probe_neutralize_batch.py`` 与
+    ``scripts/oneoff/probe_neutralize_phase2.py`` 在真实面板上锁定。
+
+    Args / Returns 同 :func:`neutralize`。
+    """
+    if (market_cap_panel is None and industry_panel is None
+            and not extra_covariates):
+        return panel
+
+    index, columns = panel.index, panel.columns
+    n_day, n_code = panel.shape
+    Y64 = panel.to_numpy().astype(np.float64)
+    y_na = panel.isna().to_numpy()
+
+    # ---- 市值（log 在原始浮点精度上算，与逐日实现同）----
+    size = None
+    S64 = None
+    mc_day = np.ones(n_day, dtype=bool)
+    if market_cap_panel is not None:
+        raw = market_cap_panel.reindex(index=index, columns=columns).to_numpy()
+        if not np.issubdtype(raw.dtype, np.floating):
+            raw = raw.astype(np.float64)
+        if log_market_cap:
+            nonpos = ~(raw > 0)
+            if nonpos.any():
+                raw = raw.copy()
+                raw[nonpos] = np.nan
+            with np.errstate(divide="ignore", invalid="ignore"):
+                size = np.log(raw)
+        else:
+            size = raw
+        mc_day = index.isin(market_cap_panel.index)
+        S64 = size.astype(np.float64)
+
+    # ---- 行业：全局整数编码（按值排序，保证列序与 get_dummies 的子序列一致）----
+    IND = None
+    n_ind = 0
+    ind_day = np.ones(n_day, dtype=bool)
+    if industry_panel is not None:
+        flat_ind = industry_panel.reindex(
+            index=index, columns=columns).to_numpy().ravel()
+        codes, uniq = pd.factorize(flat_ind, sort=True)
+        n_ind = len(uniq)
+        IND = codes.reshape(n_day, n_code)
+        ind_day = index.isin(industry_panel.index)
+
+    # ---- 额外协变量 ----
+    ex_names: list[str] = []
+    E64: list[np.ndarray] = []
+    ex_day: dict[str, np.ndarray] = {}
+    if extra_covariates:
+        for nm, ep in extra_covariates.items():
+            a = ep.reindex(index=index, columns=columns).to_numpy()
+            if not np.issubdtype(a.dtype, np.floating):
+                a = a.astype(np.float64)
+            ex_names.append(nm)
+            E64.append(a.astype(np.float64))
+            ex_day[nm] = index.isin(ep.index)
+    n_ex = len(ex_names)
+
+    # ---- 逐样本有效掩码（某天不在协变量面板 index 里 → 该协变量当天整体不参与）----
+    valid = ~y_na
+    if size is not None:
+        valid &= (~np.isnan(size)) | (~mc_day)[:, None]
+    if IND is not None:
+        valid &= (IND >= 0) | (~ind_day)[:, None]
+    for nm, arr in zip(ex_names, E64):
+        valid &= (~np.isnan(arr)) | (~ex_day[nm])[:, None]
+
+    n_valid = valid.sum(axis=1)
+    keep = n_valid >= min_samples_size_only
+    # 聚合前先把无效值清成 0：该天不参与时 valid 不要求非 NaN，直接参与
+    # bincount / 求和会把 NaN 灌进 X'X（求解期表现为 SVD 不收敛）。
+    S64z = None if S64 is None else np.where(np.isnan(S64), 0.0, S64)
+    E64z = [np.where(np.isnan(a), 0.0, a) for a in E64]
+
+    # ---- (日, 行业) 分组聚合；pair 末位留一个垃圾桶 bin ----
+    day_of = np.repeat(np.arange(n_day), n_code)
+    n_bin = n_ind + 1
+    cnt = None
+    if IND is not None:
+        ind_safe = np.where(IND >= 0, IND, 0).ravel()
+        pair = day_of * n_bin + ind_safe
+        pair = np.where(valid.ravel(), pair, day_of * n_bin + n_ind)
+        flat_len = n_day * n_bin
+
+        def _gsum(w: np.ndarray) -> np.ndarray:
+            return np.bincount(pair, weights=w.ravel(),
+                               minlength=flat_len).reshape(n_day, n_bin)[:, :n_ind]
+
+        cnt = np.bincount(pair, minlength=flat_len).reshape(
+            n_day, n_bin)[:, :n_ind].astype(np.float64)
+    else:
+        def _gsum(w: np.ndarray) -> np.ndarray:  # type: ignore[misc]
+            raise AssertionError("无行业面板时不应调用 _gsum")
+
+    def _dsum(a: np.ndarray) -> np.ndarray:
+        return np.where(valid, a, 0.0).sum(axis=1)
+
+    # ---- 列布局：[size?] + [31 个全局行业] + [extras...] + [intercept] ----
+    col_size = 0 if size is not None else None
+    base = 1 if size is not None else 0
+    ind_lo = base
+    ex_lo = base + n_ind
+    col_int = ex_lo + n_ex
+    n_par = col_int + 1
+
+    A = np.zeros((n_day, n_par, n_par), dtype=np.float64)
+    b = np.zeros((n_day, n_par), dtype=np.float64)
+
+    if size is not None:
+        s1 = _dsum(S64z)
+        A[:, col_size, col_size] = _dsum(S64z * S64z)
+        b[:, col_size] = _dsum(S64z * Y64)
+        A[:, col_size, col_int] = s1
+        A[:, col_int, col_size] = s1
+
+    if IND is not None:
+        di = np.arange(n_ind)
+        A[:, ind_lo + di, ind_lo + di] = cnt
+        b[:, ind_lo:ind_lo + n_ind] = _gsum(np.where(valid, Y64, 0.0))
+        A[:, ind_lo:ind_lo + n_ind, col_int] = cnt
+        A[:, col_int, ind_lo:ind_lo + n_ind] = cnt
+        if size is not None:
+            ind_s = _gsum(np.where(valid, S64z, 0.0))
+            A[:, col_size, ind_lo:ind_lo + n_ind] = ind_s
+            A[:, ind_lo:ind_lo + n_ind, col_size] = ind_s
+
+    for m in range(n_ex):
+        j = ex_lo + m
+        e1 = _dsum(E64z[m])
+        A[:, j, j] = _dsum(E64z[m] * E64z[m])
+        b[:, j] = _dsum(E64z[m] * Y64)
+        A[:, j, col_int] = e1
+        A[:, col_int, j] = e1
+        if size is not None:
+            se = _dsum(S64z * E64z[m])
+            A[:, col_size, j] = se
+            A[:, j, col_size] = se
+        if IND is not None:
+            ind_e = _gsum(np.where(valid, E64z[m], 0.0))
+            A[:, ind_lo:ind_lo + n_ind, j] = ind_e
+            A[:, j, ind_lo:ind_lo + n_ind] = ind_e
+        for m2 in range(m + 1, n_ex):
+            cr = _dsum(E64z[m] * E64z[m2])
+            A[:, j, ex_lo + m2] = cr
+            A[:, ex_lo + m2, j] = cr
+
+    A[:, col_int, col_int] = n_valid.astype(np.float64)
+    b[:, col_int] = _dsum(Y64)
+
+    # ---- 激活掩码：与逐日实现的"当天列集"一字对齐 ----
+    if IND is not None:
+        size_cnt = mc_day.astype(np.float64) if size is not None else np.zeros(n_day)
+        ex_cnt = np.zeros(n_day)
+        for nm in ex_names:
+            ex_cnt += ex_day[nm].astype(np.float64)
+        k_d = (cnt > 0).sum(axis=1).astype(np.float64)
+        use_ind = ind_day & (n_valid >= size_cnt + k_d + ex_cnt + rank_margin)
+
+        m_ind = use_ind[:, None, None].astype(np.float64)
+        A[:, ind_lo:ind_lo + n_ind, :] *= m_ind
+        A[:, :, ind_lo:ind_lo + n_ind] *= m_ind
+        b[:, ind_lo:ind_lo + n_ind] *= m_ind[:, :, 0]
+        m_int = (~use_ind)[:, None].astype(np.float64)
+    else:
+        use_ind = np.zeros(n_day, dtype=bool)
+        m_int = np.ones((n_day, 1), dtype=np.float64)
+
+    A[:, col_int, :] *= m_int
+    A[:, :, col_int] *= m_int
+    b[:, col_int] *= m_int[:, 0]
+    if size is not None and not mc_day.all():
+        m = mc_day[:, None].astype(np.float64)
+        A[:, col_size, :] *= m
+        A[:, :, col_size] *= m
+        b[:, col_size] *= m[:, 0]
+    for m_i, nm in enumerate(ex_names):
+        if not ex_day[nm].all():
+            m = ex_day[nm][:, None].astype(np.float64)
+            A[:, ex_lo + m_i, :] *= m
+            A[:, :, ex_lo + m_i] *= m
+            b[:, ex_lo + m_i] *= m[:, 0]
+
+    # "一个回归变量都没有"的天：逐日实现在补截距**之前**就返回原值，此处把 A/b
+    # 整块清零使 β = 0、残差 = y（否则会退化成"减均值"，与老实现分叉）。
+    any_col = np.zeros(n_day, dtype=bool)
+    if size is not None:
+        any_col |= mc_day
+    if IND is not None:
+        any_col |= use_ind
+    for nm in ex_names:
+        any_col |= ex_day[nm]
+    m_any = any_col[:, None].astype(np.float64)
+    A *= m_any[:, :, None]
+    b *= m_any
+
+    # ---- 批量伪逆：pinv(A) @ b，零 python 循环 ----
+    U, sv, Vt = np.linalg.svd(A)
+    cut = rcond * sv[:, :1]
+    sinv = np.where(sv > cut, 1.0 / np.where(sv > 0.0, sv, 1.0), 0.0)
+    tmp = np.einsum("dji,dj->di", U, b)      # U^T b
+    tmp *= sinv
+    beta = np.einsum("dji,dj->di", Vt, tmp)  # V (S^+ U^T b)
+
+    # ---- 残差 ----
+    pred = np.zeros_like(Y64)
+    if size is not None:
+        pred += beta[:, col_size][:, None] * S64z
+    if IND is not None:
+        bi = beta[:, ind_lo:ind_lo + n_ind]
+        pred += bi[np.arange(n_day)[:, None], np.where(IND >= 0, IND, 0)]
+    for m_i in range(n_ex):
+        pred += beta[:, ex_lo + m_i][:, None] * E64z[m_i]
+    pred += beta[:, col_int][:, None]
+
+    out = np.where(valid & keep[:, None], Y64 - pred, np.nan)
+    return pd.DataFrame(out, index=index, columns=columns)
 
 
 def neutralize_single(
