@@ -550,3 +550,107 @@ def test_crowding_metrics():
     assert m.pc1_share_full > 0.4          # 首主成分解释度超阈值（等价于一票)
     m2 = compute_crowding({"a": ic["f1"]})  # 因子不足 → None
     assert m2 is None
+
+
+# ---------------------------------------------------------------------------
+# ⑥ 数据新鲜度守卫（as_of 自指问题）与风格中性化接线
+# ---------------------------------------------------------------------------
+def test_data_lag_days_counts_business_days():
+    from monitoring.metrics import data_lag_days
+
+    today = pd.Timestamp("2026-09-18")          # 周五
+    assert data_lag_days(pd.Timestamp("2026-09-18"), today) == 0
+    assert data_lag_days(pd.Timestamp("2026-09-17"), today) == 1
+    # 跨周末只数工作日：09-11(五) → 09-18(五) = 5 个工作日
+    assert data_lag_days(pd.Timestamp("2026-09-11"), today) == 5
+    # 未来基准日不倒扣
+    assert data_lag_days(pd.Timestamp("2026-09-25"), today) == 0
+
+
+def test_load_trading_calendar_missing_dir(tmp_path: Path):
+    from monitoring.metrics import load_trading_calendar
+
+    assert len(load_trading_calendar(tmp_path)) == 0
+
+
+def test_load_trading_calendar_parses_int_dates(tmp_path: Path):
+    from monitoring.metrics import load_trading_calendar
+
+    pd.DataFrame({"date": [20260916, 20260917, 20260918]}).to_parquet(
+        tmp_path / "calendar.parquet")
+    cal = load_trading_calendar(tmp_path)
+    assert len(cal) == 3 and cal[-1] == pd.Timestamp("2026-09-18")
+
+
+def test_run_monitoring_flags_stale_basis(env):
+    """基准日远落后今日时，必须落一条数据集级 stale_data 告警（不再静默）。"""
+    summary = run_monitoring(
+        dataset="testds", window=60,
+        factor_root=env["lib_root"], cache_root=env["cache_root"],
+        ledger_root=env["ledger_root"], cfg=CFG, record=False,
+        style_neutral_scope="none",
+    )
+    assert summary["data_stale"] is True
+    assert summary["data_lag_days"] > 7
+    alerts = MonitoringLedger(env["ledger_root"]).load_alerts()
+    ds_rows = alerts[alerts["category"] == "dataset"]
+    assert len(ds_rows) == 1 and ds_rows.iloc[0]["rule"] == "stale_data"
+
+
+def test_load_style_covariates_builds_expected_keys(tmp_path: Path):
+    """有 volume/股本/行情时，协变量应含 size/mom/vol/turn（行业表缺失时降级）。"""
+    from monitoring.metrics import load_style_covariates
+
+    days, codes = 120, 12
+    rng = np.random.default_rng(3)
+    dates = pd.bdate_range("2025-01-01", periods=days)
+    cols = [f"c{i:03d}" for i in range(codes)]
+    close = pd.DataFrame(100 + rng.normal(0, 1, (days, codes)).cumsum(axis=0),
+                         index=dates, columns=cols)
+    vol = pd.DataFrame(rng.uniform(1e5, 1e6, (days, codes)), index=dates, columns=cols)
+
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    long = close.stack().rename("close").to_frame()
+    long["volume"] = vol.stack()
+    long.index = long.index.set_names(["date", "code"])
+    long.to_parquet(cache / "daily_hs300.parquet")
+    pd.DataFrame({
+        "code": cols, "change_date": pd.Timestamp("2020-01-01"),
+        "tot_share": 10000.0, "float_share": 5000.0,
+    }).to_parquet(cache / "equity_structure.parquet")
+
+    cov = load_style_covariates(cache, close, pool="hs300")
+    assert {"size", "mom", "vol", "turn"}.issubset(cov)
+    assert cov["size"].shape == close.shape
+    assert cov["size"].notna().any().any()
+
+
+def test_style_covariates_fill_neutral_ic_columns():
+    """接线证据：传入 style_covariates 后中性化 IC / 风格占比不再恒为 NaN。
+
+    ``style_covariates`` 形参早在 2026-09-11 就加进了 ``compute_factor_metrics``，
+    但 ``run_monitoring`` 一直没传 → 两列全项目 0 个非空值。本测试把这个
+    接线钉住：不传 → NaN；传了 → 有值。
+    """
+    close, rets = _panel(days=200, codes=40, seed=11)
+    rng = np.random.default_rng(12)
+    noise = pd.DataFrame(rng.normal(0, 1, rets.shape), index=rets.index,
+                         columns=rets.columns)
+    pred = rets.rank(axis=1, pct=True) + noise * 0.3      # 与未来收益强相关的合成因子
+    ic = pred.corrwith(rets, axis=1, method="spearman")
+    row = pd.Series({"kind": "composite", "maturity": "oos_verified",
+                     "source": "model:t", "note": "model_id=1", "ic_mean": 0.05})
+
+    base = compute_factor_metrics("model:test", row, pred, ic, rets,
+                                  close.index[-1], window=60)
+    assert base.ic_neutral_mean_recent != base.ic_neutral_mean_recent   # 未接线 → NaN
+
+    cov = {"size": close.where(close > 0),
+           "mom": close.pct_change(20, fill_method=None)}
+    wired = compute_factor_metrics("model:test", row, pred, ic, rets,
+                                   close.index[-1], window=60,
+                                   style_covariates=cov)
+    assert wired.ic_neutral_mean_recent == wired.ic_neutral_mean_recent
+    assert wired.ic_neutral_mean_full == wired.ic_neutral_mean_full
+    assert wired.style_exposure_ratio == wired.style_exposure_ratio

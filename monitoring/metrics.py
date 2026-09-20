@@ -11,12 +11,15 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+
+log = logging.getLogger("monitoring")
 
 MODEL_PREFIX = "model:"
 _MODEL_ID_RE = re.compile(r"model_id=(\d+)")
@@ -118,6 +121,109 @@ def load_returns_panel(
     """h=1 次日收益面板（因子库 IC 口径：pct_change().shift(-1)，不虚构缺口收益）。"""
     close = close_panel.loc[:as_of] if as_of is not None else close_panel
     return close.pct_change(fill_method=None).shift(-1)
+
+
+def load_trading_calendar(cache_root: str | Path) -> pd.DatetimeIndex:
+    """读交易日历（``calendar.parquet``），用于「基准日是否滞后」守卫。"""
+    p = Path(cache_root) / "calendar.parquet"
+    if not p.exists():
+        return pd.DatetimeIndex([])
+    df = pd.read_parquet(p)
+    if df.empty:
+        return pd.DatetimeIndex([])
+    col = "date" if "date" in df.columns else df.columns[0]
+    s = df[col]
+    if pd.api.types.is_numeric_dtype(s):
+        ts = pd.to_datetime(s.astype("int64").astype(str), format="%Y%m%d",
+                            errors="coerce")
+    else:
+        ts = pd.to_datetime(s, errors="coerce")
+    return pd.DatetimeIndex(ts.dropna().unique()).sort_values()
+
+
+def data_lag_days(as_of: pd.Timestamp, today: pd.Timestamp | None = None) -> int:
+    """``as_of`` 落后「今天」的**工作日数**（≈ 交易日数，用于新鲜度守卫）。
+
+    为什么需要这个口径：此前 ``as_of`` 由同一份（可能停更的）行情缓存反推，
+    缓存冻结时滞后被静默归零 —— 2026-08-21 ~ 09-17 共 28 次运行全部自称
+    「基准日 2026-08-21」而**一条数据滞后告警都没有**。改用墙钟对齐后，
+    滞后不会再被自我掩盖。
+
+    Caveat：法定节假日会被计成工作日 → 长假期间滞后略被高估（阈值判定
+    留有 7 日余量），告警文案同时给出两个真实日期供人工判断。
+    """
+    today = (today or pd.Timestamp.now()).normalize()
+    as_of = pd.Timestamp(as_of).normalize()
+    if today <= as_of:
+        return 0
+    return int(len(pd.bdate_range(as_of + pd.Timedelta(days=1), today)))
+
+
+def load_style_covariates(cache_root: str | Path,
+                          close_panel: pd.DataFrame,
+                          pool: str = "hs300",
+                          include_industry: bool = True) -> dict[str, pd.DataFrame]:
+    """构建监控用风格协变量（size / mom / vol / turn / industry）。
+
+    与回测基线 ``_base/cov_*.parquet`` **同公式同数据源**
+    （:func:`factor.preprocessing.build_style_covariates`），因此中性化 IC 与
+    历史消融网格口径可比。任一源文件缺失时该项自动跳过；全缺 → ``{}``
+    （``compute_factor_metrics`` 会跳过中性化 IC）。
+
+    Args:
+        cache_root: 行情缓存根。
+        close_panel: 后复权收盘价面板（与 :func:`load_close_panel` 同口径）。
+        pool: 日线文件池名（``daily_<pool>.parquet``，与数据集一致的股票池）。
+        include_industry: 是否构建行业哑变量（需要 ``industry_classification``
+            事件表；失败时自动降级为其余四项）。
+    """
+    from data.market_cap import build_shares_panel
+    from factor.preprocessing import build_style_covariates
+
+    root = Path(cache_root)
+    idx, cols = close_panel.index, close_panel.columns
+    dpath = root / f"daily_{pool}.parquet"
+    eqpath = root / "equity_structure.parquet"
+    if not dpath.exists() or not eqpath.exists():
+        return {}
+
+    daily = pd.read_parquet(dpath)
+    daily.index = daily.index.set_levels(daily.index.levels[0].normalize(), level=0)
+    d = daily.reset_index()
+    d["date"] = d["date"].dt.normalize()
+    if "volume" not in d.columns:
+        return {}
+
+    def _p(col: str) -> pd.DataFrame:
+        return d.pivot(index="date", columns="code", values=col).reindex(
+            index=idx, columns=cols)
+
+    volume = _p("volume")
+    close_raw = _p("close")                        # 未复权，与股本同为真实口径
+    shares = build_shares_panel(pd.read_parquet(eqpath), idx, cols)
+    mktcap = shares * close_raw
+
+    industry = None
+    if include_industry and (root / "industry_classification_level1.parquet").exists():
+        try:
+            from data.cache import DataCache
+            from data.industry import IndustryClassification
+            from data.offline import OfflineQuietDataSource
+
+            cache = DataCache(OfflineQuietDataSource())
+            industry = IndustryClassification(cache, level=1).get_industry_panel(
+                list(cols), idx)
+            if industry.isna().all().all():
+                industry = None
+        except Exception as e:  # noqa: BLE001
+            log.warning("行业面板不可用，中性化跳过行业项: %s", str(e)[:80])
+            industry = None
+
+    cov = build_style_covariates(
+        {"close": close_panel, "volume": volume, "tot_share": shares},
+        market_cap_panel=mktcap, industry_panel=industry)
+    log.info("监控风格协变量: %s（%d 日 × %d 股）", list(cov), len(idx), len(cols))
+    return cov
 
 
 def _recent_window(

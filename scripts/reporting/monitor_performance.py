@@ -138,6 +138,18 @@ def main(argv: list[str] | None = None) -> int:
         help="告警须连续触发 N 期才确认（默认 config confirm_n，研究期可设 1 免去抖）",
     )
     p.add_argument(
+        "--style-neutral-scope",
+        default="model",
+        choices=["model", "all", "none"],
+        help="中性化 IC（风格剥离后纯 alpha IC）计算范围：model(默认，只算 model: "
+             "因子，秒级) / all(全库，逐因子逐日 lstsq，分钟级) / none(不算)",
+    )
+    p.add_argument(
+        "--pool",
+        default="hs300",
+        help="日线文件池名（daily_<pool>.parquet），须与 --dataset 的股票池一致",
+    )
+    p.add_argument(
         "--register-model-factors",
         action="store_true",
         help="把 ml_synthesis h=1 OOS 预测回写因子库后退出",
@@ -185,11 +197,18 @@ def main(argv: list[str] | None = None) -> int:
             ledger_root=ledger_root,
             signal_path=args.signal_path,
             confirm_n=args.confirm_n,
+            style_neutral_scope=args.style_neutral_scope,
+            pool=args.pool,
         )
+        stale = " ⚠️数据滞后" if summary.get("data_stale") else ""
         print(
-            f"[monitor] as_of={summary['as_of']} factors={summary['n_factors']} "
+            f"[monitor] as_of={summary['as_of']}{stale} "
+            f"lag={summary.get('data_lag_days', 0)}d "
+            f"factors={summary['n_factors']} "
             f"models={summary['n_models']} critical={summary['n_critical']} "
-            f"warning={summary['n_warning']} -> {summary['report_path']}"
+            f"warning={summary['n_warning']} "
+            f"style-neutral={summary.get('n_style_neutral_factors', 0)} "
+            f"-> {summary['report_path']}"
         )
 
     if args.daemon:

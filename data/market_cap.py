@@ -13,7 +13,44 @@ InfoData.get_equity_structure 返回的是稀疏的股本变动事件表（一�
 """
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
+
+
+def build_shares_panel(
+    equity_structure_df: pd.DataFrame,
+    index: pd.Index,
+    columns: pd.Index,
+    share_field: str = "tot_share",
+) -> pd.DataFrame:
+    """股本变动事件表 → 日频股本面板（单位：**股**），逐日 PIT 前向填充。
+
+    与 :func:`build_market_cap_panel` 的差别：本函数只出股本（不乘股价），
+    且用 ``pivot + ffill`` 向量化实现 —— 全A 规模（5800 列 × 2500 日）下
+    :func:`build_market_cap_panel` 的逐 code 循环过慢，而风格中性化只需要股本，
+    不需要先算市值再取 log。公式与
+    ``scripts/pipelines/rolling_grid_alla._shares_panel`` 等价（后者是回测基线
+    ``_base/cov_size`` 的真源，改这里须同步核对）。
+    """
+    out = pd.DataFrame(np.nan, index=index, columns=columns, dtype=float)
+    if equity_structure_df is None or equity_structure_df.empty:
+        return out
+    if share_field not in equity_structure_df.columns:
+        return out
+    df = equity_structure_df[equity_structure_df["code"].isin(columns)][
+        ["code", "change_date", share_field]].copy()
+    df["change_date"] = pd.to_datetime(df["change_date"])
+    df = df.dropna(subset=[share_field]).drop_duplicates(
+        subset=["code", "change_date"], keep="last")
+    if df.empty:
+        return out
+    wide = df.pivot(index="change_date", columns="code",
+                    values=share_field).sort_index()
+    wide = wide.reindex(index=sorted(set(wide.index) | set(index))).ffill()
+    wide = wide.reindex(columns=columns)
+    common = index.intersection(wide.index)
+    out.loc[common] = wide.loc[common].to_numpy()
+    return out * 10000.0     # 万股 -> 股
 
 
 def build_market_cap_panel(

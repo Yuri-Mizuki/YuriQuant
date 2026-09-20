@@ -23,8 +23,11 @@ from monitoring.ledger import MonitoringLedger
 from monitoring.metrics import (
     MonitorMetrics,
     compute_factor_metrics,
+    data_lag_days,
     load_close_panel,
     load_returns_panel,
+    load_style_covariates,
+    load_trading_calendar,
 )
 from monitoring.state import confirm_rows
 from stats import PERIODS_PER_YEAR
@@ -52,6 +55,8 @@ def run_monitoring(
     signal_path: str | Path | None = None,
     confirm_n: int | None = None,
     run_stamp: str | None = None,
+    style_neutral_scope: str = "model",
+    pool: str = "hs300",
 ) -> dict:
     """跑一轮完整监控，返回汇总 dict（factors/models/告警计数 + 产物路径）。
 
@@ -62,6 +67,10 @@ def run_monitoring(
         as_of: 监控基准日 YYYYMMDD（默认 = 数据源最新交易日）。
         factor_root / cache_root / ledger_root: 路径覆盖（测试隔离用）。
         record: 是否写 experiments 账本。
+        style_neutral_scope: 中性化 IC 的计算范围 —— ``model``（默认，只算
+            ``model:`` 因子，秒级）/ ``all``（全库，逐因子逐日 lstsq，分钟级）
+            / ``none``（不算，保持既有行为）。
+        pool: 日线文件池名（``daily_<pool>.parquet``），与数据集股票池一致。
     """
     from research.factor_library import FactorLibrary
 
@@ -80,6 +89,30 @@ def run_monitoring(
     as_of_ts = pd.Timestamp(as_of) if as_of else close.index[-1]
     returns = load_returns_panel(close, as_of=as_of_ts)
 
+    # 数据新鲜度守卫：as_of 是从这份缓存自己推出来的，缓存停更时滞后会
+    # 静默归零（08-21~09-17 共 28 次运行全自称「基准日 08-21」却零告警）。
+    # 这里改用墙钟对齐，滞后不再被自我掩盖。
+    calendar = load_trading_calendar(cache_root)
+    cal_last = calendar[-1] if len(calendar) else None
+    lag_days = data_lag_days(as_of_ts)
+    max_lag = int(conf.get("max_stale_days", 7))
+    if lag_days > max_lag:
+        log.warning("监控基准日 %s 落后今日 %d 个工作日（阈值 %d；交易日历最新 %s）："
+                    "行情源未更新，本轮全部指标不代表当日",
+                    as_of_ts.date(), lag_days, max_lag,
+                    cal_last.date() if cal_last is not None else "—")
+
+    style_cov: dict[str, pd.DataFrame] = {}
+    if style_neutral_scope != "none":
+        style_cov = load_style_covariates(cache_root, close, pool=pool)
+
+    def _cov_for(name: str) -> dict[str, pd.DataFrame] | None:
+        if not style_cov:
+            return None
+        if style_neutral_scope == "all":
+            return style_cov
+        return style_cov if name.startswith("model:") else None
+
     snapshots: list[MonitorMetrics] = []
     ic_history: dict[str, pd.Series] = {}
     for _, row in registry.iterrows():
@@ -93,6 +126,7 @@ def run_monitoring(
         m = compute_factor_metrics(
             name, row, panel, ic, returns, as_of_ts,
             window=window, window_long=window_long,
+            style_covariates=_cov_for(name),
         )
         m = attach_alerts(m, conf)
         snapshots.append(m)
@@ -150,6 +184,20 @@ def run_monitoring(
                     "message": a["message"],
                 }
             )
+    if lag_days > max_lag:
+        # 数据集级告警：不进 confirm_rows 去抖（它不是"观察中"的漂移信号，
+        # 而是"这一轮的数字根本不对应当日"的运维事实）。
+        alert_rows.append({
+            "run_date": run_date,
+            "as_of": as_of_ts.strftime("%Y-%m-%d"),
+            "name": f"dataset:{dataset}",
+            "category": "dataset",
+            "source": "dataset:行情缓存",
+            "rule": "stale_data",
+            "level": "warning",
+            "message": (f"监控基准日 {as_of_ts.date()} 落后今日 {lag_days} 个工作日"
+                        f"（阈值 {max_lag}）——行情源未更新，本轮指标不代表当日"),
+        })
     confirm_n = int(confirm_n if confirm_n is not None else conf.get("confirm_n", 3))
     # 去抖：只把达到 confirm_n 连续期的告警算作"确认"用于报告与计数；
     # 但所有触发（含观察中）都落台账并带 confirmed 标记，否则历史里看不到
@@ -171,6 +219,8 @@ def run_monitoring(
         window_long=window_long,
         as_of=as_of_ts,
         pending_count=n_pending,
+        data_lag_days=lag_days,
+        max_stale_days=max_lag,
     )
 
     n_model = sum(1 for m in snapshots if m.category == "model")
@@ -178,6 +228,13 @@ def run_monitoring(
         "run_date": run_date,
         "as_of": str(as_of_ts.date()),
         "dataset": dataset,
+        "data_lag_days": lag_days,
+        "data_stale": bool(lag_days > max_lag),
+        "calendar_last": str(cal_last.date()) if cal_last is not None else "",
+        "style_neutral_scope": style_neutral_scope,
+        "n_style_covariates": len(style_cov),
+        "n_style_neutral_factors": sum(
+            1 for m in snapshots if m.ic_neutral_mean_recent == m.ic_neutral_mean_recent),
         "n_factors": len(snapshots),
         "n_models": n_model,
         "n_critical": sum(1 for m in snapshots if m.status == "critical"),
@@ -235,6 +292,9 @@ h1 { font-size: 1.5rem; margin-bottom: 0.3rem; }
 .card.crit .v { color: #B3402A; }
 .card.warn .v { color: #B07A1E; }
 .card.ok .v { color: #0E6E5C; }
+.banner { background: #F7E3DE; border: 1px solid #B3402A; border-left: 5px solid #B3402A;
+          color: #7A2A1B; border-radius: 6px; padding: 0.7rem 0.9rem;
+          font-size: 0.85rem; margin-bottom: 1.2rem; }
 h2 { font-size: 1.05rem; margin: 1.8rem 0 0.7rem; padding-bottom: 0.35rem;
      border-bottom: 2px solid #0E6E5C; }
 table { width: 100%; border-collapse: collapse; font-size: 0.8rem;
@@ -387,11 +447,15 @@ def generate_html_report(
     window_long: int = 252,
     as_of: pd.Timestamp | None = None,
     pending_count: int = 0,
+    data_lag_days: int = 0,
+    max_stale_days: int = 7,
 ) -> None:
     """生成自包含 HTML 监控报告（inline SVG，无外部依赖，可直接归档/邮件转发）。
 
     章节顺序：概要 → 模型预测 → 全部快照 → 拥挤度 → 告警明细。
     所有表格使用 thead/tbody 分离，排序 JS 只排 tbody 行，不会把表头挤走。
+    ``data_lag_days`` 超过 ``max_stale_days`` 时在顶部插红色横幅 —— 报告正文
+    里的「基准日」是数据基准，不等于今天，脚本停更时必须一眼看出来。
     """
     # research 是实验层（其 __init__/html_report 拖 matplotlib）：monitoring
     # （生产监控）只允许函数级向上引用（2026-09-11 自模块级降级，守卫防回潮）。
@@ -409,6 +473,15 @@ def generate_html_report(
     parts = [
         "<div class='wrap'>",
         "<h1>因子与模型预测 · 性能监控报告</h1>",
+    ]
+    if data_lag_days > max_stale_days:
+        parts.append(
+            "<div class='banner'>⚠️ 数据滞后：监控基准日 "
+            f"{as_of.date() if as_of is not None else ''} 落后今日 "
+            f"<b>{data_lag_days}</b> 个工作日（阈值 {max_stale_days}）。"
+            "行情源未更新，本页全部指标**不代表当日**，仅可用于回溯诊断。</div>"
+        )
+    parts += [
         f"<div class='meta'>数据集={_html.escape(dataset)} · 基准日="
         f"{as_of.date() if as_of is not None else ''} · 双窗口={window}/{window_long}日"
         f"（近{window}日提前预警 / 近{window_long}日稳健确认）· "
@@ -430,6 +503,8 @@ def generate_html_report(
             "<table><thead><tr>"
             "<th class='sortable'>名称</th><th>月频IC趋势</th>"
             "<th class='sortable num abs-sort'>近60日IC</th>"
+            "<th class='sortable num abs-sort'>近60日中性化IC</th>"
+            "<th class='sortable num'>风格占比</th>"
             "<th class='sortable num abs-sort'>近252日IC</th>"
             "<th class='sortable num'>保留率</th>"
             "<th class='sortable num abs-sort'>NW-t</th>"
@@ -442,6 +517,8 @@ def generate_html_report(
                 f"<tr><td>{_html.escape(m.name)}<br><span class='rule'>{m.model_id}</span></td>"
                 f"<td>{_sparkline_monthly(ic_history.get(m.name))}</td>"
                 f"<td class='num'>{_fmt(m.ic_mean_recent)}</td>"
+                f"<td class='num'>{_fmt(m.ic_neutral_mean_recent)}</td>"
+                f"<td class='num'>{_fmt(m.style_exposure_ratio, '{:+.0%}')}</td>"
                 f"<td class='num'>{_fmt(m.ic_mean_recent_252)}</td>"
                 f"<td class='num'>{_fmt(m.ic_retention, '{:.0%}')}</td>"
                 f"<td class='num'>{_fmt(m.ic_t_nw_recent, '{:.2f}')}</td>"
