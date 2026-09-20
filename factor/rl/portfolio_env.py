@@ -84,14 +84,19 @@ def map_actions_to_weights(
     softmax_temp: float = DEFAULT_ACTION_KW["softmax_temp"],
     clip_range: float = DEFAULT_ACTION_KW["clip_range"],
     max_holding_pct: float = DEFAULT_ACTION_KW["max_holding_pct"],
+    tradable_mask: np.ndarray | None = None,
 ) -> np.ndarray:
     """连续动作打分 → 目标权重（非负、和为 1、持仓数受上限约束）。
 
     流程：clip[-R,R] → 温度 softmax（数值稳定）→ ``w_raw = (1−ρ)·wb + ρ·w_act``
-    → 归一化 → 保留权重最大的前 ``max_holding_pct·N`` 只后重归一。
+    → 归一化 → 可交易掩码清零重归一 → 保留权重最大的前 ``max_holding_pct·N``
+    只后重归一。
 
     ``active_share=0`` 退化为基准（被动）；=1 为纯主动 softmax 权重。
     bench 含 NaN/负值按 0 处理后归一化（基准面板缺失票不占预算）。
+    ``tradable_mask``（bool，True=可持有）：权重在不可持有处清零后重归一
+    ——用于剔除非成分/停牌/ST（Phase 1 真实数据必需；掩码后预算在可持仓
+    集内重新分配，持仓数上限仍在全列表上取 top-k，不可持仓处不会入选）。
     """
     a = np.clip(np.asarray(actions, dtype=float), -clip_range, clip_range)
     scaled = a / max(softmax_temp, 1e-9)
@@ -107,6 +112,17 @@ def map_actions_to_weights(
         b = b / b.sum()
     w_raw = (1.0 - active_share) * b + active_share * w_act
     w = w_raw / w_raw.sum()
+    if tradable_mask is not None:
+        m = np.asarray(tradable_mask, dtype=bool)
+        if not m.any():
+            raise ValueError("tradable_mask 全 False：无可持仓股票")
+        if not m.all():
+            w = w * m
+            s = w.sum()
+            if s <= 0:                                 # 极端：主动权重全在禁区
+                w = np.where(m, 1.0 / m.sum(), 0.0)
+            else:
+                w = w / s
     # 持仓数上限：保留权重最大的 top_k，其余清零后重归一（银河 3.1 节 2）
     k = max(1, int(round(len(w) * float(max_holding_pct))))
     keep = np.argsort(w)[::-1][:k]
@@ -286,6 +302,7 @@ class PortfolioEnv(gym.Env):
         init_to_bench: bool = True,
         action_kw: dict[str, float] | None = None,
         reward_kw: dict[str, float] | None = None,
+        tradable_masks: pd.DataFrame | None = None,
         seed: int = 0,
     ):
         super().__init__()
@@ -298,6 +315,10 @@ class PortfolioEnv(gym.Env):
         miss_r = [d for d in need if d not in period_returns.index]
         if miss_r:
             raise ValueError(f"period_returns 缺期间末端日: {miss_r[:3]}")
+        if tradable_masks is not None:
+            miss_m = [d for d in decision_dates if d not in tradable_masks.index]
+            if miss_m:
+                raise ValueError(f"tradable_masks 缺决策日: {miss_m[:3]}")
 
         self.factor = factor
         self.aux = aux
@@ -310,6 +331,7 @@ class PortfolioEnv(gym.Env):
         self.init_to_bench = bool(init_to_bench)
         self.action_kw = {**DEFAULT_ACTION_KW, **(action_kw or {})}
         self.reward_kw = {**DEFAULT_REWARD_KW, **(reward_kw or {})}
+        self.tradable_masks = tradable_masks
 
         codes = bench.columns
         self.codes = list(codes)
@@ -331,21 +353,32 @@ class PortfolioEnv(gym.Env):
 
     # ------------------------------------------------------------------
     def _hist_stats(self, i: int) -> dict[str, np.ndarray]:
-        """回看窗（当前决策日之前 lookback 期）内信号均值与收益统计。"""
+        """回看窗（当前决策日之前 lookback 期）内信号均值与收益统计。
+
+        因子/风险窗用决策日本身（当期值在决策时点可见）；收益窗只取
+        **期间末端日**（首个决策日没有已实现的期间收益，须剔除）。
+        """
         start = max(0, i - self.lookback)
         win_dates = self.decision_dates[start:i]
         if not win_dates:
             zero = np.zeros(self.n_codes)
             return {"f_mean": zero, "z_mean": zero,
                     "r_mean": zero, "r_vol": zero}
-        win_r = self.period_returns.loc[win_dates].reindex(columns=self.codes)
+        win_r_dates = [d for d in win_dates if d in self.period_returns.index]
         win_f = self.factor.loc[win_dates].reindex(columns=self.codes)
         win_z = self.aux.loc[win_dates].reindex(columns=self.codes)
+        if win_r_dates:
+            win_r = self.period_returns.loc[win_r_dates].reindex(columns=self.codes)
+            r_mean = win_r.mean(axis=0).to_numpy(dtype=float)
+            r_vol = win_r.std(axis=0, ddof=0).to_numpy(dtype=float)
+        else:
+            r_mean = np.zeros(self.n_codes)
+            r_vol = np.zeros(self.n_codes)
         return {
             "f_mean": win_f.mean(axis=0).to_numpy(dtype=float),
             "z_mean": win_z.mean(axis=0).to_numpy(dtype=float),
-            "r_mean": win_r.mean(axis=0).to_numpy(dtype=float),
-            "r_vol": win_r.std(axis=0, ddof=0).to_numpy(dtype=float),
+            "r_mean": r_mean,
+            "r_vol": r_vol,
         }
 
     def _idx_hist_stats(self, i: int) -> tuple[float, float]:
@@ -403,8 +436,11 @@ class PortfolioEnv(gym.Env):
         else:
             bench = bench / bench.sum()
 
+        mask = None
+        if self.tradable_masks is not None:
+            mask = self.tradable_masks.loc[t].reindex(self.codes).fillna(False).to_numpy(dtype=bool)
         w = map_actions_to_weights(np.asarray(action, dtype=float), bench,
-                                   **self.action_kw)
+                                   tradable_mask=mask, **self.action_kw)
         period_ret = self.period_returns.loc[t_next].reindex(self.codes)
         period_ret = np.nan_to_num(period_ret.to_numpy(dtype=float), nan=0.0)
         f_row = self.factor.loc[t].reindex(self.codes).to_numpy(dtype=float)

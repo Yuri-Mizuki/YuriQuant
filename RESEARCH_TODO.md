@@ -386,17 +386,35 @@
   历史模拟场景 + Rockafellar-Uryasev 线性化（cvxpy 可直接写），可选约束
   `CVaR_α(loss) ≤ c`；`optimize/risk.py` 已有 VaR/CVaR 度量，缺的是把它变成
   QP 约束。**不依赖 RL、独立有价值**；华安 226 本身不值得复现（3 只美股实证）。
-- [~] **stage2 组合优化 RL 实现**—— **Phase 0 完成（09-20）**：
+- [x] ~~**stage2 组合优化 RL 实现——Phase 0（env 确定性骨架）**~~ —— **完成（09-20）**：
   `factor/rl/portfolio_env.py`（银河 0706 口径：主动权重空间、动作→权重映射
   clip+softmax+active_share 混合+持仓数上限、奖励六项分解 λ=表 7 缺省、
   Banach 自融资投影训练成本=0、银河表 8 状态向量 8N+14、逐决策日 gymnasium env）
-  + `tests/test_portfolio_env.py` 22 用例（合成面板确定性验证：映射归一/上限/
-  极端集中、奖励符号方向逐项、Banach 闭式解一致、成本臂 vs 免费臂、env 终止
-  与入参校验）。
-  **下一步 Phase 1**：接真实数据（GBDT h=10 预测为 f、风险信号为 z、指数基准
-  权重为 wb）+ SB3 PPO 训练入口（对齐 `run_alphapool_ppo.py` 风格）→ hs300
-  平价验证（PPO vs QP vs 等权三臂，1 seed 小预算）。Phase 2（zz1000 主实验 +
-  银河 6 组消融 + PBO）待 Phase 1 链路验证后。
+  + `tests/test_portfolio_env.py` 22 用例（合成面板确定性验证）。
+  Phase 1 期间追加：`tradable_masks`（非成分/不可持仓权重清零重归一）+
+  回看收益窗只取期间末端日（首决策日无已实现期间收益的 off-by-one）。
+- [x] ~~**stage2 组合优化 RL 实现——Phase 1（hs300 平价验证）**~~ —— **完成（09-20）**
+  - `scripts/factors/run_portfolio_ppo.py`：真实数据四臂入口（PPO/QP/等权/TopN，
+    统一评估口径防漂移）；env 扩展 `tradable_masks`（非成分权重清零重归一）。
+  - **结果**（2023-01~2026-06，85 期，信号代理=rev5，基准=成分等权，单 seed）：
+    PPO 超额 −0.82%/TE 4.12%（贴近基准）vs 等权 −0.47% vs QP −3.00%（TE 18%）
+    vs TopN −2.32%。**链路自洽 ✅，且行为形态与银河 HS300 结论一致**
+    （成分多/偏离空间小的池子：RL 贴基准打平、大幅主动偏离者输）——
+    这正是 Phase 1 想要的验证。数字不外引（信号是代理、不调参）。
+  - **踩掉三个工程坑（Phase 2 直接受益）**：① `daily_hs300.parquet` 是
+    (date,code) MultiIndex；② `rolling_covariance` 的 `dropna(how="any")`
+    在含数据不全历史成分的宽面板上把窗口行全杀光（513 码全 None → QP 臂
+    静默退化为基准）——须逐期取「当期成分∩窗内数据完整」子集估 Σ、
+    在子集内解小稠密 QP 再散回（全尺寸带零块 Σ 会让 OSQP user_limit）。
+  - **Phase 2 待办（zz1000 主实验）**：信号换 GBDT h=10 预测（f）+ 风险信号
+    （z，可先 −vol20）；滚动训练协议（逐年 + 双窗口双门槛 + 多种子集成 + 回退）；
+    银河 6 组消融；结果接 `stats/pbo.py`。预计大算力，随长实验同机排队。
+  **Phase 3（全A 规模化，Phase 2 验证 RL 超额机制后才启动）**：池=全A，
+  **基准=全A 等权**（T2RL 口径——全A 无自然指数权重面板，指增语义改相对
+  等权基准）；额外工程项=可交易掩码注入（全A ST/停牌量大）、动作维度 ~5800
+  的训练稳定性、信号覆盖核查（分钟特征等增广信号全A 缺失）。
+  设计意图：hs300→zz1000→全A 是"集中度自由度"递增梯度，三点点位可画出
+  「RL 相对 QP 优势 vs 池子集中度空间」关系，比单独一个全A 结果更有信息量。
 - [x] ~~**多因子10 补齐两主力合成方法**~~ —— **2026-09-16 完成前两项**：
   最大化 IC_IR（`synthesize_ic_ir_max`，`w=Σ⁻¹ĪC` + 半衰加权 + 对角收缩 + `w≥0`
   截断）/ 最大化 IC（`synthesize_ic_max`，`w=V⁻¹ĪC`，V=决策时点截面）/
