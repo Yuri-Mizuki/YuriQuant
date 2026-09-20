@@ -12,9 +12,13 @@ import pandas as pd
 import pytest
 
 from factor.preprocessing import (
+    get_neutralize_impl,
     neutralize,
+    neutralize_batch,
+    neutralize_grouped,
     neutralize_single,
     preprocess_factor,
+    set_neutralize_impl,
     standardize_rank,
     standardize_zscore,
     winsorize_mad,
@@ -299,3 +303,137 @@ def test_neutralize_size_only_matches_with_intercept_version():
     assert float((size_only - with_intercept).abs().max().max()) < 1e-12
     # NaN 位置原样保留
     assert int(size_only.notna().sum().sum()) == int(panel.notna().sum().sum())
+
+
+# ===========================================================================
+# 向量化实现（2026-09-20）
+#   neutralize_batch   —— numpy 外壳 + 逐日 lstsq，要求与历史实现**逐位一致**
+#   neutralize_grouped —— (日,行业) 分组聚合 + 批量伪逆，要求浮点级一致
+# ===========================================================================
+def _impl_case(seed=21, n_days=12, n_codes=60, nan_frac=0.15, n_ind=5,
+               sparse_days=(), all_nan_days=(), drop_mc_days=(),
+               drop_ind_days=()):
+    """生成同时含 NaN / 样本降级 / 协变量面板缺日三类边界的合成面板。"""
+    rng = np.random.default_rng(seed)
+    idx = pd.date_range("2024-01-01", periods=n_days, freq="B")
+    codes = [f"C{i}" for i in range(n_codes)]
+    panel = pd.DataFrame(rng.normal(0, 1, (n_days, n_codes)), idx, codes)
+    mc = pd.DataFrame(rng.lognormal(22.0, 1.2, (n_days, n_codes)), idx, codes)
+    ind = pd.DataFrame(
+        [[f"SW{int(k):02d}" for k in rng.integers(0, n_ind, n_codes)]
+         for _ in range(n_days)], idx, codes)
+    panel = panel.mask(rng.random((n_days, n_codes)) < nan_frac)
+    mc = mc.mask(rng.random((n_days, n_codes)) < nan_frac)
+    ind = ind.mask(rng.random((n_days, n_codes)) < nan_frac)
+    for d in sparse_days:      # 只剩 3 个有效样本 → 触发行业降级
+        panel.iloc[d, 3:] = np.nan
+        mc.iloc[d, 3:] = np.nan
+        ind.iloc[d, 3:] = np.nan
+    for d in all_nan_days:     # 整天无有效样本
+        panel.iloc[d, :] = np.nan
+    if drop_mc_days:           # 该天整体不在市值面板 index 里
+        mc = mc.drop(index=[idx[d] for d in drop_mc_days])
+    if drop_ind_days:
+        ind = ind.drop(index=[idx[d] for d in drop_ind_days])
+    return panel, mc, ind
+
+
+def _assert_same(a: pd.DataFrame, b: pd.DataFrame, tol: float) -> None:
+    """NaN 结构必须完全一致；有效位置逐点差不超过 tol。"""
+    A = a.to_numpy(dtype=np.float64)
+    B = b.to_numpy(dtype=np.float64)
+    na, nb = np.isnan(A), np.isnan(B)
+    assert int((na != nb).sum()) == 0, "NaN 结构不一致"
+    both = ~na & ~nb
+    if both.any():
+        assert float(np.abs(A[both] - B[both]).max()) <= tol
+
+
+_IMPL_CALLS = (
+    {"market_cap_panel": "mc"},
+    {"industry_panel": "ind"},
+    {"market_cap_panel": "mc", "industry_panel": "ind"},
+    {"market_cap_panel": "mc", "industry_panel": "ind", "extra_covariates": True},
+)
+
+_IMPL_CASES = [
+    dict(seed=21),
+    dict(seed=22, nan_frac=0.55),
+    dict(seed=23, sparse_days=(2, 5)),
+    dict(seed=24, all_nan_days=(1,)),
+    dict(seed=25, drop_mc_days=(3,)),
+    dict(seed=26, drop_ind_days=(4,)),
+    dict(seed=27, drop_mc_days=(2,), drop_ind_days=(6,)),
+    dict(seed=28, n_days=4, n_codes=8, nan_frac=0.10, n_ind=3),
+    dict(seed=29, n_codes=120, n_ind=11, nan_frac=0.30),
+    dict(seed=30, nan_frac=0.0),
+]
+
+
+def _case_kwargs(panel, mc, ind, spec, seed):
+    kw = {}
+    for key, val in spec.items():
+        kw[key] = (mc if val == "mc" else ind) if isinstance(val, str) else {
+            "mom": panel * 0.3, "vol": panel.abs() + 1.0}
+    return kw
+
+
+@pytest.fixture
+def _loop_impl():
+    """把 neutralize 临时切回历史逐日实现（测试结束恢复默认 batch）。"""
+    set_neutralize_impl("loop")
+    yield
+    set_neutralize_impl("batch")
+
+
+@pytest.mark.parametrize("case", _IMPL_CASES, ids=lambda c: f"seed{c['seed']}")
+def test_neutralize_batch_matches_loop_bitwise(case, _loop_impl):
+    """``neutralize_batch`` 与历史逐日实现**逐位一致**（``max|Δ| = 0``）。
+
+    这是默认实现路径（``_NEUTRALIZE_IMPL = "batch"``）的正确性锚点：
+    只要这条测试绿，切换到向量化外壳就是零语义变更的纯提速。
+    """
+    panel, mc, ind = _impl_case(**case)
+    for spec in _IMPL_CALLS:
+        kw = _case_kwargs(panel, mc, ind, spec, case["seed"])
+        old = neutralize(panel, **kw)          # 历史逐日实现（fixture 已切换）
+        new = neutralize_batch(panel, **kw)    # 向量化外壳
+        _assert_same(old, new, 0.0)
+
+
+@pytest.mark.parametrize("case", _IMPL_CASES, ids=lambda c: f"seed{c['seed']}")
+def test_neutralize_grouped_matches_loop_within_tolerance(case):
+    """``neutralize_grouped``（分组聚合 + 批量伪逆）与逐日实现在浮点级一致。
+
+    解法从 SVD-on-X 变成 pinv-on-X'X，条件数被平方，故**不要求**逐位相同；
+    阈值 1e-10 在合成边界用例上留有 ~3 个量级余量（实测最差 2.2e-13）。
+    """
+    panel, mc, ind = _impl_case(**case)
+    for spec in _IMPL_CALLS:
+        kw = _case_kwargs(panel, mc, ind, spec, case["seed"])
+        expected = neutralize_batch(panel, **kw)
+        got = neutralize_grouped(panel, **kw)
+        _assert_same(expected, got, 1e-10)
+
+
+def test_neutralize_impl_switch_and_guard():
+    """实现开关：默认 batch；可切 loop 并切回；非法值报错。"""
+    assert get_neutralize_impl() == "batch"
+    try:
+        set_neutralize_impl("loop")
+        assert get_neutralize_impl() == "loop"
+        with pytest.raises(ValueError):
+            set_neutralize_impl("nope")
+    finally:
+        set_neutralize_impl("batch")
+    assert get_neutralize_impl() == "batch"
+
+
+def test_neutralize_grouped_noop_without_any_panels():
+    """分组聚合版同样在"无任何协变量面板"时原样返回（与 neutralize 一致）。"""
+    dates = pd.date_range("2024-01-01", periods=2, freq="D")
+    codes = [f"C{i}" for i in range(5)]
+    panel = pd.DataFrame(
+        np.random.default_rng(31).normal(0, 1, (2, 5)), index=dates, columns=codes)
+
+    pd.testing.assert_frame_equal(neutralize_grouped(panel), panel)
