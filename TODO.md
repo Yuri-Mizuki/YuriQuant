@@ -60,8 +60,12 @@
   ② 端到端——出榜链 ortho 榜与主实验 ortho 臂 pred 末日非 NaN 数/板块构成吻合
   （5195 vs 5196；两者 BJ 均为 0）。**已知边界**：`cov_industry` 无北交所分类 →
   ortho 口径下 BJ 337 只不入榜（与主实验 ortho 臂一致，非本链特有）。
-  ⚠️ 耗时 **~60 分钟**（正交化逐日截面回归 6 倍于 h1h5 的 589s）——后续可对
-  `neutralize` 的逐日循环向量化优化。
+  ⚠️ 耗时 **~60 分钟**（正交化逐日截面回归 6 倍于 h1h5 的 589s）。**向量化已落地**
+  （2026-09-20）：`neutralize` 默认切 numpy 外壳，与旧逐日实现 `max|Δ| = 0`（逐位
+  一致），`preprocess_factor` 全流程 **2.96x**（86 因子 22.05 → 7.45 分钟）；更快的
+  `neutralize_grouped`（**8.3x**）因解法换为 pinv-on-X'X、条件数平方（`max|Δ|`
+  1e-12~1e-8，截面名次位移实测 0）**保持 opt-in，未设默认**——要切默认须先跑一次
+  端到端出榜对照。证据：`reports/neutralize_vectorization/report.md`。
 - [x] **修复每日计划任务静默失败**（2026-09-17）：`YuriQuant AllaDailyRank` 的 TR
   仍指向 09-11 重构前的 `scripts\alla_daily_rank.py`，自 09-12 起每天 `rc=2`
   （实测"can't open file"）——`reports/alla_daily/` 09-12~09-16 的榜实为手工产出。
