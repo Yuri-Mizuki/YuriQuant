@@ -28,6 +28,9 @@
 > **2026-09-20 L1 落地**：特征族+三标签+滚动 GBDT 当日完成（6 测试全绿）；
 > **「风险标签可测」成立**（mdd test 0.25/0.40，超研报量级），sharpe/alpha
 > 年度翻符号→质量门槛+回退为必要设计；L2 不触发，倾向归档。
+> **2026-09-20 Phase 2 管线完成**：zz1000 主实验 runner 冒烟通过（信号
+> 管线/PPO 滚动集成/银河口径 QP/消融钩子），生产命令两档已写入 stage2 条目，
+> 待好机器执行。
 > 筛选维度：① 当前（2026）业界是否仍先进/主流；② 是否落在项目四条主线
 > （因子挖掘 → 因子合成/模型 → 文本因子 → 组合优化/RL）。
 >
@@ -440,11 +443,23 @@
   - **L2 触发条件评估：不触发，倾向归档**——mdd 已超研报量级、sharpe 同量级
     但年度噪声大，截面联动（图网络）的增量无证据支撑；若未来收益侧信号
     突破再议。
-  - **Phase 2 待办（zz1000 主实验）**：信号用 L1 产出——**f 逐年按质量
-    门槛择用（alpha/sharpe 年度不稳，门槛不达标即回退等权基准方向），
-    z=mdd_66 GBDT 预测（已验证稳定）**；滚动训练协议（逐年 + 双窗口
-    双门槛 + 多种子集成 + 回退）；银河 6 组消融；结果接 `stats/pbo.py`。
-    预计大算力，随长实验同机排队。
+  - [~] **Phase 2（zz1000 主实验）—— 管线完成（09-20），冒烟通过，待好机器全量**
+    `scripts/factors/run_portfolio_phase2.py`：信号（三标签 GBDT 逐年滚动
+    + 质量门槛/回退，缓存至 signals/）+ PPO 银河滚动协议（训练年 Y-2 信号 /
+    验证年 Y-1 双窗双门槛 / 预测年 Y，多 seed 候选 Softmax 集成、全败回退）
+    + 银河口径 QP（SCS；主动空间+TE≤10%+换手≤20%+风险中性软惩罚+top5
+    后处理投影）+ EW/TopN 基准 + 消融组（只作用于 PPO 臂）。冒烟结论：
+    全链路通（PPO 小预算 0/4 门槛→回退基准正确；银河 QP zz1000 2024
+    超额 +3.28%；no_alpha 消融组信号装配正确）。
+    **生产命令（好机器执行）**：
+    ```bash
+    # 快档（约 6-9 小时）：先出三臂主对照
+    python -m scripts.factors.run_portfolio_phase2 --pool zz1000 \n      --begin 2019-06-01 --end 2026-06-30 --model-years 2024,2025,2026 \n      --arms ppo,qp,ew,topn --ablations full \n      --ppo-seeds 5 --ppo-retries 3 --ppo-timesteps 50000 \n      --out reports/portfolio_phase2
+    # 全档（约 1-2 天）：+ 银河消融组
+    python -m scripts.factors.run_portfolio_phase2 --pool zz1000 \n      --ablations full,no_alpha,no_risk,no_excess,no_te_turn \n      --ppo-timesteps 100000 --out reports/portfolio_phase2_full
+    ```
+    跑完把各配置期间收益接 `stats/pbo.py`（cscv_pbo + deflate_best）
+    做选择偏差检验；结果判读守双门槛口径（reward + 实际超额）。
   - **Phase 2 升级项（银河 0608 研读产出，09-20）**：① QP 臂口径从简化 mvo
     升级为银河原始口径（主动空间 + TE≤10% + 换手≤20% + top5≤50% + 风险中性
     软惩罚 + Σ 向等方差收缩 20%），使 RL vs QP 对照贴近银河原设定；
