@@ -109,6 +109,36 @@
 
 ## 二、研究功能缺口（新能力）
 
+### 2026-09-18~20 交付批次（RL 组合优化线 + 统计层，详见 RESEARCH_TODO stage2 条目）
+
+- [x] **RL 组合优化线（stage2 三阶段）**：`factor/rl/portfolio_env.py`
+  （银河 0706 口径主动权重空间 env + tradable_masks，28 用例）→
+  `scripts/factors/run_portfolio_ppo.py`（Phase 1 hs300 平价验证四臂：
+  PPO 贴基准打平/QP·TopN 主动偏离者输，与银河 HS300 形态一致）→
+  `scripts/factors/run_portfolio_phase2.py`（Phase 2 zz1000 主实验 runner：
+  三标签 GBDT 信号管线 + PPO 滚动集成 + 银河口径 QP + 消融钩子；冒烟全链路
+  通过，生产命令两档见 RESEARCH_TODO，待好机器全量）。
+- [x] **策略级过拟合检验**：`stats/pbo.py`——CSCV PBO（12870 组合秒级）+
+  缩水夏普 DSR + deflate_best（14 用例，统计锚点测试）；待接入各实验产物
+  作为出报告固定环节。
+- [x] **银河 0608 特征族与三标签（复现 L1）**：`factor/classic` 新增
+  `compute_galaxy_features`（36 特征，分组差异化预处理）+
+  `build_galaxy_labels`（alpha22/sharpe22/mdd66）+ `scripts/evaluation/galaxy_l1.py`
+  滚动评估（6 用例）。**结论：风险标签可测成立**（mdd test 0.25/0.40 超
+  研报量级）、sharpe/alpha 年度翻符号→质量门槛+回退为必要设计。
+- [x] **合成权重 T 扫描**：`scripts/evaluation/mf10_t_scan.py`（研报 T∈
+  {3,6,9,12,24,36} 月网格；防未来函数=训练窗截标签实现期；7 用例）。
+- [x] **QP 求解器三件套（AI39 对齐）**：`optimize/solver` 新增
+  industry_target_from_benchmark / max_weight_change（逐股 |w−w₀|≤δ）/
+  solve_lambda_grid；顺手修 industry_target 传 Series 的真值歧义 bug 与
+  risk_aversion 反向 docstring。
+- [x] **每日邮件正文链路**：`scripts/reporting/build_daily_email_body.py` +
+  `md_to_email_html.py` + pyproject report extra（markdown 依赖显式化）。
+- [x] **研报 PDF 抽文本工具**：`scripts/data_tools/dump_pdf_text.py`。
+- [x] **数据链路健壮性（09-16 事故治理）**：cache 宽表合并 OOM 修复
+  （内存友好合并+upto 短路）、状态表分片落盘 + 子进程硬超时
+  （settings fetch.status_table）。
+
 - [ ] **分钟频因子挖掘 pipeline**（数据层已建，2026-09-09）：
   - [x] 数据层：`data/intraday.py` MinutePanelStore——parquet 分钟长表 → 按年分区
     MemMap 稠密面板 `[日,bar,码]`（全市场 GB 级不进内存，参照 Alpha掘金 24 的
@@ -166,6 +196,21 @@
 - [ ] **在线 dashboard**：报告均为静态 HTML，无增量刷新的监控页面。
 
 ## 三、工程层剩余债务
+
+### 2026-09-20 新增债项（RL/统计层批次带入）
+
+- [ ] **.venv 缺 rl 依赖**：gymnasium/sb3 等只在系统解释器
+  （D:/Python/Python312）可用，.venv 跑不了 RL 测试（test_ai97_llm_pool /
+  test_portfolio_env / test_gflownet_im_features 需用系统 python）；
+  统一环境或在 .venv 补装 rl extra。
+- [ ] **portfolio_env 涨跌停/停牌掩码注入**：当前 tradable_masks 只剔
+  非成分；Phase 2 全量前接 `data/tradability`（一字板不可成交语义，
+  与研报环境层一致）——zz1000 的 ST/停牌量会放大该边界。
+- [ ] **实验产物接 PBO 出报告**：`stats/pbo.py` 已就绪，把 rolling_grid
+  各臂 / AI97 三臂 / Phase 2 各配置的期间收益矩阵接入 cscv_pbo +
+  deflate_best 作为固定出报告环节。
+- [ ] **邮件链路 Skills 化**（可选，速读批借鉴）：build_daily_email_body
+  的口径约束固化 + 渐进式披露；技能总量控制在上限 20–30 内。
 
 ### 3.1 结构性（应先做）
 
@@ -681,7 +726,19 @@
 
 ---
 
-## 建议推进顺序
+## 建议推进顺序（2026-09-20 刷新；研报研读线见 RESEARCH_TODO 第六节）
+
+1. ~~重跑 multiyear + freq_tune~~（09-01 完成）；口径统一二/三批（全部完成）
+2. **好机器长实验队列**（清单与命令见 RESEARCH_TODO 第六节序 0）：
+   AI97 三臂 ×3 seed → 国金24 残余⑤ 校准轮 → mf10 T 扫描全量 →
+   stage2 Phase 2 zz1000 全量（快档→全档，命令见 RESEARCH_TODO）
+3. **本机半天级穿插**（均挂已有基础设施）：CVaR 约束进 solve_portfolio、
+   labels.py IR/Calmar 标签分支、预测层观点注入等价实现、实验产物接 PBO
+4. e2e 族历史报告年化口径重跑（见一，~3% 系统性偏移）
+5. 分钟频第三层扩原料 + all_a 分钟数据扩容（资源墙，后置）
+6. 生产级执行（实盘对接、实时行情）
+
+### 历史顺序（2026-08-29 版，仅存档）
 
 1. 重跑 multiyear + freq_tune（补核心结论证据链，顺带验证整改后口径）
 2. ~~最小 CI~~（09-10 完成：已转为手动触发；3.2 机械清理亦已批量收口）
