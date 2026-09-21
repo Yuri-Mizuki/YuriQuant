@@ -18,7 +18,7 @@
    ENDDATE F005N F004N F003V F002V F001V F011V F010V）
 
 2. 🚨 **服务端单请求硬上限 20000 行，且截断不报错。**
-   实测（``_tmp/probe_cninfo1030_width.txt``）：
+   实测（快照 ``E:/_YuriQuant_snapshots/_tmp_20260921_0230/probe_cninfo1030_width.txt``）：
 
    ==========  ==========  =============  ==========================
    请求区间      总量 total   实际 records    结论
