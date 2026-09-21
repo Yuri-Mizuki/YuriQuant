@@ -17,19 +17,34 @@
 > 条目全文见提交 `e70ac96` 的 TODO.md 与附录历史交付记录。
 > 2026-09-21 二次清理：另类数据 P0 管道 + holder_dyn 消融 + panels_neu 补齐完成，归档于节末。
 
-- [ ] **P0 新口径（920 面板）全量基线重跑**（09-21 新增，取代原「ortho 臂 alt 口径重跑」）：
+- [ ] **P0 新口径（920 面板）全量基线重跑**（09-21 新增，取代原「ortho 臂 alt 口径重跑」；
+  **执行环境：另一台更强的机器，本机不跑**）：
   `panels_neu` 882→920 补齐 38 缺（`reports/panels_neu_backfill/`）后，真 DPP 对照
   磁盘主实验 selection **0/18 相同**（每轮 +6~11/−6~11；`lhb_count_20d`/`notice_*`/
   `unlock_ratio_20d`/`limit_pos`/`st_days`/`suspend_*` 进选中，挤出等量 alpha360 量价族）
   ⇒ **15.54%/15.52% 与当前库已脱钩**：当前代码+数据已产不出旧数字，下次重跑
   （即使零改动）落新口径。**命令**（挂机 ≈5–7h：select 36 轮 ≈2h + predict ≈2–3h
-  + ensemble/backtest ≈0.5h）：
-  `python scripts/pipelines/rolling_grid_alla.py --preproc ortho --out-tag ortho920`
-  （全流程断点续跑；旧产物 `alla_rolling_ortho/` 原样保留作对照，禁覆盖）。
+  + ensemble/backtest ≈0.5h）——**治本口径**（由莉酱 09-21 拍板）：
+  `python scripts/pipelines/rolling_grid_alla.py --preproc ortho --out-tag ortho920tl \
+     --exclude-features limit_pos --tradable-labels`
+  三个开关各自的意义（一次重跑同时落三个维度，差异归因靠 2x2 探针补齐）：
+  - `--out-tag ortho920tl`：产物另存，旧 `alla_rolling_ortho/` 原样保留作对照，禁覆盖；
+  - `--exclude-features limit_pos`：因子层剔除纸面因子（09-16 已证 +0.3~1.2pp/年、
+    4/4 格全改善；新口径下它 13/18 轮会重新进选中，不剔则白占 1/50 名额）；
+    与生产出榜链 `alla_daily_rank.py` 口径对齐；
+  - `--tradable-labels`：**标签治本**（09-17 接入的 P1-a）——训练标签把「T 日封板 →
+    T+1 买不进」的样本按 T+1 成交口径掩掉，模型从源头学不到纸面关系，
+    不再依赖逐因子拉黑（ST/停牌/一字板同理受益）。
+  （若想分离三开关的净贡献：跑完治本臂后，可用
+  `--out-tag ortho920 --exclude-features limit_pos`（无 labels）与
+  `--out-tag ortho920pure`（全默认）补两个对照臂，每个 ≈5–7h，可选。）
   **收尾必做**：① 新旧 `metrics_ensemble` 对照表（沿用 `prod_pipeline_gap` 2x2 格式，
-  探针 `scripts/oneoff/probe_prod_pipeline_gap.py` 改两行路径即得）；
+  探针 `scripts/oneoff/probe_prod_pipeline_gap.py` 改两行路径即得；治本臂 vs
+  `alla_rolling_ortho` 的差异 = 920 面板 + exclude + labels 三者合计）；
   ② 集成年化变化 >±1pp ⇒ 更新 MEMORY.md 主实验口径段，旧数字补「882 口径」标注；
-  ③ 顺带落地 `_extra` 方案 B（面板存在性门槛；当前 920=920 下是空操作，纯防复发）。
+  ③ 顺带落地 `_extra` 方案 B（面板存在性门槛；当前 920=920 下是空操作，纯防复发）；
+  ④ 若治本臂不及旧基线，先看 `--tradable-labels` 单开关消融再定口径去留——
+  **不允许因「治本臂数字低」而回退标签掩码**（掩掉纸面收益是修正偏差，不是损失）。
 - [ ] **重跑 e2e 族报告对齐年化口径**：`perf_stats` 年化 244→252 后，
   `reports/e2e_backtest/`、`reports/investment_report/` 中 e2e 链路历史数字
   与现行口径存在 ~3% 系统性偏移。已挂好机器队列末尾。
@@ -167,8 +182,10 @@
 ## 建议推进顺序（2026-09-21 刷新；研报研读线见 RESEARCH_TODO 第六节）
 
 1. ~~重跑 multiyear + freq_tune~~（09-01 完成）；口径统一二/三批（全部完成）
-2. **P0 新口径（920 面板）全量基线重跑**（见一，命令已写明，挂机 ≈5–7h）——
-   唯一挡在「所有全A结论可信引用」前面的事，优先于其他一切长实验
+2. **P0 新口径（920 面板）治本口径基线重跑**（见一，命令已写明，挂机 ≈5–7h，
+   **执行环境：另一台更强的机器，本机不跑**——机器迁移清单复用 RESEARCH_TODO
+   第六节序 0：git clone + `E:\data` 数据面（panels_neu 920 已含）+ Python 环境；
+   本任务无 API 依赖）。**唯一挡在「所有全A结论可信引用」前面的事，优先于其他一切长实验**
 3. **好机器长实验队列**（清单与命令见 RESEARCH_TODO 第六节序 0）：
    AI97 三臂 ×3 seed → 国金24 残余⑤ 校准轮 → mf10 T 扫描全量 →
    stage2 Phase 2 zz1000 全量（快档→全档，命令见 RESEARCH_TODO）
