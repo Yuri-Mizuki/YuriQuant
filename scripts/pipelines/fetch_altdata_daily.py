@@ -53,7 +53,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -80,64 +79,50 @@ ALL_TABLES = ("holder_control", "inner_trade", "mgmt_hold", "cninfo_holder",
 
 
 # ---------------------------------------------------------------------------
-# 计划任务（沿用 alla_daily_rank 的 schtasks 模式）
+# 计划任务（2026-09-21 收口到 scripts.common.task_scheduler）
 # ---------------------------------------------------------------------------
-def _run_schtasks(cmd: str) -> str:
-    """跑 schtasks 并按编码逐个尝试解码。
+def install_task(time_str: str, tables: str = "all") -> str:
+    """注册每日全量任务（默认盘后 18:00，出榜之后）。
 
-    中文 Windows 下 schtasks 输出为 GBK，``text=True``（默认 utf-8）会
-    UnicodeDecodeError —— 2026-09-17 实测：任务其实已建好，但异常栈把成功回显吞了，
-    看起来像注册失败（与 ``alla_daily_rank._run_schtasks`` 同源）。
+    参数真源见 ``config/schedule.yaml`` 的 ``altdata_daily`` 条；注册改用 XML
+    导入，顺带绕开旧的 ``/TR`` 多层转义坑：XML 文本节点里的引号原样保留，
+    不会出现"注册成功但运行时路径带反斜杠"那种静默降级。
     """
-    proc = subprocess.run(cmd, shell=True, capture_output=True)
-    raw = (proc.stdout or b"") + (proc.stderr or b"")
-    for enc in ("utf-8", "gbk", "cp1252"):
-        try:
-            return raw.decode(enc).strip()
-        except UnicodeDecodeError:
-            continue
-    return raw.decode("utf-8", errors="replace").strip()
+    from scripts.common.task_scheduler import install_task as _install
 
-
-def _tr(tables: str, extra: str = "") -> str:
-    """构造 schtasks 的 ``/TR`` 内容。
-
-    🚨 **转义层级只能有一层**（2026-09-20 实测）：``/TR`` 整体被外层双引号包住，
-    内部的引号只需转义一次（``\\"``）。多转义一层会让 schtasks **原样存下
-    反斜杠**（``<Arguments>\\"E:\\...py\\"</Arguments>``）—— 任务注册「成功」、
-    计划任务列表也看得见，但**运行时 Python 收到带反斜杠的路径，直接失败**，
-    且不会有任何注册期报错。注册后务必用
-    ``schtasks /Query /TN <名> /XML`` 核对 ``<Arguments>`` 里是**裸引号**。
-
-    （对照：``alla_daily_rank.py::install_task`` 用的就是单层 ``\\"``。）
-    """
     py = VENV_PY if VENV_PY.exists() else Path(sys.executable)
     script = (ROOT / "scripts" / "pipelines" / "fetch_altdata_daily.py").resolve()
-    args = f'\\"{script}\\" --tables {tables}{extra}'
-    return f'\\"{py}\\" {args}'
-
-
-def install_task(time_str: str, tables: str = "all") -> str:
-    """注册每日全量任务（默认盘后 18:00，出榜之后）。"""
-    tr = _tr(tables)
-    cmd = (f'schtasks /Create /F /TN "{TASK_NAME}" /SC DAILY /ST {time_str} '
-           f'/TR "{tr}"')
-    return f"cmd: {cmd}\n{_run_schtasks(cmd)}\nTR 内嵌解释器：{VENV_PY}"
+    return _install(
+        task_name=TASK_NAME,
+        command=str(py),
+        arguments=f'"{script}" --tables {tables}',
+        time_str=time_str,
+        description="YuriQuant 另类数据日更（akshare，必须 .venv 解释器）",
+        working_dir=str(ROOT),
+    )
 
 
 def install_cls_backfill_task(time_str: str = "17:30", max_pages: int = 3000) -> str:
-    """注册**财联社历史回补续跑**任务（默认 17:30，每日最多翻 ``max_pages`` 页）。
+    """注册财联社历史回补续跑任务（默认 17:30，每日最多翻 ``max_pages`` 页）。
 
     为什么需要它：首次回补是「数小时级」的长任务，中途被杀是常态。
-    ``backfill_cls`` 自带断点续传（``cls_backfill_cursor``），
-    所以这个任务在回补期是「推进器」，回补完成后**自动变成空转**
-    （游标已在 ``begin`` 之前 ⇒ 首轮直接 ``reached_begin``，不做任何请求）。
-    ⇒ 可以长期挂着，不需要人工在回补完成后删任务。
+    ``backfill_cls`` 自带断点续传（``cls_backfill_cursor``），所以这个任务在
+    回补期是「推进器」，回补完成后**自动变成空转**（游标已在 ``begin`` 之前
+    ⇒ 首轮直接 ``reached_begin``，不做任何请求）⇒ 可长期挂着，不必删任务。
     """
-    tr = _tr("cls", extra=f" --cls-backfill --cls-max-pages {int(max_pages)}")
-    cmd = (f'schtasks /Create /F /TN "{CLS_BACKFILL_TASK}" /SC DAILY /ST {time_str} '
-           f'/TR "{tr}"')
-    return f"cmd: {cmd}\n{_run_schtasks(cmd)}\nTR 内嵌解释器：{VENV_PY}"
+    from scripts.common.task_scheduler import install_task as _install
+
+    py = VENV_PY if VENV_PY.exists() else Path(sys.executable)
+    script = (ROOT / "scripts" / "pipelines" / "fetch_altdata_daily.py").resolve()
+    return _install(
+        task_name=CLS_BACKFILL_TASK,
+        command=str(py),
+        arguments=(f'"{script}" --tables cls --cls-backfill '
+                   f'--cls-max-pages {int(max_pages)}'),
+        time_str=time_str,
+        description="YuriQuant 财联社历史回补续跑推进器",
+        working_dir=str(ROOT),
+    )
 
 
 def install_news_task(time_str: str, every_minutes: int = 10,
@@ -145,27 +130,36 @@ def install_news_task(time_str: str, every_minutes: int = 10,
     """注册高频新闻快照任务（默认 09:00–21:00 每 10 分钟）。
 
     ⚠️ **引入财联社可回补源后，本任务的价值大幅下降**（见模块 docstring）：
-    同花顺/新浪只有 20 条快照、无历史，10 分钟粒度仍会漏掉大量快讯；
-    而财联社可以按 ``last_time`` 精确回补到 2015。**默认不装**，
-    仅在需要「多源旁证」或财联社端点失效时启用。
+    同花顺/新浪只有 20 条快照、无历史，10 分钟粒度仍会漏掉大量快讯；而财联社
+    可按 ``last_time`` 精确回补到 2015。**默认不装**，仅在需要「多源旁证」或
+    财联社端点失效时启用。
     """
-    tr = _tr("news")
-    cmd = (f'schtasks /Create /F /TN "{NEWS_TASK_NAME}" /SC MINUTE /MO {every_minutes} '
-           f'/ST {time_str} /ET {end_time} /TR "{tr}"')
-    return f"cmd: {cmd}\n{_run_schtasks(cmd)}\nTR 内嵌解释器：{VENV_PY}"
+    from scripts.common.task_scheduler import install_task as _install
+
+    py = VENV_PY if VENV_PY.exists() else Path(sys.executable)
+    script = (ROOT / "scripts" / "pipelines" / "fetch_altdata_daily.py").resolve()
+    return _install(
+        task_name=NEWS_TASK_NAME,
+        command=str(py),
+        arguments=f'"{script}" --tables news',
+        time_str=time_str,
+        description="YuriQuant 高频新闻快照（盘中每 10 分钟）",
+        working_dir=str(ROOT),
+        execution_limit="PT1H",
+        schedule="minute",
+        every_minutes=every_minutes,
+        end_time=end_time,
+    )
 
 
 def remove_task(which: str = "all") -> str:
-    outs = []
+    from scripts.common.task_scheduler import remove_task as _remove
+
     table = {"all": [TASK_NAME, CLS_BACKFILL_TASK, NEWS_TASK_NAME],
              "daily": [TASK_NAME],
              "cls_backfill": [CLS_BACKFILL_TASK],
              "news": [NEWS_TASK_NAME]}
-    names = table.get(which, [which])
-    for n in names:
-        cmd = f'schtasks /Delete /F /TN "{n}"'
-        outs.append(f"cmd: {cmd}\n{_run_schtasks(cmd)}")
-    return "\n".join(outs)
+    return "\n".join(_remove(n) for n in table.get(which, [which]))
 
 
 # ---------------------------------------------------------------------------

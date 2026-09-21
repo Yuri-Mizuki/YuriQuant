@@ -1,0 +1,109 @@
+# YuriQuant 定时任务单一登记表
+#
+# 为什么需要它
+# ------------
+# 2026-09-21 前，任务注册逻辑散落在三处（`alla_daily_rank` / `fetch_altdata_daily` /
+# 已归档的 `daily_pipeline`），README 只有一张手写速查表；且全部走 `schtasks /Create`
+# 裸参数形式，继承了 Windows 默认的电池条件 —— 2026-09-21 三个任务同日同码
+# （-1073741510 = 0xC000013A）全部被杀、零产物。
+#
+# 本表是**机器可读真源**，由 `scripts.common.task_scheduler` 消费：
+#
+#   python -m scripts.common.task_scheduler doctor           # 体检：漂移 / 结果码 / 产物新鲜度
+#   python -m scripts.common.task_scheduler list             # 系统里实际存在的 YuriQuant 任务
+#   python -m scripts.common.task_scheduler install <key>    # 按本表重注册（改完表再跑）
+#   python -m scripts.common.task_scheduler show <key>       # 只看将写入的 XML
+#   python -m scripts.common.task_scheduler remove <key>     # 删除
+#
+# 🚨 改完本表后跑 `install <key>` 重注册，任务里的**绝对路径**与参数才会同步；
+#    只改表不重注册 = 表与系统脱钩（doctor 会报，因为时间/参数核对不上）。
+#
+# status 取值：
+#   active   —— 应在系统里注册并运行（doctor 会核对存在性/条件/结果码/产物）
+#   planned  —— 代码支持但**有意未启用**（doctor 不报漂移）
+#   retired  —— 已退休，不应存在于系统（若仍在，doctor 报异常）
+#
+# system 取值：
+#   schtasks  —— Windows 计划任务（doctor 可自动核对）
+#   workbuddy —— WorkBuddy 自动化（脚本无法枚举，需人工核对）
+
+version: 1
+updated: '2026-09-21'
+
+tasks:
+  - key: alla_daily_rank
+    name: 'YuriQuant AllaDailyRank'
+    system: schtasks
+    status: active
+    time: '17:30'
+    schedule: daily
+    command: 'D:\python\Python312\python.exe'
+    arguments: '"E:\YuriQuant\scripts\pipelines\alla_daily_rank.py"'
+    working_dir: 'E:\YuriQuant'
+    execution_limit: PT3H
+    product_glob: 'reports/alla_daily/ranking_*.csv'
+    description: 'YuriQuant 全A每日出榜（主实验 ortho 口径，全流程约 60 分钟）'
+    notes: '下游 = daily_report（19:00 读 reports/alla_daily/），缓冲 30 分钟'
+
+  - key: altdata_daily
+    name: 'YuriQuant AltDataDaily'
+    system: schtasks
+    status: active
+    time: '18:00'
+    schedule: daily
+    command: 'E:\YuriQuant\.venv\Scripts\python.exe'
+    arguments: '"E:\YuriQuant\scripts\pipelines\fetch_altdata_daily.py" --tables all'
+    working_dir: 'E:\YuriQuant'
+    execution_limit: PT3H
+    product_glob: 'E:/data/parquet/_alt_meta.json'
+    description: 'YuriQuant 另类数据日更（akshare：质押/增减持/高管持股/宏观日历/财联社/新闻）'
+    notes: '解释器必须是 .venv（akshare 是本地 wheel，进不了 uv.lock）；与出榜并行无依赖'
+
+  - key: daily_report
+    name: 'WorkBuddy 自动化：全A出榜日报邮件推送'
+    system: workbuddy
+    status: active
+    time: '19:00'
+    schedule: '工作日（周一至周五）'
+    automation_id: 3b31c720-1e3b-4eab-bd0b-db35c7213311
+    product_glob: 'reports/alla_daily/email_body_*.html'
+    description: '检查当日榜单 → 更新生产口径 IC 台账 → 生成日报正文 → 邮件推送 163'
+    notes: '判断型任务（判日/重试/附件降级），刻意不并入 schtasks'
+
+  - key: monitor
+    name: 'YuriQuant Monitor'
+    system: schtasks
+    status: retired
+    time: '17:30'
+    description: '旧因子库监控链（绑 hs300_2022_2025，行情源 2026-08-26 停更）'
+    notes: '2026-09-21 停用后退休：改指 all_a 实测 686 个因子因面板或 eval 缺失被跳过'
+
+  - key: altdata_cls_backfill
+    name: 'YuriQuant AltDataClsBackfill'
+    system: schtasks
+    status: planned
+    time: '17:30'
+    schedule: daily
+    command: 'E:\YuriQuant\.venv\Scripts\python.exe'
+    arguments: >-
+      "E:\YuriQuant\scripts\pipelines\fetch_altdata_daily.py" --tables cls
+      --cls-backfill --cls-max-pages 3000
+    working_dir: 'E:\YuriQuant'
+    execution_limit: PT3H
+    description: '财联社历史回补续跑推进器（断点续传；回补完成后自动空转）'
+    notes: '回补期需要；回补完成后可长期挂着，不必删任务。当前未启用'
+
+  - key: altdata_news
+    name: 'YuriQuant AltDataNews'
+    system: schtasks
+    status: planned
+    time: '09:00'
+    schedule: minute
+    every_minutes: 10
+    end_time: '21:00'
+    command: 'E:\YuriQuant\.venv\Scripts\python.exe'
+    arguments: '"E:\YuriQuant\scripts\pipelines\fetch_altdata_daily.py" --tables news'
+    working_dir: 'E:\YuriQuant'
+    execution_limit: PT1H
+    description: '高频新闻快照（09:00–21:00 每 10 分钟）'
+    notes: '引入财联社可回补源后价值大幅下降（同花顺/新浪只有 20 条无历史快照），默认不装'

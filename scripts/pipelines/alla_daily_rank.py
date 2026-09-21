@@ -1469,38 +1469,35 @@ def write_outputs(ranking: pd.DataFrame, picks: pd.DataFrame,
 
 
 # ---------------------------------------------------------------------------
-# 计划任务（沿用 monitor_performance 的 schtasks 模式）
+# 计划任务（2026-09-21 收口到 scripts.common.task_scheduler）
 # ---------------------------------------------------------------------------
-def _run_schtasks(cmd: str) -> str:
-    """跑 schtasks 并回显输出。
-
-    中文 Windows 下 schtasks 输出为 GBK，``text=True``（默认 utf-8）会
-    UnicodeDecodeError —— 2026-09-17 实测：任务其实已建好，但异常栈把成功回显吞了，
-    看起来像注册失败。故按编码逐个尝试解码。
-    """
-    proc = subprocess.run(cmd, shell=True, capture_output=True)
-    raw = (proc.stdout or b"") + (proc.stderr or b"")
-    for enc in ("utf-8", "gbk", "cp1252"):
-        try:
-            return raw.decode(enc).strip()
-        except UnicodeDecodeError:
-            continue
-    return raw.decode("utf-8", errors="replace").strip()
-
-
 def install_task(time_str: str) -> str:
-    """注册/更新每日计划任务（默认跑全流程含数据更新）。"""
+    """注册/更新每日计划任务（默认跑全流程含数据更新）。
+
+    2026-09-21 起收口到 :mod:`scripts.common.task_scheduler`：改用 XML 定义
+    导入，显式把 ``DisallowStartIfOnBatteries`` / ``StopIfGoingOnBatteries``
+    写成 false —— 旧的 ``schtasks /Create /SC DAILY /TR`` 裸建会继承 Windows
+    默认值 true，是三个任务同日 ``0xC000013A`` 全灭的头号嫌疑。
+    参数真源见 ``config/schedule.yaml`` 的 ``alla_daily_rank`` 条。
+    """
+    from scripts.common.task_scheduler import install_task as _install
+
     py = Path(SYSTEM_PY).resolve()
     script = (ROOT / "scripts" / "pipelines" / "alla_daily_rank.py").resolve()
-    tr = f'\\"{py}\\" \\"{script}\\"'
-    cmd = (f'schtasks /Create /F /TN "{TASK_NAME}" /SC DAILY /ST {time_str} '
-           f'/TR "{tr}"')
-    return f"cmd: {cmd}\n{_run_schtasks(cmd)}"
+    return _install(
+        task_name=TASK_NAME,
+        command=str(py),
+        arguments=f'"{script}"',
+        time_str=time_str,
+        description="YuriQuant 全A每日出榜（主实验 ortho 口径，全流程约 60 分钟）",
+        working_dir=str(ROOT),
+    )
 
 
 def remove_task() -> str:
-    cmd = f'schtasks /Delete /F /TN "{TASK_NAME}"'
-    return f"cmd: {cmd}\n{_run_schtasks(cmd)}"
+    from scripts.common.task_scheduler import remove_task as _remove
+
+    return _remove(TASK_NAME)
 
 
 # ---------------------------------------------------------------------------
