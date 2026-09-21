@@ -38,7 +38,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from backtest.costs import default_costs  # noqa: E402
-from backtest.engine import VectorBacktest  # noqa: E402
+from backtest.engine import VectorBacktest, build_execution_split  # noqa: E402
 from backtest.metrics import PERIODS_PER_YEAR  # noqa: E402
 from config import Config  # noqa: E402
 from model.params import DEFAULT_MODEL_PARAMS  # noqa: E402
@@ -172,6 +172,11 @@ def main():
     parser.add_argument("--tradable-labels", action="store_true",
                         help="训练标签掩掉买不进的样本（T+1 成交口径）；"
                              "默认关闭 = 主实验现行口径")
+    parser.add_argument("--execution", default="close", choices=["close", "open", "vwap"],
+                        help="成交价口径：close=调仓日收盘（默认，乐观上限，历史行为不变）；"
+                             "open/vwap=T+1 执行价（T 收盘出信号、T+1 开盘/算法单成交，"
+                             "仅 horizon=1；掩码改走信号预掩码路径。09-15 实测"
+                             "close→open −0.88pp / →vwap −0.94pp，换手不变）")
     args = parser.parse_args()
 
     cfg = _mp_cfg()
@@ -211,12 +216,48 @@ def main():
 
     mask = base["mask"].reindex(index=test_days, columns=close.columns).fillna(True)
 
+    # 成交价口径（默认 close = 历史行为逐位不变）：T+1 执行价模式仅 horizon=1，
+    # 掩码走信号预掩码（引擎 executable_mask 会重归一多头、抹掉执行价分段，
+    # 与 rolling_grid_alla.stage_backtest 同一处理，2026-09-21 接入主入口）
+    execution = args.execution
+    exec_split = None
+    sig_used = sig
+    rb_exec = None
+    if execution != "close":
+        if cfg["ensemble_horizons"][0] != 1:
+            raise SystemExit(f"--execution {execution} 仅支持 horizon=1"
+                             f"（当前 ensemble_horizons={cfg['ensemble_horizons']}，"
+                             "取 [0] 回测）")
+        fp = RG.OUT / "_base" / f"{execution}_adj.parquet"
+        if not fp.exists():
+            raise SystemExit(f"{fp} 缺失：先跑 --refresh-base 或 "
+                             f"rolling_grid_alla --stage prep 重建基础面板")
+        fill = pd.read_parquet(fp)
+        sig_used = sig.shift(1).where(mask)
+        s_ = pd.Series(test_days, index=test_days)
+        firsts = s_.groupby(s_.index.to_period(
+            {"D": "D", "W": "W"}.get(cfg["rebalance_freq"], "M"))).first()
+        pos_ = {d: i for i, d in enumerate(test_days)}
+        rb_exec = set()
+        for t in firsts:
+            i_ = pos_[t]
+            if i_ + 1 < len(test_days):
+                rb_exec.add(test_days[i_ + 1])
+        exec_split = build_execution_split(fill, close, rb_exec)
+        log.info("成交价口径: %s（fill=%s，调仓日=T 信号日次一交易日，%d 个）",
+                 execution, fp.name, len(rb_exec))
+
     rows, curves = [], {}
     for tag, cost in (("net", True), ("pre", False)):
         strat = TopFracLongOnly(frac=cfg["frac"], weight_mode="equal")
         bt = VectorBacktest(strategy=strat, rebalance_freq=cfg["rebalance_freq"],
                             initial_capital=1_000_000.0, costs=default_costs(cost))
-        res = bt.run(sig, fwd, executable_mask=mask, horizon=cfg["ensemble_horizons"][0])
+        if exec_split is not None:
+            res = bt.run(sig_used, fwd, horizon=1, rebalance_days=rb_exec,
+                         execution_split=exec_split)
+        else:
+            res = bt.run(sig, fwd, executable_mask=mask,
+                         horizon=cfg["ensemble_horizons"][0])
         m = res.metrics(benchmark_returns=bench_main)
         curves[f"ens_h{'h'.join(str(h) for h in cfg['ensemble_horizons'])}_{tag}"] = \
             res.equity_curve
@@ -232,7 +273,7 @@ def main():
 
     table = pd.DataFrame(rows)
     print(f"\n===== 模型增强组合（全A正交化管线 ens_h{'h'.join(map(str, cfg['ensemble_horizons']))}"
-          f"，frac={cfg['frac']}，{cfg['rebalance_freq']}）=====")
+          f"，frac={cfg['frac']}，{cfg['rebalance_freq']}，成交={execution}）=====")
     with pd.option_context("display.width", 200,
                            "display.float_format", lambda v: f"{v:.4f}"):
         print(table.to_string(index=False))
@@ -244,11 +285,13 @@ def main():
 
     # 回测与选股落盘
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    table.to_csv(OUT_DIR / "portfolio_result.csv", index=False, encoding="utf-8-sig")
+    sfx = "" if execution == "close" else f"_{execution}"
+    table.to_csv(OUT_DIR / f"portfolio_result{sfx}.csv", index=False, encoding="utf-8-sig")
     for name, eq in curves.items():
-        eq.to_csv(OUT_DIR / f"equity_{name}.csv", encoding="utf-8-sig")
-    ens.round(6).to_parquet(OUT_DIR / "ens_pred.parquet")
-    export_picks(sig, mask, cfg["frac"])
+        eq.to_csv(OUT_DIR / f"equity_{name}{sfx}.csv", encoding="utf-8-sig")
+    if execution == "close":
+        ens.round(6).to_parquet(OUT_DIR / "ens_pred.parquet")
+        export_picks(sig, mask, cfg["frac"])
     log.info("结果已保存到 %s", OUT_DIR)
 
 
