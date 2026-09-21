@@ -14,18 +14,35 @@
 ## 一、研究验证欠账（最高优先级——影响结论可信度）
 
 > 2026-09-20 清理：本节原 12 项中 10 项已完成，压缩归档于节末；清理前的
-> 条目全文见提交 `e70ac96` 的 TODO.md 与附录历史交付记录。以下为全部剩余。
+> 条目全文见提交 `e70ac96` 的 TODO.md 与附录历史交付记录。
+> 2026-09-21 二次清理：另类数据 P0 管道 + holder_dyn 消融 + panels_neu 补齐完成，归档于节末。
 
+- [ ] **P0 新口径（920 面板）全量基线重跑**（09-21 新增，取代原「ortho 臂 alt 口径重跑」）：
+  `panels_neu` 882→920 补齐 38 缺（`reports/panels_neu_backfill/`）后，真 DPP 对照
+  磁盘主实验 selection **0/18 相同**（每轮 +6~11/−6~11；`lhb_count_20d`/`notice_*`/
+  `unlock_ratio_20d`/`limit_pos`/`st_days`/`suspend_*` 进选中，挤出等量 alpha360 量价族）
+  ⇒ **15.54%/15.52% 与当前库已脱钩**：当前代码+数据已产不出旧数字，下次重跑
+  （即使零改动）落新口径。**命令**（挂机 ≈5–7h：select 36 轮 ≈2h + predict ≈2–3h
+  + ensemble/backtest ≈0.5h）：
+  `python scripts/pipelines/rolling_grid_alla.py --preproc ortho --out-tag ortho920`
+  （全流程断点续跑；旧产物 `alla_rolling_ortho/` 原样保留作对照，禁覆盖）。
+  **收尾必做**：① 新旧 `metrics_ensemble` 对照表（沿用 `prod_pipeline_gap` 2x2 格式，
+  探针 `scripts/oneoff/probe_prod_pipeline_gap.py` 改两行路径即得）；
+  ② 集成年化变化 >±1pp ⇒ 更新 MEMORY.md 主实验口径段，旧数字补「882 口径」标注；
+  ③ 顺带落地 `_extra` 方案 B（面板存在性门槛；当前 920=920 下是空操作，纯防复发）。
 - [ ] **重跑 e2e 族报告对齐年化口径**：`perf_stats` 年化 244→252 后，
   `reports/e2e_backtest/`、`reports/investment_report/` 中 e2e 链路历史数字
   与现行口径存在 ~3% 系统性偏移。已挂好机器队列末尾。
-- [ ] **全A实验后续深挖（剩余两项）**：
-  - [ ] ortho 臂 alt 口径 `stage_predict/stage_backtest` 重跑（09-12 接入
-    另类族后被 exists 静默跳过，产物停在 09-07）。已挂好机器队列末尾。
-  - [ ] all_a_2018_2026 数据集纳入正式因子库监控（目前为轻量 registry）。
+- [ ] **all_a_2018_2026 数据集纳入正式因子库监控**（目前为轻量 registry）。
 
-### 已完成归档（2026-09-20 压缩，一行一条）
+### 已完成归档（一行一条）
 
+- [x] ~~ortho 臂 alt 口径 `stage_predict/stage_backtest` 重跑~~（09-12 挂起项）——
+  **并入上条新口径全量重跑**：alt 28 面板已随 09-21 补齐进入候选池，旧口径单独重跑已无意义
+- [x] 另类数据 P0（09-20~21）：抓取层 7 源落地（cls 119.2万条 / 宏观 64,978 行含补洞
+  2,275 天 / 巨潮增减持 26.6 万行全历史等，见 `reports/docs/另类数据管道_数据源说明.md`）；
+  holder_dyn 9 因子三探针消融 **Δ=−0.85pp 无增量价值**（`reports/holder_dyn_forced/`，
+  Step 1b 全历史回补不做）；panels_neu 882→920 补齐（`reports/panels_neu_backfill/`）
 - [x] 重跑 multiyear_oos（09-01，620s）：h1×M 是唯一三年一致稳健解
 - [x] 重跑 freq_tune（09-01）：h1 排序不变，h5×M 伪结果修正
 - [x] 全A滚动训练实验（09-01）：选股宽度是"跑输基准"的答案——Top10% 等权
@@ -147,17 +164,19 @@
 
 ---
 
-## 建议推进顺序（2026-09-20 刷新；研报研读线见 RESEARCH_TODO 第六节）
+## 建议推进顺序（2026-09-21 刷新；研报研读线见 RESEARCH_TODO 第六节）
 
 1. ~~重跑 multiyear + freq_tune~~（09-01 完成）；口径统一二/三批（全部完成）
-2. **好机器长实验队列**（清单与命令见 RESEARCH_TODO 第六节序 0）：
+2. **P0 新口径（920 面板）全量基线重跑**（见一，命令已写明，挂机 ≈5–7h）——
+   唯一挡在「所有全A结论可信引用」前面的事，优先于其他一切长实验
+3. **好机器长实验队列**（清单与命令见 RESEARCH_TODO 第六节序 0）：
    AI97 三臂 ×3 seed → 国金24 残余⑤ 校准轮 → mf10 T 扫描全量 →
    stage2 Phase 2 zz1000 全量（快档→全档，命令见 RESEARCH_TODO）
-3. **本机半天级穿插**（均挂已有基础设施）：CVaR 约束进 solve_portfolio、
+4. **本机半天级穿插**（均挂已有基础设施）：CVaR 约束进 solve_portfolio、
    labels.py IR/Calmar 标签分支、预测层观点注入等价实现、实验产物接 PBO
-4. e2e 族历史报告年化口径重跑（见一，~3% 系统性偏移）
-5. 分钟频第三层扩原料 + all_a 分钟数据扩容（资源墙，后置）
-6. 生产级执行（实盘对接、实时行情）
+5. e2e 族历史报告年化口径重跑（见一，~3% 系统性偏移）
+6. 分钟频第三层扩原料 + all_a 分钟数据扩容（资源墙，后置）
+7. 生产级执行（实盘对接、实时行情）
 
 ### 历史顺序（2026-08-29 版，仅存档）
 
