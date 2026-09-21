@@ -2,11 +2,16 @@
 端到端工作流共享模块
 ====================
 
-e2e_stock_picks.py（今日选股）、e2e_backtest.py（walk-forward 回测）与
+e2e_backtest.py（walk-forward 回测）与
 investment_report / optimize_e2e 等 e2e 家族脚本共用的编排逻辑：
 数据加载（``load_daily_data``）、特征选择漏斗（``select_features``）、
 面板新鲜度守卫（``drop_stale_factors``）、风格中性化
 （``build_neutral_covariates`` / ``neutralize_predictions``）。
+
+⚠️ 本模块**绑 HS300 口径**：``load_daily_data`` / ``load_library_grid_panels``
+读死 ``daily_hs300.parquet``（该缓存 2026-08-26 起停更），``DATASET`` 固定
+``hs300_2022_2025``。消费者均为 HS300 时代链路，生产在全A（``alla_daily_rank``）。
+2026-09-21：原消费者之一 ``e2e_stock_picks.py`` 已归档到 ``scripts/archive/``。
 
 另含 **im_* 分钟特征装载**（2026-09-16，国金24 × GFlowNet 交叉）：
 ``load_im_panels`` 是 `im_*` 面板的**单一口径真源**，``attach_im_features``

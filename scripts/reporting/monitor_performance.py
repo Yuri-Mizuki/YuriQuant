@@ -1,5 +1,12 @@
 """生产化监控调度 CLI —— 因子与模型预测的性能监控。
 
+⚠️ **2026-09-21 起本条链已退休**（计划任务 `YuriQuant Monitor` 已 `/disable`）：
+它监控的 `hs300_2022_2025` 数据集行情源 `daily_hs300.parquet` 自 2026-08-26 停更，
+每轮都自曝 `as_of=2026-08-21 lag=21d` 却照常产出 144 critical / 235 warning 的噪音告警。
+改指全A 实测不可行：runner 行情源硬编码 hs300，且全A 库 evals 缺失导致大批因子被跳过
+（详见根 README §04）。**现役生产监控见 ``scripts/reporting/monitor_production_ic.py``。**
+本脚本保留为手动入口 / hs300 时代结论的复现工具。
+
 用法：
     # 单次监控（cron / Windows 计划任务每日调用）
     python scripts/reporting/monitor_performance.py --dataset hs300_2022_2025

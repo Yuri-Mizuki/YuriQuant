@@ -7,6 +7,9 @@
 - _enforce_caps 约束后处理（w<=cap 且 sum=1）
 - e2e_stock_picks --mock 端到端产出文件齐全
 - e2e_backtest --mock 端到端产出 summary/净值/月度表
+
+2026-09-21：`e2e_stock_picks.py` 已归档到 `scripts/archive/`（HS300 口径、职责被生产
+入口 `alla_daily_rank` 取代），本测试路径随之改指 —— mock 链路本身仍在验证范围内。
 """
 from __future__ import annotations
 
@@ -86,7 +89,7 @@ def test_enforce_caps_constraints():
 def test_e2e_stock_picks_mock(tmp_path):
     out_dir = tmp_path / "picks"
     cmd = [
-        sys.executable, str(ROOT / "scripts" / "pipelines" / "e2e_stock_picks.py"),
+        sys.executable, str(ROOT / "scripts" / "archive" / "e2e_stock_picks.py"),
         "--top", "10", "--model", "ridge", "--seed", "0",
         "--n-days", "300", "--n-codes", "30",
         "--out", str(out_dir),

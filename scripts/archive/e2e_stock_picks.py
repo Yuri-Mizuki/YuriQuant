@@ -13,9 +13,9 @@
   6. 信号：可执行清单 + 报告
 
 用法:
-    python scripts/pipelines/e2e_stock_picks.py --mock --top 30
-    python scripts/pipelines/e2e_stock_picks.py --real --top 30
-    python scripts/pipelines/e2e_stock_picks.py --real --top 50 --portfolio risk_parity
+    python scripts/archive/e2e_stock_picks.py --mock --top 30
+    python scripts/archive/e2e_stock_picks.py --real --top 30
+    python scripts/archive/e2e_stock_picks.py --real --top 50 --portfolio risk_parity
 """
 from __future__ import annotations
 

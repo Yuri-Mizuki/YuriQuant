@@ -12,20 +12,20 @@ TopK 多空 / TopK 纯多 / 分位多空，日/周/月调仓，输出：
 用法
 ----
     # 用最佳复合因子选股（默认）
-    python -m scripts.portfolio.select_stocks --dataset hs300_2025 --factor composite2_orthogonal
+    python -m scripts.archive.select_stocks --dataset hs300_2025 --factor composite2_orthogonal
 
     # 用单因子选股
-    python -m scripts.portfolio.select_stocks --dataset hs300_2025 --factor close30_ret
+    python -m scripts.archive.select_stocks --dataset hs300_2025 --factor close30_ret
 
     # 全 raw 因子逐个跑对比（耗时较长）
-    python -m scripts.portfolio.select_stocks --dataset hs300_2025 --all-raw --top 10
+    python -m scripts.archive.select_stocks --dataset hs300_2025 --all-raw --top 10
 
     # 指定策略与频率
-    python -m scripts.portfolio.select_stocks --dataset hs300_2025 --factor composite2_orthogonal \
+    python -m scripts.archive.select_stocks --dataset hs300_2025 --factor composite2_orthogonal \
         --strategy topk_lo --k 50 --freq W
 
     # 只输出选股清单，不画图
-    python -m scripts.portfolio.select_stocks --dataset hs300_2025 --factor composite2_orthogonal --list-only
+    python -m scripts.archive.select_stocks --dataset hs300_2025 --factor composite2_orthogonal --list-only
 """
 
 from __future__ import annotations
