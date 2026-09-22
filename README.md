@@ -192,11 +192,17 @@ reports/    实验与交付物（模型/监控/因子库/设计文档/HTML报告
 | 文本挖掘 | `scripts/factors/fetch_textmining.py` + `scripts/textmining/` | 研报/公告 → FADT/SUE-文本、BERT 编码 → `reports/textmining*/`（另一会话维护） |
 | 设计文档 | — | 模型层/训练纪律/项目总览 → `reports/docs/design/` |
 
-### 执行价口径（已收口）
+### 执行价口径（09-21 拍板：open 主 / vwap 披露）
 
 - **C0 = 调仓日收盘成交 + T+1 可交易掩码**（2026-09-14 终审）。C0 实盘不可行（因子用 T 日收盘数据），
   实测 T+1 开盘 14.66 / VWAP 14.60（vs close 15.54，代价 −0.9pp、换手不变）。
-  **执行价模式代码（`--execution`/open/vwap）已于 2026-09-21 整体移除**，仅留 6 份 metrics CSV 证据。
+- **09-21 拍板**：披露口径以 **T+1 开盘为主、VWAP 次之**；920 基线重跑完成后顺跑
+  `run_model_portfolio --execution open` / `--execution vwap` 两臂补披露（各 ≈+0.5h）。
+- 执行价代码 09-21 曾整体移除、当晚自 HEAD 恢复无损（41 测试 + open/vwap 重算对齐
+  留存 CSV ≤0.0001pp），并接入主入口 `run_model_portfolio.py`（e6e255f）：
+  **默认 close = 历史行为逐位不变**，open/vwap 为 opt-in 臂（输出加后缀隔离）；
+  `rolling_grid_alla --execution` 同口径。恢复记录见
+  `reports/docs/consistency_checks/口径核对_AI39_多因子10.md` §1.5。
 
 ## 待办 / 缺口 / 历史交付
 
