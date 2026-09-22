@@ -8,7 +8,8 @@
     全A（含退市回补） → 因子层全正交（panels_neu）→ DPP 选择+基本面族保留席位
     → gbdt h1+h5 秩平均集成 → raw 信号（信号层不再中性化）→ 月频 Top10% 等权
 
-头部实现 2018-2026 样本外：年化 15.5%、超额上证 +13.3%/年、Sharpe 0.63。
+头部实现 2018-2026 样本外（close 乐观上限口径、882 面板时代的历史数字；
+open 可执行定版数字以 920 重跑为准）：年化 15.5%、超额上证 +13.3%/年、Sharpe 0.63。
 旧版 HS300 口径（dataset=hs300_2022_2025 + 信号层风格中性化）已退役——
 其「信号层中性化」在全A上被实证为过度中性化（−5.4pp/年）。
 
@@ -172,11 +173,12 @@ def main():
     parser.add_argument("--tradable-labels", action="store_true",
                         help="训练标签掩掉买不进的样本（T+1 成交口径）；"
                              "默认关闭 = 主实验现行口径")
-    parser.add_argument("--execution", default="close", choices=["close", "open", "vwap"],
-                        help="成交价口径：close=调仓日收盘（默认，乐观上限，历史行为不变）；"
-                             "open/vwap=T+1 执行价（T 收盘出信号、T+1 开盘/算法单成交，"
-                             "仅 horizon=1；掩码改走信号预掩码路径。09-15 实测"
-                             "close→open −0.88pp / →vwap −0.94pp，换手不变）")
+    parser.add_argument("--execution", default="open", choices=["close", "open", "vwap"],
+                        help="成交价口径（2026-09-22 定版）：open=T+1 开盘成交"
+                             "（可执行定版口径，正名产物，默认）；"
+                             "close=T 收盘（乐观上限对照，_close 后缀）；"
+                             "vwap=T+1 VWAP（次披露）。执行价分段仅 horizon=1，"
+                             "掩码走信号预掩码路径。09-15 校准 close→open −0.88pp")
     args = parser.parse_args()
 
     cfg = _mp_cfg()
@@ -216,9 +218,9 @@ def main():
 
     mask = base["mask"].reindex(index=test_days, columns=close.columns).fillna(True)
 
-    # 成交价口径（默认 close = 历史行为逐位不变）：T+1 执行价模式仅 horizon=1，
+    # 成交价口径（默认 open = T+1 可执行定版，09-22 换主）：执行价模式仅 horizon=1，
     # 掩码走信号预掩码（引擎 executable_mask 会重归一多头、抹掉执行价分段，
-    # 与 rolling_grid_alla.stage_backtest 同一处理，2026-09-21 接入主入口）
+    # 与 rolling_grid_alla.stage_backtest 同一处理）；close = 乐观上限对照臂
     execution = args.execution
     exec_split = None
     sig_used = sig
@@ -283,15 +285,15 @@ def main():
               f"（{len(b)} 日）")
     print(f"样本 {test_days[0].date()} ~ {test_days[-1].date()} | 总耗时 {time.time()-t0:.0f}s")
 
-    # 回测与选股落盘
+    # 回测与选股落盘（09-22 命名换主：open=正名，close=_close 对照）
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    sfx = "" if execution == "close" else f"_{execution}"
+    sfx = {"close": "_close", "open": ""}.get(execution, f"_{execution}")
     table.to_csv(OUT_DIR / f"portfolio_result{sfx}.csv", index=False, encoding="utf-8-sig")
     for name, eq in curves.items():
         eq.to_csv(OUT_DIR / f"equity_{name}{sfx}.csv", encoding="utf-8-sig")
-    if execution == "close":
-        ens.round(6).to_parquet(OUT_DIR / "ens_pred.parquet")
-        export_picks(sig, mask, cfg["frac"])
+    # 集成信号与今日选股与成交口径无关（同一 sig+掩码），无条件落盘
+    ens.round(6).to_parquet(OUT_DIR / "ens_pred.parquet")
+    export_picks(sig, mask, cfg["frac"])
     log.info("结果已保存到 %s", OUT_DIR)
 
 

@@ -192,18 +192,20 @@ reports/    实验与交付物（模型/监控/因子库/设计文档/HTML报告
 | 文本挖掘 | `scripts/factors/fetch_textmining.py` + `scripts/textmining/` | 研报/公告 → FADT/SUE-文本、BERT 编码 → `reports/textmining*/`（另一会话维护） |
 | 设计文档 | — | 模型层/训练纪律/项目总览 → `reports/docs/design/` |
 
-### 执行价口径（09-22 定版：open 主口径）
+### 执行价口径（09-22 定版：可执行 open = 全链默认正名）
 
-- **C0 = 调仓日收盘成交 + T+1 可交易掩码**（2026-09-14 终审）。C0 实盘不可行（因子用 T 日收盘数据），
-  实测 T+1 开盘 14.66 / VWAP 14.60（vs close 15.54，代价 −0.9pp、换手不变）。
-- **09-21 拍板（披露 open 主 / vwap 次之）→ 09-22 定版**：920 基线重跑**主跑即带
-  `--execution open`**（open 为主口径产物），close/vwap 由 `--stage backtest` 补跑臂
-  提供（各 ≈+0.5h，close 仅作乐观上限对照）；生产入口同口径
-  `run_model_portfolio --execution open`。
-- 执行价代码 09-21 曾整体移除、当晚自 HEAD 恢复无损（41 测试 + open/vwap 重算对齐
-  留存 CSV ≤0.0001pp），并接入主入口 `run_model_portfolio.py`（e6e255f）：
-  **默认 close = 历史行为逐位不变**，open/vwap 为 opt-in 臂（输出加后缀隔离）；
-  `rolling_grid_alla --execution` 同口径。恢复记录见
+- C0（调仓日收盘成交 + T+1 可交易掩码）实盘不可行（因子用 T 日收盘数据）。
+  882 口径实测：close 15.54 / T+1 开盘 14.66 / VWAP 14.60（代价 −0.9pp、换手不变）。
+- **09-22 拍板：全部实验口径按可执行（T+1 open）为默认正名**，旧 882 记录待
+  920 重跑覆盖：`rolling_grid_alla` / `run_model_portfolio` 默认
+  `--execution open`；产物命名换主——**open = 正名**（metrics_overall.csv、
+  equity/、portfolio_result.csv、metrics_ensemble.csv），close = 乐观上限对照
+  （`_close` 后缀），vwap = 次披露。旧目录中无后缀文件是 close 时代产物，
+  920 重跑前不再作口径依据。
+- 执行价分段仅挂 h=1 结算（口径核对 §1.7 推论①："h=1 回测"≠"只用 h1 模型"，
+  ens/生产链全覆盖）；h>1 native 结算诊断行仅 close 臂产出。
+- 09-21 历史：执行价代码曾整体移除、当晚自 HEAD 恢复无损并接入主入口
+  （e6e255f）；恢复记录见
   `reports/docs/consistency_checks/口径核对_AI39_多因子10.md` §1.5。
 
 ## 待办 / 缺口 / 历史交付

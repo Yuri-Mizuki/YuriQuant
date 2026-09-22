@@ -17,20 +17,22 @@
   `unlock_ratio_20d`/`limit_pos`/`st_days`/`suspend_*` 进选中，挤出等量 alpha360 量价族）
   ⇒ **15.54%/15.52% 与当前库已脱钩**：当前代码+数据已产不出旧数字，下次重跑
   （即使零改动）落新口径。**命令**（挂机 ≈5–7h：select 36 轮 ≈2h + predict ≈2–3h
-  + ensemble/backtest ≈0.5h）——**治本口径**（09-21 拍板；09-22 拍板主跑即
-  T+1 open 主披露，close 降为乐观上限对照）：
+  + ensemble/backtest ≈0.5h）——**治本口径**（09-21 拍板；09-22 定版：可执行
+  open = 全链默认正名，close 降为乐观上限对照臂）：
   `python scripts/pipelines/rolling_grid_alla.py --preproc ortho --out-tag ortho920tl \
      --exclude-features limit_pos --tradable-labels --execution open`
-  （`--execution` 仅作用于 backtest 阶段、产物加 `_open` 后缀；新目录的
-  `_base/open_adj.parquet` 由 `--stage all` 的 prep 自动建出。⚠️ 执行价分段
-  只能挂 h=1 结算（§1.7 推论①："h=1 回测"≠"只用 h1 模型"，ens/生产链全是
-  h=1 结算、open 全覆盖），故 `metrics_overall_open` 仅含 h=1 行（定版口径
-  全在其中）；h>1 native 结算诊断行由 close 对照臂保留。**补齐对照臂**——
-  主跑完成后各 +0.5h：`--stage backtest`（close，与 882 旧基线对表）+
+  （末尾 flag 与新默认同值、仅作自文档。`--execution` 作用于 backtest+ensemble
+  阶段；产物命名 09-22 换主：**open=正名**（metrics_overall.csv / equity/），
+  close=`_close`、vwap=`_vwap`；新目录 `_base/open_adj.parquet` 由 prep 自动建出。
+  ⚠️ 执行价分段只能挂 h=1 结算（§1.7 推论①："h=1 回测"≠"只用 h1 模型"，ens/
+  生产链全是 h=1 结算、open 全覆盖），故正名 metrics_overall 仅含 h=1 行（定版
+  口径全在其中）；h>1 native 结算诊断行由 close 对照臂保留。**补齐对照臂**——
+  主跑完成后各 +0.5h：`--stage backtest --execution close`（与 882 旧基线对表）+
   `--stage backtest --execution vwap`（次披露）。）
-  **生产入口披露臂**：`python scripts/pipelines/run_model_portfolio --no-train
-  --execution open` 为主，`--execution vwap` 次披露，close 对照可选
-  （09-15 旧库校准 close→open −0.88pp / →vwap −0.94pp，换手不变）。
+  **生产入口**：默认即 open（09-22 冒烟 net 8.03% 与 09-21 校准逐位一致；
+  picks/ens_pred 已改为与成交口径无关、无条件落盘）；`--execution vwap`
+  次披露、`--execution close` 对照可选（09-15 校准 close→open −0.88pp /
+  →vwap −0.94pp，换手不变）。
   三个开关各自的意义（一次重跑同时落三个维度，差异归因靠 2x2 探针补齐）：
   - `--out-tag ortho920tl`：产物另存，旧 `alla_rolling_ortho/` 原样保留作对照，禁覆盖；
   - `--exclude-features limit_pos`：因子层剔除纸面因子（09-16 已证 +0.3~1.2pp/年、
@@ -42,8 +44,7 @@
   （可选对照臂：`--out-tag ortho920 --exclude-features limit_pos`（无 labels）与
   `--out-tag ortho920pure`（全默认），各 ≈5–7h。）
   **收尾必做**：① 新旧对照表（沿用 `prod_pipeline_gap` 2x2 格式），**主口径列 =
-  `metrics_overall_open`（T+1 open）**，close 仅作乐观上限对照（注意
-  `metrics_ensemble.csv` 固定 close 口径，仅作集成内部对照）；
+  正名 `metrics_overall.csv`（T+1 open 可执行）**，`_close` 仅作乐观上限对照；
   ② open 口径年化变化 >±1pp ⇒ 更新 MEMORY.md 主实验口径段（主数字换 open），
   旧数字补「882 口径」标注；
   ③ 顺带落地 `_extra` 方案 B（面板存在性门槛；当前 920=920 下是空操作，纯防复发）；

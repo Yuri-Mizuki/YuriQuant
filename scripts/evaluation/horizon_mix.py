@@ -6,8 +6,9 @@
 产物 reports/horizon_mix/）。本脚本即该实验的固化版：920 口径基线重跑后
 对新 pred 目录再跑一次即可复核定版。
 
-口径与 rolling_grid_alla.stage_ensemble 完全一致：
-raw 信号 / M 月频 / equal 等权 / frac（默认 0.10）/ backtest horizon=1。
+口径与 rolling_grid_alla.stage_ensemble 同构（raw 信号 / M 月频 / equal 等权 /
+frac 默认 0.10 / 结算 horizon=1），成交价口径默认 open=T+1 可执行定版
+（09-22 换主；close=乐观上限对照，产物加 _close 后缀）。
 变体：baseline_ens_h1h5、ens_h1h5h20、ens_h1h5h10h20、blend_h20_l25、
 blend_h20_l40、gbdt_h20_only。
 
@@ -24,7 +25,7 @@ import pandas as pd
 
 from scripts.pipelines import rolling_grid_alla as RG
 from backtest.costs import default_costs
-from backtest.engine import VectorBacktest
+from backtest.engine import VectorBacktest, build_execution_split
 from stats.ic import calc_ic_series
 from strategy.examples import TopFracLongOnly
 
@@ -69,6 +70,8 @@ def main():
     ap.add_argument("--out", default="reports/horizon_mix",
                     help="本实验产物目录")
     ap.add_argument("--frac", type=float, default=0.10, help="Top 分位")
+    ap.add_argument("--execution", default="open", choices=["close", "open", "vwap"],
+                    help="成交价口径（默认 open=T+1 可执行定版；close=乐观上限对照）")
     args = ap.parse_args()
     pred_dir, dest = Path(args.pred_dir), Path(args.out)
     dest.mkdir(parents=True, exist_ok=True)
@@ -97,6 +100,22 @@ def main():
     bench_idx = base["bench_index"].reindex(oos_days).fillna(0.0)
     bench_eqw = base["bench_eqw"].reindex(oos_days).fillna(0.0)
 
+    exec_split = None
+    rb_exec = None
+    if args.execution != "close":
+        fp = pred_dir / "_base" / f"{args.execution}_adj.parquet"
+        if not fp.exists():
+            raise SystemExit(f"{fp} 缺失：先跑 rolling_grid_alla --stage prep 重建基础面板")
+        fill = pd.read_parquet(fp)
+        s_ = pd.Series(oos_days, index=oos_days)
+        firsts = s_.groupby(s_.index.to_period("M")).first()
+        pos_ = {d: i for i, d in enumerate(oos_days)}
+        rb_exec = {oos_days[pos_[t] + 1] for t in firsts
+                   if pos_[t] + 1 < len(oos_days)}
+        exec_split = build_execution_split(fill, close, rb_exec)
+        print(f"[exec] 执行价口径: {args.execution}（fill={fp.name}，"
+              f"调仓日=T 次一交易日，{len(rb_exec)} 个）", flush=True)
+
     rows_overall, rows_yearly = [], []
     for name, sig in variants.items():
         sig = sig.reindex(index=oos_days, columns=close.columns)
@@ -104,8 +123,13 @@ def main():
         strat = TopFracLongOnly(frac=args.frac, weight_mode="equal")
         bt = VectorBacktest(strategy=strat, rebalance_freq="M",
                             initial_capital=1_000_000.0, costs=costs)
-        res = bt.run(sig, fwd, executable_mask=mask_oos, horizon=1,
-                     rebalance_days=None)
+        if exec_split is not None:
+            # 信号预掩码：引擎 executable_mask 会重归一多头、抹掉执行价分段
+            res = bt.run(sig.shift(1).where(mask_oos), fwd, horizon=1,
+                         rebalance_days=rb_exec, execution_split=exec_split)
+        else:
+            res = bt.run(sig, fwd, executable_mask=mask_oos, horizon=1,
+                         rebalance_days=None)
         dr = res.daily_returns
         m = RG.res_metrics(dr, bench_idx, res.turnover_series)
         row = {
@@ -124,9 +148,10 @@ def main():
               f"Sharpe={row['sharpe']:.2f} 回撤={row['max_dd'] * 100:.1f}% "
               f"换手={row['turnover'] * 100:.1f}%", flush=True)
 
-    pd.DataFrame(rows_overall).to_csv(dest / "metrics_horizon_mix.csv",
+    sfx = {"close": "_close", "open": ""}.get(args.execution, f"_{args.execution}")
+    pd.DataFrame(rows_overall).to_csv(dest / f"metrics_horizon_mix{sfx}.csv",
                                       index=False, encoding="utf-8-sig")
-    pd.DataFrame(rows_yearly).to_csv(dest / "metrics_yearly.csv",
+    pd.DataFrame(rows_yearly).to_csv(dest / f"metrics_yearly{sfx}.csv",
                                      index=False, encoding="utf-8-sig")
     print(f"完成 {time.time() - t0:.0f}s", flush=True)
 

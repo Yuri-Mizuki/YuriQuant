@@ -844,12 +844,20 @@ def _yearly_rows(base_row: dict, dr: pd.Series, bench: pd.Series,
     return out
 
 
-def stage_backtest(quick: bool = False, execution: str = "close"):
+def _exec_sfx(execution: str) -> str:
+    """执行价口径的产物命名（2026-09-22 定版换主）：
+    open（T+1 可执行，定版口径）= 正名无后缀；close（乐观上限对照）= _close；
+    vwap（次披露）= _vwap。"""
+    return {"close": "_close", "open": ""}.get(execution, f"_{execution}")
+
+
+def stage_backtest(quick: bool = False, execution: str = "open"):
     """组合回测。
 
-    execution: 成交价口径。close = T 收盘成交（默认，乐观上限）；open / vwap =
-        T+1 执行价（信号 T 收盘产生、T+1 开盘 / T+1 VWAP 算法单成交，可执行
-        口径，仅支持 h=1；产物文件名加 _{execution} 后缀与 close 口径并列）。
+    execution: 成交价口径。open = T+1 开盘成交（默认，可执行定版口径，正名产物）；
+        close = T 收盘成交（乐观上限对照，_close 后缀）；vwap = T+1 VWAP（次披露）。
+        执行价分段仅支持 h=1 结算（§1.7 推论①：h=1 回测≠只用 h1 模型，ens/生产链
+        全覆盖）；h>1 native 结算诊断行仅 close 臂产出。
     """
     from backtest.costs import default_costs
     from backtest.engine import VectorBacktest, build_execution_split
@@ -862,7 +870,7 @@ def stage_backtest(quick: bool = False, execution: str = "close"):
     mask = base["mask"].astype(bool)
     cov = base["cov"]
     costs = default_costs()
-    eq_dir = OUT / ("equity" if execution == "close" else f"equity_{execution}")
+    eq_dir = OUT / f"equity{_exec_sfx(execution)}"
     eq_dir.mkdir(parents=True, exist_ok=True)
     fill = None
     if execution != "close":
@@ -978,7 +986,7 @@ def stage_backtest(quick: bool = False, execution: str = "close"):
                              run_id, row["annual"] * 100, row["excess_idx"] * 100,
                              row["sharpe"], row["turnover"] * 100)
 
-    sfx = "" if execution == "close" else f"_{execution}"
+    sfx = _exec_sfx(execution)
     pd.DataFrame(rows_overall).to_csv(OUT / f"metrics_overall{sfx}.csv",
                                       index=False, encoding="utf-8-sig")
     pd.DataFrame(rows_yearly).to_csv(OUT / f"metrics_yearly{sfx}.csv",
@@ -1166,7 +1174,7 @@ def _rank_average(panels: list[pd.DataFrame], min_panels: int = 2) -> pd.DataFra
     return out
 
 
-def stage_ensemble(quick: bool = False):
+def stage_ensemble(quick: bool = False, execution: str = "open"):
     """多模型集成 + 跨 horizon 合成子网格。
 
     用户确认方向（2026-09-03）：做 ridge+gbdt+ranker 秩平均、h1+h5 信号合成，
@@ -1179,9 +1187,11 @@ def stage_ensemble(quick: bool = False):
     回测形态：跟 smallcap 最优口径（M 月频, inds 只行业中性, equal 等权），
     frac 用 0.10 / 0.20 两组；对照 raw（不中性）同 frac。产出
     pred/ens_*.parquet + equity_ensemble/*.csv + metrics_ensemble.csv。
+    execution（09-22 接入）：集成结算 h=1，open/vwap 走信号预掩码 + 次日
+    执行价分段（与 stage_backtest h=1 路径同一处理），命名经 _exec_sfx。
     """
     from backtest.costs import default_costs
-    from backtest.engine import VectorBacktest
+    from backtest.engine import VectorBacktest, build_execution_split
     from factor.preprocessing import neutralize
     from stats.ic import calc_ic_series
     from strategy.examples import TopFracLongOnly
@@ -1226,7 +1236,23 @@ def stage_ensemble(quick: bool = False):
     bench_idx = base["bench_index"].reindex(oos_days).fillna(0.0)
     bench_eqw = base["bench_eqw"].reindex(oos_days).fillna(0.0)
 
-    eq_dir = OUT / "equity_ensemble"
+    exec_split = None
+    rb_exec = None
+    if execution != "close":
+        fp = OUT / "_base" / f"{execution}_adj.parquet"
+        if not fp.exists():
+            raise FileNotFoundError(f"{fp} 缺失：先跑 --stage prep 重建基础面板")
+        fill = pd.read_parquet(fp)
+        s_ = pd.Series(oos_days, index=oos_days)
+        firsts = s_.groupby(s_.index.to_period("M")).first()
+        pos_ = {d: i for i, d in enumerate(oos_days)}
+        rb_exec = {oos_days[pos_[t] + 1] for t in firsts
+                   if pos_[t] + 1 < len(oos_days)}
+        exec_split = build_execution_split(fill, close, rb_exec)
+        log.info("[ensemble] 执行价口径: %s（fill=%s，调仓日=T 信号日次一交易日，%d 个）",
+                 execution, fp.name, len(rb_exec))
+
+    eq_dir = OUT / f"equity_ensemble{_exec_sfx(execution)}"
     eq_dir.mkdir(parents=True, exist_ok=True)
     rows_overall, rows_yearly = [], []
     for hname, sig in variants.items():
@@ -1243,8 +1269,15 @@ def stage_ensemble(quick: bool = False):
                 bt = VectorBacktest(strategy=strat, rebalance_freq=freq,
                                     initial_capital=1_000_000.0, costs=costs)
                 try:
-                    res = bt.run(sg, fwd, executable_mask=mask_oos,
-                                 horizon=h, rebalance_days=None)
+                    if execution == "close":
+                        res = bt.run(sg, fwd, executable_mask=mask_oos,
+                                     horizon=h, rebalance_days=None)
+                    else:
+                        # 信号预掩码：引擎 executable_mask 会重归一多头、
+                        # 抹掉执行价分段（与 stage_backtest h=1 同一处理）
+                        res = bt.run(sg.shift(1).where(mask_oos), fwd, horizon=1,
+                                     rebalance_days=rb_exec,
+                                     execution_split=exec_split)
                 except ValueError as e:
                     log.warning("[%s] 不可行: %s", run_id, str(e)[:100])
                     continue
@@ -1272,9 +1305,10 @@ def stage_ensemble(quick: bool = False):
                          row["excess_idx"] * 100, row["excess_eqw"] * 100,
                          row["sharpe"], row["turnover"] * 100)
 
-    pd.DataFrame(rows_overall).to_csv(OUT / "metrics_ensemble.csv",
+    esfx = _exec_sfx(execution)
+    pd.DataFrame(rows_overall).to_csv(OUT / f"metrics_ensemble{esfx}.csv",
                                       index=False, encoding="utf-8-sig")
-    pd.DataFrame(rows_yearly).to_csv(OUT / "metrics_ensemble_yearly.csv",
+    pd.DataFrame(rows_yearly).to_csv(OUT / f"metrics_ensemble_yearly{esfx}.csv",
                                      index=False, encoding="utf-8-sig")
     log.info("ensemble 完成 %.0fs（%d 组合）", time.time() - t0, len(rows_overall))
 
@@ -1293,10 +1327,11 @@ def main():
                     choices=["zscore", "ortho", "mixed"],
                     help="特征预处理口径：zscore(全局截面z) / ortho(因子层行业+市值"
                          "中性化) / mixed(基本面族中性化+量价zscore)")
-    ap.add_argument("--execution", default="close", choices=["close", "open", "vwap"],
-                    help="backtest 阶段成交价口径：close(T收盘,乐观上限,默认) / "
-                         "open(T+1开盘) / vwap(T+1 VWAP算法单，可执行主口径)；"
-                         "执行价模式仅 h=1，产物加 _{execution} 后缀")
+    ap.add_argument("--execution", default="open", choices=["close", "open", "vwap"],
+                    help="backtest/ensemble 阶段成交价口径（2026-09-22 定版）："
+                         "open(T+1开盘,可执行定版,正名产物,默认) / "
+                         "close(T收盘,乐观上限对照,_close后缀) / vwap(T+1 VWAP次披露)；"
+                         "执行价分段仅 h=1 结算（h>1 诊断行仅 close 臂产出）")
     ap.add_argument("--exclude-features", default=None,
                     help="消融臂：逗号分隔的特征名，select 阶段硬剔除"
                          "（候选池 + 全部保留席位）；须配 --out-tag 防覆盖主实验")
@@ -1361,7 +1396,7 @@ def main():
         elif st == "smallcap":
             stage_smallcap(args.quick)
         elif st == "ensemble":
-            stage_ensemble(args.quick)
+            stage_ensemble(args.quick, execution=args.execution)
 
 
 if __name__ == "__main__":
