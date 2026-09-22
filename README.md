@@ -192,12 +192,14 @@ reports/    实验与交付物（模型/监控/因子库/设计文档/HTML报告
 | 文本挖掘 | `scripts/factors/fetch_textmining.py` + `scripts/textmining/` | 研报/公告 → FADT/SUE-文本、BERT 编码 → `reports/textmining*/`（另一会话维护） |
 | 设计文档 | — | 模型层/训练纪律/项目总览 → `reports/docs/design/` |
 
-### 执行价口径（09-21 拍板：open 主 / vwap 披露）
+### 执行价口径（09-22 定版：open 主口径）
 
 - **C0 = 调仓日收盘成交 + T+1 可交易掩码**（2026-09-14 终审）。C0 实盘不可行（因子用 T 日收盘数据），
   实测 T+1 开盘 14.66 / VWAP 14.60（vs close 15.54，代价 −0.9pp、换手不变）。
-- **09-21 拍板**：披露口径以 **T+1 开盘为主、VWAP 次之**；920 基线重跑完成后顺跑
-  `run_model_portfolio --execution open` / `--execution vwap` 两臂补披露（各 ≈+0.5h）。
+- **09-21 拍板（披露 open 主 / vwap 次之）→ 09-22 定版**：920 基线重跑**主跑即带
+  `--execution open`**（open 为主口径产物），close/vwap 由 `--stage backtest` 补跑臂
+  提供（各 ≈+0.5h，close 仅作乐观上限对照）；生产入口同口径
+  `run_model_portfolio --execution open`。
 - 执行价代码 09-21 曾整体移除、当晚自 HEAD 恢复无损（41 测试 + open/vwap 重算对齐
   留存 CSV ≤0.0001pp），并接入主入口 `run_model_portfolio.py`（e6e255f）：
   **默认 close = 历史行为逐位不变**，open/vwap 为 opt-in 臂（输出加后缀隔离）；
