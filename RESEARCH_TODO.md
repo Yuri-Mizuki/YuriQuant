@@ -116,6 +116,46 @@ done
 - [ ] **AI39 剩余（单独立项）**：① 主动权重空间结构性口径（x=w−w_b，工程量中等）；
   ② 结构化风险模型（Barra CNE5）。低成本 3 件套已落地（09-18）。
 
+### 基本面因子权重过低的诊断与双频融合（09-22 研读，未跑）
+
+**现象**（`reports/alla_daily_ortho/latest_feature_importance.csv` + `e:/data/factor_library/all_a_2018_2026/registry.csv`）：
+gain Top5 全量价、累计 71.5%（alpha158_KLEN 23.4%），`ln_mktcap` 5.0% 第 6，
+其余基本面单因子仅 0.02–0.2%，与量价头部差 2–3 个数量级；fundamental 族全样本
+h1 IC 仅 +0.0025（alpha360 +0.039）。
+
+**诊断（三层，按主次）**：
+1. **期限错配（主因）**：标签 h1/h5 截面 rank，基本面季更+ffill 在日频面板近似
+   常数，对 1–5 日收益天然无区分度——不是因子烂，是问错了问题。A 股 PEAD 有效
+   但周期在月级（PanAgora、学术 PEAD 综述）；现有 `ic_stats.csv` 自身已示
+   h20 IC 0.1343 > h1 0.1096，而生产却是**月频调仓**——标签期与持有期双重错配。
+2. **正交化二次压制**：ortho 对行业+市值中性化，bp/ep/div_yield 的主信息恰是
+   风格暴露本身，剥完残差短周期更弱（与"信号层必须 raw"同源：中性化对净值有害）。
+3. **GBDT gain 的机械偏置**：日变特征天然多得分裂机会，gain 系统性低估慢因子的
+   条件化贡献；8/50 席位的 gain 占比不能当基本面价值度量（消融 +0.7pp 为正贡献）。
+
+**业界融合方法（09-22 搜索归档）**：传统合成层=等权（稳健基线）/IC 加权/max-IC、
+max-ICIR 加权（华泰 6 法对比，后两者最优）/对称正交化（无优先序、损失最小）vs
+Schmidt 序贯；ML 融合=stacking 元学习（CFA ensemble 综述）、两阶段 MSIF-OEM
+（深度+集成+在线学习，ESWA 2025）、DoubleEnsemble 式样本×特征双重重加权；
+混合频率=MIDAS 回归、混合频率深度网络（SSRN 2026 Peng）；**条件化用法**=基本面
+作 conditioning 变量建交互特征（GBDT 天然"先按估值/质量状态分裂、组内再用量价"）；
+**组合层 alpha layering**=慢组合（基本面月频）+快组合（量价日频）按 ICIR/风险
+贡献加权。来源：华泰研报 crm.htsc.com.cn、zhuanlan.zhihu.com 因子合成综述、
+doi.org/10.1016/j.eswa.2025.130536、arxiv.org/abs/2507.07107、
+rpc.cfainstitute.org ensemble 章节、macrosynergy.com MIDAS、panagora.com A股因子。
+
+**提议实验（低成本，不跑，待排期；E2/E5 可作本机半天级穿插）**：
+- [ ] **E1 期限延长臂**：gbdt h20 单独一臂对照 h1/h5（复用 rolling_grid，
+  horizon=20），看基本面 gain 占比是否量级抬升 → 直接检验期限错配假设。
+- [ ] **E2 SHAP 归因核验（零训练成本）**：`alla_daily_rank.py` 已产 SHAP Top20，
+  加查 bp/ep 等是否以交互分裂而非主分裂贡献 → 检验条件化假设。
+- [ ] **E3 组合层双频叠加**：基本面月频 TopN 组合 + 现有日频组合按 λ 加权
+  （零模型改动，λ∈{0.3,0.5,0.7} 扫描）。
+- [ ] **E4 交互特征**：基本面状态分桶 × 量价因子组内 zscore 显式入池
+  （如 bp 十分组内的 alpha158_KLEN）。
+- [ ] **E5 基本面跳过市值中性化**：基本面因子只对行业中性（保价值/红利的风格
+  信息），单变量对照现 ortho 臂。
+
 ---
 
 ## 二、RL 组合优化 stage2（银河 0706 复现线）—— 主线定稿
@@ -209,7 +249,7 @@ python -m scripts.factors.run_portfolio_phase2 --pool zz1000 \
 | 序 | 任务 | 说明 |
 |---|---|---|
 | **0** | **920 治本口径基线重跑**（TODO §一，命令已写明，≈5–7h）→ **好机器长实验队列**：① AI97 三臂 ×3 seed → ② 国金24 残余⑤ 校准轮（1 臂 1 seed）→ 视耗时铺三臂 → ③ mf10 T 扫描全量 → ④ stage2 Phase 2 zz1000 全量（快档→全档，命令见 §二） | **迁移清单**：代码仓库（git clone）+ `E:\data` 数据面（因子库 parquet / min5_hs300 / 日线缓存，~GB 级；panels_neu 920 已含）+ Python 环境（系统解释器 D:/Python/Python312 有全依赖；.venv 缺 rl 依赖）+ `DEEPSEEK_API_KEY`（AI97 llm 臂需要）；产物 CSV/报告拷回本机入库归档 |
-| 1 | 本机半天级穿插（§一 🥉 六项） | 均挂已有基础设施 |
+| 1 | 本机半天级穿插（§一 🥉 六项；+基本面诊断 E2/E5） | 均挂已有基础设施 |
 | 2 | ~~研读批~~ **全部完成**：银河 0706+华安 226（09-20）、西南 T2RL（09-18）、国金19 Mamba2 归档（09-20）、AI43/AI29（09-20）、大模型投研速读批（09-20） | 报告均见 `reports/docs/research_notes/` |
 | 3 | 华泰3128 全频段 | 依赖分钟特征扩容，资源墙后置 |
 | 4 | 国金24 残余②：全A 分钟扩容 | 先跑吞吐探针估成本，再决定是否投入 |
