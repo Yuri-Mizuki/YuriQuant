@@ -112,6 +112,11 @@
   供手动跑；复活前提 = ① 全A 库 evals 补齐 ② runner 行情源参数化。
 - [ ] **HS300 时代入口剩余项裁决**：同族 `e2e_backtest` / `optimize_e2e` 证据与已归档者相同
   （`daily_hs300.parquet` 停更、产物 09-16 清理）但属**独立回测实验**，待拍板是否归档。
+  09-22 全仓死代码普查补充：`investment_report` 同属本族——零引用入口（仅 mock 测试
+  保活）且 import `e2e_backtest` 四个函数（perf_stats / 两只组合回测 / walk_forward
+  预测），归档需三口同裁并同步退休 `test_metrics` 的 perf_stats 一致性用例与
+  `test_layering` 的 `_enforce_caps` 钉子。普查其余结论：核心库包零孤儿，墓地已收敛在
+  scripts/archive + scripts/oneoff 两区，无新增待清项。
 - [ ] **调度余项**：`.workbuddy/memory/automations/` 下残留的旧自动化 `71e2d7a5`
   记忆文件（已加退役标注，可择机清）。
 
