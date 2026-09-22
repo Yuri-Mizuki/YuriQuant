@@ -22,7 +22,10 @@
   `python scripts/pipelines/rolling_grid_alla.py --preproc ortho --out-tag ortho920tl \
      --exclude-features limit_pos --tradable-labels --execution open`
   （`--execution` 仅作用于 backtest 阶段、产物加 `_open` 后缀；新目录的
-  `_base/open_adj.parquet` 由 `--stage all` 的 prep 自动建出。**补齐对照臂**——
+  `_base/open_adj.parquet` 由 `--stage all` 的 prep 自动建出。⚠️ 执行价分段
+  只能挂 h=1 结算（§1.7 推论①："h=1 回测"≠"只用 h1 模型"，ens/生产链全是
+  h=1 结算、open 全覆盖），故 `metrics_overall_open` 仅含 h=1 行（定版口径
+  全在其中）；h>1 native 结算诊断行由 close 对照臂保留。**补齐对照臂**——
   主跑完成后各 +0.5h：`--stage backtest`（close，与 882 旧基线对表）+
   `--stage backtest --execution vwap`（次披露）。）
   **生产入口披露臂**：`python scripts/pipelines/run_model_portfolio --no-train
