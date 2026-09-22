@@ -172,8 +172,21 @@ MASTER/HIST/Transformer 系与轻量滚动架构不匹配，暂缓。
 - [ ] **P1 E1''**：920 基线重跑后对新 pred 目录复跑 `horizon_mix.py`（已接
   execution 臂、默认 open）+ buffer(20/30) 臂，定版月频信号口径是否切到
   ens_h1h5h10h20（好机器，挂基线重跑后）
-- [ ] **P2 E3**：基本面慢信号（滚动 ICIR 加权线性合成，embargo 对齐）⊕ gbdt
-  快信号双层叠加，λ∈{0.3,0.5,0.7}（本机可跑，零重训）
+- [x] **P2 E3 双层融合（09-22 本机完成，open 口径，固化脚本
+  `scripts/evaluation/fundamental_blend.py`）**：基本面族（62/63 因子，
+  goodwill_ratio 面板缺）滚动 ICIR 线性慢信号（月频、embargo 2 月末、
+  trailing 24 月、ICIR clip[0,3]；末月 Top 权重 bp 0.060 / float_ratio 0.057 /
+  main_profit_ratio 0.046 / 单季成长族 / holder_num_chg，ICIR 噪声大→近分散
+  等权）⊕ 快信号秩空间 λ 加权。结果（882 pred / M / Top10% / open）：
+  **slow_only 年化 10.17%、超额上证 +7.94pp、换手 26.8%**（线性基本面合成
+  自身有真 alpha）；**blend_s0.3 全指标占优基线**（年化 15.04% vs 14.66%、
+  Sharpe 0.64 vs 0.59、回撤 35.4% vs 37.2%、换手 64.1% vs 73.0%）；blend_s0.5
+  把 2024 大差年 −5.5pp 修到 +2.2pp（防御器，代价是强年少赚）；**与 h20 混合
+  信息冗余**：h1020⊕s0.5 年化 15.02% < h1020_baseline 15.75%，但 Sharpe 0.66
+  全场最高、回撤 33.5% 最低。结论：慢信号是**风险调整改进器而非增量 alpha**
+  （h20 模型已隐式吃到基本面）；定版取舍=要年化选 h1020 混合、要 Sharpe/回撤
+  选 h1020⊕s0.5——留 920 重跑后与 E1'' 一并裁决。
+  产物 `reports/fundamental_blend/`（不入库）。
 - [ ] **P3 E5**：基本面只对行业中性化臂（panels 变体+重跑，好机器）
 - [ ] **P4 E4**：交互特征（基本面分桶×量价组内 zscore 显式入池，重训）
 - [ ] **P5 基本面补缺（二阶；8 席位内按当期 IC 竞争上岗）**：财报版 SUE、
