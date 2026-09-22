@@ -215,6 +215,16 @@ MASTER/HIST/Transformer 系与轻量滚动架构不匹配，暂缓。
   无"购建固定资产"专项科目（可 NET_CASH_FLOWS_INV_ACT/总资产 作投资强度代理，
   或 akshare 免费接口补拉）。分析师一致预期=唯一真数据墙（tushare 未装、
   akshare 东财接口历史浅，暂缓）。
+- [x] **P5 补缺构建落地（09-22 本机完成，`scripts/builders/build_alla_p5_factors.py`）**：
+  5 因子入库（registry 946→951，ic_h 面板融合，panels_neu 920→924）——
+  **sue_q h20 IC −0.068 随 horizon 走强**（负号=A股超预期反转，家族顶级）、
+  **asset_growth_yoy −0.046**（资产扩张负向，符合文献）；capex_intensity（≈0，
+  投资净额代理噪声大）与 spsr（−0.006）弱；bonus_freq_3y 覆盖 0.211 被门槛挡。
+  5 个已入 FUNDAMENTAL_SETS（B5 族）参加 920 重跑席位竞争。慢信号对照
+  （open 口径）：P5 扩充家族（67 因子）slow_only 9.97% vs 原 63 因子版 10.17%
+  （噪声内——组合稀释，价值在席位竞争）；**holder_dyn 并入（76 因子）
+  slow_only 10.28%（+0.31pp）温和改善**、blend_s0.3 15.01%/回撤 35.1%——
+  建议 920 后正式并入家族。登记映射 'p5' 已同步 SET_TO_FAMILY/SOURCE_PREFIXES。
 - [ ] **P6**：DoubleEnsemble 式特征×样本重加权（若 P1–P3 后基本面贡献仍低）
 
 ---

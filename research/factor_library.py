@@ -128,7 +128,7 @@ SET_TO_FAMILY: dict[str, str] = {
     "alpha101": "量价", "alpha158": "量价", "alpha191": "量价", "alpha360": "量价",
     # 财务基本面（含构造型/风格型）
     "fundamental": "基本面", "constructed": "基本面", "style": "基本面",
-    "sue_pledge": "基本面",
+    "sue_pledge": "基本面", "p5": "基本面",
     # 股东（持股/质押/折价；holder_dyn = 增减持/内部人交易等**动态**持股，2026-09-20 另类数据 P0）
     "holder": "股东", "pledge": "股东", "disc_holder_dyn": "股东", "holder_dyn": "股东",
     # 事件与资金
@@ -218,6 +218,8 @@ CANONICAL_COLUMNS: list[str] = [
     # —— 检验统计 ——
     "n_dates", "n_codes", "ic_mean", "ic_std", "ic_ir", "t_stat", "t_stat_nw",
     "p_value_nw", "ic_win_rate", "ic_decay5", "autocorr", "significant",
+    # —— 结构化证据（2026-09-22 evals 改造包：报告列，均不参与入库门槛）——
+    "monotonicity", "pfs",
     # —— 入库前冗余预检（check_dup）——
     "dup_checked", "dup_corr_max", "dup_top", "resid_ic", "resid_t_nw",
 ] + [f"{m}_{c.key}" for c in CANONICAL_CONFIGS for m in _METRIC_COLS] + [
@@ -453,6 +455,20 @@ class FactorLibrary:
         except Exception:
             autocorr = float("nan")
 
+        # 1c) 结构化证据（2026-09-22 evals 改造包，t+单调性论文 / AlphaEval）：
+        # 只做报告列、**不参与入库门槛**（门槛仍是可交易口径 |t_nw|>2 + FDR）。
+        # 与样本外的相关性验证成立之前，这两列仅用于观察分布。
+        try:
+            from stats.ic import monotonicity_ratio
+            monotonicity = monotonicity_ratio(panel, returns_panel, n_quantiles=5)
+        except Exception:
+            monotonicity = float("nan")
+        try:
+            from stats.ic import perturbation_fidelity
+            pfs = perturbation_fidelity(panel)
+        except Exception:
+            pfs = float("nan")
+
         # 2) canonical 回测
         eval_cols: dict = {"ic": ic}
         metric_rows: dict = {}
@@ -508,6 +524,8 @@ class FactorLibrary:
             "ic_win_rate": ic_win_rate,
             "ic_decay5": ic_decay5,
             "autocorr": autocorr,
+            "monotonicity": monotonicity,
+            "pfs": pfs,
             "significant": significant,
             **dup_row,
             **metric_rows,
@@ -916,7 +934,8 @@ class FactorLibrary:
         # IC 类指标无 config 后缀（单一口径，不随回测配置变，2026-08-05 修复：
         # 原实现把 ic_mean 也拼成 ic_mean_ls_M 导致 KeyError）
         _IC_COLS = {"ic_mean", "ic_std", "ic_ir", "t_stat", "t_stat_nw", "p_value_nw",
-                    "ic_win_rate", "ic_decay5", "autocorr", "significant"}
+                    "ic_win_rate", "ic_decay5", "autocorr", "significant",
+                    "monotonicity", "pfs"}
         if metric in ("ir", "ic_ir"):
             col = "ic_ir"
         elif metric in _IC_COLS:

@@ -56,6 +56,7 @@ def load_family_slices(names: set, dates: pd.DatetimeIndex, root: Path) -> dict:
 
 def build_slow_panel(base: dict, oos_days: pd.DatetimeIndex, ic_months: int,
                      embargo_months: int, min_cov: float, min_months: int,
+                     extra_family: set | None = None,
                      log=print) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """返回 (ICIR 慢信号面板, max-ICIR 慢信号面板, 末月权重表)。
 
@@ -71,10 +72,11 @@ def build_slow_panel(base: dict, oos_days: pd.DatetimeIndex, ic_months: int,
     fwd20 = close.pct_change(20, fill_method=None).shift(-20)
 
     needed = pd.DatetimeIndex(sorted(set(t0_days) | set(ic_days_all)))
-    panels = load_family_slices(RG.FUNDAMENTAL_FAMILY_SETS, needed, RG.ds_root())
+    family = set(RG.FUNDAMENTAL_FAMILY_SETS) | set(extra_family or ())
+    panels = load_family_slices(family, needed, RG.ds_root())
     names = sorted(panels)
-    log(f"[slow] 家族因子 {len(RG.FUNDAMENTAL_FAMILY_SETS)} 个、面板就绪 "
-        f"{len(names)} 个（缺失 {sorted(set(RG.FUNDAMENTAL_FAMILY_SETS) - set(names))}）")
+    log(f"[slow] 家族因子 {len(family)} 个、面板就绪 "
+        f"{len(names)} 个（缺失 {sorted(family - set(names))}）")
 
     # 月末 IC（spearman = 秩的 pearson），覆盖率不足的月份置 NaN
     fwd_r = fwd20.reindex(ic_days_all).rank(axis=1, pct=True)
@@ -158,6 +160,9 @@ def main():
     ap.add_argument("--embargo-months", type=int, default=2)
     ap.add_argument("--min-cov", type=float, default=0.5)
     ap.add_argument("--min-months", type=int, default=12)
+    ap.add_argument("--include-holder-dyn", action="store_true",
+                    help="慢信号家族并入 holder_dyn 增减持/高管持股 9 因子"
+                         "（P5 盘点：mgmt_netbuy 系 h20 IC 0.012~0.013）")
     args = ap.parse_args()
     pred_dir, dest = Path(args.pred_dir), Path(args.out)
     dest.mkdir(parents=True, exist_ok=True)
@@ -179,9 +184,15 @@ def main():
     bench_idx = base["bench_index"].reindex(oos_days).fillna(0.0)
     bench_eqw = base["bench_eqw"].reindex(oos_days).fillna(0.0)
 
+    hold_dyn = {
+        "ctrl_change_cnt_60d", "ctrl_hold_ratio", "inner_netbuy_20d",
+        "inner_netbuy_60d", "inner_netbuy_cnt_60d", "mgmt_netbuy_20d",
+        "mgmt_netbuy_60d", "mgmt_netbuy_cnt_20d", "mgmt_sell_ratio_60d",
+    }
     slow, slow_max, weights = build_slow_panel(
         base, oos_days, args.ic_months, args.embargo_months,
-        args.min_cov, args.min_months)
+        args.min_cov, args.min_months,
+        extra_family=(hold_dyn if args.include_holder_dyn else None))
     weights.to_csv(dest / "slow_weights.csv", index=False, encoding="utf-8-sig")
 
     fast = RG._rank_average([h1, h5]).reindex(index=oos_days,

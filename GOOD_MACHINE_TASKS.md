@@ -170,9 +170,10 @@ zz1000 的 ST/停牌量会放大该边界）；跑完接 `stats/pbo.py`、判读
   保价值/红利风格信息）——检验"ortho 二次压制"诊断，单变量对照；
 - **E4 交互特征**（基本面状态分桶 × 量价因子组内 zscore 显式入池）——检验
   "基本面当条件变量"假设；
-- **P5 落地**：holder_dyn 族并入 FUNDAMENTAL_FAMILY_SETS（或另类席位机制）+
-  SUE 财报版/总资产增速/送转预期（每股资本公积）三件自建因子入池——
-  数据源已核清（4/5 可自建），构建走既有 builder 模式。
+- **P5 收尾（09-22 已构建入库：sue_q h20 IC −0.068 / asset_growth_yoy −0.046
+  两强因子 + capex/spsr 弱 + bonus 覆盖不足；已入 B5 族与慢信号对照）**：
+  剩 holder_dyn 族并入 FUNDAMENTAL_FAMILY_SETS 的拍板（本机对照 slow_only
+  +0.31pp 温和改善）与 E5/E4 重训对照。
 
 ## 批次 7（队列末尾）
 

@@ -99,6 +99,11 @@ FUNDAMENTAL_SETS = {
     "np_rev_gap", "rev_recv_gap", "cfo_to_np",
     "margin_delta_ttm", "np_accel_sq", "roe_vol_pit",
     "risky_asset_ratio", "div_growth_yoy", "div_consecutive_years",
+    # B5 族：P5 补缺（build_alla_p5_factors 构建，2026-09-22）——
+    # sue_q（h20 IC -0.068 随 horizon 走强，负号=A股超预期反转）与
+    # asset_growth_yoy（-0.046，资产扩张负向）为强因子；capex_intensity/spsr
+    # 弱、bonus_freq_3y 覆盖 0.21（过不了 MIN_COVERAGE），入族参与席位竞争
+    "sue_q", "asset_growth_yoy", "capex_intensity", "spsr", "bonus_freq_3y",
 }
 # 注：float_mktcap（流通市值）剔除——其 float_share 底层在 2021-01~04 覆盖 0.000 有数据洞，
 # 且与 ln_mktcap 规模信息冗余；规模/流通维度由 ln_mktcap + float_ratio 覆盖。
