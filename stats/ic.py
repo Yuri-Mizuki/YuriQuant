@@ -29,6 +29,7 @@ from stats import PERIODS_PER_YEAR
 __all__ = [
     "calc_ic_series", "calc_ir", "calc_ic_decay",
     "quantile_backtest", "factor_autocorr",
+    "monotonicity_ratio", "perturbation_fidelity",
 ]
 
 
@@ -189,3 +190,131 @@ def factor_autocorr(factor_panel: pd.DataFrame, max_lag: int = 1) -> float:
         if len(c):
             vals.append(float(c.mean()))
     return float(np.mean(vals)) if vals else 0.0
+
+
+def monotonicity_ratio(
+    factor_panel: pd.DataFrame,
+    returns_panel: pd.DataFrame,
+    n_quantiles: int = 5,
+    direction: str = "auto",
+) -> float:
+    """分层收益单调性占比（"因子动物园"文献的 monotonicity 指标）。
+
+    每个截面日按因子值分 ``n_quantiles`` 组（与 :func:`quantile_backtest` 同口径：
+    当日因子赚当日未来一期收益、有效观测 < 组数跳过、qcut duplicates=drop），
+    若各组**平均收益从低因子组到高因子组依次递增**（严格单调上升）记该日
+    "单调"；单调性占比 = 单调日数 / 有效日数。
+
+    与 IC 的关系（t+单调性论文的动机）：IC/多空价差只看两端，单调性约束
+    **中间分组也须有序**——两者样本内相关近 0，各自独立预测样本外表现。
+    IC 均值 0.03 但正率 52% / 单调占比 50% 的因子实质接近抛硬币。
+
+    Args:
+        direction: "auto"（默认）= 每日取"递增或递减"较优方向计入（因子
+            方向未知时用，与入库检验的 |IC| 语义对齐）；"asc" = 只认严格
+            递增；"desc" = 只认严格递减。
+            注意：auto 会把"始终稳定反号"的因子也算满单调——这正确，因为
+            因子可取反；真正被它抓的是"中间组乱序"的结构性缺陷。
+
+    Returns:
+        float ∈ [0, 1]；无有效日返回 NaN。
+    """
+    common_dates = factor_panel.index.intersection(returns_panel.index)
+    fp = factor_panel.loc[common_dates]
+    rp = returns_panel.loc[common_dates]
+
+    n_ok = 0
+    n_mono = 0
+    for i, _date in enumerate(common_dates):
+        f = fp.iloc[i].dropna()
+        r = rp.iloc[i]
+        common = f.index.intersection(r.index)
+        if len(common) < n_quantiles:
+            continue
+        f_aligned = f.loc[common]
+        r_aligned = r.loc[common]
+        try:
+            groups = pd.qcut(f_aligned, n_quantiles, labels=False, duplicates="drop")
+        except ValueError:
+            continue
+        n_actual = groups.nunique()
+        if n_actual < 2:
+            continue
+        means = np.array([
+            r_aligned[groups == g].mean() if (groups == g).sum() else np.nan
+            for g in range(n_actual)
+        ])
+        if not np.isfinite(means).all():
+            continue
+        diffs = np.diff(means)
+        asc = bool((diffs > 0).all())
+        desc = bool((diffs < 0).all())
+        if direction == "asc":
+            mono = asc
+        elif direction == "desc":
+            mono = desc
+        else:
+            mono = asc or desc
+        n_ok += 1
+        n_mono += int(mono)
+
+    if n_ok == 0:
+        return float("nan")
+    return n_mono / n_ok
+
+
+def perturbation_fidelity(
+    factor_panel: pd.DataFrame,
+    noise_scale: float = 0.01,
+    n_trials: int = 20,
+    seed: int = 42,
+    distribution: str = "gauss",
+    df_t: float = 5.0,
+) -> float:
+    """扰动保真度 PFS（AlphaEval 框架的 robustness 维度）。
+
+    对因子面板加乘性噪声 ``panel * (1 + noise_scale * eps)``，计算扰动前后
+    **截面排名**的 Spearman 相关（对每个截面日算再取均值，多 trial 再取均值）。
+    越接近 1 = 排名对数据噪声越不敏感（鲁棒）；偏低 = 排名被少数极端值
+    主导（扰动后名次大幅洗牌，实盘中对应"对数据瑕疵/口径噪声敏感"）。
+
+    与 :func:`factor_autocorr` 的区别：autocorr 衡量**时间上**因子自身
+    延续性（换手代理）；PFS 衡量**横截面上**排名对噪声的敏感度（数据
+    鲁棒性）——两者正交，前者高不保证后者高。
+
+    Args:
+        noise_scale: 相对噪声幅度（1% 默认，约等于数据瑕疵/复权舍入量级）。
+        n_trials: 重复次数（每次独立抽噪声，均值降噪）。
+        seed: 随机种子（固定以保证同一因子重复入库结果一致）。
+        distribution: "gauss"（默认）或 "t"（重尾扰动，模拟极端数据错误，
+            论文用 t 分布作为更强扰动）。
+        df_t: t 分布自由度（仅 distribution="t" 时生效）。
+
+    Returns:
+        float ∈ [-1, 1]（实际应接近 1）；无法计算返回 NaN。
+    """
+    rng = np.random.default_rng(seed)
+    fp = factor_panel
+    if not isinstance(fp, pd.DataFrame) or fp.empty:
+        return float("nan")
+
+    ranked = fp.rank(axis=1)
+    # 两个 rank 面板之间的 Spearman ≡ Pearson（单调变换不变性）——直接在
+    # 已 rank 的数据上用默认 Pearson 省掉 corrwith 内部的重复整表排名。
+    # 2026-09-22 对照验证：单因子 5 trials 结果逐位一致（max|Δ|=0），
+    # 32.4s → 21.9s。
+    vals: list[float] = []
+    for _ in range(n_trials):
+        if distribution == "t":
+            eps = rng.standard_t(df_t, size=fp.shape)
+        else:
+            eps = rng.normal(0.0, 1.0, size=fp.shape)
+        noise = pd.DataFrame(eps, index=fp.index, columns=fp.columns)
+        perturbed = (fp * (1.0 + noise_scale * noise)).rank(axis=1)
+        c = ranked.corrwith(perturbed, axis=1)
+        v = c.dropna()
+        if len(v):
+            vals.append(float(v.mean()))
+    if not vals:
+        return float("nan")
+    return float(np.mean(vals))
