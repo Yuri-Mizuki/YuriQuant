@@ -619,9 +619,12 @@ class FactorLibrary:
             old = reg[dup].set_index("name").replace(r"^\s*$", np.nan, regex=True)
             add = new_df.set_index("name").reindex(old.index)
             upd = old.combine_first(add).reset_index()
+            # 2026-09-22 修：混合批次（新+已有）时 upd 只覆盖交集，
+            # 纯新增行会被 keep 过滤后静默丢失——必须显式并回
+            new_only = new_df[~new_df["name"].isin(known)]
+            out = pd.concat([keep, upd, new_only], ignore_index=True)
         else:
-            upd = new_df
-        out = pd.concat([keep, upd], ignore_index=True)
+            out = pd.concat([keep, new_df], ignore_index=True)
         self._save_registry(out)
         log.info("轻量登记: %d -> %d 因子（新增 %d, 更新 %d）",
                  before, len(out), n_add, int(dup.sum()))

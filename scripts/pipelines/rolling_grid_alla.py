@@ -104,6 +104,7 @@ FUNDAMENTAL_SETS = {
     # asset_growth_yoy（-0.046，资产扩张负向）为强因子；capex_intensity/spsr
     # 弱、bonus_freq_3y 覆盖 0.21（过不了 MIN_COVERAGE），入族参与席位竞争
     "sue_q", "asset_growth_yoy", "capex_intensity", "spsr", "bonus_freq_3y",
+    "ccc", "report_delay", "piotroski_f", "inv_rev_gap",
 }
 # 注：float_mktcap（流通市值）剔除——其 float_share 底层在 2021-01~04 覆盖 0.000 有数据洞，
 # 且与 ln_mktcap 规模信息冗余；规模/流通维度由 ln_mktcap + float_ratio 覆盖。

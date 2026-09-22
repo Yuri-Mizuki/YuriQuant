@@ -15,7 +15,7 @@
 | 5 | stage2 Phase 2 zz1000 | 快档 6–9h → 全档 1–2 天 | 🖥️ CPU 多核（sb3 PPO 常规 CPU 训练） |
 | 6 | 口径修复重训 E5/E4/P5 | 各 ≈5–7h | 🖥️💾 同批次 1 |
 | 7 | e2e 族年化口径重跑 | 未实测 | 🖥️ CPU，队列末尾 |
-| **8** | **表格基础模型对照（TabPFN-3 / TabICL V2 vs LightGBM）** | 冒烟半天本机 → 全量未实测（先 hs300 外推） | **🎮 GPU 强受益**（全量版建议单卡 ≥8GB 显存；hs300 小窗口 CPU 也能跑） |
+| **8** | **表格基础模型对照（TabPFN-3 / TabICL V2 vs LightGBM）** | 冒烟✅（09-22 本机完成，CPU 实测见 §批次 8）→ 全量未实测（先 hs300 外推） | **🎮 GPU 强受益（实测后升级为硬前置：CPU pred 27.7min/窗口，全量不可行）**；全量版建议单卡 ≥8GB 显存；hs300 小窗口 CPU 也能跑 |
 
 ---
 
@@ -170,10 +170,10 @@ zz1000 的 ST/停牌量会放大该边界）；跑完接 `stats/pbo.py`、判读
   保价值/红利风格信息）——检验"ortho 二次压制"诊断，单变量对照；
 - **E4 交互特征**（基本面状态分桶 × 量价因子组内 zscore 显式入池）——检验
   "基本面当条件变量"假设；
-- **P5 收尾（09-22 已构建入库：sue_q h20 IC −0.068 / asset_growth_yoy −0.046
-  两强因子 + capex/spsr 弱 + bonus 覆盖不足；已入 B5 族与慢信号对照）**：
-  剩 holder_dyn 族并入 FUNDAMENTAL_FAMILY_SETS 的拍板（本机对照 slow_only
-  +0.31pp 温和改善）与 E5/E4 重训对照。
+- **P5 收尾（09-22 全部构建入库：两批 9 因子，sue_q/asset_growth_yoy/
+  inv_rev_gap 强、piotroski_f 负号=A股质量反转、其余弱；已入 B5 族+慢信号
+  81 因子家族）**：剩 holder_dyn 族并入 FUNDAMENTAL_FAMILY_SETS 的拍板
+  （本机对照温和改善）与 E5/E4 重训对照。
 
 ## 批次 7（队列末尾）
 
@@ -208,8 +208,23 @@ KV cache 使 SHAP 计算快 120x；License = 研究与内部评估免费（TABPF
 （Top10% 等权，口径=批次 1 正名 open）。
 
 **两步走**：
-1. **本机冒烟（半天，CPU 可跑，不必等好机器）**：hs300 单窗口单 W、n_estimators=2，
-   校准 tabpfn v3 API 与耗时，验证 `TabICLPredictor` 模式可平移（新 Predictor 类半天）；
+1. **本机冒烟（半天，CPU 可跑，不必等好机器）✅ 已完成（09-22）**：hs300 单窗口单 W、
+   n_estimators=2，校准 tabpfn v3 API 与耗时，验证 `TabICLPredictor` 模式可平移（新
+   Predictor 类半天）。**实测校准数据**（`reports/tabpfn3_smoke/`，quick 模式 2024H2
+   训练 → 2025–2026H1 测试，~6000 训练样本）：
+   | 臂 | IC | IC_IR | fit | pred（CPU） |
+   |---|---|---|---|---|
+   | gbdt | 0.0241 | 2.84 | 1.5s | 0.5s |
+   | tabpfn3（v3 权重） | 0.0243 | 1.59 | 169.8s | 1659.6s |
+   | tabicl | 0.0271 | 1.80 | 1.0s | 864.4s |
+   - **API/环境已全通**：tabpfn 8.4.0（**7.1.1 不含 v3，ModelVersion 只到 V2_6**）+
+     license 走 `TABPFN_TOKEN` 环境变量（API 直接 POST `/account/license` {"version":...}
+     即接受，无需浏览器）；CPU 大样本须 `ignore_pretraining_limits=True`（v3 上限
+     5000 行，v2.x 是 1000）。权重 ckpt 已缓存 `%APPDATA%\tabpfn\`。
+   - **耗时外推**：CPU 上 tabpfn3 pred ≈ 27.7min/窗口（6000 训练样本 × 5000 测试行）
+     → 全量逐月滚动不可行，**GPU 是批次 8 硬前置**；tabicl CPU 减半（864s）也撑不住
+     全A 逐月。冒烟 IC 层面三臂同量级（0.024–0.027），v3 未见优势——方向假设（ICL+
+     滚动短窗）仍待 GPU 全量裁决。
 2. **好机器全量（本批次）**：全A（~5549 股 × 逐月滚动 × test_step=1）+ hs300/zz1000
    多池 + 多窗口。耗时未知——**先跑 hs300 全量外推**再决定全A 是否铺满。
    runner 新写（复用 PREDICTORS 注册 + `scripts/evaluation` 滚动协议，半天工程量）。
