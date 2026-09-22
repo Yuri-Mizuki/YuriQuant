@@ -225,6 +225,18 @@ MASTER/HIST/Transformer 系与轻量滚动架构不匹配，暂缓。
   （噪声内——组合稀释，价值在席位竞争）；**holder_dyn 并入（76 因子）
   slow_only 10.28%（+0.31pp）温和改善**、blend_s0.3 15.01%/回撤 35.1%——
   建议 920 后正式并入家族。登记映射 'p5' 已同步 SET_TO_FAMILY/SOURCE_PREFIXES。
+- [x] **基本面因子全面性审计（09-22 搜索核对，结论：覆盖 ~95%，无大类缺失）**：
+  对照 [Barra CNE6 风格体系](https://www.fxbaogao.com)（16 风格：Size/Beta/Mom/
+  ResVol/NLSize/Liq 量价域管辖 + Value/EarnYield/Growth/Leverage/Quality/Dividend/
+  Sentiment 全有）与学术模型（[q-factor I/A+ROE](https://www.nber.org)、
+  [FF5 RMW/CMA](https://english.ckgsb.edu.cn)、[Sloan 应计](https://www.anderson.ucla.edu)、
+  [Piotroski F](https://alphaarchitect.com)）：A股特色（质押/商誉/预告快报/送转/
+  股东户数/增减持/解禁/两融）全齐；研发/费用率因子已存在但弱且 rd 系 coverage
+  0.44（不动作）。**最后一批可自建增量 4 个（全部现有字段，半天级）**：
+  ccc 现金转换周期（ACCT_PAYABLE 在表）、report_delay 披露时滞（ann_date−
+  report_period）、piotroski_f（9 项组件齐全差合成）、inv_rev_gap 存货异动；
+  **数据墙 4 类（不做）**：分析师一致预期、审计意见、ESG、客户供应链。
+  操纵性应计（修正 Jones）可近似但工程中等，列后。
 - [ ] **P6**：DoubleEnsemble 式特征×样本重加权（若 P1–P3 后基本面贡献仍低）
 
 ---
