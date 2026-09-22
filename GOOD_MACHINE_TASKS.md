@@ -183,24 +183,28 @@ zz1000 的 ST/停牌量会放大该边界）；跑完接 `stats/pbo.py`、判读
 **背景**：项目 2026-08 已实测 TabICL v1（ICML 2025，`model/predictor.py::TabICLPredictor`
 基建现成——ICL 语义、chunk 推理、device 参数齐全）：**滚动 3 个月是唯一 4 窗口全正 IR 的
 方法（+2.48~+4.88，均值≈3.9）**，静态全年在 2025→2026H1 切换期翻车（−2.72）——ICL 模型
-与滚动短窗口天然适配。但遗留局限未补：test_step=3 抽样（IR 系统性高估）、HS300 单池、
-47 因子、n_estimators=2。**新变量**：TabPFN-3 已发布（2026-05-12，arXiv:2605.13986，
+与滚动短窗口天然适配。**v1 结论只作方向假设来源（09-22 由莉酱拍板：有 V2 不做 v1）**——
+v1 的遗留局限（test_step=3 抽样高估、HS300 单池、47 因子、n_estimators=2）**直接在 V2 上
+修复，不在 v1 上补验**：版本差异与抽样差异混在一起会污染对照，且在旧模型上加固的数字
+对用 V2 的正式对照没有参考价值。**新变量**：TabPFN-3 已发布（2026-05-12，arXiv:2605.13986，
 Prior Labs）——1M 行 × 200 特征、比 v2.5 快 20x、TabArena 单次 forward 1850 Elo（对照：
 LightGBM tuned+ensembled 1600 / TabICL V2 default 1700 / TabPFN-2.5 1550），
 KV cache 使 SHAP 计算快 120x；License = 研究与内部评估免费（TABPFN-3.0 License v1.0，
-本项目研究用途无碍）。**本次对照直接用最新版，不测 v2。**
+本项目研究用途无碍）。**本次对照全部用最新版：TabPFN-3 + TabICL V2，不测任何旧版。**
 
 **臂设计**（滚动协议沿用 08-08 结论）：
 - 臂 1：`gbdt`（现役基线，同窗口滚动对照）；
 - 臂 2：`tabpfn3`（TabPFN-3，CPU 兜底参数照抄 TabICLPredictor：n_estimators=2 起步、
   chunk 推理）；
-- 臂 3：`tabicl_v2`（tabicl 升级后同口径跑，验证 v1 结论是否在 V2 保持）；
+- 臂 3：`tabicl_v2`（tabicl 升级到 V2 后同口径跑；v1 的旧数字不进对照，只作
+  「ICL+滚动短窗口值得测」的方向依据）；
 - 臂 4：`tabpfn3+gbdt 秩平均`（h1h5 集成同款逻辑：两模型族信号秩相关 <0.3 时
   ensemble 才有增量空间——先算秩相关再决定此臂价值）。
 - 窗口扫描：W∈{2m, 3m}（08-08：2m 强趋势更强、3m 唯一全正，须在 920/全A 复验）。
 
 **评估口径**：可交易掩码 + 可交易 IC（防纸面三判据）；OOS IC + NW t；test_step=1
-全量测试日（修 v1 的 IR 高估）；组合层对照（Top10% 等权，口径=批次 1 正名 open）。
+全量测试日（v1 的 IR 高估问题直接在 V2 上修掉，不在 v1 上补验）；组合层对照
+（Top10% 等权，口径=批次 1 正名 open）。
 
 **两步走**：
 1. **本机冒烟（半天，CPU 可跑，不必等好机器）**：hs300 单窗口单 W、n_estimators=2，
@@ -210,9 +214,9 @@ KV cache 使 SHAP 计算快 120x；License = 研究与内部评估免费（TABPF
    runner 新写（复用 PREDICTORS 注册 + `scripts/evaluation` 滚动协议，半天工程量）。
 
 **预期管理（诚实标注）**：TabArena 数字是通用表格 benchmark，不等于 A 股截面有优势；
-v1 实测在 HS300 上静态 IR 最差（−2.72）、全靠滚动短窗口翻盘 → 对照的假设是
+v1 实测在 HS300 上静态 IR 最差（−2.72）、全靠滚动短窗口翻盘（方向假设）→ 对照的假设是
 「TabPFN-3 更快 + 更大 context 后，滚动短窗口协议下的优势能否复现并放大到全A」，
-**假设可能不成立，负结果同样归档**（参照 ml_algorithm_compare 先例：TabICL 0.029
+**假设可能不成立，负结果同样归档**（参照 ml_algorithm_compare 先例：TabICL v1 0.029
 < gbdt 0.051，静态口径已被证伪过一次）。
 
 **与批次 1 的关系**：正式对比用 920 新口径 pred 与特征池；冒烟不依赖批次 1。
