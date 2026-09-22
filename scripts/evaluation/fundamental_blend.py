@@ -56,8 +56,13 @@ def load_family_slices(names: set, dates: pd.DatetimeIndex, root: Path) -> dict:
 
 def build_slow_panel(base: dict, oos_days: pd.DatetimeIndex, ic_months: int,
                      embargo_months: int, min_cov: float, min_months: int,
-                     log=print) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """返回 (慢信号日频面板, 末月权重表)。"""
+                     log=print) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """返回 (ICIR 慢信号面板, max-ICIR 慢信号面板, 末月权重表)。
+
+    max-ICIR（华泰 6 法对比最优）：w ∝ Σ_s⁻¹μ，μ/Σ = trailing 月度 IC 的均值/
+    协方差；24 样本估 n≈50 的协方差严重病态 → 收缩 Σ_s = 0.5Σ + 0.5diag(Σ) +
+    1e-6 I，非负解经 active-set 迭代 2 轮。
+    """
     close = base["close"]
     all_days = close.index
     t0_days = month_firsts(oos_days)
@@ -81,10 +86,15 @@ def build_slow_panel(base: dict, oos_days: pd.DatetimeIndex, ic_months: int,
         ic_tab[n] = ic.where(cov >= min_cov)
     ic_tab = pd.DataFrame(ic_tab)  # index=月末日, columns=因子
 
-    # 逐信号月：trailing ICIR 权重（embargo）→ 截面加权 nanmean 合成
-    comp_rows, weight_rows = {}, []
-    months = pd.PeriodIndex(t0_days, freq="M")
-    for t0, m in zip(t0_days, months):
+    # 逐信号月：trailing ICIR / max-ICIR 权重（embargo）→ 截面加权 nanmean 合成
+    comp_rows, comp_max_rows, weight_rows = {}, {}, []
+
+    def _nanmean(w: pd.Series, t0) -> pd.Series:
+        Zt = pd.concat({n: panels[n].loc[t0] for n in w.index}, axis=1)
+        present = Zt.notna().mul(w, axis=1)
+        return (Zt.mul(w, axis=1)).sum(axis=1) / present.sum(axis=1)
+
+    for t0, m in zip(t0_days, pd.PeriodIndex(t0_days, freq="M")):
         window = ic_tab[(ic_tab.index.to_period("M") <= m - embargo_months)].tail(ic_months)
         mu, sd = window.mean(), window.std()
         icir = (mu / sd.replace(0.0, np.nan)).clip(0.0, 3.0).dropna()
@@ -94,19 +104,45 @@ def build_slow_panel(base: dict, oos_days: pd.DatetimeIndex, ic_months: int,
             ok = window.notna().sum() >= max(6, len(window) // 2)
             w = pd.Series(1.0, index=ok[ok].index)
             w = w / w.sum()
-        Zt = pd.concat({n: panels[n].loc[t0] for n in w.index}, axis=1)
-        present = Zt.notna().mul(w, axis=1)
-        comp_rows[t0] = (Zt.mul(w, axis=1)).sum(axis=1) / present.sum(axis=1)
+        comp_rows[t0] = _nanmean(w, t0)
+
+        w_max = w
+        cols = window.columns[window.notna().sum() >= max(6, int(len(window) * 0.6))]
+        if len(window) >= min_months and len(cols) >= 5:
+            W = window[cols].fillna(window[cols].mean())
+            mu_v = W.mean().to_numpy()
+            Sig = np.cov(W.to_numpy(), rowvar=False)
+            Sig_s = 0.5 * Sig + 0.5 * np.diag(np.diag(Sig)) \
+                + 1e-6 * np.eye(len(cols))
+            try:
+                wv = np.clip(np.linalg.solve(Sig_s, mu_v), 0.0, None)
+                for _ in range(2):  # active-set 迭代逼近非负最优
+                    act = wv > 0
+                    if act.sum() < 2:
+                        break
+                    sub = Sig_s[np.ix_(act, act)]
+                    sol = np.clip(np.linalg.solve(sub, mu_v[act]), 0.0, None)
+                    if sol.sum() <= 0:
+                        break
+                    wv[:] = 0.0
+                    wv[act] = sol / sol.sum()
+                w_max = (wv / wv.sum()) if wv.sum() > 0 else w
+                w_max = pd.Series(w_max, index=cols)
+            except np.linalg.LinAlgError:
+                pass
+        comp_max_rows[t0] = _nanmean(w_max, t0)
         weight_rows.append({"signal_month": str(m), "n_factors": len(w),
-                            **{k: round(v, 4) for k, v in
+                            **{k: round(float(v), 4) for k, v in
                                w.sort_values(ascending=False).head(8).items()}})
 
-    slow = pd.DataFrame(comp_rows).T
-    slow = slow.reindex(columns=close.columns).reindex(oos_days).ffill()
+    slow = pd.DataFrame(comp_rows).T.reindex(columns=close.columns) \
+        .reindex(oos_days).ffill()
+    slow_max = pd.DataFrame(comp_max_rows).T.reindex(columns=close.columns) \
+        .reindex(oos_days).ffill()
     weights = pd.DataFrame(weight_rows)
     log(f"[slow] 慢信号面板 {slow.shape}，{len(t0_days)} 个信号月；"
-        f"末月 Top 权重: {dict(weights.iloc[-1, 2:])}")
-    return slow, weights
+        f"末月 Top ICIR 权重: {weights.iloc[-1, 2:].dropna().astype(float).round(3).to_dict()}")
+    return slow, slow_max, weights
 
 
 def main():
@@ -143,7 +179,7 @@ def main():
     bench_idx = base["bench_index"].reindex(oos_days).fillna(0.0)
     bench_eqw = base["bench_eqw"].reindex(oos_days).fillna(0.0)
 
-    slow, weights = build_slow_panel(
+    slow, slow_max, weights = build_slow_panel(
         base, oos_days, args.ic_months, args.embargo_months,
         args.min_cov, args.min_months)
     weights.to_csv(dest / "slow_weights.csv", index=False, encoding="utf-8-sig")
@@ -153,12 +189,13 @@ def main():
     fast1020 = RG._rank_average([h1, h5, h10, h20]).reindex(index=oos_days,
                                                             columns=close.columns)
     fast_r, fast1020_r = fast.rank(axis=1, pct=True), fast1020.rank(axis=1, pct=True)
-    slow_r = slow.rank(axis=1, pct=True)
+    slow_r, slow_max_r = slow.rank(axis=1, pct=True), slow_max.rank(axis=1, pct=True)
 
     variants = {"baseline_ens_h1h5": fast_r, "slow_only": slow_r,
-                "h1020_baseline": fast1020_r}
+                "slow_only_max": slow_max_r, "h1020_baseline": fast1020_r}
     for lam in [float(x) for x in args.lambdas.split(",")]:
         variants[f"blend_s{lam:.1f}"] = (1 - lam) * fast_r + lam * slow_r
+        variants[f"blendmax_s{lam:.1f}"] = (1 - lam) * fast_r + lam * slow_max_r
     variants[f"h1020_s{float(args.lambdas.split(',')[1]):.1f}"] = (
         0.5 * fast1020_r + float(args.lambdas.split(",")[1]) * slow_r)
 

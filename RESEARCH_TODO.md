@@ -189,9 +189,32 @@ MASTER/HIST/Transformer 系与轻量滚动架构不匹配，暂缓。
   产物 `reports/fundamental_blend/`（不入库）。
 - [ ] **P3 E5**：基本面只对行业中性化臂（panels 变体+重跑，好机器）
 - [ ] **P4 E4**：交互特征（基本面分桶×量价组内 zscore 显式入池，重训）
-- [ ] **P5 基本面补缺（二阶；8 席位内按当期 IC 竞争上岗）**：财报版 SUE、
-  capex/总资产增速、送转预期（每股资本公积）、大股东增减持/回购事件；
-  分析师一致预期类=数据墙（需 Wind/朝阳永续级源），暂缓
+- [x] **E6 stacking + max-ICIR 对照（09-22 本机完成，open 口径）**：
+  **E6**（`scripts/evaluation/stack_blend.py`，7 成员 OOS 预测滚动元学习，
+  秩空间凸约束、逐月 walk-forward）：stack_fast4（4 horizon 学权）年化 15.86%
+  vs h1020 等权 15.75%——**学权未胜等权**（+0.11pp 在噪声内、回撤 40.2% 更深）；
+  stack_all7 12.82% 更差（元学习器在 fwd20 目标上把 slow_icir 学到 0.35、
+  ridge_h1 0.19——目标错配+成员相关的小样本过拟合），**但学到的权重结构独立
+  复现了诊断链结论"慢信号+h20 是最有价值成员"**。**max-ICIR**
+  （fundamental_blend --weighting 双权重，收缩 Σ+active-set 迭代）：
+  slow_only_max 7.87% << ICIR 版 10.17%——24 个月度 IC 样本估 50 因子协方差
+  病态，华泰"max-ICIR 最优"在小样本基本面域**不成立**；blendmax_s0.5 14.97%
+  略优于 blend_s0.5 但不及 blend_s0.3。**系列总结论：等权/简单规则稳健性
+  压倒学权/优化（与 1/N 文献一致），定版候选收敛为 h1020_baseline（要年化）
+  与 h1020⊕s0.5（要 Sharpe/回撤/换手）二选一，留 920 裁决。**
+- [x] **P5 数据源盘点（09-22 完成，结论：4/5 可自建或已建，无需付费源）**：
+  ① **增减持/高管持股已建好入库**——holder_dyn 族 9 因子（alt_inner_trade
+  2.6 万条 + alt_mgmt_hold 3.0 万条，mgmt_netbuy 系 h20 IC 0.012~0.013 随
+  horizon 走强），6 个已进 panels_neu，**但不在 FUNDAMENTAL_FAMILY_SETS
+  保护席位族→静默缺席（与当初另类族同病）**；注意 inner_* 系数据 2025 年
+  才开始（active_day_frac 0.167），mgmt_* 系全历史可用。**最便宜补缺动作=
+  把 holder_dyn 族并入慢信号家族/席位机制，可并入 920 后 E3'' 对照**。
+  ② SUE 财报版：income 表全字段（NET_PRO_EXCL_MIN_INT_INC 等 95 列）可自建。
+  ③ 总资产增速：TOTAL_ASSETS ✓。④ 送转预期：CAP_RESV ✓ + TOT_SHARE ✓ +
+  dividend 表（bonus_rate/base_share 送转历史）✓。⑤ capex：cash_flow 117 列
+  无"购建固定资产"专项科目（可 NET_CASH_FLOWS_INV_ACT/总资产 作投资强度代理，
+  或 akshare 免费接口补拉）。分析师一致预期=唯一真数据墙（tushare 未装、
+  akshare 东财接口历史浅，暂缓）。
 - [ ] **P6**：DoubleEnsemble 式特征×样本重加权（若 P1–P3 后基本面贡献仍低）
 
 ---
