@@ -4,6 +4,18 @@
 > 本机半天级穿插项不在本清单（见 TODO §一 🥉）。**约定：批次内任务可并行，
 > 批次间按序；每批产物 CSV/报告拷回本机入库归档（reports/ 不进 git）；
 > 全链成交口径已定版 open=T+1 可执行（正名产物），close=乐观上限对照（_close）。**
+> **资源标注（09-22 补）**：每批标 🖥️CPU / 🎮GPU / 💾大内存；GPU 强受益任务见批次 8。
+
+| 批次 | 内容 | 耗时 | 资源 |
+|---|---|---|---|
+| 1 | 920 治本重跑 + 定版臂 | ≈8–10h | 🖥️💾 CPU 密集 + 大内存（全A 面板 float32 ~24GB + 滚动工作副本） |
+| 2 | AI97 三臂 ×3 seed | ≈2–2.5h | 🖥️ 纯 CPU（多核受益小） |
+| 3 | GFlowNet 正式实验 | 校准 1–1.5h → 9–14h | 🖥️ CPU 可跑（GPU 可加速非必需，模型小） |
+| 4 | mf10 T 扫描全量 | 半天级 | 🖥️ CPU |
+| 5 | stage2 Phase 2 zz1000 | 快档 6–9h → 全档 1–2 天 | 🖥️ CPU 多核（sb3 PPO 常规 CPU 训练） |
+| 6 | 口径修复重训 E5/E4/P5 | 各 ≈5–7h | 🖥️💾 同批次 1 |
+| 7 | e2e 族年化口径重跑 | 未实测 | 🖥️ CPU，队列末尾 |
+| **8** | **表格基础模型对照（TabPFN-3 / TabICL V2 vs LightGBM）** | 冒烟半天本机 → 全量未实测（先 hs300 外推） | **🎮 GPU 强受益**（全量版建议单卡 ≥8GB 显存；hs300 小窗口 CPU 也能跑） |
 
 ---
 
@@ -33,6 +45,8 @@
 | 数据面 | 整个 `E:\data`：`parquet/`（原始表）+ `factor_library/all_a_2018_2026/`（panels + panels_neu 920 已含 + registry + ic_h*.parquet）+ `min5_hs300` + 日线缓存；~GB 级 |
 | Python | 系统解释器（本项目机为 D:/Python/Python312，含全部依赖；**.venv 缺 rl 依赖**，RL 测试/实验必须用系统解释器） |
 | 密钥 | `DEEPSEEK_API_KEY`（仅批次 2 的 llm 臂需要） |
+| 硬件建议 | 内存 ≥64GB（批次 1/5/6 全A 面板 + 滚动工作副本）；批次 8 需 GPU：单卡 ≥8GB 显存（TabPFN-3 官方口径单张 H100 推理 1M 行，hs300 规模 8GB 足够） |
+| Python 补装（仅批次 8） | `pip install tabpfn`（v3）+ tabicl 升级到 V2；HF 镜像 `HF_ENDPOINT=https://hf-mirror.com`（torch 用系统解释器现有版本即可） |
 
 ---
 
@@ -163,6 +177,45 @@ zz1000 的 ST/停牌量会放大该边界）；跑完接 `stats/pbo.py`、判读
 ## 批次 7（队列末尾）
 
 - e2e 族报告对齐年化口径（`perf_stats` 244→252 后 ~3% 系统性偏移）。
+
+## 批次 8：表格基础模型对照 🎮（TabPFN-3 / TabICL V2 vs LightGBM；09-22 立项）
+
+**背景**：项目 2026-08 已实测 TabICL v1（ICML 2025，`model/predictor.py::TabICLPredictor`
+基建现成——ICL 语义、chunk 推理、device 参数齐全）：**滚动 3 个月是唯一 4 窗口全正 IR 的
+方法（+2.48~+4.88，均值≈3.9）**，静态全年在 2025→2026H1 切换期翻车（−2.72）——ICL 模型
+与滚动短窗口天然适配。但遗留局限未补：test_step=3 抽样（IR 系统性高估）、HS300 单池、
+47 因子、n_estimators=2。**新变量**：TabPFN-3 已发布（2026-05-12，arXiv:2605.13986，
+Prior Labs）——1M 行 × 200 特征、比 v2.5 快 20x、TabArena 单次 forward 1850 Elo（对照：
+LightGBM tuned+ensembled 1600 / TabICL V2 default 1700 / TabPFN-2.5 1550），
+KV cache 使 SHAP 计算快 120x；License = 研究与内部评估免费（TABPFN-3.0 License v1.0，
+本项目研究用途无碍）。**本次对照直接用最新版，不测 v2。**
+
+**臂设计**（滚动协议沿用 08-08 结论）：
+- 臂 1：`gbdt`（现役基线，同窗口滚动对照）；
+- 臂 2：`tabpfn3`（TabPFN-3，CPU 兜底参数照抄 TabICLPredictor：n_estimators=2 起步、
+  chunk 推理）；
+- 臂 3：`tabicl_v2`（tabicl 升级后同口径跑，验证 v1 结论是否在 V2 保持）；
+- 臂 4：`tabpfn3+gbdt 秩平均`（h1h5 集成同款逻辑：两模型族信号秩相关 <0.3 时
+  ensemble 才有增量空间——先算秩相关再决定此臂价值）。
+- 窗口扫描：W∈{2m, 3m}（08-08：2m 强趋势更强、3m 唯一全正，须在 920/全A 复验）。
+
+**评估口径**：可交易掩码 + 可交易 IC（防纸面三判据）；OOS IC + NW t；test_step=1
+全量测试日（修 v1 的 IR 高估）；组合层对照（Top10% 等权，口径=批次 1 正名 open）。
+
+**两步走**：
+1. **本机冒烟（半天，CPU 可跑，不必等好机器）**：hs300 单窗口单 W、n_estimators=2，
+   校准 tabpfn v3 API 与耗时，验证 `TabICLPredictor` 模式可平移（新 Predictor 类半天）；
+2. **好机器全量（本批次）**：全A（~5549 股 × 逐月滚动 × test_step=1）+ hs300/zz1000
+   多池 + 多窗口。耗时未知——**先跑 hs300 全量外推**再决定全A 是否铺满。
+   runner 新写（复用 PREDICTORS 注册 + `scripts/evaluation` 滚动协议，半天工程量）。
+
+**预期管理（诚实标注）**：TabArena 数字是通用表格 benchmark，不等于 A 股截面有优势；
+v1 实测在 HS300 上静态 IR 最差（−2.72）、全靠滚动短窗口翻盘 → 对照的假设是
+「TabPFN-3 更快 + 更大 context 后，滚动短窗口协议下的优势能否复现并放大到全A」，
+**假设可能不成立，负结果同样归档**（参照 ml_algorithm_compare 先例：TabICL 0.029
+< gbdt 0.051，静态口径已被证伪过一次）。
+
+**与批次 1 的关系**：正式对比用 920 新口径 pred 与特征池；冒烟不依赖批次 1。
 
 ---
 
