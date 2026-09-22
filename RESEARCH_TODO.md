@@ -309,7 +309,7 @@ python -m scripts.factors.run_portfolio_phase2 --pool zz1000 \
 
 | 序 | 任务 | 说明 |
 |---|---|---|
-| **0** | **920 治本口径基线重跑**（TODO §一，命令已写明，≈5–7h）→ **好机器长实验队列**：① AI97 三臂 ×3 seed → ② 国金24 残余⑤ 校准轮（1 臂 1 seed）→ 视耗时铺三臂 → ③ mf10 T 扫描全量 → ④ stage2 Phase 2 zz1000 全量（快档→全档，命令见 §二）；**920 重跑完成后追加 E1'' horizon 定版臂**（`python -m scripts.evaluation.horizon_mix --pred-dir <920产物目录>` + buffer 20/30 臂，§一 基本面诊断 P1） | **迁移清单**：代码仓库（git clone）+ `E:\data` 数据面（因子库 parquet / min5_hs300 / 日线缓存，~GB 级；panels_neu 920 已含）+ Python 环境（系统解释器 D:/Python/Python312 有全依赖；.venv 缺 rl 依赖）+ `DEEPSEEK_API_KEY`（AI97 llm 臂需要）；产物 CSV/报告拷回本机入库归档 |
+| **0** | **920 治本口径基线重跑**（TODO §一，命令已写明，≈5–7h）→ **好机器长实验队列**：① AI97 三臂 ×3 seed → ② 国金24 残余⑤ 校准轮（1 臂 1 seed）→ 视耗时铺三臂 → ③ mf10 T 扫描全量 → ④ stage2 Phase 2 zz1000 全量（快档→全档，命令见 §二）；**920 重跑完成后追加 E1'' horizon 定版臂**（`python -m scripts.evaluation.horizon_mix --pred-dir <920产物目录>` + buffer 20/30 臂，§一 基本面诊断 P1）。**全部批次/命令/验收已汇总定稿 → [GOOD_MACHINE_TASKS.md](GOOD_MACHINE_TASKS.md)** | **迁移清单**：代码仓库（git clone）+ `E:\data` 数据面（因子库 parquet / min5_hs300 / 日线缓存，~GB 级；panels_neu 920 已含）+ Python 环境（系统解释器 D:/Python/Python312 有全依赖；.venv 缺 rl 依赖）+ `DEEPSEEK_API_KEY`（AI97 llm 臂需要）；产物 CSV/报告拷回本机入库归档 |
 | 1 | 本机半天级穿插（§一 🥉 六项；+基本面 E3 双层叠加回测，零重训） | 均挂已有基础设施 |
 | 2 | ~~研读批~~ **全部完成**：银河 0706+华安 226（09-20）、西南 T2RL（09-18）、国金19 Mamba2 归档（09-20）、AI43/AI29（09-20）、大模型投研速读批（09-20） | 报告均见 `reports/docs/research_notes/` |
 | 3 | 华泰3128 全频段 | 依赖分钟特征扩容，资源墙后置 |
