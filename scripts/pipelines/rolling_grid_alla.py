@@ -163,6 +163,23 @@ EXCLUDE_FEATURES: set[str] = set()
 USE_TRADABLE_LABELS: bool = False
 
 # ---------------------------------------------------------------------------
+# 市场状态特征（2026-09-23 接入，国金19 转译）：指数点位派生的日级广播特征。
+# 出处：国金19 研读笔记 §1.1 —— 研报三大信息注入中**只有指数点位带来稳定增益**
+# （时间/风格无稳定增益）；§四 补短板清单第 1 条「把三大宽基指数收益率/点位
+# 作为市场状态特征注入 GBDT 面板——对'普涨/普跌 vs 结构分化'行情区分有直接依据」。
+# 实现：model/market_features.py（ret/均线位置/波动/52周位置 × expanding z，
+# 全部只用 t 日及以前指数收盘，防前视有因果锁测试）。
+# 注入路径（stage_predict）：旁路并入特征集——**不过 select 漏斗**（逐股 IC
+# 对日级广播特征无定义）、**不进 FeatureStore 截面 zscore**（同日同值过截面
+# 标准化 std=0 → 整列 NaN）、**不进 existence_mask**（幽灵股守卫保持因子口径）。
+# 默认两只 = 本地缓存 2015 起全期覆盖的指数；沪深300 缓存缺 2018（OOS 首年
+# 全 NaN 会被 LightGBM 全程当缺失），不默认纳入，可 CLI 自选。
+# CLI: --market-features（须配 --out-tag 防覆盖主实验产物）
+# ---------------------------------------------------------------------------
+MARKET_FEATURE_INDICES = ("000001_SH", "399317_SZ")   # 上证指数 + 国证A指
+MARKET_FEATURES_ON: bool = False
+
+# ---------------------------------------------------------------------------
 # RRE 秩稳定性筛选（2026-09-14 接入）：剔除"排名天天变"的高换手因子。
 # 出处：国金 AlphaEval（系列之二十四），项目内既有实现在
 #   factor/gflownet/selection.py::select_low_corr（GFlowNet 路径）与
@@ -696,6 +713,27 @@ def stage_predict(quick: bool = False, only_horizons: list[int] | None = None):
     lab_mask = base["mask"] if USE_TRADABLE_LABELS else None
     if lab_mask is not None:
         log.info("+++ 训练标签用可交易掩码（T+1 成交口径）：掩掉买不进的样本")
+    # 市场状态特征（--market-features）：指数点位派生的日级广播特征，构造
+    # 一次逐年复用。旁路并入 feats（不过 select/不做截面 zscore/不进
+    # existence_mask，理由见常量区注释）。
+    mkt_feats: dict[str, pd.DataFrame] = {}
+    if MARKET_FEATURES_ON:
+        from data.cache_helpers import load_index_close_level
+        from model.market_features import build_market_state_features
+        closes: dict[str, pd.Series] = {}
+        for tag in MARKET_FEATURE_INDICES:
+            s = load_index_close_level(tag)
+            if s is None:
+                log.warning("市场特征指数 %s 缓存缺失，跳过（其余照常）", tag)
+                continue
+            closes[tag] = s
+        if closes:
+            mkt_feats = build_market_state_features(closes, all_days, close.columns)
+            log.info("+++ 市场状态特征：%d 面板（%s）", len(mkt_feats),
+                     sorted(mkt_feats)[:3])
+        else:
+            log.warning("--market-features 开启但无可用指数缓存 → 特征空集"
+                        "（pred 指纹已含开关，不会静默混口径）")
     for h in horizons:
         labels, _embargo = build_labels(close, horizon=h, mode="rank",
                                         tradable_mask=lab_mask)
@@ -729,6 +767,11 @@ def stage_predict(quick: bool = False, only_horizons: list[int] | None = None):
                 feats = store.get_many(feats_names)
                 feats = {k: v.reindex(index=all_days, columns=close.columns)
                          for k, v in feats.items()}
+                if mkt_feats:
+                    # 市场状态特征旁路并入（广播面板已对齐 all_days × close.columns）。
+                    # existence_mask 保持因子口径：广播特征同日同值，若并入会把
+                    # ">=1/4 特征非 NaN" 阈值语义稀释成恒真条件。
+                    feats.update(mkt_feats)
                 test_days = all_days[(all_days >= pd.Timestamp(f"{year}-01-01")) &
                                      (all_days <= pd.Timestamp(f"{year}-12-31"))]
                 log.info("[%s h%d] 年 %d: %d 特征, %d 测试日", mname, h, year,
@@ -964,7 +1007,20 @@ def _predict_fp(years: list[int]) -> str:
         "model_params": str(DEFAULT_MODEL_PARAMS),
         "roll": [N_FOLDS, N_FOLDS_LONG, MIN_TRAIN],
         "years": list(years),
+        # 市场状态特征臂：开关 + 指数清单 + 特征集版本（改特征定义时
+        # model/market_features.MARKET_FEAT_VERSION 须 +1，此处自动失配重训）
+        "market_features": (MARKET_FEATURES_ON, list(MARKET_FEATURE_INDICES),
+                            _market_feat_version()),
     })
+
+
+def _market_feat_version() -> int:
+    """market_features 特征集版本（懒 import；模块缺失时视为 0）。"""
+    try:
+        from model.market_features import MARKET_FEAT_VERSION
+        return int(MARKET_FEAT_VERSION)
+    except ImportError:
+        return 0
 
 
 def _backtest_fp(execution: str, pred_path: Path) -> str:
@@ -1472,6 +1528,10 @@ def main():
     ap.add_argument("--tradable-labels", action="store_true",
                     help="训练标签掩掉买不进的样本（T+1 成交口径可交易掩码）；"
                          "默认关闭 = 主实验现行口径。须配 --out-tag 防覆盖")
+    ap.add_argument("--market-features", action="store_true",
+                    help="市场状态特征臂（国金19 转译）：指数点位派生日级广播"
+                         "特征旁路并入 GBDT 特征集（不过 select 漏斗）；"
+                         "指数清单 MARKET_FEATURE_INDICES。须配 --out-tag 防覆盖")
     ap.add_argument("--out-tag", default=None,
                     help="消融臂输出目录后缀 -> reports/alla_rolling_<tag>")
     ap.add_argument("--sc-model", default=None,
@@ -1480,11 +1540,21 @@ def main():
     args = ap.parse_args()
 
     global INCLUDE_FUNDAMENTAL, OUT, PANELS_DIR, NAME_DIR, EXCLUDE_FEATURES
-    global USE_TRADABLE_LABELS, SC_MODEL
+    global USE_TRADABLE_LABELS, SC_MODEL, MARKET_FEATURES_ON
     if args.sc_model:
         SC_MODEL = args.sc_model
         log.info("+++ smallcap 信号模型 -> %s（产物加 __%s 后缀）",
                  SC_MODEL, SC_MODEL)
+    if args.market_features:
+        if not args.out_tag:
+            ap.error("--market-features 须配 --out-tag：否则 pred 产物与主实验"
+                     "同目录同名，exists-skip 不会重跑（静默混口径；指纹 "
+                     "sidecar 只保护后续运行，首次就会直接覆盖）")
+        MARKET_FEATURES_ON = True
+        from model.market_features import FEATURES_PER_INDEX
+        log.info("+++ 市场状态特征臂（国金19）：指数 %s -> %d 面板广播特征旁路"
+                 "并入", MARKET_FEATURE_INDICES,
+                 len(MARKET_FEATURE_INDICES) * len(FEATURES_PER_INDEX))
     if args.tradable_labels:
         if not args.out_tag:
             ap.error("--tradable-labels 须配 --out-tag："

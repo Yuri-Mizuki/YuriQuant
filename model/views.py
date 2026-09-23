@@ -30,7 +30,7 @@ from typing import Mapping
 
 import pandas as pd
 
-from model.predictor import BasePredictor, _grid
+from model.predictor import BasePredictor, grid_of
 
 __all__ = ["inject_by_feature_duplication", "TwoStagePredictor"]
 
@@ -108,7 +108,7 @@ class TwoStagePredictor(BasePredictor):
             labels: pd.DataFrame) -> "TwoStagePredictor":
         if self.view_feature not in features:
             raise KeyError(f"观点因子 {self.view_feature!r} 不在特征集中")
-        idx, cols = _grid(features, labels)
+        idx, cols = grid_of(features, labels)
         self.feature_names_ = sorted(features.keys())
         vp = features[self.view_feature].reindex(index=idx, columns=cols)
         m = self._daily_mask(vp, idx, cols)

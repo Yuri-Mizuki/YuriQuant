@@ -95,6 +95,49 @@ def load_index_returns(
     return ret
 
 
+def load_index_close_level(index_code: str) -> pd.Series | None:
+    """指数收盘点位序列（date → close；市场状态特征用）。
+
+    与 ``load_index_returns`` 的差异：要**点位**不要收益（ret/均线比/52周
+    位置全部在消费侧自行派生，且要求对指数缺失日是 NaN 而非 ffill——
+    ffill 会让"洞日"继承前值、人为平滑波动率类特征）。
+
+    只读本地 parquet（离线安全），缺失返回 None 由调用方降级。
+    ``index_code`` 接受 ``000001.SH`` / ``000001_SH`` 两种写法（缓存文件名
+    与 code 层存储分别用两种格式，内部统一探测）。
+    """
+    raw = str(index_code)
+    safe = raw.replace(".", "_")
+    p = Path(str(Config.cache()["root"])) / f"index_daily_{safe}.parquet"
+    if not p.exists():
+        _log.warning("指数 %s 无本地缓存（%s）", index_code, p)
+        return None
+    df = pd.read_parquet(p)
+    if "code" in getattr(df.index, "names", ()):
+        # code 层存的是原始格式（如 000001.SH）；输入可能是安全 tag 或原始
+        # 写法，统一枚举两种形态探测（safe→raw 重建：仅把「_」结尾段改点号
+        # 不安全，故直接用「_ 前两段后加点」的指数代码惯例）。
+        level_vals = set(df.index.get_level_values("code").unique())
+        cands = {raw, safe}
+        head, _sep, tail = safe.partition("_")
+        cands.add(f"{head}.{tail}")
+        key = next((c for c in cands if c in level_vals), None)
+        if key is None:
+            _log.warning("指数 %s 缓存 code 层无匹配（存有 %s）",
+                         index_code, sorted(level_vals)[:3])
+            return None
+        close = df.xs(key, level="code")["close"].sort_index()
+    elif "code" in df.columns:
+        close = (df.reset_index()
+                 .pivot(index="date", columns="code", values="close")
+                 .sort_index().iloc[:, 0])
+    else:
+        close = df["close"].sort_index()
+    close.index = pd.DatetimeIndex(close.index)
+    close.name = safe
+    return close
+
+
 def load_daily(cache, uni, index_code: str, begin: int, end: int | None,
                pool: str | None = None):
     """日历校验 + 成分股 + 日K线。

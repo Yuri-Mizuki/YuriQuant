@@ -35,15 +35,17 @@ log = logging.getLogger(__name__)
 __all__ = [
     "BasePredictor", "RidgePredictor", "LGBMPredictor", "LGBRankerPredictor",
     "TabICLPredictor", "PREDICTORS", "fit_predict_oos", "rolling_oos",
+    "grid_of",
 ]
 
 
 # ---------------------------------------------------------------------------
 # 网格与长矩阵（口径对齐 factor.synthesis.long_matrix：日期优先行序）
 # ---------------------------------------------------------------------------
-def _grid(features: Mapping[str, pd.DataFrame],
-          target: pd.DataFrame | None = None) -> tuple[pd.Index, pd.Index]:
-    """所有特征面板（+可选目标面板）的 (date, code) 交集网格。"""
+def grid_of(features: Mapping[str, pd.DataFrame],
+            target: pd.DataFrame | None = None) -> tuple[pd.Index, pd.Index]:
+    """所有特征面板（+可选目标面板）的 (date, code) 交集网格（公开 API：
+    同包 views.py 等兄弟模块也走此入口，私有名守卫 test_layering 强制）。"""
     if not features:
         raise ValueError("features 为空")
     idx = None
@@ -57,6 +59,10 @@ def _grid(features: Mapping[str, pd.DataFrame],
     if len(idx) == 0 or len(cols) == 0:
         raise ValueError("特征与目标无公共 (date, code) 网格")
     return idx, cols
+
+
+#: 旧名（模块内历史调用沿用）；外部模块请用 :func:`grid_of`。
+_grid = grid_of
 
 
 def _long_matrix(features: Mapping[str, pd.DataFrame], names: list[str],
