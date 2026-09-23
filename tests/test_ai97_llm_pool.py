@@ -35,14 +35,20 @@ from factor.rl.llm_pool import (
     OpenAICompatibleProposer,
     TemplateProposer,
     build_prompt,
+    build_semantic_check_prompt,
     canonical,
     check_many,
     check_report_formula,
     extract_formulas,
+    is_structural_duplicate,
+    llm_semantic_check,
     make_proposer,
     parse_report_formula,
+    parse_semantic_verdict,
     refresh_pool,
     seed_pool,
+    structure_keys,
+    structure_similarity,
     to_project,
     to_report,
 )
@@ -840,3 +846,182 @@ def test_arm_choices_are_closed_set():
         assert ap.parse_args(["--arm", arm]).arm == arm
     with pytest.raises(SystemExit):
         ap.parse_args(["--arm", "nope"])
+
+
+# ---------------------------------------------------------------------------
+# QuantaAlpha 机制抽取（东方证券 0407 研读，2026-09-22）
+#
+# ① AST 结构去重：树形状 Jaccard 判「同族不同窗 / 不同字段同结构」的冗余；
+# ② 复杂度三维约束：param_heavy（自由参数 ≥50%）+ too_many_features（字段 >6）
+#    —— 当前 6 字段空间下 ⑧ 天然不可触发，只锁「不误伤」；⑦ 在 scalar_operand
+#    拦截常数实参后也难触发，锁「不误伤」为主，字段/常数表扩容后自动生效；
+# ③ 语义一致性 LLM 审查：opt-in，依赖注入（ask 回调），离线可测。
+# ---------------------------------------------------------------------------
+def test_structure_keys_same_shape_different_window():
+    """同族不同窗：结构键集合应当完全相同（窗口不参与结构指纹）。"""
+    a = "Div(Sub($close, Mean($close, 5)), Std($close, 5))"
+    b = "Div(Sub($close, Mean($close, 20)), Std($close, 20))"
+    assert structure_keys(a) == structure_keys(b)
+    assert structure_similarity(a, b) == 1.0
+    assert is_structural_duplicate(a, [b]) == (True, b)
+
+
+def test_structure_keys_different_families():
+    """异族结构：反转 zscore vs 量价相关，Jaccard 应显著低于阈值。"""
+    a = "Div(Sub($close, Mean($close, 5)), Std($close, 5))"
+    c = "Corr($close, $volume, 20)"
+    assert structure_similarity(a, c) == 0.0
+    assert not is_structural_duplicate(c, [a])[0]
+
+
+def test_structure_similarity_symmetry_and_empty():
+    assert structure_similarity("Corr($close, $volume, 20)",
+                                "Corr($close, $volume, 20)") == 1.0
+    # 非法公式无结构 → 相似度 0、不构成重复
+    assert structure_similarity("Foo($close)", "Corr($close, $volume, 20)") == 0.0
+    assert is_structural_duplicate("Foo($close)", ["Corr($close, $volume, 20)"]) == \
+        (False, "")
+
+
+def test_structure_keys_accepts_project_syntax():
+    """项目语法直入也能对上（gp 风格窗口后缀剥掉后与研报语法同构）。"""
+    a = "Div(Sub($close, Mean($close, 5)), Std($close, 5))"
+    g = "div(sub(close, ts_mean_5(close)), ts_std_5(close))"
+    assert structure_similarity(a, g) == 1.0
+
+
+def test_structure_duplicate_reported_best_match(pool):
+    """_update 链路端到端：同族变体在求值前被 struct_dup 拦截。"""
+    base = "Div(Sub($close, Mean($close, 5)), Std($close, 5))"
+    variant = "Div(Sub($close, Mean($close, 20)), Std($close, 20))"
+    rep1 = seed_pool(pool, [base])
+    assert rep1.accepted == 1, rep1.status_counts
+    rep2 = seed_pool(pool, [variant])
+    assert rep2.accepted == 0
+    assert "rejected:struct_dup" in rep2.status_counts
+    assert ("struct_dup", variant) in rep2.rejected
+    # 池内没有第二个因子（变体没进求值，更没进池）
+    assert len(pool.formulas) == 1
+
+
+def test_seed_pool_struct_dedup_off_switch(pool):
+    """struct_dedup=False 时关闭结构去重（回退旧行为，供消融对照）。"""
+    base = "Div(Sub($close, Mean($close, 5)), Std($close, 5))"
+    variant = "Div(Sub($close, Mean($close, 20)), Std($close, 20))"
+    seed_pool(pool, [base])
+    rep = seed_pool(pool, [variant], struct_dedup=False)
+    assert "rejected:struct_dup" not in rep.status_counts
+    # 关闸后变体走 AlphaPool 相关性门槛（大概率 no_pool，但不是 struct_dup）
+
+
+def test_param_heavy_and_feature_cap_do_not_hurt_valid_formulas():
+    """⑦⑧ 在当前空间是「上保险」性质：既有合法公式一条都不能误伤。"""
+    valid = [
+        "Div(Sub($close, Mean($close, 20)), Std($close, 20))",
+        "Corr($close, $volume, 20)",
+        "Mul($close, $volume)",
+        "Div($volume, Mean($volume, 20))",
+        "Add(Div($close, $open), Div($high, $low))",
+        "Var(Med(Mean($close, 5), 5), 5)",
+    ]
+    for t in valid:
+        chk = check_report_formula(t)
+        assert chk.ok, f"{t} 被 ⑦⑧ 误伤：{chk.issues}"
+
+
+def test_too_many_features_and_param_heavy_triggers():
+    """⑦⑧ 的判定逻辑本身要能触发（借超宽字段空间构造越界公式）。
+
+    注意不能走完整 ``check_report_formula``：扩出来的假字段不在 ``_FIELD_DIM``
+    里，量纲校验会先 KeyError（量纲表与字段表是两张表，测试只关心 ⑧ 的计数逻辑），
+    故直接调 ``_semantic_issues``。
+    """
+    import factor.rl.llm_pool as lp
+
+    fields_backup = lp.FIELDS
+    dim_backup = lp._FIELD_DIM
+    try:
+        extra = {"amount": (1, 1), "turnover": (0, 1), "shares": (0, 0)}
+        lp.FIELDS = fields_backup + tuple(extra)
+        lp._FIELD_DIM = {**dim_backup, **extra}
+        # 7 个不同字段（>6 上限）：6 原生 + 1 假字段；量纲手工配平——
+        # amount(1,1) 与 close(1,0) 不能混加，用 turnover(0,1)/shares(0,0)
+        # 搭桥：price + vol + ... 让每层两侧同指数不现实（Add 链两侧必须逐位相等），
+        # 所以改用「全 shares 桥」——shares(0,0) 无量纲与谁都兼容，但 close
+        # (1,0) 与 volume(0,1) 相加仍是 mismatch。量纲冲突无所谓：
+        # _semantic_issues 是逐项独立判定，issues 允许同时含 dimension_mismatch
+        # 与 too_many_features，这里只断言后者在场。
+        text = ("Add(Add(Add(Add(Add(Add(Add($close, $volume), $vwap),"
+                " $open), $high), $low), $amount), $turnover)")
+        node = parse_report_formula(text)
+        n_f = len({str(s.value) for s in lp._walk(node) if s.kind == "field"})
+        assert n_f == 8, f"测试前提：应为 8 个不同字段，实际 {n_f}"
+        issues = lp._semantic_issues(node)
+        assert "too_many_features" in issues, issues
+        # 6 个字段恰好卡在上限（不 >6）→ 不触发（原生 6 字段全用上，无假字段）
+        lp.FIELDS = fields_backup + ("amount",)
+        text6 = ("Add(Add(Add(Add(Add($close, $volume), $vwap),"
+                 " $open), $high), $low)")
+        n_f6 = len({str(s.value) for s in lp._walk(parse_report_formula(text6))
+                    if s.kind == "field"})
+        assert n_f6 == 6, f"测试前提：应为 6 个不同字段，实际 {n_f6}"
+        issues6 = lp._semantic_issues(parse_report_formula(text6))
+        assert "too_many_features" not in issues6, issues6
+    finally:
+        lp.FIELDS = fields_backup
+        lp._FIELD_DIM = dim_backup
+
+    # ⑦ 参数过重：常数密度 ≥50%（RPN token 口径）。4 常数 + 1 字段 +
+    # 4 算子 = 9 tok，4*2=8 < 9 不触发；再加一层（5 常数 + 5 算子）= 11 tok，
+    # 5*2=10 < 11 仍不触发。能触发的最低密度：常数数 * 2 >= 总 token，
+    # 即常数至少占一半 —— 用 5 常数 + 1 字段 + 5 算子 = 11 tok 的变形仍不够，
+    # 改用窗口参数堆叠：Mean(Mean(Mean($close, 1), 1), 1) = 3 算子 + 1 字段 +
+    # 3 窗口 = 7 tok，参数 3*2=6 < 7 也不够。理论最小可触发构造在
+    # scalar_operand 拦截后几乎不存在（这正是模块 docstring 里的诚实边界），
+    # 故直接对 ⑦ 判据做手算锁定：
+    node_cnt = parse_report_formula("Add(Add(Add(Add($close, 5), 5), 5), 5)")
+    assert lp._n_tokens(node_cnt) == 9
+    n_param = sum(
+        1 if s.kind == "const" else
+        (1 if s.kind == "call" and s.value[1] is not None else 0)
+        for s in lp._walk(node_cnt))
+    assert n_param == 4
+    assert not (n_param * 2 >= lp._n_tokens(node_cnt))   # 4/9 < 50% 不触发
+
+
+def test_parse_semantic_verdict_json_and_fallbacks():
+    assert parse_semantic_verdict('{"verdict": "yes", "reason": "ok"}') is True
+    assert parse_semantic_verdict('{"verdict": "no", "reason": "x"}') is False
+    assert parse_semantic_verdict('前缀 {"verdict": "Yes"} 后缀') is True
+    assert parse_semantic_verdict("the answer is yes") is True
+    assert parse_semantic_verdict("the answer is no") is False
+    # 词边界：not 不得误中 no
+    assert parse_semantic_verdict("it is not consistent") is None or \
+        parse_semantic_verdict("it is not consistent") is False
+    # 无关文本 / 空文本 → None（审查通道故障，宁可不通过）
+    assert parse_semantic_verdict("今天天气不错") is None
+    assert parse_semantic_verdict("") is None
+    # 中文陷阱回归：「不一致」包含「一致」，子串匹配必误判（设计上不做中文兜底）
+    assert parse_semantic_verdict("该表达式与假设不一致") is None
+
+
+def test_build_semantic_check_prompt_contains_hypothesis_and_formula():
+    p = build_semantic_check_prompt("量价背离", "Corr($close, $volume, 20)")
+    assert "量价背离" in p and "Corr($close, $volume, 20)" in p
+    assert "JSON" in p
+
+
+def test_llm_semantic_check_injected_ask_and_exception():
+    formulas = ["Corr($close, $volume, 20)", "Sub($close, $open)"]
+    hyps = ["量价背离", "日内动量"]
+
+    def good_ask(prompt):
+        return '{"verdict": "yes"}' if "Corr" in prompt else '{"verdict": "no"}'
+
+    assert llm_semantic_check(formulas, hyps, ask=good_ask) == [True, False]
+
+    def boom(_prompt):
+        raise RuntimeError("网络炸了")
+
+    # 审查失败 → None（调用方按「未通过」处理，不静默放行）
+    assert llm_semantic_check(formulas, hyps, ask=boom) == [None, None]

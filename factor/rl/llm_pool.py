@@ -30,6 +30,12 @@ AlphaPool 的大模型因子池（华泰 AI97《大模型+强化学习因子挖�
 - 提案器：``TemplateProposer``（离线确定性，用于 mock / 无网环境）与
   ``OpenAICompatibleProposer``（OpenAI 兼容 HTTP 接口，研报用的是 deepseek）。
 - 注入原语：``seed_pool``（构造基础池）/ ``refresh_pool``（去弱留强）。
+- QuantaAlpha 机制抽取（2026-09-22，东方证券 0407）：① AST 结构去重
+  （``structure_similarity``，Jaccard ≥0.6 判同族变体，``_update`` 求值前拦截）；
+  ② 复杂度三维约束中的两项校验 ``param_heavy``（自由参数占比 ≥50%）与
+  ``too_many_features``（底层特征 >6；表达式长度已有 token 上限）；③ 语义一致性
+  前置校验（``llm_semantic_check``，LLM-judged，**opt-in 默认关**）。机制④
+  （假设绑定元数据）归东吴 MCTS Phase 0；机制⑤（池容量 50% 上限）备选未做。
 
 **复现边界（必须披露）**：
 
@@ -48,7 +54,7 @@ import logging
 import os
 import re
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Optional, Protocol, Sequence
+from typing import Any, Callable, Iterable, Optional, Protocol, Sequence
 
 import numpy as np
 
@@ -71,17 +77,24 @@ __all__ = [
     "OpenAICompatibleProposer",
     "PoolUpdateReport",
     "RNode",
+    "STRUCT_SIMILAR_THRESHOLD",
     "TemplateProposer",
     "UniformRandomProposer",
     "build_prompt",
+    "build_semantic_check_prompt",
     "canonical",
     "check_report_formula",
     "check_many",
     "extract_formulas",
+    "is_structural_duplicate",
+    "llm_semantic_check",
     "make_proposer",
     "parse_report_formula",
+    "parse_semantic_verdict",
     "refresh_pool",
     "seed_pool",
+    "structure_similarity",
+    "structure_keys",
     "to_report",
     "to_project",
 ]
@@ -380,6 +393,12 @@ def _divide(a, b):
     return (a[0] - b[0], a[1] - b[1])
 
 
+#: 底层原始特征数上限（QuantaAlpha 复杂度三维约束之三）。
+#: **固定常数 6，不随字段空间扩容放松** —— 若用 ``len(FIELDS)`` 做上限，
+#: 字段表一扩容约束就自动失效，形同虚设。研报口径即"≤6 个原始特征"。
+MAX_BASE_FEATURES: int = 6
+
+
 def _walk(node: RNode):
     yield node
     for c in node.children:
@@ -459,6 +478,33 @@ def _semantic_issues(node: RNode) -> list[str]:
     if not _is_panel_valued(node):
         issues.append("scalar_formula")
 
+    # ⑦ 参数过重（QuantaAlpha 复杂度三维约束之一：自由参数占比 <50%）：
+    #    「自由参数」= 常数叶子 + 窗口槽位。一条公式若一半以上 token 是参数，
+    #    经济结构就退化成"参数拟合"。判据按 **RPN token 口径**（与 _n_tokens /
+    #    MAX_EXPR_LENGTH 一致）：常数叶子占 1、窗口占 1、字段占 1、算子占 1
+    #    （滚动算子的窗口额外 +1）。
+    #    **触发性说明（诚实边界）**：当前 21 算子 / 6 字段 / 13 常数的空间里，
+    #    scalar_operand / trivial_terminal 已拦截全部「常数当实参」形态，能活到
+    #    这一步的公式常数密度天然很低 —— 在字段空间扩容前，本条实际不会被触发
+    #    （tests 里只锁「不误伤既有合法公式」）。它是给**常数表扩容 / 空间扩容**
+    #    之后的行为上保险，与 ⑧ 同性质：现在便宜（O(n) 扫一遍），将来自动生效。
+    n_tok = _n_tokens(node)
+    n_param = 0
+    for sub in _walk(node):
+        if sub.kind == "const":
+            n_param += 1
+        elif sub.kind == "call" and sub.value[1] is not None:
+            n_param += 1                      # 滚动窗口占 1 token
+    if n_tok > 0 and n_param * 2 >= n_tok:
+        issues.append("param_heavy")
+
+    # ⑧ 底层原始特征过多（QuantaAlpha 复杂度三维约束之一：≤6 个）：
+    #    引用字段去重数超过上限意味着 LLM 开始堆砌字段。上限是固定常数
+    #    :data:`MAX_BASE_FEATURES`（=6，不随字段空间扩容放松，见其 docstring）。
+    n_fields = len({str(s.value) for s in _walk(node) if s.kind == "field"})
+    if n_fields > MAX_BASE_FEATURES:
+        issues.append("too_many_features")
+
     return sorted(set(issues))
 
 
@@ -532,6 +578,185 @@ def check_report_formula(
 def check_many(formulas: Iterable[str], **kw) -> list[FormulaCheck]:
     """批量校验（保持输入顺序）。"""
     return [check_report_formula(f, **kw) for f in formulas]
+
+
+# ===========================================================================
+# 3.5) AST 结构去重（QuantaAlpha 机制抽取 ①，2026-09-22）
+# ===========================================================================
+# 出处：东方证券《QuantaAlpha：用大模型做量化因子挖掘》（arXiv:2602.07085），
+# Factor Agent 三约束之「冗余性」：树相似度判定「核心逻辑一致仅数学表达不同」。
+# 项目已有 canonical 化（factor/formula.py::_node_key + gflownet/expr.py 交换律
+# 排序），本节把它扩展成**子树集合 Jaccard**：两条公式共享的「带窗子结构」越多，
+# 越可能是同族变体。只对「至少含一个窗口或二元运算」的子结构做指纹，裸字段
+# （close/volume 各因子都有）不算结构证据。
+
+#: Jaccard 相似度判定阈值：≥ 此值判「结构性冗余」。0.6 = 共享 3 个子结构中 2 个。
+STRUCT_SIMILAR_THRESHOLD: float = 0.6
+
+
+def _strip_win_suffix(name: str) -> str:
+    """剥掉 GP 风格窗口后缀（``ts_mean_20`` → ``ts_mean``），使「同构不同窗」同键。"""
+    m = _GP_WINDOW_SUFFIX_RE.match(name)
+    return m.group(1) if (m and m.group(1)) else name
+
+
+def _structure_keys_of_ast(node) -> set[str]:
+    """项目 AST（``('call', spec, children, win)`` 元组）→ 结构子树键集合。
+
+    键 = 去窗口的前缀形态 ``op(arg1|arg2|...)``；参数若是子树则递归其键，
+    若是终端则用类型占位（``*``），保证 ``Mean(close,20)`` 与 ``Mean(volume,5)``
+    是**同一个结构**（去重判「形状」不判「内容」）。交换律算子（add/mul/max/min）
+    参数按键排序，与 gflownet canonical 同口径。
+    """
+    kind = node[0]
+    if kind in ("feat", "const"):
+        return set()
+    spec, children, _win = node[1], node[2], node[3]
+    arity = spec.arity
+    panel_args = children[:arity]
+    arg_keys: list[str] = []
+    for c in panel_args:
+        sub = _structure_keys_of_ast(c)
+        if c[0] in ("feat", "const"):
+            arg_keys.append("*")              # 终端占位：结构只看形状
+        else:
+            arg_keys.append("|".join(sorted(sub)))
+    key = f"{_strip_win_suffix(spec.name)}({','.join(arg_keys)})"
+    if spec.name in ("add", "mul", "max", "min") and len(arg_keys) == 2:
+        key = f"{_strip_win_suffix(spec.name)}({','.join(sorted(arg_keys))})"
+    out = {key}
+    for c in panel_args:
+        out |= _structure_keys_of_ast(c)
+    return out
+
+
+def structure_keys(formula: str) -> set[str]:
+    """项目/研报语法公式 → 结构子树键集合。解析失败返回空集合。
+
+    两种语法都收：先按**项目语法**解析（``div(close, 5)``），失败再借
+    :func:`canonical` 把研报语法（``Div($close, 5)``）转成项目语法重试。
+    """
+    node = None
+    try:
+        from factor.formula import parse_formula
+        from factor.operators import op_registry
+
+        try:
+            node = parse_formula(formula, features=list(FIELDS),
+                                 registry=op_registry())
+        except Exception:
+            proj = canonical(formula)          # 研报语法 → 项目语法
+            if proj:
+                node = parse_formula(proj, features=list(FIELDS),
+                                     registry=op_registry())
+    except Exception:
+        node = None
+    if node is None:
+        return set()
+    return _structure_keys_of_ast(node)
+
+
+def structure_similarity(a: str, b: str) -> float:
+    """两条公式的结构相似度 = 子树键集合的 Jaccard 系数（无结构时返回 0）。"""
+    ka, kb = structure_keys(a), structure_keys(b)
+    if not ka or not kb:
+        return 0.0
+    inter = len(ka & kb)
+    union = len(ka | kb)
+    return inter / union if union else 0.0
+
+
+def is_structural_duplicate(
+    formula: str, existing: Iterable[str],
+    *, threshold: float = STRUCT_SIMILAR_THRESHOLD,
+) -> tuple[bool, str]:
+    """判 ``formula`` 是否与 ``existing`` 中某条**结构冗余**（Jaccard ≥ threshold）。
+
+    返回 ``(是否重复, 最相似的那条)``；``existing`` 为空或 formula 无结构 → False。
+    """
+    kf = structure_keys(formula)
+    if not kf:
+        return False, ""
+    best, best_sim = "", -1.0
+    for ex in existing:
+        ke = structure_keys(ex)
+        if not ke:
+            continue
+        sim = len(kf & ke) / len(kf | ke)
+        if sim > best_sim:
+            best, best_sim = ex, sim
+    return (best_sim >= threshold), best
+
+
+# ===========================================================================
+# 3.6) 语义一致性前置校验（QuantaAlpha 机制抽取 ③，opt-in）
+# ===========================================================================
+# 出处同上：Idea Agent 产出的「投资假设」与 Factor Agent 产出的「表达式」之间
+# 做一次 LLM 忠实度审查（假设说"量价背离"，表达式是不是真的在度量价背离），
+# 不过关的不进回测，省下昂贵的评估预算。项目口径：**opt-in、默认关**——
+# 每次 LLM 审查都是额外 token 成本，且前 6+2 项离线校验已覆盖大部分明显病灶，
+# 只有联真 LLM 跑实验时才值得开。
+
+def build_semantic_check_prompt(hypothesis: str, formula: str) -> str:
+    """构造「假设 ↔ 公式」忠实度审查提示词（自拟口径，研报未给原文）。"""
+    return (
+        "你是量化因子研究员。请判断下面的因子表达式是否忠实实现了投资假设。\n\n"
+        f"投资假设：{hypothesis}\n"
+        f"因子表达式（研报语法）：{formula}\n\n"
+        "判断标准：表达式所用的字段与运算，是否构成假设所述经济逻辑的合理实现"
+        "（方向、比较对象、时间尺度大体一致即可，不要求逐字对应）。\n"
+        "只输出一行 JSON：{\"verdict\": \"yes\" 或 \"no\", \"reason\": \"一句话理由\"}"
+    )
+
+
+_SEM_VERDICT_RE = re.compile(r'"verdict"\s*:\s*"(yes|no)"', re.IGNORECASE)
+
+
+def parse_semantic_verdict(text: str) -> Optional[bool]:
+    """从 LLM 回复里抽忠实度判定。``True``=忠实 / ``False``=不忠实 / ``None``=无法解析。
+
+    解析失败返回 ``None``（调用方应视为「未通过」——审查通道本身故障时，
+    宁可错杀也不把未审查的公式放进回测白跑）。
+    """
+    if not text:
+        return None
+    m = _SEM_VERDICT_RE.search(text)
+    if m:
+        return m.group(1).lower() == "yes"
+    # 容错：无 JSON 时的英文关键词兜底（词边界匹配——"not" 不得误中 "no"）。
+    # 不做中文关键词兜底：「不一致」包含「一致」，子串匹配必然误判。
+    low = text.lower()
+    if re.search(r"\byes\b", low):
+        return True
+    if re.search(r"\bno\b", low):
+        return False
+    return None
+
+
+def llm_semantic_check(
+    formulas: Sequence[str],
+    hypotheses: Sequence[str],
+    *,
+    ask: Callable[[str], str],
+) -> list[Optional[bool]]:
+    """批量语义一致性审查（依赖注入，不绑定具体 LLM 客户端，离线可测）。
+
+    Args:
+        formulas: 公式列表（研报语法）。
+        hypotheses: 与 formulas 一一对应的投资假设。
+        ask: ``提示词 -> 回复文本`` 的回调（真实场景用 proposer 的 HTTP 通道；
+            测试场景用桩函数）。
+    Returns:
+        与 formulas 对齐的判定列表；第 i 项为 ``None`` 表示该项审查失败
+        （回复无法解析 / 抛异常），调用方应按「未通过」处理。
+    """
+    out: list[Optional[bool]] = []
+    for f, h in zip(formulas, hypotheses):
+        try:
+            out.append(parse_semantic_verdict(ask(build_semantic_check_prompt(h, f))))
+        except Exception:                     # 网络失败等：显式 None，不静默放行
+            out.append(None)
+    return out
 
 
 # ===========================================================================
@@ -1211,7 +1436,8 @@ def _update(pool: AlphaPool, formulas: Sequence[str], stage: str,
             origin: str, features: Sequence[str] | None,
             with_dropped: list[str] | None = None,
             n_pool_pre: int | None = None,
-            verbose: bool = True) -> PoolUpdateReport:
+            verbose: bool = True,
+            struct_dedup: bool = True) -> PoolUpdateReport:
     rep = PoolUpdateReport(
         stage=stage, proposed=len(formulas),
         best_obj_before=float(pool.best_obj),
@@ -1229,6 +1455,17 @@ def _update(pool: AlphaPool, formulas: Sequence[str], stage: str,
             rep.status_counts["rejected:" + chk.reason] = (
                 rep.status_counts.get("rejected:" + chk.reason, 0) + 1)
             continue
+        # 结构去重（QuantaAlpha 机制 ①，2026-09-22）：在**求值之前**按树形状
+        # 拦截「核心逻辑一致仅数学表达不同 / 仅改窗口」的同族变体，省一次
+        # 因子求值与相关系数计算。池内相关系数门槛（corr_threshold）拦的是
+        # 「数值巧合相似」，这里拦的是「形状本来就一样」，两道闸互补。
+        if struct_dedup:
+            dup, _best = is_structural_duplicate(chk.project, pool.formulas)
+            if dup:
+                rep.rejected.append(("struct_dup", text))
+                rep.status_counts["rejected:struct_dup"] = (
+                    rep.status_counts.get("rejected:struct_dup", 0) + 1)
+                continue
         status, _reward = pool.evaluate(chk.project, origin=origin)
         rep.status_counts[status] = rep.status_counts.get(status, 0) + 1
         if status == "pooled":
@@ -1245,20 +1482,26 @@ def _update(pool: AlphaPool, formulas: Sequence[str], stage: str,
 
 def seed_pool(pool: AlphaPool, formulas: Sequence[str], *, origin: str = "llm",
               features: Sequence[str] | None = None,
-              verbose: bool = True) -> PoolUpdateReport:
+              verbose: bool = True,
+              struct_dedup: bool = True) -> PoolUpdateReport:
     """把候选公式注入因子池（研报「构造基础池」）。
 
     先过 :func:`check_report_formula`（省掉必然无效的求值），再交给
     :meth:`AlphaPool.evaluate` 决定入池与否。公式一旦入池即带上 ``origin``
     来源标记，供 :meth:`AlphaPool.drop_worst` 按来源淘汰。
+
+    ``struct_dedup=True``（默认）时在求值前做 AST 结构去重（QuantaAlpha 机制 ①），
+    「仅改窗口 / 数学表达不同但结构同族」的变体不再进求值。
     """
-    return _update(pool, formulas, "seed", origin, features, verbose=verbose)
+    return _update(pool, formulas, "seed", origin, features,
+                   verbose=verbose, struct_dedup=struct_dedup)
 
 
 def refresh_pool(pool: AlphaPool, proposer: FactorProposer, *, n_new: int,
                  drop_rl_n: int, origin: str = "llm",
                  features: Sequence[str] | None = None,
-                 verbose: bool = True) -> PoolUpdateReport:
+                 verbose: bool = True,
+                 struct_dedup: bool = True) -> PoolUpdateReport:
     """研报的定期更新：先剔除 ``drop_rl_n`` 个 RL 因子，再注入 ``n_new`` 条大模型因子。
 
     顺序是**先剔除再注入**（研报超参表把 ``drop_rl_n`` 定义为"每次丢弃多少个 RL
@@ -1267,6 +1510,8 @@ def refresh_pool(pool: AlphaPool, proposer: FactorProposer, *, n_new: int,
 
     ``n_new`` 在研报里没有对应超参，本函数**不做默认**，必须由调用方显式给出，
     避免把自拟参数当成研报参数引用。
+
+    ``struct_dedup`` 透传 :func:`seed_pool`（同款 AST 结构去重开关）。
     """
     n_pre = len(pool.formulas)
     dropped = pool.drop_worst(origin="rl", n=drop_rl_n)
@@ -1275,4 +1520,5 @@ def refresh_pool(pool: AlphaPool, proposer: FactorProposer, *, n_new: int,
     banned = list(pool.fail_cache) + list(pool.empty_cache)
     proposed = proposer.propose(n_new, existing=pool.formulas, avoid=banned)
     return _update(pool, proposed, "refresh", origin, features,
-                   with_dropped=dropped, n_pool_pre=n_pre, verbose=verbose)
+                   with_dropped=dropped, n_pool_pre=n_pre, verbose=verbose,
+                   struct_dedup=struct_dedup)
