@@ -16,6 +16,7 @@
 | 6 | 口径修复重训 E5/E4/P5 | 各 ≈5–7h | 🖥️💾 同批次 1 |
 | 7 | e2e 族年化口径重跑 | 未实测 | 🖥️ CPU，队列末尾 |
 | **8** | **表格基础模型对照（TabPFN-3 / TabICL V2 vs LightGBM）** | 冒烟✅（09-22 本机完成，CPU 实测见 §批次 8）→ 全量未实测（先 hs300 外推） | **🎮 GPU 强受益（实测后升级为硬前置：CPU pred 27.7min/窗口，全量不可行）**；全量版建议单卡 ≥8GB 显存；hs300 小窗口 CPU 也能跑 |
+| 10 | 920 后收尾对照包（member_blend12 / 消融 5 组等） | 各分钟级~小时级 | 🖥️ CPU，依赖批次 1 新 pred |
 
 ---
 
@@ -29,11 +30,17 @@
    - **h1020⊕慢信号 λ0.5**（要风险调整）：15.02% / Sharpe 0.66 / 回撤 33.5% / 换手 51.1%。
 3. **学权/优化路线证伪**：E6 stacking 学权未胜等权（15.86% vs 15.75%，回撤更深）；
    max-ICIR 在小样本基本面域劣于简单 ICIR（7.87% vs 10.17%）——与 1/N 文献一致，
-   等权/简单规则稳健性胜出。
+   等权/简单规则稳健性胜出。**09-23 增证**：member_blend12 把成员扩到
+   3 模型 × 4 horizon = 12 个，学权 stack_all12 15.53% ≈ 生产 ens_h1h5 15.52%，
+   仍低于 h1020 等权 16.89%——学权无增量在更大成员集上再次复现。
 4. **慢信号自身是真 alpha**：纯基本面 ICIR 线性合成年化 10.17%、超额上证 +7.94pp、
    换手 26.8%，是合格的防御性分散器。
 5. **P5 数据盘点**：补缺清单 4/5 可自建或已建（增减持已入库待接席位），唯一数据墙
    =分析师一致预期类。详见 RESEARCH_TODO §一 基本面诊断。
+6. **member_blend12（09-23，882 存量 pred）**：合成增量几乎全在 horizon（标签）维度
+   不在模型族维度——eq_h20_3 16.00% > eq_h1_3 12.27%，同 horizon 混模型族是稀释；
+   全 12 等权 15.12% < h1020 16.89%（弱成员净拖累）。**h1020 已在 882 口径
+   member_blend12 上再次胜出（16.89%），920 后复验**。证据 `reports/member_blend12/`。
 
 ---
 
@@ -83,6 +90,8 @@ python -m scripts.evaluation.fundamental_blend \
     --pred-dir reports/alla_rolling_ortho920tl --out reports/fundamental_blend_920
 python -m scripts.evaluation.stack_blend \
     --pred-dir reports/alla_rolling_ortho920tl --out reports/stack_blend_920
+python -m scripts.evaluation.member_blend12 \
+    --pred-dir reports/alla_rolling_ortho920tl --out reports/member_blend12_920
 ```
 
 ### 1.4 buffer(20/30) 臂

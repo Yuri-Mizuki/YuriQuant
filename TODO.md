@@ -111,6 +111,20 @@
   1 分钟档位（存储 ×5）；先跑吞吐探针（`scripts/oneoff/_probe_minute_throughput.py`）估成本。
 - [ ] **另类数据因子轮次**：快讯/宏观/公告表通道就绪但因子未建（刻意留白），
   等下一次因子挖掘轮次消费；PIT 对齐规则见 `reports/docs/另类数据管道_数据源说明.md` §四。
+- [x] **llm_pool 机制抽取（QuantaAlpha 转译，09-23 完成）**：① AST 结构去重
+  （`structure_similarity` 子树 Jaccard ≥0.6 判同族变体——去窗口、终端占位、交换律排序，
+  `_update` 求值前拦截省评估预算，`struct_dedup=False` 可关）；② 复杂度三维约束两项新校验
+  `param_heavy`（自由参数占比 ≥50%，当前空间上保险性质）+ `too_many_features`
+  （底层特征 >`MAX_BASE_FEATURES=6`，固定常数不随字段表扩容放松）；③ 语义一致性前置校验
+  `llm_semantic_check`（LLM-judged，opt-in 依赖注入设计，解析失败=未通过不静默放行）。
+  `tests/test_ai97_llm_pool.py` 73→118 用例全绿；机制④归 MCTS Phase 0、机制⑤备选未做。
+- [x] **多模型×多标签预测合成对照（09-23 完成）**：12 成员（gbdt/ranker/ridge ×
+  h1/h5/h10/h20）等权逐级 + walk-forward 学权（`scripts/evaluation/member_blend12.py`，
+  与 stack_blend 同参）。结论：**增量在 horizon（标签）维度不在模型族维度**
+  （eq_h20_3 16.00% vs eq_h1_3 12.27%；同 horizon 混族反而稀释）；全 12 等权
+  15.12% < h1020 16.89%（−1.77pp）；学权 stack_all12 15.53% ≈ 生产 ens_h1h5
+  15.52%，对 12 成员学权仍无增量。**h1020 记为 920 后候选升级项**（882 存量
+  pred 结论，920 重跑后复验再议）。证据 `reports/member_blend12/`。
 
 ### 生产化 / 长期
 

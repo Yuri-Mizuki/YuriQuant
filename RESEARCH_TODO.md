@@ -103,7 +103,21 @@ done
 ### 🥉 补短板低成本项（半天级，本机穿插）
 
 - [ ] **指数点位市场状态特征进 GBDT 面板**（国金19 转译，半天）：三大宽基指数点位。
-- [ ] **多模型×多标签预测合成对照**（复用 `model/stacking.py` + `factor/synthesis.py`，零新代码）。
+- [x] **llm_pool 机制抽取（QuantaAlpha 转译，09-23 完成）**：① `structure_similarity`
+  AST 子树 Jaccard 去重（同族不同窗=1.0、异族=0.0 实测；`_update` 入池前拦截）；
+  ② `param_heavy` + `too_many_features`（MAX_BASE_FEATURES=6 固定上限）；
+  ③ `llm_semantic_check` opt-in 语义一致性（依赖注入，不触网可测）。118 用例全绿。
+  机制④（假设元数据）归东吴 MCTS Phase 0；机制⑤（池容量 50% 上限）与 AlphaPool
+  corr_threshold/capacity 语义重叠，备选不做。
+- [x] **多模型×多标签预测合成对照**（09-23 完成，`scripts/evaluation/member_blend12.py`）：
+  12 成员 = 3 模型 × 4 horizon（horizon 即不同训练标签，AI29 多标签维度的现有 pred
+  等价物）。**增量全在 horizon 维**：eq_h20_3 16.00% > eq_h10_3 14.19% > eq_h5_3
+  13.58% > eq_h1_3 12.27%；同 horizon 混模型族是稀释（eq_h1_3 12.27% <
+  solo_gbdt_h1 13.51%）；全 12 等权 15.12% < h1020 等权 16.89%（−1.77pp）；
+  walk-forward 学权 stack_all12 15.53% ≈ 生产 ens_h1h5 15.52%（学权对 12 成员
+  仍无增量，与 stack_blend 7 成员旧结论一致）。**h1020 = 920 后候选升级项**
+  （+1.37pp vs 生产基线，882 存量 pred 口径，重跑后复验再议）。
+  证据 `reports/member_blend12/`。ir/calmar 另类标签重训仍挂 920。
 - [ ] **`model/labels.py` 加 IR/Calmar 标签分支**（AI29，半天；注意研报如实披露的代价：
   另类标签的超额最大回撤**更差**，实验须同口径报回撤）。
 - [ ] **预测层观点注入等价实现**（AI43：特征复制×k / 两段模型，与 BL 优化层注入做三臂对照）。
