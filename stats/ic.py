@@ -197,17 +197,19 @@ def monotonicity_ratio(
     returns_panel: pd.DataFrame,
     n_quantiles: int = 5,
     direction: str = "auto",
+    min_valid_days: int = 60,
 ) -> float:
     """分层收益单调性占比（"因子动物园"文献的 monotonicity 指标）。
 
     每个截面日按因子值分 ``n_quantiles`` 组（与 :func:`quantile_backtest` 同口径：
-    当日因子赚当日未来一期收益、有效观测 < 组数跳过、qcut duplicates=drop），
-    若各组**平均收益从低因子组到高因子组依次递增**（严格单调上升）记该日
-    "单调"；单调性占比 = 单调日数 / 有效日数。
+    当日因子赚当日未来一期收益、qcut duplicates=drop），若各组**平均收益从低
+    因子组到高因子组依次递增**（严格单调上升）记该日"单调"；单调性占比 =
+    单调日数 / 有效日数。
 
     与 IC 的关系（t+单调性论文的动机）：IC/多空价差只看两端，单调性约束
-    **中间分组也须有序**——两者样本内相关近 0，各自独立预测样本外表现。
-    IC 均值 0.03 但正率 52% / 单调占比 50% 的因子实质接近抛硬币。
+    **中间分组也须有序**。注意本项目实测（09-23，连续因子子集 n=138）mono
+    与 |IC| 的 Spearman ≈ +0.34——弱相关而非论文所称的近零正交；"独立预测
+    样本外"是否成立须以本项目 920 后 OOS 验证为准。
 
     Args:
         direction: "auto"（默认）= 每日取"递增或递减"较优方向计入（因子
@@ -215,9 +217,21 @@ def monotonicity_ratio(
             递增；"desc" = 只认严格递减。
             注意：auto 会把"始终稳定反号"的因子也算满单调——这正确，因为
             因子可取反；真正被它抓的是"中间组乱序"的结构性缺陷。
+        min_valid_days: 有效日下限，低于此值返回 NaN（一个占比只有在足够
+            多的日子里才有意义）。
 
     Returns:
-        float ∈ [0, 1]；无有效日返回 NaN。
+        float ∈ [0, 1]；有效日不足或无有效日返回 NaN。
+
+    .. warning:: 2026-09-23 两处口径修正（低基数因子上旧实现产出误导值）：
+       1. **只认完整分组**：qcut duplicates=drop 后组数 < n_quantiles 的日
+          跳过。旧实现只要 ≥2 组就计入——而 auto 语义下 2 组日**必然**记
+          "单调"（单差分非正即负），3 组日随机基线 50%，二值/哑变量因子
+          mono 虚高，甚至由单日拼出假满分（alpha191_004 有效日仅 1 天 →
+          mono=1.0，实为 1/1）。合成对照：与收益无关的三值因子旧口径
+          mono=0.96（随机基线应 ≈0.1）。简并面板上的正确答案 = NaN
+          （5 分位单调性无定义），不是假 1.0。
+       2. **min_valid_days 下限**（新增参数）。
     """
     common_dates = factor_panel.index.intersection(returns_panel.index)
     fp = factor_panel.loc[common_dates]
@@ -238,7 +252,9 @@ def monotonicity_ratio(
         except ValueError:
             continue
         n_actual = groups.nunique()
-        if n_actual < 2:
+        # 只认完整分组（09-23 修正）：组数不足 = 分位数塌缩，该日无定义；
+        # 旧口径 ≥2 组即计入，让 auto 在低基数下几乎必真
+        if n_actual < n_quantiles:
             continue
         means = np.array([
             r_aligned[groups == g].mean() if (groups == g).sum() else np.nan
@@ -258,7 +274,7 @@ def monotonicity_ratio(
         n_ok += 1
         n_mono += int(mono)
 
-    if n_ok == 0:
+    if n_ok < max(min_valid_days, 1):
         return float("nan")
     return n_mono / n_ok
 
@@ -270,6 +286,7 @@ def perturbation_fidelity(
     seed: int = 42,
     distribution: str = "gauss",
     df_t: float = 5.0,
+    tie_aware: bool = True,
 ) -> float:
     """扰动保真度 PFS（AlphaEval 框架的 robustness 维度）。
 
@@ -289,6 +306,13 @@ def perturbation_fidelity(
         distribution: "gauss"（默认）或 "t"（重尾扰动，模拟极端数据错误，
             论文用 t 分布作为更强扰动）。
         df_t: t 分布自由度（仅 distribution="t" 时生效）。
+        tie_aware: True（默认，09-23 修正）= **同一截面内相同值共享同一扰动**
+            ——数据瑕疵语义：同一输入值受同样的系统性误差，并列名次集体
+            移动、相对秩序不变。False = 旧口径，逐元素独立噪声，会把本应
+            不可分的并列值人为打散（pap_breakout_atr 旧口径 PFS=0.145，
+            修正后 1.0——99.4% 并列面板的排名"脆弱"纯为噪声模型 artifact）。
+            与 IC 显著性独立：低 PFS 的真实来源应是**连续重尾分布**（少数
+            极端值之间的微小间隙被噪声放大），不是并列。
 
     Returns:
         float ∈ [-1, 1]（实际应接近 1）；无法计算返回 NaN。
@@ -305,12 +329,29 @@ def perturbation_fidelity(
     # 32.4s → 21.9s。
     vals: list[float] = []
     for _ in range(n_trials):
-        if distribution == "t":
-            eps = rng.standard_t(df_t, size=fp.shape)
+        if tie_aware:
+            # 并列共享扰动：按截面日的 unique 值抽噪声再 map 回去。
+            # 连续面板 unique 数 ≈ 行长，性能与旧口径同量级；简并面板
+            # unique 极少，反而快几个量级。
+            noise = pd.DataFrame(0.0, index=fp.index, columns=fp.columns)
+            for i in range(len(fp)):
+                row = fp.iloc[i]
+                uv = row.dropna().unique()
+                if len(uv) == 0:
+                    continue
+                draws = 1.0 + noise_scale * (
+                    rng.standard_t(df_t, len(uv)) if distribution == "t"
+                    else rng.normal(0.0, 1.0, len(uv))
+                )
+                noise.iloc[i] = row.map(dict(zip(uv, draws))).fillna(0.0)
+            perturbed = (fp * noise).rank(axis=1)
         else:
-            eps = rng.normal(0.0, 1.0, size=fp.shape)
-        noise = pd.DataFrame(eps, index=fp.index, columns=fp.columns)
-        perturbed = (fp * (1.0 + noise_scale * noise)).rank(axis=1)
+            if distribution == "t":
+                eps = rng.standard_t(df_t, size=fp.shape)
+            else:
+                eps = rng.normal(0.0, 1.0, size=fp.shape)
+            noise = pd.DataFrame(eps, index=fp.index, columns=fp.columns)
+            perturbed = (fp * (1.0 + noise_scale * noise)).rank(axis=1)
         c = ranked.corrwith(perturbed, axis=1)
         v = c.dropna()
         if len(v):

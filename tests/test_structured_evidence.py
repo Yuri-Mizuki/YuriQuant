@@ -1,15 +1,18 @@
-"""结构化证据统计量测试（evals 改造包 2026-09-22）。
+"""结构化证据统计量测试（evals 改造包 2026-09-22；09-23 口径修正后重写）。
 
 覆盖 ``stats.ic.monotonicity_ratio``（分层收益单调性占比）与
 ``stats.ic.perturbation_fidelity``（PFS 扰动保真度）。
 
-口径锁死要点：
-- 单调性与 ``quantile_backtest`` 同口径（当日因子赚当日未来一期收益、
-  有效观测 < 组数跳过、qcut duplicates=drop）；
+口径锁死要点（09-23 修正后）：
+- **mono 只认完整分组**：qcut duplicates=drop 后组数 < n_quantiles 的日跳过，
+  有效日 < min_valid_days 返回 NaN。回归锁：与收益无关的三值因子必须接近
+  随机水平（旧口径曾给 0.96 的假满分——组数不足 artifact）；
 - direction="auto" 对完美反号因子给 1.0（因子可取反，抓的是中间组乱序）；
+- **PFS tie_aware（默认）**：同一截面内相同值共享同一扰动。回归锁：高占比
+  并列面板 PFS=1.0（旧口径逐元素独立噪声曾把并列人为打散，pap_breakout_atr
+  实测 0.145 的"低 PFS"纯属噪声模型 artifact）；
 - PFS 与 ``factor_autocorr`` 正交：时间延续性高 ≠ 噪声鲁棒；
-- PFS 固定 seed → 同一面板重复调用结果逐位一致（入库可复现）；
-- 极端值主导的因子 PFS 显著低于 ranks 稳定的因子（判别力）。
+- PFS 固定 seed → 同一面板重复调用结果逐位一致（入库可复现）。
 """
 from __future__ import annotations
 
@@ -55,6 +58,51 @@ def test_monotonicity_noise_factor_is_coin_flip():
     # 随机基线：5 组全序排列中严格单调的占 2/120；auto 取双向 ≈ 4/120。
     # 噪声日间波动大，给宽上限 0.35 防翻车，下限 0（不该显著高于随机）。
     assert 0.0 <= ratio <= 0.35
+
+
+def test_monotonicity_low_cardinality_no_false_perfect():
+    """【09-23 回归锁】与收益无关的三值因子 → mono 必须是 NaN（不是假满分）。
+
+    旧口径只要 qcut 后 ≥2 组就计入该日：三值因子 qcut 后 2 组，auto 语义
+    下单差分非正即负 → 该日必然记"单调"，实测 mono=0.96。新口径只认完整
+    5 组：三值因子永远分不出 5 组 → 有效日=0 < min_valid_days → NaN。
+    这是"组数不足 artifact"的直接反证。
+    """
+    rng = np.random.default_rng(23)
+    idx, codes = _idx_codes()
+    tri = pd.DataFrame(rng.choice([0.0, 1.0, 2.0], p=[.6, .3, .1],
+                                  size=(N_DAYS, N_CODES)), idx, codes)
+    rets = pd.DataFrame(rng.normal(0, 0.02, (N_DAYS, N_CODES)), idx, codes)
+    ratio = monotonicity_ratio(tri, rets)
+    assert np.isnan(ratio)
+
+
+def test_monotonicity_binary_factor_returns_nan():
+    """二值因子同理：qcut 后最多 2 组 → 全部塌缩日跳过 → NaN。"""
+    rng = np.random.default_rng(29)
+    idx, codes = _idx_codes()
+    binary = pd.DataFrame((rng.normal(0, 1, (N_DAYS, N_CODES)) > 0).astype(float),
+                          idx, codes)
+    rets = pd.DataFrame(rng.normal(0, 0.02, (N_DAYS, N_CODES)), idx, codes)
+    assert np.isnan(monotonicity_ratio(binary, rets))
+
+
+def test_monotonicity_min_valid_days_floor():
+    """有效日不足 min_valid_days → NaN（单日拼不出占比）。
+
+    旧口径曾让 alpha191_004（有效日仅 1 天）给出 mono=1.0 的假满分。
+    """
+    rng = np.random.default_rng(31)
+    idx, codes = _idx_codes()
+    rets = pd.DataFrame(rng.normal(0, 0.02, (N_DAYS, N_CODES)), idx, codes)
+    factor = rets * 20  # 完美单调因子，但只给 10 天有效日
+    ratio = monotonicity_ratio(factor.iloc[:10], rets.iloc[:10],
+                               min_valid_days=60)
+    assert np.isnan(ratio)
+    # 放宽下限后同一段数据有值
+    ratio_ok = monotonicity_ratio(factor.iloc[:10], rets.iloc[:10],
+                                  min_valid_days=5)
+    assert 0.0 <= ratio_ok <= 1.0
 
 
 def test_monotonicity_direction_semantics():
@@ -120,11 +168,49 @@ def test_pfs_high_for_well_spread_factor():
     assert perturbation_fidelity(factor) > 0.99
 
 
+def test_pfs_tie_aware_ties_share_perturbation():
+    """【09-23 回归锁】高占比并列面板 → PFS=1.0（tie_aware 并列共享扰动）。
+
+    旧口径逐元素独立噪声会把本应不可分的并列值人为打散：99.4% 并列面板
+    实测 PFS=0.145。tie_aware 下并列名次集体移动、相对秩序不变 → PFS=1。
+    """
+    rng = np.random.default_rng(37)
+    idx, codes = _idx_codes()
+    # 99% 样本同值(1.0，非零——乘性噪声下 0 值天然不动，测不出差异)
+    # + 1% 独立大值：旧口径 artifact 的重现构造
+    vals = np.ones((N_DAYS, N_CODES))
+    rare_mask = rng.random((N_DAYS, N_CODES)) < 0.01
+    vals[rare_mask] = 10.0
+    tied = pd.DataFrame(vals, idx, codes)
+    pfs_tie = perturbation_fidelity(tied, tie_aware=True, n_trials=5)
+    assert pfs_tie > 0.999
+    # 旧口径对照：同一面板逐元素独立噪声 → 并列被人为打散 → 显著低于 1
+    pfs_old = perturbation_fidelity(tied, tie_aware=False, n_trials=5)
+    assert pfs_old < 0.95
+
+
+def test_pfs_tie_aware_matches_old_on_continuous():
+    """tie_aware 与旧口径在连续面板上应给出几乎相同的结果（并列极少）。
+
+    连续正态面板 unique 数 ≈ 行长，并列可忽略——两种噪声模型在数学上
+    近似同分布，均值差异应远小于 trial 间波动量级。回归锁：修正不能
+    改变连续因子的既有读数（alpha158_MA5 实测 Δ=0）。
+    """
+    rng = np.random.default_rng(41)
+    idx, codes = _idx_codes()
+    factor = pd.DataFrame(rng.normal(0, 1, (N_DAYS, N_CODES)), idx, codes)
+    pfs_new = perturbation_fidelity(factor, tie_aware=True, n_trials=5)
+    pfs_old = perturbation_fidelity(factor, tie_aware=False, n_trials=5)
+    assert abs(pfs_new - pfs_old) < 0.01
+
+
 def test_pfs_discriminates_extreme_value_dominated_factor():
     """少数极端值主导排名的因子 → PFS 显著更低（判别力测试）。
 
     构造：每行 95% 样本挤在 [0, 0.01] 的微小噪声带 + 5% 大极端值。
     极端值决定名次两端，但中间名次对同尺度扰动敏感度远高于正态因子。
+    （09-23 注：此为"连续重尾"型低 PFS 的正当来源——与并列打散
+    artifact 不同，这里的微小间隙是真实的数据敏感性。）
     """
     rng = np.random.default_rng(13)
     idx, codes = _idx_codes()
