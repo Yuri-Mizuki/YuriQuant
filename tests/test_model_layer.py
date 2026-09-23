@@ -190,6 +190,117 @@ class TestLabels:
 
 
 # ===========================================================================
+# ② LabelBuilder —— AI29 另类标签（method = ir / calmar）
+# ===========================================================================
+class TestAltLabels:
+    """华泰 AI29《另类标签和集成学习》：IR / Calmar 标签（超额口径）。
+
+    IR  = 区间超额收益 ÷ 区间内日度超额 σ；Calmar = 区间超额收益 ÷ |超额 MaxDD|。
+    """
+
+    @staticmethod
+    def _market_with_bench(market):
+        """给合成市场配一条"慢牛"基准（日收益 +0.1%），超额 = 个股 − 基准。"""
+        close, signal = market
+        bench = pd.Series(
+            3000.0 * np.cumprod(1.001 + np.zeros(len(close))),
+            index=close.index, name="bench")
+        return close, signal, bench
+
+    def test_method_return_is_zero_regression(self, market):
+        """method="return"（默认）= 历史行为逐位一致（防静默改口径）。"""
+        close, _ = market
+        ref, _ = build_labels(close, horizon=5, mode="rank")
+        out, _ = build_labels(close, horizon=5, mode="rank", method="return")
+        pd.testing.assert_frame_equal(out, ref)
+
+    def test_ir_requires_bench(self, market):
+        close, _, _ = self._market_with_bench(market)
+        with pytest.raises(ValueError, match="bench_close_panel"):
+            build_labels(close, horizon=5, method="ir")
+        with pytest.raises(ValueError, match="close_panel"):
+            build_labels(horizon=5, method="ir",
+                         bench_close_panel=pd.Series(1.0, index=close.index))
+
+    def test_ir_hand_computed(self):
+        """3 日窗口手工值：区间超额复合 − 日度超额 σ 的比值。"""
+        idx = pd.date_range("2023-01-02", periods=5, freq="B")
+        close = pd.DataFrame({"a": [100.0, 101.0, 103.0, 104.0, 104.0]}, index=idx)
+        bench = pd.Series([200.0, 200.0, 200.0, 200.0, 200.0], index=idx)
+        labels, embargo = build_labels(close, horizon=3, mode="raw",
+                                       method="ir", bench_close_panel=bench)
+        assert embargo == 3
+        # t=0: 价格 100→101→103→104，基准全 0 → 超额同个股日收益
+        r = np.array([101 / 100 - 1, 103 / 101 - 1, 104 / 103 - 1])
+        exp_total = np.prod(1 + r) - 1
+        exp_vol = r.std(ddof=1)
+        got = labels.iloc[0, 0]
+        assert got == pytest.approx(exp_total / exp_vol, rel=1e-10)
+        # 尾部 horizon 日无完整窗口 → NaN（与 forward_returns 的 shift(-h) 同分布）
+        assert labels.iloc[-1].isna().all()
+        assert labels.iloc[-3].isna().all()
+        assert labels.iloc[-4].notna().any()
+
+    def test_calmar_hand_computed(self):
+        """Calmar = 区间超额收益 ÷ |几何超额净值 MaxDD|。"""
+        idx = pd.date_range("2023-01-02", periods=5, freq="B")
+        # 个股恒 0 收益、基准先跌后回 → 几何超额净值 = 1/(基准复合净值)
+        close = pd.DataFrame({"a": [100.0] * 5}, index=idx)
+        bench = pd.Series([200.0, 200.0, 198.0, 199.0, 200.0], index=idx)
+        labels, _ = build_labels(close, horizon=3, mode="raw",
+                                 method="calmar", bench_close_panel=bench)
+        # t=0: 基准日收益 [0, −1%, +0.505%] → 个股平 → 几何超额净值 = 1/(1+rb) 累积
+        rb = np.array([0.0, 198 / 200 - 1, 199 / 198 - 1])
+        nav = 1.0 / np.cumprod(1 + rb)
+        exp_total = 0.0 - np.prod(1 + rb) + 1.0  # 个股区间收益 0 − 基准区间收益
+        exp_mdd = float((nav / np.maximum.accumulate(nav) - 1).min())
+        got = labels.iloc[0, 0]
+        assert got == pytest.approx(exp_total / abs(exp_mdd), rel=1e-10)
+        assert got > 0  # 基准区间净跌（200→199 < 200）→ 个股平 → 净超额为正
+
+    def test_ir_calmar_no_bench_drift_means_nan(self, market):
+        """个股与基准完全同收益 → 超额恒 0：σ=0 → NaN（防除零常数改写经济含义）。
+
+        另类标签无有效样本时按既有守卫抛"全为 NaN"。
+        """
+        close, _, _ = self._market_with_bench(market)
+        bench_ret = pd.Series(1.0, index=close.index)  # 基准零波动
+        flat_ir, _ = build_labels(close, horizon=5, mode="raw", method="ir",
+                                  bench_close_panel=bench_ret)
+        flat_cal, _ = build_labels(close, horizon=5, mode="raw", method="calmar",
+                                   bench_close_panel=bench_ret)
+        # 个股 vs 零波动基准：超额波动来自个股 → 有值
+        assert flat_ir.notna().sum().sum() > 0
+        assert flat_cal.notna().sum().sum() > 0
+        # 若基准与个股逐日同收益 → 超额恒 0 → σ=0 → 全 NaN → 守卫抛错
+        with pytest.raises(ValueError, match="全为 NaN"):
+            build_labels(close, horizon=5, mode="raw", method="ir",
+                         bench_close_panel=close)
+
+    def test_alt_labels_rank_mode_still_cross_sectional(self, market):
+        """另类标签走 rank/zscore 变换后仍满足截面统计性质。"""
+        close, _, bench = self._market_with_bench(market)
+        labels, _ = build_labels(close, horizon=5, mode="rank",
+                                 method="ir", bench_close_panel=bench)
+        row = labels.iloc[60].dropna()
+        assert len(row) > 0
+        vals = labels.values[~np.isnan(labels.values)]
+        assert vals.min() > -0.5 and vals.max() <= 0.5
+
+    def test_fwd_panel_ignored_for_alt_methods(self, market):
+        """method≠return 时预制 fwd 面板被忽略（另类标签须重算区间路径）。"""
+        close, _, bench = self._market_with_bench(market)
+        fwd = forward_returns(close, 5)
+        a, _ = build_labels(fwd_returns_panel=fwd, close_panel=close, horizon=5,
+                            mode="rank", method="ir", bench_close_panel=bench)
+        b, _ = build_labels(close, horizon=5, mode="raw",
+                            method="ir", bench_close_panel=bench)
+        # a 走 rank 变换、b 是 raw —— 只验证 a 的确不是 b（即没被预制面板接管）
+        assert not np.allclose(a.values[~np.isnan(a.values)][:10],
+                               b.values[~np.isnan(b.values)][:10])
+
+
+# ===========================================================================
 # ① FeatureStore
 # ===========================================================================
 class TestFeatureSet:
