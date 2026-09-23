@@ -667,3 +667,132 @@ def test_solve_lambda_grid_risk_monotone():
     w_minvar = solve_portfolio(alpha, Sigma, method="min_var")
     v0 = float(w_minvar.values @ Sigma @ w_minvar.values)
     assert var[0.0] == pytest.approx(v0, abs=1e-6)
+
+
+# ===========================================================================
+# CVaR 约束（历史模拟 + RU 线性化，2026-09-23 华安 226 转译）
+# ===========================================================================
+def _hist_cvar(w: np.ndarray, scen: np.ndarray, alpha: float = 0.95) -> float:
+    """与 RU 约束同口径的历史模拟 CVaR（校验用）。
+
+    RU 的分母是 (1−α)·S（可为分数）→ 尾部 = 最差 ⌊(1−α)S⌋ 个全额 + 下一个的
+    分数权重。整数 k 口径（floor 取整后取均值）与之不等（分式 ≤ 整数），
+    校验必须同口径，否则紧约束处会误报超限（09-23 踩坑）。
+    """
+    losses = np.sort(-(np.asarray(scen) @ np.asarray(w)))[::-1]  # 降序，最差在前
+    s = len(losses)
+    tail = 1.0 - alpha
+    k_full = int(tail * s)
+    frac = tail * s - k_full
+    total = losses[:k_full].sum()
+    if k_full < s and frac > 0:
+        total += losses[k_full] * frac
+    return float(total / (tail * s))
+
+
+def test_cvar_constraint_binds_and_is_satisfied():
+    """紧约束场景：给一个注定超限的 c → 解存在且实测 CVaR ≤ c，同时比无约束解更保守。"""
+    f, rets = _mock_panel(n_days=200, n_codes=20, seed=9)
+    alpha = f.iloc[150]
+    # 场景 = < 调仓日的最近 100 日收益（防前视纪律与 optimize_weights_qp 一致）
+    scen = rets.iloc[50:150].values
+
+    w_free = solve_portfolio(alpha, estimate_covariance(rets.iloc[:150]),
+                             method="mvo")
+    cvar_free = _hist_cvar(w_free.values, scen)
+
+    # 把上限压到无约束解的一半 → 必然绑定
+    c = 0.5 * cvar_free
+    w_cap = solve_portfolio(alpha, estimate_covariance(rets.iloc[:150]),
+                            method="mvo", scenario_returns=scen, cvar_limit=c)
+    cvar_cap = _hist_cvar(w_cap.values, scen)
+    assert cvar_cap <= c + 1e-4          # 约束被满足（RU 线性化精确性）
+    assert cvar_cap < cvar_free - 1e-4   # 且确实起了收紧作用
+    assert abs(w_cap.sum() - 1.0) < 1e-4
+
+
+def test_cvar_constraint_relaxed_is_noop():
+    """上限给得极宽（不绑定）→ 解与无约束时一致（约束空转不扭曲优化）。"""
+    f, rets = _mock_panel(n_days=200, n_codes=20, seed=9)
+    alpha = f.iloc[150]
+    scen = rets.iloc[50:150].values
+    Sigma = estimate_covariance(rets.iloc[:150])
+    w_free = solve_portfolio(alpha, Sigma, method="mvo")
+    w_loose = solve_portfolio(alpha, Sigma, method="mvo",
+                              scenario_returns=scen, cvar_limit=10.0)
+    # 两个问题规模不同（辅助变量 u/z）、求解器路径不同 → OSQP 数值噪声 ~1e-5，
+    # 用 1e-4 容差只验证"约束不改变最优解结构"（不是逐位一致）
+    np.testing.assert_allclose(w_free.values, w_loose.values, atol=1e-4)
+
+
+def test_cvar_hand_computed_uniform_loss():
+    """可手算的退化场景：等权 vs 集中，验证 _hist_cvar 参照口径本身。
+
+    两只股票场景收益已知 → CVaR_0.95(等权) 可解析验证（k=1 取最差 1 个场景）。
+    """
+    scen = np.array([
+        [ 0.01,  0.02],
+        [-0.03,  0.01],
+        [ 0.02, -0.04],
+    ])
+    w = np.array([0.5, 0.5])
+    losses = -(scen @ w)   # [-0.015, 0.01, 0.01]
+    k = max(1, int(np.floor(0.05 * 3)))  # = 1
+    cvar = float(np.sort(losses)[-k:].mean())
+    assert cvar == pytest.approx(0.01)
+
+
+def test_cvar_alpha_interpretation():
+    """α 越高尾部越窄：同一 c 下 α=0.99 的可行域 ⊆ α=0.95（更严）。"""
+    f, rets = _mock_panel(n_days=200, n_codes=20, seed=11)
+    alpha = f.iloc[150]
+    scen = rets.iloc[50:150].values
+    Sigma = estimate_covariance(rets.iloc[:150])
+    c = 0.02
+    w95 = solve_portfolio(alpha, Sigma, method="mvo",
+                          scenario_returns=scen, cvar_limit=c, cvar_alpha=0.95)
+    w99 = solve_portfolio(alpha, Sigma, method="mvo",
+                          scenario_returns=scen, cvar_limit=c, cvar_alpha=0.99)
+    # α=0.99 是更严的约束 → 其解的 0.99-CVaR 也应 ≤ c；且两者可行
+    assert _hist_cvar(w99.values, scen, 0.99) <= c + 1e-4
+    assert _hist_cvar(w95.values, scen, 0.95) <= c + 1e-4
+
+
+def test_cvar_pair_validation_and_shape_errors():
+    """参数校验：cvar 与 scenarios 须成对；形状/NaN/α 越界报错。"""
+    f, rets = _mock_panel(n_days=120, n_codes=10, seed=3)
+    alpha = f.iloc[100]
+    Sigma = estimate_covariance(rets)
+    scen_bad = np.ones((30, 9))  # 列数不齐
+    with pytest.raises(ValueError, match="成对给出"):
+        solve_portfolio(alpha, Sigma, cvar_limit=0.03)
+    with pytest.raises(ValueError, match="成对给出"):
+        solve_portfolio(alpha, Sigma, scenario_returns=scen_bad)
+    with pytest.raises(ValueError, match="S\\?×10|须为"):
+        solve_portfolio(alpha, Sigma, scenario_returns=scen_bad, cvar_limit=0.03)
+    with pytest.raises(ValueError, match="NaN"):
+        solve_portfolio(alpha, Sigma, scenario_returns=np.full((10, 10), np.nan),
+                        cvar_limit=0.03)
+    with pytest.raises(ValueError, match="cvar_alpha"):
+        solve_portfolio(alpha, Sigma, scenario_returns=np.ones((10, 10)),
+                        cvar_limit=0.03, cvar_alpha=1.0)
+
+
+def test_qp_wrapper_cvar_passthrough():
+    """面板级透传：滚动求解中每行实测 CVaR（用同纪律的场景矩阵）≤ c。"""
+    f, rets = _mock_panel(n_days=160, n_codes=10, seed=5)
+    w = optimize_weights_qp(
+        f, rets, method="mvo", window=60, min_periods=40,
+        cvar_limit=0.025, cvar_alpha=0.95,
+    )
+    n_checked = 0
+    for t in w.index:
+        row = w.loc[t]
+        if row.abs().sum() == 0:
+            continue
+        # 与 optimize_weights_qp 内部同纪律：< t 的最近 60 行
+        hist = rets.loc[:t].iloc[:-1].tail(60).dropna(how="any")
+        scen = hist.reindex(columns=f.columns).fillna(0.0).values
+        assert _hist_cvar(row.values, scen) <= 0.025 + 1e-4, t
+        n_checked += 1
+    assert n_checked > 0

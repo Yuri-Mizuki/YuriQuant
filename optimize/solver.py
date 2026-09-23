@@ -13,7 +13,8 @@
    - 目标：最小方差 min w'Σw / TEV min (w-wb)'Σ(w-wb) − λ·α'w / MVO min w'Σw − λ·α'w。
    - 约束（线性、**精确满足**，优于投影法的近似）：
      预算 sum(w)=budget、个股上限 w≤max、行业中性（等式）、
-     换手（|w−w_prev| 线性化，单边换手口径与回测一致 0.5·Σ|Δw|）。
+     换手（|w−w_prev| 线性化，单边换手口径与回测一致 0.5·Σ|Δw|）、
+     CVaR（RU 线性化 + 历史模拟场景，2026-09-23，华安 226 转译）。
    - 可选换手惩罚（L1 进目标，对应线性冲击成本）。
 
 与启发式投影的定位：
@@ -254,6 +255,9 @@ def solve_portfolio(
     tau: float = 0.05,
     delta: float = 2.5,
     rp_refine: bool = True,
+    scenario_returns: np.ndarray | pd.DataFrame | None = None,
+    cvar_limit: float | None = None,
+    cvar_alpha: float = 0.95,
 ) -> pd.Series:
     """cvxpy QP 单截面求解（P2：BL 观点融合、多空、A-C 成本惩罚）。
 
@@ -294,6 +298,15 @@ def solve_portfolio(
         rp_refine: method="risk_parity" 时是否做 CCD 精炼（近似解 → 精确等风险贡献）。
             目标函数里带成本惩罚、或存在个股上限 / 行业 / 风格 / 换手等额外约束时会
             自动跳过——精炼只保持 Σw=1 与 w>0，无法保证其他约束仍可行。
+        scenario_returns: 历史模拟场景收益矩阵 (S×N)（行 = 场景/历史日，列 = 股票，
+            列序与 alpha.index 对齐；**收益口径**，正 = 赚）。CVaR 约束的损失
+            定义为 loss_s = −r_s·w（组合在该场景的亏损）。典型来源：调仓日之前
+            window 日的收益面板（防前视由调用方保证——与 rolling_covariance 同纪律）。
+        cvar_limit: CVaR 上限 c（与 scenario_returns 配合使用）。约束
+            ``CVaR_α(loss) ≤ c``，loss = −场景收益·w（正 = 亏损）。
+            c 的量级 = 单期（场景频率）损失，如日频场景 c=0.03 表示
+            "最差 5% 日的平均亏损 ≤ 3%"。None = 不启用 CVaR 约束。
+        cvar_alpha: CVaR 置信水平 α ∈ (0,1)，默认 0.95（尾部 = 最差 1−α 比例场景）。
     Returns:
         Series(index=code) 最优权重；不可持仓（alpha NaN）股票恒为 0。
     """
@@ -304,6 +317,11 @@ def solve_portfolio(
         raise ValueError("method='tev' 需要 benchmark 基准权重")
     if method == "risk_parity" and allow_short:
         raise ValueError("risk_parity 要求纯多头（w > 0）")
+    if (cvar_limit is not None) != (scenario_returns is not None):
+        raise ValueError(
+            "cvar_limit 与 scenario_returns 须成对给出（历史模拟场景 + 上限）")
+    if cvar_limit is not None and not (0.0 < cvar_alpha < 1.0):
+        raise ValueError(f"cvar_alpha 须 ∈ (0,1)，收到 {cvar_alpha}")
 
     codes = list(alpha.index)
     n = len(codes)
@@ -369,6 +387,29 @@ def solve_portfolio(
         if B.shape[1] > 0:
             constraints.append(cp.abs(B.T @ w) <= style_tolerance)
 
+    # ---- 约束：CVaR（历史模拟 + Rockafellar-Uryasev 线性化，2026-09-23 华安 226 转译）----
+    # loss_s = −r_s·w（场景 s 的组合亏损，正 = 亏）。RU（2000）：
+    #   CVaR_α = min_u u + 1/((1−α)S)·Σ z_s,  z_s ≥ loss_s − u, z_s ≥ 0
+    # 把 min_u 提升为约束「u + 1/((1−α)S)·Σ z_s ≤ c」后整式仍是 LP 可行域——
+    # 对任何 (w, u)，取 z_s = max(loss_s − u, 0) 即最优 z，因此约束等价于
+    # CVaR_α(w) ≤ c（u 自动扮演 VaR 的角色，无需预先算出）。
+    if cvar_limit is not None:
+        R = np.asarray(scenario_returns, dtype=float)  # (S, N)
+        if R.ndim != 2 or R.shape[1] != n:
+            raise ValueError(
+                f"scenario_returns 须为 (S×{n})，列序对齐 alpha.index，收到 {R.shape}")
+        if not np.isfinite(R).all():
+            raise ValueError("scenario_returns 含 NaN/Inf：请先清洗场景矩阵")
+        n_scen = R.shape[0]
+        if n_scen < 2:
+            raise ValueError("scenario_returns 至少需要 2 个场景")
+        u = cp.Variable()  # 辅助变量（最优解处 ≈ VaR_α）
+        z = cp.Variable(n_scen, nonneg=True)  # 场景超额损失
+        # 损失向量式：z ≥ −R·w − u（逐场景）
+        constraints.append(z >= -(R @ w) - u)
+        tail = 1.0 - cvar_alpha
+        constraints.append(u + cp.sum(z) / (tail * n_scen) <= cvar_limit)
+
     # ---- 目标函数 ----
     score = _alpha_score(alpha).fillna(0.0).values
     if method == "min_var":
@@ -421,9 +462,16 @@ def solve_portfolio(
 
     objective = cp.Minimize(sum(obj_parts))
     prob = cp.Problem(objective, constraints)
-    # risk_parity 含 cp.log（指数锥）→ OSQP（仅 QP）不可用，需 SCS/ECOS；其余 QP 用 OSQP
+    # risk_parity 含 cp.log（指数锥）→ OSQP（仅 QP）不可用，需 SCS/ECOS；其余 QP 用 OSQP。
+    # CVaR 约束激活时 RU 线性化引入 S+1 个辅助变量（z/u），紧约束下 OSQP 默认
+    # max_iter=4000 不够（实测 user_limit，2026-09-23）→ 提到 200k（毫秒级问题不构成负担）。
     if method == "risk_parity":
         prob.solve(solver=cp.SCS, verbose=False, eps=1e-6, max_iters=100_000)
+    elif cvar_limit is not None:
+        # eps 收紧到 1e-8：RU 辅助变量让 OSQP 默认容差（~1e-4）下的解在
+        # 紧约束处可超出 c 达 1e-4 量级（实测 0.02511 vs c=0.025，09-23）
+        prob.solve(solver=cp.OSQP, verbose=False, max_iter=200_000, eps_abs=1e-8,
+                   eps_rel=1e-8)
     else:
         prob.solve(solver=cp.OSQP, verbose=False)
     if prob.status not in ("optimal", "optimal_inaccurate"):
@@ -439,6 +487,7 @@ def solve_portfolio(
             (max_weight is not None and max_weight < 1.0)
             or industry_map is not None
             or (style_exposures is not None and np.asarray(style_exposures).shape[1] > 0)
+            or cvar_limit is not None  # CVaR 约束会被精炼破坏（精炼只保 Σw 与 w>0）
             or (
                 prev_weights is not None
                 and (
@@ -556,6 +605,8 @@ def optimize_weights_qp(
     delta: float = 2.5,
     rp_refine: bool = True,
     max_weight_change: float | None = None,
+    cvar_limit: float | None = None,
+    cvar_alpha: float = 0.95,
     **kwargs: Any,
 ) -> pd.DataFrame:
     """面板级求解器组合优化（与 optimize_weights 同签名风格、同输出约定）。
@@ -574,6 +625,9 @@ def optimize_weights_qp(
             总杠杆≤gross_limit）。
         views / market_weights / tau / delta: Black-Litterman（method="bl" 时生效）。
         quadratic_cost: A-C 二次冲击成本系数（与 turnover_penalty 线性项组合）。
+        cvar_limit / cvar_alpha: CVaR 约束（见 solve_portfolio）。场景矩阵由本函数
+            从 returns_panel 自动构造：调仓日 t 用 **< t** 的最近 window 行
+            （与 rolling_covariance 同一防前视纪律），对齐当日因子列。
         prev_weights: 面板级 DataFrame 时取**上一期输出权重**（滚动持仓）；
             Series 时每期广播。仅 max_turnover / max_weight_change /
             turnover_penalty / quadratic_cost 启用时生效。
@@ -622,6 +676,15 @@ def optimize_weights_qp(
             row = industry_panel.loc[t].dropna()
             if not row.empty:
                 ind_map_t = row.to_dict()
+        # CVaR 场景矩阵：与 rolling_covariance 同一防前视纪律（< t 的最近 window 行）
+        scen = None
+        if cvar_limit is not None:
+            hist = returns_panel.loc[:t].iloc[:-1].tail(window).dropna(how="any")
+            if len(hist) < 2:
+                rows.append(pd.Series(0.0, index=codes))
+                prev_series = None
+                continue
+            scen = hist.reindex(columns=codes).fillna(0.0).values
         try:
             w = solve_portfolio(
                 alpha, Sigma, method=method, risk_aversion=risk_aversion,
@@ -636,6 +699,7 @@ def optimize_weights_qp(
                 short_limit=short_limit, gross_limit=gross_limit,
                 views=views, market_weights=market_weights, tau=tau, delta=delta,
                 rp_refine=rp_refine,
+                scenario_returns=scen, cvar_limit=cvar_limit, cvar_alpha=cvar_alpha,
             )
         except RuntimeError:  # 单截面求解失败 → 该期空仓，不中断面板
             w = pd.Series(0.0, index=codes)
