@@ -407,3 +407,99 @@ def test_yearly_rows_tolerates_none_turnover():
     rows = _yearly_rows({"run_id": "y"}, dr, pd.Series(0.0, index=idx), None)
     assert len(rows) == 1
     assert np.isnan(rows[0]["turnover"])
+
+
+# ---------------------------------------------------------------------------
+# 产物指纹（2026-09-23，P0 治本：exists-skip 静默陈旧）
+# ---------------------------------------------------------------------------
+def test_fp_sidecar_lifecycle(tmp_path):
+    """指纹 sidecar：写入 → 匹配 → 内容不符/缺失/损坏 → 一律视为过期。"""
+    from scripts.pipelines.rolling_grid_alla import _fp, _fp_match, _fp_write
+
+    artifact = tmp_path / "eq__x.csv"
+    artifact.write_text("a,b\n1,2\n", encoding="utf-8")
+    fp = _fp({"execution": "open", "costs": "[36, 0]"})
+    _fp_write(artifact, fp, {"run_id": "x"})
+
+    assert _fp_match(artifact, fp)                      # 命中
+    assert not _fp_match(artifact, _fp({"execution": "close"}))  # 口径变了
+    (tmp_path / "eq__x.csv.fp.json").unlink()
+    assert not _fp_match(artifact, fp)                  # sidecar 缺失
+    (tmp_path / "eq__x.csv.fp.json").write_text("{broken", encoding="utf-8")
+    assert not _fp_match(artifact, fp)                  # sidecar 损坏
+
+
+def test_fp_select_changes_on_config_and_neutralizes(tmp_path, monkeypatch):
+    """selection 指纹对口径敏感：exclude/开关/常量/panels 源任一变化即失配。"""
+    from scripts.pipelines import rolling_grid_alla as R
+
+    monkeypatch.setattr(R, "OUT", tmp_path)
+    monkeypatch.setattr(R, "PANELS_DIR", None)
+    monkeypatch.setattr(R, "NAME_DIR", None)
+    monkeypatch.setattr(R, "EXCLUDE_FEATURES", set())
+    monkeypatch.setattr(R, "INCLUDE_FUNDAMENTAL", True)
+    monkeypatch.setattr(R, "INCLUDE_ALT", True)
+
+    fp0 = R._selection_fp()
+    assert fp0 == R._selection_fp()                     # 稳定可复现
+
+    for attr, val in [("EXCLUDE_FEATURES", {"limit_pos"}),
+                      ("INCLUDE_ALT", False),
+                      ("PANELS_DIR", tmp_path / "panels_neu"),
+                      ("NAME_DIR", {"ln_mktcap": tmp_path / "p"})]:
+        monkeypatch.setattr(R, attr, val)
+        assert R._selection_fp() != fp0, f"{attr} 变化必须改变指纹"
+        monkeypatch.setattr(R, attr, {"EXCLUDE_FEATURES": set(),
+                                      "INCLUDE_ALT": True,
+                                      "PANELS_DIR": None,
+                                      "NAME_DIR": None}[attr])
+    assert R._selection_fp() == fp0                     # 复原后回到基线
+
+
+def test_fp_predict_changes_on_years_and_sel_files(tmp_path, monkeypatch):
+    """pred 指纹：quick(2019) 与全量(2018-2026) 必须不同（防冒烟产物被
+    全量复用）；selection 目录内容变化 → 指纹变。"""
+    from scripts.pipelines import rolling_grid_alla as R
+
+    monkeypatch.setattr(R, "OUT", tmp_path)
+    monkeypatch.setattr(R, "EXCLUDE_FEATURES", set())
+    monkeypatch.setattr(R, "PANELS_DIR", None)
+    monkeypatch.setattr(R, "NAME_DIR", None)
+    monkeypatch.setattr(R, "INCLUDE_ALT", True)
+    monkeypatch.setattr(R, "USE_TRADABLE_LABELS", False)
+
+    fp_quick = R._predict_fp([2019])
+    fp_full = R._predict_fp(list(range(2018, 2027)))
+    assert fp_quick != fp_full
+
+    # selection 内容入指纹：同目录放一个 json 后指纹变；内容不变则稳定
+    sel_dir = tmp_path / "selection"
+    sel_dir.mkdir()
+    (sel_dir / "y2019__h1.json").write_text('["m0", "m1"]', encoding="utf-8")
+    fp_sel = R._predict_fp([2019])
+    assert fp_sel != fp_quick
+    assert R._predict_fp([2019]) == fp_sel
+
+    # selection 内容变了 → pred 指纹变 → pred 重训
+    (sel_dir / "y2019__h1.json").write_text('["m0", "m2"]', encoding="utf-8")
+    assert R._predict_fp([2019]) != fp_sel
+
+
+def test_fp_backtest_senses_pred_file_change(tmp_path):
+    """eq 指纹绑定 pred 文件内容（size+mtime_ns）：pred 重训覆盖 → eq 失效。"""
+    import os
+
+    from scripts.pipelines.rolling_grid_alla import _backtest_fp
+
+    pf = tmp_path / "gbdt__h1.parquet"
+    pf.write_bytes(b"pred-v1")
+    fp1 = _backtest_fp("open", pf)
+    assert fp1 == _backtest_fp("open", pf)              # 未动 → 稳定（断点续跑命中）
+
+    assert fp1 != _backtest_fp("close", pf)             # 执行价变了
+
+    # pred 重训覆盖（模拟）：内容+时间戳变 → 指纹变 → eq 重算
+    old = os.stat(pf)
+    os.utime(pf, ns=(old.st_atime_ns, old.st_mtime_ns - 1_000_000))
+    pf.write_bytes(b"pred-v2-longer")
+    assert fp1 != _backtest_fp("open", pf)

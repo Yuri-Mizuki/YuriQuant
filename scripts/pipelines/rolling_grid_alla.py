@@ -158,7 +158,7 @@ EXCLUDE_FEATURES: set[str] = set()
 #                  处置 NaN，等价于从训练集剔除）。
 # 为什么需要：无掩码时标签把"T 日封涨停 → T+1 继续封板"的**买不进**收益当监督
 # 信号，模型学出"高封板位置 → 高收益"的纸面关系（limit_pos 可交易口径 IC 为负
-# 却拿到 Top1 权重；reports/limit_pos_tradable_p0/report.md）。治本位置在标签层。
+# 却拿到 Top1 权重；reports/limit_pos/tradable_p0/report.md）。治本位置在标签层。
 # CLI: --tradable-labels（须配 --out-tag 防覆盖主实验产物）
 USE_TRADABLE_LABELS: bool = False
 
@@ -600,17 +600,22 @@ def stage_select(quick: bool = False):
 
     horizons = [1] if quick else HORIZONS
     years = [2019] if quick else YEARS
+    sfp = _selection_fp()
     for h in horizons:
         ic_cache = pd.read_parquet(root / f"ic_h{h}.parquet")
         for year in years:
             out = sel_dir / f"y{year}__h{h}.json"
-            if out.exists():
+            if _fp_match(out, sfp):
                 continue
+            if out.exists():
+                log.warning("[selection 指纹失配] %s 过期，重算（口径已变）",
+                            out.name)
             feats = select_features_for_year(year, h, ic_cache, registry,
                                              store, all_days,
                                              exclude=EXCLUDE_FEATURES)
             out.write_text(json.dumps(feats, ensure_ascii=False, indent=1),
                            encoding="utf-8")
+            _fp_write(out, sfp, {"year": year, "h": h})
             log.info("选择 y%d h%d: %d 特征（%.0fs）", year, h, len(feats),
                      time.time() - t0)
     log.info("select 完成 %.0fs", time.time() - t0)
@@ -699,8 +704,12 @@ def stage_predict(quick: bool = False, only_horizons: list[int] | None = None):
             if mcfg.get("h1_only") and h != 1:
                 continue  # 模型/超参/窗口变体只在 h=1 上验证
             out_path = pred_dir / f"{mname}__h{h}.parquet"
-            if out_path.exists():
+            pfp = _predict_fp(years)
+            if _fp_match(out_path, pfp):
                 continue
+            if out_path.exists():
+                log.warning("[pred 指纹失配] %s 过期 → 重训（selection/标签"
+                            "口径/模型网格已变）", out_path.name)
             t1 = time.time()
             parts = []
             for year in years:
@@ -736,6 +745,7 @@ def stage_predict(quick: bool = False, only_horizons: list[int] | None = None):
                 parts.append(pred_y)
             pred = pd.concat(parts).astype(np.float32)
             pred.to_parquet(out_path)
+            _fp_write(out_path, pfp, {"model": mname, "h": h})
             ic = calc_ic_series(pred, fwd)
             ic_by_year = ic.groupby(ic.index.year).mean()
             log.info("[%s h%d] 完成: OOS IC=%.4f | 分年 %s | %.0fs", mname, h,
@@ -857,6 +867,118 @@ def _exec_sfx(execution: str) -> str:
     return {"close": "_close", "open": ""}.get(execution, f"_{execution}")
 
 
+# ---------------------------------------------------------------------------
+# 产物指纹（2026-09-23，P0 治本：exists-skip 静默陈旧）
+#
+# 病根：select/predict/backtest 三处 exists-skip 只看文件存在与否。同 OUT
+# 目录内口径变异（costs/execution 定版换主/模型超参/消融开关）或上游 pred
+# 重训后，旧产物被静默复用 → metrics 静默陈旧（09-22 定版换主 62c2870 时
+# 旧 close 语义正名 eq CSV 差点被 open 语义复用，实锤事故路径）。
+#
+# 机制：产物旁 sidecar ``<name>.fp.json`` 记录 md5 指纹；读取前校验，
+# 缺失/损坏/不符 = 过期 → 重算覆盖（eq/selection 重算分钟级，自动；
+# pred 重训小时级，warning 说清后重训——宁可明看重跑，不要静默旧数）。
+#
+# 极限（如实声明）：指纹覆盖「可序列化的口径常量 + 上游产物内容」，
+# 抓不住不改常量的纯代码逻辑变更（如引擎内部算法重写）——此类变更须
+# 手动清理产物或换 --out-tag。920 重跑走 --out-tag 新目录，天然无历史包袱。
+# ---------------------------------------------------------------------------
+def _fp(obj) -> str:
+    """口径要素 dict → 稳定 md5 短指纹（12 位足够防碰撞，本场景非安全用途）。"""
+    import hashlib
+    import json as _json
+    blob = _json.dumps(obj, sort_keys=True, ensure_ascii=False, default=str)
+    return hashlib.md5(blob.encode("utf-8")).hexdigest()[:12]
+
+
+def _fp_path(path: Path) -> Path:
+    return path.parent / (path.name + ".fp.json")
+
+
+def _fp_write(path: Path, fp: str, detail: dict) -> None:
+    """产物落盘时同步写指纹 sidecar。"""
+    _fp_path(path).write_text(
+        json.dumps({"fp": fp, "detail": detail}, ensure_ascii=False, indent=1),
+        encoding="utf-8")
+
+
+def _fp_match(path: Path, fp: str) -> bool:
+    """产物指纹校验：sidecar 缺失/损坏/不符 → False（产物视为过期）。"""
+    p = _fp_path(path)
+    if not p.exists():
+        return False
+    try:
+        return json.loads(p.read_text(encoding="utf-8")).get("fp") == fp
+    except Exception:  # noqa: BLE001 损坏的 sidecar 一律视为过期
+        return False
+
+
+def _selection_fp() -> str:
+    """selection json 的口径指纹：preproc 数据源 + 消融开关 + 选择常量。
+
+    任何一项变化都意味着既有 selection 归属旧口径，必须重算。
+    """
+    return _fp({
+        "panels": str(PANELS_DIR) if PANELS_DIR else None,
+        "name_dir": (sorted((k, str(v)) for k, v in NAME_DIR.items())
+                     if NAME_DIR else None),
+        "exclude": sorted(EXCLUDE_FEATURES),
+        "include_fundamental": INCLUDE_FUNDAMENTAL,
+        "include_alt": INCLUDE_ALT,
+        "rre": [RRE_MIN_AUTOCORR, RRE_STRIDE],
+        "sel_consts": [MAX_FEATURES, MIN_COVERAGE, ALT_MIN_COVERAGE,
+                       RESERVED_FUNDAMENTAL_SLOTS, RESERVED_ALT_SLOTS,
+                       DEDUP_TOP_CANDIDATES, DPP_SIGMA, QUALITY_WINDOW],
+    })
+
+
+def _sel_files_fingerprint() -> dict:
+    """selection json 的**内容**指纹（md5）——selection 重算后内容若逐字
+    相同则 pred 无须重训；内容真的变了 → pred 指纹变 → 重训。
+
+    注意排除 sidecar（``*.fp.json``）：pathlib 的 glob 模式 ``y*__h*.json``
+    不做整名锚定，会匹配到 ``y2019__h1.json.fp.json``。"""
+    sel_dir = OUT / "selection"
+    if not sel_dir.exists():
+        return {}
+    return {p.name: _fp(p.read_bytes())
+            for p in sorted(sel_dir.glob("y*__h*.json"))
+            if not p.name.endswith(".fp.json")}
+
+
+def _predict_fp(years: list[int]) -> str:
+    """pred parquet 的口径指纹：selection 指纹 + selection 内容 + 标签口径
+    + 模型网格（含超参单一真源）+ 滚动训练常量 + **年份覆盖范围**。
+
+    年份范围入指纹的原因：--quick 冒烟只算 2019 一年，产物文件名与全量
+    完全相同——不入指纹则 quick 先跑、全量后跑会静默复用 1 年冒烟 pred。
+    """
+    from model.params import DEFAULT_MODEL_PARAMS
+    grid = {k: [v["key"], v["params"], v["window"]]
+            for k, v in _build_model_grid().items()}
+    return _fp({
+        "select": _selection_fp(),
+        "sel_files": _sel_files_fingerprint(),
+        "tradable_labels": USE_TRADABLE_LABELS,
+        "grid": grid,
+        "model_params": str(DEFAULT_MODEL_PARAMS),
+        "roll": [N_FOLDS, N_FOLDS_LONG, MIN_TRAIN],
+        "years": list(years),
+    })
+
+
+def _backtest_fp(execution: str, pred_path: Path) -> str:
+    """单个 pred 组合的 eq 指纹：执行价 + 成本真源 + **该 pred 文件的内容
+    指纹**（size+mtime_ns）。pred 重训覆盖 → mtime 变 → eq 自动失效重算；
+    只重跑 backtest 时 pred 未动 → 命中断点续跑。"""
+    return _fp({
+        "execution": execution,
+        "costs": str(Config.costs()),
+        "pred": [pred_path.name, pred_path.stat().st_size,
+                 pred_path.stat().st_mtime_ns],
+    })
+
+
 def stage_backtest(quick: bool = False, execution: str = "open"):
     """组合回测。
 
@@ -919,7 +1041,11 @@ def stage_backtest(quick: bool = False, execution: str = "open"):
                     stag = "neut" if sname == "neut" else "raw"
                     run_id = f"{mname}__h{h}__{freq}__{stag}__f{frac:.2f}"
                     eq_path = eq_dir / f"eq__{run_id}.csv"
-                    if not eq_path.exists():
+                    bfp = _backtest_fp(execution, pf)
+                    if not _fp_match(eq_path, bfp):
+                        if eq_path.exists():
+                            log.warning("[eq 指纹失配] %s 产物过期，重算"
+                                        "（口径或 pred 已变）", run_id)
                         strat = TopFracLongOnly(frac=frac, weight_mode="equal")
                         rb = None
                         exec_split = None
@@ -968,6 +1094,8 @@ def stage_backtest(quick: bool = False, execution: str = "open"):
                             "bench_eqw": bench_eqw,
                             "turnover": res.turnover_series,
                         }).to_csv(eq_path, encoding="utf-8-sig")
+                        _fp_write(eq_path, bfp, {"run_id": run_id,
+                                                 "execution": execution})
                     eq = pd.read_csv(eq_path, index_col=0, parse_dates=True)
                     dr = eq["daily_ret"]
                     m = res_metrics(dr, bench_idx, eq.get("turnover"))
@@ -1363,6 +1491,14 @@ def main():
                      "否则会覆盖主实验 pred/（exists-skip 不会重跑，静默混口径）")
         USE_TRADABLE_LABELS = True
         log.info("+++ 训练标签：可交易掩码口径（治本，P0 §六 P1-a）")
+    if args.exclude_features:
+        if not args.out_tag:
+            ap.error("--exclude-features 须配 --out-tag：否则 select/pred 产物"
+                     "与主实验同目录同名，exists-skip 不会重跑（静默混口径；"
+                     "指纹 sidecar 只保护后续运行，首次就会直接覆盖）")
+        EXCLUDE_FEATURES.update(
+            n.strip() for n in args.exclude_features.split(",") if n.strip())
+        log.info("+++ 消融臂：select 阶段硬剔除 %s", sorted(EXCLUDE_FEATURES))
     if args.ablation:
         INCLUDE_FUNDAMENTAL = False
         OUT = Path("reports") / "alla_rolling_nofund"
@@ -1377,10 +1513,6 @@ def main():
         NAME_DIR = {n: _neu for n in FUNDAMENTAL_FAMILY_SETS | {"float_mktcap"}}
         log.info("+++ 混合口径：基本面/股东族 %d 因子 -> panels_neu，量价 -> panels，"
                  "输出 -> %s", len(NAME_DIR), OUT)
-    if args.exclude_features:
-        EXCLUDE_FEATURES.update(
-            n.strip() for n in args.exclude_features.split(",") if n.strip())
-        log.info("+++ 消融臂：select 阶段硬剔除 %s", sorted(EXCLUDE_FEATURES))
     if args.out_tag:
         OUT = Path("reports") / f"alla_rolling_{args.out_tag}"
         log.info("+++ 输出重定向 -> %s（防覆盖主实验产物）", OUT)
