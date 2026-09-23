@@ -26,6 +26,13 @@
 - ``ic_neutral`` = 先用 :func:`factor.preprocessing.neutralize` 对当日 score 做
   五风格中性化（size/industry/mom/vol/turn）取残差，再算 Spearman。
 - ``style_exposure_ratio`` = ``1 − ic_neutral / ic_raw``（raw IC 被风格解释的比例）。
+- ``signal_mktcap_spearman`` = 逐日截面 Spearman(score, size)。信号-市值漂移
+  监控（国泰海通多粒度 DL 复盘 → 方案 D①）：多粒度因子 2026 失效的病根即此
+  漂移（研报口径 corr 与市值 −0.3 且逐年偏移）。本项目因子层已全正交，但 gbdt
+  非线性组合可能重新长出市值暴露，故须逐年监控。注意：``cov["size"]`` 是 raw
+  市值面板（log 只在 neutralize 内部做），与 882 口径一次性诊断
+  （``scripts/oneoff/_signal_mktcap_drift.py``，中性化面板）存在系统差——
+  raw 口径语义更直接，红牌判据看**逐年恶化趋势**而非绝对值对齐。
 - ``z_*`` = 组合持仓在对应风格上的横截面 z 均值（事前可算，不需未来收益）。
 
 注意
@@ -334,6 +341,14 @@ def compute_metrics(score: pd.DataFrame, close: pd.DataFrame,
     ic_ind = daily_rank_ic(_neutralize_style(score, cov, (INDUSTRY_KEY,)), fwd)
     mono = _monotonicity(score, fwd)
 
+    # 信号-市值漂移（方案 D①）：逐日 Spearman(score, raw 市值)。
+    # daily_rank_ic 对两个已 rank 面板即逐日截面 Spearman（秩变换后 Pearson）。
+    if "size" in cov:
+        drift = daily_rank_ic(score, cov["size"])
+    else:
+        drift = pd.Series(dtype=float)
+        log.warning("缺 cov['size']，signal_mktcap_spearman 列将全 NaN")
+
     # 组合口径：Top 10% 等权（与出榜链 frac 一致），事后 + 事前指标
     zs = {k: _zscore_cs(cov[k]) for k in STYLE_KEYS if k in cov}
     rows = []
@@ -355,6 +370,7 @@ def compute_metrics(score: pd.DataFrame, close: pd.DataFrame,
             "ic_neutral": ic_neu.get(d, np.nan),
             "ic_ind_neutral": ic_ind.get(d, np.nan),
             "monotonicity": mono.get(d, np.nan),
+            "signal_mktcap_spearman": drift.get(d, np.nan),
             "top_ret": float(_r.reindex(top).mean()) if len(_r) else np.nan,
             "univ_ret": float(_r.mean()) if len(_r) else np.nan,
         }
@@ -407,4 +423,13 @@ def summarize(df: pd.DataFrame, window: int = 60) -> dict:
     if len(ex):
         out["top_excess_recent"] = float(ex.tail(window).mean())
         out["top_excess_full"] = float(ex.mean())
+    # 信号-市值漂移摘要：全期 vs 近窗均值 + 逐年序列（红牌判据 = 逐年恶化趋势）
+    if "signal_mktcap_spearman" in df.columns:
+        dr = df.set_index("predict_date")["signal_mktcap_spearman"].dropna()
+        if len(dr):
+            out["mktcap_drift_full"] = float(dr.mean())
+            out["mktcap_drift_recent"] = float(dr.tail(window).mean())
+            out["mktcap_drift_yearly"] = {
+                int(y): round(float(v), 4)
+                for y, v in dr.groupby(dr.index.year).mean().items()}
     return out

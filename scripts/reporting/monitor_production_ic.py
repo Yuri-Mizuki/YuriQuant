@@ -78,10 +78,15 @@ def main(argv: list[str] | None = None) -> int:
     if "top_excess_full" in s:
         print(f"[prod-ic] Top10% 超额 全期 {_fmt(s['top_excess_full'], 7, 4)} / "
               f"近{args.window}日 {_fmt(s['top_excess_recent'], 7, 4)}")
+    if s.get("mktcap_drift_yearly"):
+        yr = " ".join(f"{y}:{v:+.3f}" for y, v in s["mktcap_drift_yearly"].items())
+        print(f"[prod-ic] 信号-市值漂移 全期 {_fmt(s.get('mktcap_drift_full'), 7, 4)} / "
+              f"近{args.window}日 {_fmt(s.get('mktcap_drift_recent'), 7, 4)}")
+        print(f"[prod-ic]   逐年: {yr}")
 
     tail = df.tail(10)[["predict_date", "source", "n_eval", "ic_raw", "ic_neutral",
-                        "style_exposure_ratio", "top_excess", "z_size", "z_vol",
-                        "z_turn"]]
+                        "style_exposure_ratio", "signal_mktcap_spearman",
+                        "top_excess", "z_size", "z_vol", "z_turn"]]
     print("\n最近 10 个截面：")
     print(tail.to_string(index=False))
     return 0
