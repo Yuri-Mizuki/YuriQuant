@@ -34,7 +34,11 @@
   次披露、`--execution close` 对照可选（09-15 校准 close→open −0.88pp /
   →vwap −0.94pp，换手不变）。
   三个开关各自的意义（一次重跑同时落三个维度，差异归因靠 2x2 探针补齐）：
-  - `--out-tag ortho920tl`：产物另存，旧 `alla_rolling_ortho/` 原样保留作对照，禁覆盖；
+  - `--out-tag ortho920tl`：产物另存，旧 `alla_rolling_ortho/` 原样保留作对照，禁覆盖
+    （其 `_base/` 447MB 纯重复已于 09-23 删：md5 与主臂逐字节相同（prep 产物与
+    `--preproc` 无关）、`--stage prep` 可随时重建且本就非 882 历史原物（09-15/09-21
+    重建过）；`probe_neutralize_batch`/`probe_event_feature_neutralize` 已改读主臂
+    `_base`，`probe_prod_pipeline_gap` 重跑前需 `--preproc ortho --stage prep` 重建）；
   - `--exclude-features limit_pos`：因子层剔除纸面因子（09-16 已证 +0.3~1.2pp/年、
     4/4 格全改善；新口径下它 13/18 轮会重新进选中，不剔则白占 1/50 名额）；
     与生产出榜链 `alla_daily_rank.py` 口径对齐；
@@ -66,7 +70,7 @@
   见 `reports/docs/另类数据管道_数据源说明.md`）；日增量入口 `fetch_altdata_daily`
   进计划任务（18:00，`.venv` 解释器）
 - [x] holder_dyn 9 因子三探针消融（09-21）：强制纳入臂 **Δ=−0.85pp 无增量价值**
-  （`reports/holder_dyn_forced/`），Step 1b 全历史回补结案不推进；表保留（增量继续抓）
+  （`reports/holder_dyn/forced/`），Step 1b 全历史回补结案不推进；表保留（增量继续抓）
 - [x] panels_neu 882→920 补齐（09-21）：38 缺面板补齐（含 ALT 28 + 基本面/股东 10，
   修复主实验 select 崩溃点），证据 `reports/panels_neu_backfill/` → 由此派生 P0 重跑项
 - [x] 每日计划任务静默失败修复 + 调度收口（09-17/09-21）：三任务同日 `0xC000013A`
@@ -100,9 +104,13 @@
 
 ### 已就绪待接入 / 待全量
 
-- [ ] **实验产物接 PBO 出报告**：`stats/pbo.py` 已就绪（CSCV PBO + DSR + deflate_best），
-  把 rolling_grid 各臂 / AI97 三臂 / stage2 Phase 2 各配置的期间收益矩阵接入
-  作为固定出报告环节。
+- [x] **实验产物接 PBO 出报告**（09-23 固化 `scripts/evaluation/pbo_report.py`）：
+  rolling_grid 三网格已出（`reports/pbo_rolling_ortho/`：M_raw 0.174 / M_neut 0.227 /
+  W_raw 0.000，均远低于 0.5 红线）；AI97 三臂 / stage2 各配置全量跑完后用
+  `--returns-csv <date×N 收益矩阵>` 同一入口接入。
+- [x] **labels.py IR/Calmar 标签分支**（09-23，AI29 转译；`build_labels(method=)`，
+  超额口径需 `bench_close_panel`；注意研报如实披露的代价：另类标签的超额最大
+  回撤**更差**，实验须同口径报回撤）。实验待跑（挂 920 后新 pred）。
 - [ ] **分钟频挖掘第三层扩原料**：时段切片矩阵化（20 分钟窗 × 动量/波动/量）、
   量价 lead-lag、tsfresh 计算器移植、事件日条件化（与文本 PEAD 线交叉）；
   扩完重跑 mine_im_combos 看组合上限是否抬升（二层结论：增益≈0，信号在
@@ -178,8 +186,13 @@
 - [ ] **portfolio_env 涨跌停/停牌掩码注入**：当前 tradable_masks 只剔非成分；
   Phase 2 全量前接 `data/tradability`（一字板不可成交语义）——zz1000 的 ST/停牌量
   会放大该边界。
-- [ ] **`stage_backtest`/`stage_ensemble` eq 缓存失效（P0 附带）**：旧 eq CSV 即跳过回测
-  → metrics 可能静默陈旧；P0 治本重跑时顺带核对。
+- [x] **`stage_backtest`/`stage_ensemble` eq 缓存失效（P0 附带，09-23 完成 commit f4d3172）**：
+  rolling_grid_alla 三处 exists-skip（backtest eq / select json / pred parquet）全部接
+  产物指纹 sidecar（`.fp.json`），失配自动重算（eq/selection 分钟级自动；pred warning 后
+  重训）；eq 指纹绑 pred 内容（重训→eq 失效，断点续跑仍命中）；`--exclude-features` 补硬
+  校验须配 --out-tag；**附带发现并修复 --quick 冒烟产物可被全量复用**（years 入 pred 指纹）。
+  注意 stage_ensemble/smallcap 本就总重跑无此病；指纹抓不住不改常量的纯代码逻辑变更
+  （此类走 --out-tag）。
 - [ ] **邮件链路 Skills 化**（可选，速读批借鉴）：build_daily_email_body 的口径约束固化 +
   渐进式披露；技能总量控制在上限 20–30 内。
 - [ ] **scripts 层私有名跨模块 import**：仅剩 `scripts/textmining/*`（他会话管辖，不动）。

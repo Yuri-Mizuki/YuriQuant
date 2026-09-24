@@ -1,4 +1,4 @@
-# GOOD_MACHINE_TASKS — 好机器大任务队列（2026-09-22 定稿）
+# GOOD_MACHINE_TASKS — 好机器大任务队列（2026-09-22 定稿，09-23 增补批次 9）
 
 > 汇总全部需要好机器执行的大任务：批次顺序、完整命令、耗时估计、依赖与验收。
 > 本机半天级穿插项不在本清单（见 TODO §一 🥉）。**约定：批次内任务可并行，
@@ -15,7 +15,8 @@
 | 5 | stage2 Phase 2 zz1000 | 快档 6–9h → 全档 1–2 天 | 🖥️ CPU 多核（sb3 PPO 常规 CPU 训练） |
 | 6 | 口径修复重训 E5/E4/P5 | 各 ≈5–7h | 🖥️💾 同批次 1 |
 | 7 | e2e 族年化口径重跑 | 未实测 | 🖥️ CPU，队列末尾 |
-| **8** | **表格基础模型对照（TabPFN-3 / TabICL V2 vs LightGBM）** | 冒烟✅（09-22 本机完成，CPU 实测见 §批次 8）→ 全量未实测（先 hs300 外推） | **🎮 GPU 强受益（实测后升级为硬前置：CPU pred 27.7min/窗口，全量不可行）**；全量版建议单卡 ≥8GB 显存；hs300 小窗口 CPU 也能跑 |
+| **8** | **表格基础模型对照（TabPFN-3.5 / TabICL 2.2 vs LightGBM）** | 冒烟✅（09-22 本机完成，CPU 实测见 §批次 8）→ 全量未实测（先 hs300 外推） | **🎮 GPU 强受益（实测后升级为硬前置：CPU pred 27.7min/窗口，全量不可行）**；全量版建议单卡 ≥8GB 显存；hs300 小窗口 CPU 也能跑 |
+| **9** | **东吴 LLM-MCTS Phase 0**（同题四引擎对照） | **代码待实现**（~600-800 行，本机 ≈1 天；先 1 Seed×3 iters 冒烟）→ 全量未实测 | 🖥️ CPU + LLM API（key 同批次 2）；候选评测互相独立可多进程 |
 | 10 | 920 后收尾对照包（member_blend12 / 消融 5 组等） | 各分钟级~小时级 | 🖥️ CPU，依赖批次 1 新 pred |
 
 ---
@@ -51,9 +52,9 @@
 | 代码 | `git clone` master（≥ `93d7b0a`） |
 | 数据面 | 整个 `E:\data`：`parquet/`（原始表）+ `factor_library/all_a_2018_2026/`（panels + panels_neu 920 已含 + registry + ic_h*.parquet）+ `min5_hs300` + 日线缓存；~GB 级 |
 | Python | 系统解释器（本项目机为 D:/Python/Python312，含全部依赖；**.venv 缺 rl 依赖**，RL 测试/实验必须用系统解释器） |
-| 密钥 | `DEEPSEEK_API_KEY`（仅批次 2 的 llm 臂需要） |
+| 密钥 | `DEEPSEEK_API_KEY`（批次 2 的 llm 臂、批次 9 MCTS 均需要） |
 | 硬件建议 | 内存 ≥64GB（批次 1/5/6 全A 面板 + 滚动工作副本）；批次 8 需 GPU：单卡 ≥8GB 显存（TabPFN-3 官方口径单张 H100 推理 1M 行，hs300 规模 8GB 足够） |
-| Python 补装（仅批次 8） | `pip install tabpfn`（v3）+ tabicl 升级到 V2；HF 镜像 `HF_ENDPOINT=https://hf-mirror.com`（torch 用系统解释器现有版本即可） |
+| Python 补装（仅批次 8） | `pip install tabpfn==9.0.0`（TabPFN-3.5）+ `pip install tabicl==2.2.0`；HF 镜像 `HF_ENDPOINT=https://hf-mirror.com`（torch 用系统解释器现有版本即可）；**载荷包别动**（pandas 2.x 等保持原版，见批次 8 版本口径） |
 
 ---
 
@@ -188,7 +189,7 @@ zz1000 的 ST/停牌量会放大该边界）；跑完接 `stats/pbo.py`、判读
 
 - e2e 族报告对齐年化口径（`perf_stats` 244→252 后 ~3% 系统性偏移）。
 
-## 批次 8：表格基础模型对照 🎮（TabPFN-3 / TabICL V2 vs LightGBM；09-22 立项）
+## 批次 8：表格基础模型对照 🎮（TabPFN-3.5 / TabICL 2.2 vs LightGBM；09-22 立项，09-23 版本口径升级）
 
 **背景**：项目 2026-08 已实测 TabICL v1（ICML 2025，`model/predictor.py::TabICLPredictor`
 基建现成——ICL 语义、chunk 推理、device 参数齐全）：**滚动 3 个月是唯一 4 窗口全正 IR 的
@@ -196,19 +197,31 @@ zz1000 的 ST/停牌量会放大该边界）；跑完接 `stats/pbo.py`、判读
 与滚动短窗口天然适配。**v1 结论只作方向假设来源（09-22 由莉酱拍板：有 V2 不做 v1）**——
 v1 的遗留局限（test_step=3 抽样高估、HS300 单池、47 因子、n_estimators=2）**直接在 V2 上
 修复，不在 v1 上补验**：版本差异与抽样差异混在一起会污染对照，且在旧模型上加固的数字
-对用 V2 的正式对照没有参考价值。**新变量**：TabPFN-3 已发布（2026-05-12，arXiv:2605.13986，
-Prior Labs）——1M 行 × 200 特征、比 v2.5 快 20x、TabArena 单次 forward 1850 Elo（对照：
-LightGBM tuned+ensembled 1600 / TabICL V2 default 1700 / TabPFN-2.5 1550），
-KV cache 使 SHAP 计算快 120x；License = 研究与内部评估免费（TABPFN-3.0 License v1.0，
-本项目研究用途无碍）。**本次对照全部用最新版：TabPFN-3 + TabICL V2，不测任何旧版。**
+对用 V2 的正式对照没有参考价值。**版本线**：TabPFN-3（2026-05-12，arXiv:2605.13986，
+Prior Labs）→ **TabPFN-3.5（2026-09-15 随 tabpfn 9.0.0 发布，成为默认模型**，1M 行 ×
+2 万特征、KV cache、SHAP 提速；TabArena 单次 forward 1850 Elo 为 v3 数字，对照：
+LightGBM tuned+ensembled 1600 / TabICL V2 default 1700 / TabPFN-2.5 1550）。
+License = 研究与内部评估免费（TabPFN-3.5 license，本项目研究用途无碍）。
+**本次对照全部用最新版：TabPFN-3.5（tabpfn 9.0.0）+ TabICL 2.2.0（V2 大版本），
+不测任何旧版（09-23 版本口径升级，替代 09-22 的"TabPFN-3 + TabICL V2"表述）。**
+
+**版本口径（09-23 定，生产机按此装）**：本机 09-23 已实测升级通道全通——
+`tabpfn==9.0.0`（PyPI 2026-09-15 发布，**默认模型 = TabPFN-3.5**，`ModelVersion.V3_5` /
+`V3_5_FAST` 在 `tabpfn.constants`；3.5 支持 1M 行 × 2 万特征、CPU 上限 5000 行，与 v3 相同）
++ `tabicl==2.2.0`（V2 大版本最新补丁）。License 全部就绪（本机 API 直推 accepted：
+v3 串 `tabpfn-3-5-license-v1.0` 与 3.5 串 `tabpfn-3.5-license-v1.0` 均已接受）；
+生产机复用同一 token（`TABPFN_TOKEN` 环境变量）或到 ux.priorlabs.ai License 页自取。
+**注意：升级/安装时 uv 会连带拉新 pandas/torch/sklearn——生产环境载荷包（pandas 2.x 等）
+必须钉回原版本，仅 tabpfn/tabicl 装新版（两者依赖下限兼容旧 pandas）**，09-23 本机
+踩过一次 pandas 3.0.6 令 portfolio_env 测试连环挂的坑。
 
 **臂设计**（滚动协议沿用 08-08 结论）：
 - 臂 1：`gbdt`（现役基线，同窗口滚动对照）；
-- 臂 2：`tabpfn3`（TabPFN-3，CPU 兜底参数照抄 TabICLPredictor：n_estimators=2 起步、
-  chunk 推理）；
-- 臂 3：`tabicl_v2`（tabicl 升级到 V2 后同口径跑；v1 的旧数字不进对照，只作
+- 臂 2：`tabpfn35`（TabPFN-3.5 = 9.0.0 默认模型；CPU 兜底参数照抄 TabICLPredictor：
+  n_estimators=2 起步、chunk 推理；如 3.5-Fast 在同窗口耗时显著更优则加测该臂）；
+- 臂 3：`tabicl_v2`（tabicl 2.2.0 同口径跑；v1 的旧数字不进对照，只作
   「ICL+滚动短窗口值得测」的方向依据）；
-- 臂 4：`tabpfn3+gbdt 秩平均`（h1h5 集成同款逻辑：两模型族信号秩相关 <0.3 时
+- 臂 4：`tabpfn35+gbdt 秩平均`（h1h5 集成同款逻辑：两模型族信号秩相关 <0.3 时
   ensemble 才有增量空间——先算秩相关再决定此臂价值）。
 - 窗口扫描：W∈{2m, 3m}（08-08：2m 强趋势更强、3m 唯一全正，须在 920/全A 复验）。
 
@@ -226,10 +239,12 @@ KV cache 使 SHAP 计算快 120x；License = 研究与内部评估免费（TABPF
    | gbdt | 0.0241 | 2.84 | 1.5s | 0.5s |
    | tabpfn3（v3 权重） | 0.0243 | 1.59 | 169.8s | 1659.6s |
    | tabicl | 0.0271 | 1.80 | 1.0s | 864.4s |
-   - **API/环境已全通**：tabpfn 8.4.0（**7.1.1 不含 v3，ModelVersion 只到 V2_6**）+
-     license 走 `TABPFN_TOKEN` 环境变量（API 直接 POST `/account/license` {"version":...}
-     即接受，无需浏览器）；CPU 大样本须 `ignore_pretraining_limits=True`（v3 上限
-     5000 行，v2.x 是 1000）。权重 ckpt 已缓存 `%APPDATA%\tabpfn\`。
+   - **API/环境已全通**：tabpfn 8.4.0（冒烟当时最新，**7.1.1 不含 v3**，ModelVersion 只到
+     V2_6）+ license 走 `TABPFN_TOKEN` 环境变量（API 直接 POST `/account/license`
+     {"version":...} 即接受，无需浏览器）；CPU 大样本须 `ignore_pretraining_limits=True`
+     （v3 上限 5000 行，v2.x 是 1000）。权重 ckpt 已缓存 `%APPDATA%\tabpfn\`。
+     **09-23 已再升 tabpfn 9.0.0（3.5）+ tabicl 2.2.0，冒烟数字为 v3 权重所出，正式对照
+     用 3.5 重跑（冒烟只作耗时量级与 API 校准依据）**。
    - **耗时外推**：CPU 上 tabpfn3 pred ≈ 27.7min/窗口（6000 训练样本 × 5000 测试行）
      → 全量逐月滚动不可行，**GPU 是批次 8 硬前置**；tabicl CPU 减半（864s）也撑不住
      全A 逐月。冒烟 IC 层面三臂同量级（0.024–0.027），v3 未见优势——方向假设（ICL+
@@ -245,6 +260,41 @@ v1 实测在 HS300 上静态 IR 最差（−2.72）、全靠滚动短窗口翻�
 < gbdt 0.051，静态口径已被证伪过一次）。
 
 **与批次 1 的关系**：正式对比用 920 新口径 pred 与特征池；冒烟不依赖批次 1。
+
+---
+
+## 批次 9：东吴 LLM-MCTS Phase 0（同题四引擎对照；**代码待实现**）
+
+> 设计真源：`reports/docs/research_notes/东吴0623_研读_LLM_MCTS因子迭代框架与Phase0设计.md`；
+> 立项理由与复现边界见 RESEARCH_TODO §一 🥈。
+
+### 9.1 前置（本机，≈1 天）
+
+- `factor/mcts/`（tree / reward 六项 / engine：select-expand-eval-backprop + virtual expansion）
+  + `scripts/factors/run_llm_mcts.py`；复用 `llm_pool.py`（`OpenAICompatibleProposer`
+  + 解析 + 4 校验）、`alphapool_env`、`alpha158.py`（29 Seed，窗口统一 20）
+- **冒烟先行**（对齐国金24 教训：噪声带可超臂间差异）：1 Seed × 3 iters，验证
+  LLM 往返 → 公式求值 → reward → 回传全链，再铺全量
+
+### 9.2 全量（命令骨架，实现后定稿）
+
+```bash
+python -u scripts/factors/run_llm_mcts.py --panel hs300_2015_2026 \
+  --is 2016-01-01:2023-12-31 --oos 2024-01-01:2026-08-21 --horizon 5 \
+  --arm mcts --iterations 10 --variants 5 --max-depth 3 --seeds-n 3 \
+  --out reports/llm_mcts_phase0
+# 四臂：--arm {mcts,gp,gflownet,llm_oneshot}；平行臂换 --panel 全A 920 库
+```
+
+### 9.3 口径与验收
+
+- hs300_2015_2026 主 + 全A 920 平行；IS 2016-2023 / OOS 2024-2026-08-21；**h=5 对齐东吴**
+  （非生产口径）；搜索 reward → top50 全量复评（不抽样）；**IS 选型、OOS 只验证**
+- 双口径对标东吴：正式选择 OOS 提升比例 vs **65.5%**；候选池诊断率 vs **75.4%**
+- 四臂比双优公式数 / 去重唯一数 / 两两相关性 / token 成本；接 `stats/pbo.py` 出 PBO/DSR
+- 成本粗估：≈1450 次 LLM 扩展/臂 + 1450 次面板评测（可多进程）；token ≈ AI97 llm 臂量级
+- **否定结果同样归档**：若 llm_oneshot ≈ mcts，结论即「LLM 语义生成为主、MCTS 控制增益有限」
+- 高频部分不做（min5_hs300 资源墙）
 
 ---
 

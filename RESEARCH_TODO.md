@@ -8,9 +8,13 @@
 > 核实复现状态；09-18/09-20 五批推进（P1 全部处置 + stage2 设计定稿 + Phase 0/1 落地 +
 > Phase 2 管线冒烟）；**09-21 增量**：panels_neu 补齐至 920 → 主实验数字脱钩，
 > 治本口径重跑定为最高优先级（见 TODO §一，先于本文件全部长实验）。
+> **09-23 增量**：东吴《LLM-MCTS》+ 东方《QuantaAlpha》两篇 LLM 因子挖掘研报归档
+> （`reports/docs/research_notes/东吴0623_*`、`东方0407_*`）；东吴列为 **P0 试点**
+> （同题四引擎对照，Phase 0 设计定稿见笔记，代码待实现），QuantaAlpha 仅抽 5 个机制
+> 进 `llm_pool` 增强清单、**不复现**。
 > **长实验一律不跑、写成显式待办，执行环境 = 另一台更强的机器**。
 
-> **核心判断：全库 85 篇中 2025–2026 年仅 12 篇，恰好覆盖项目全部短板方向。**
+> **核心判断：全库 87 篇中 2025–2026 年仅 14 篇，恰好覆盖项目全部短板方向。**
 >
 > ### 状态标记
 > - `[x]` 已完成复现（代码 + 产物落地） · `[~]` 部分完成 · `[ ]` 未开始
@@ -31,6 +35,9 @@
 | 华泰 AI14/16 CPCV / AI11 stacking / AI6 Boosting | `[x]` | `cpcv_eval` + `cpcv_h1_eval`；`model/stacking.py`；GBDT 已成主基线 |
 | 国金24 GFlowNet+AlphaEval 分钟频 | `[x]` 主体 + 残余 | AlphaEval 漏斗 / RRE / DPP / 42 `im_*` 接 GP / e2e 三臂 / GFlowNet 接 im；**残余见 §一** |
 | 华泰 AI97 大模型+RL | `[x]` P0 完成 | `factor/rl/` 四模块 + `run_alphapool_ppo` + LLM 池真实联网验证；**正式三臂实验待跑（§一）** |
+| 东吴0623 LLM-MCTS 因子迭代 | `[~]` 研读完成，**P0 待立项** | 笔记 `reports/docs/research_notes/东吴0623_研读_LLM_MCTS因子迭代框架与Phase0设计.md`；Phase 0 设计定稿（复用 `llm_pool`，同题四引擎对照），**代码待实现（§一）** |
+| 东方0407 QuantaAlpha | `[x]` 研读归档，**不复现** | 论文主结果有测试集泄露（东方自述）、修正复现仅 21 因子 ICIR 偏低；5 机制抽取进 `llm_pool` 增强清单（TODO §二） |
+| 微软 RD-Agent(Q)（NeurIPS 2025） | `[x]` 研读归档，**不复现不替换** | 量化 R&D 自动化多 Agent 框架（LLM 提假设→Co-STEER 写码→Qlib 回测→反馈，bandit 选 factor/model 方向）；**同题不同栈**（AI97/东吴 MCTS 同题）；机制抽取 8 条：数值去重/失败换向/JSON 纪律进 MCTS Phase 0 设计，`fin_factor_report` 自动 vs 手工对照列 P2（挂 920+好机器 WSL2）。笔记 `reports/docs/research_notes/微软RD-Agent_研读_*.md` |
 | 华泰 AI39 组合优化实证 | `[x]` 口径核对 | `reports/口径核对_AI39_多因子10.md`；最大差异=主动 vs 绝对权重空间；3 项低成本对齐已落地 |
 | 华泰多因子10 合成口径 | `[x]` + 补齐 | 两主力方法（`synthesize_ic_ir_max`/`synthesize_ic_max`）+ 半衰加权 + T 扫描脚本；全量扫描待跑 |
 | 银河 0608 时序截面三层预测 | `[x]` 研读 + L1 落地 | L1 结论：**风险标签可测成立**（mdd test 0.25/0.40）；L2 不触发，倾向归档；L3 并入 stage2 |
@@ -93,6 +100,46 @@ done
 `reasoning_content` 共享 `max_tokens`，思维链吃光预算 → 空 content + HTTP 200 无异常，
 实测 `max_tokens=16000` 可用（已固化默认）。
 
+### 🥈 东吴 LLM-MCTS Phase 0 试点（新引擎同题对照，**代码待实现**）
+
+> 设计真源：`reports/docs/research_notes/东吴0623_研读_LLM_MCTS因子迭代框架与Phase0设计.md`
+> （reward 六项公式 / UCT / virtual expansion / 参数表 / 验收口径 / 复现边界全在笔记里）。
+
+**立项理由**：MCTS 用 UCT 把有限回测预算集中到高潜分支，直击「GP 盲目试错、因子同质化、
+单 IC 选股不管换手」三个已知短板；六项 reward（0.40 IC+0.30 IR+0.02 覆盖+0.10 换手
++0.10 多样性+0.08 过拟合）全部可用项目现成件计算。**立项核心问题 = 同题四臂对照
+（MCTS vs GP vs GFlowNet vs LLM-one-shot）有无增量**——不做对照则价值不成立。
+
+**实现范围（本机可写，~600-800 行）**：`factor/mcts/`（tree/reward/engine）+
+`scripts/factors/run_llm_mcts.py`；复用 `llm_pool.py`（proposer+解析+4 校验）、
+`alphapool_env`（算子/窗口/字段）、`alpha158.py`（29 Seed，窗口统一 20）、既有周度
+RankIC/换手/相关性统计。先写 1 Seed × 3 iters 冒烟（对齐国金24 教训：噪声带可超臂间差异）。
+**吸收微软 RD-Agent(Q) 三机制**（09-24 研读，笔记 `reports/docs/research_notes/微软RD-Agent_研读_*.md` §三）：
+① 评测前"与当前库逐日 IC 相关 ≥0.99 数值去重"层（AST 去重之外的数值防线）；
+④ 连续 N 轮无 SOTA 改进 → prompt 层重置复杂度从简单公式起步；⑦ 因子公式禁省略号/占位文本（JSON 纪律）。
+
+**实验口径**：hs300_2015_2026 主 + 全A 920 平行臂；IS 2016-2023 / OOS 2024-2026-08-21；
+**h=5 对齐东吴**（非项目默认 h=1）；搜索 reward → top50 全量复评两段结构（不抽样）；
+**IS 选型、OOS 只验证**。验收双口径：正式选择 OOS 提升比例对标 **65.5%**、候选池诊断率
+对标 **75.4%**；四臂比双优公式数/去重数/相关性/token 成本；接 `stats/pbo.py`。
+
+**执行**（代码就绪 + `DEEPSEEK_API_KEY` 后挂好机器，≈1450 次 LLM 扩展/臂，单臂评测可并行）：
+
+```bash
+# 命令待实现后定稿；骨架：
+python -u scripts/factors/run_llm_mcts.py --panel hs300_2015_2026 \
+  --is 2016-01-01:2023-12-31 --oos 2024-01-01:2026-08-21 --horizon 5 \
+  --arm mcts --iterations 10 --variants 5 --max-depth 3 --seeds-n 3 \
+  --out reports/llm_mcts_phase0
+```
+
+**复现边界（引用必须注明）**：① 东吴未披露模型→项目 `deepseek-flash`（同族不同版本）；
+② prompt 自拟（东吴/论文均未给全文）；③ 股票池不同，**指标绝对值不可跨报告比、只比同池四臂**；
+④ h=5 系对齐东吴非生产口径；⑤ diversity 项搜索期压相关候选、复评期放开（东吴口径）；
+⑥ 东吴 Stage1 分层抽样纯为降本，项目不抽。**明确跳过高频部分**（min5_hs300 资源墙，
+同 TODO §二分钟频扩容项）。注意：若 `llm_oneshot` 臂已接近 mcts，结论即「LLM 语义生成
+为主、MCTS 控制增益有限」——否定结果同样有信息量，如实报。
+
 ### 🥈 多因子10 T 扫描全量（长实验，命令已定）
 
 `python -m scripts.evaluation.mf10_t_scan --dataset hs300_2022_2025 --top 8`
@@ -102,7 +149,20 @@ done
 
 ### 🥉 补短板低成本项（半天级，本机穿插）
 
-- [ ] **指数点位市场状态特征进 GBDT 面板**（国金19 转译，半天）：三大宽基指数点位。
+- [x] **信号-市值漂移监控升格进生产 IC 监控**（09-23 完成，commit 612cf59）：
+  `monitoring/production_ic.py` 新列 `signal_mktcap_spearman`（逐日
+  Spearman(score, cov_size)，复用 daily_rank_ic，零新依赖）+ summarize
+  mktcap_drift 全期/近窗/逐年 + CLI 摘要行。判据 = 逐年恶化趋势（raw vs
+  oneoff 中性化面板口径差见 docstring）。**验证**：L1 探针 max|Δ|=1.1e-16
+  （2103 日）；L2 逐年趋势与 882 红牌 Spearman=1.000；端到端 2111 行落盘，
+  **近 60 日漂移 −0.353、实时段 z_size≈−1.0（小市值暴露持续），红牌属实**。
+  一次性诊断脚本 `scripts/oneoff/_signal_mktcap_drift.py` 保留作 882 口径存档。
+- [x] **指数点位市场状态特征进 GBDT 面板**（09-23，国金19 转译；`model/market_features.py`
+  9 特征×指数（多周期动量/均线位置/20日波动/52周位置），expanding z、防前视因果锁测试）：
+  `rolling_grid_alla --market-features`（须配 --out-tag）旁路注入 stage_predict——不过 select
+  漏斗（逐股 IC 对日级广播特征无定义）、不做截面 zscore（同日同值 std=0→全 NaN 坑）、
+  不进 existence_mask。默认上证+国证A指（2015 起缓存全期；沪深300 缺 2018 不默认）。
+  **实验待跑**（挂 920 后新 pred）。
 - [x] **llm_pool 机制抽取（QuantaAlpha 转译，09-23 完成）**：① `structure_similarity`
   AST 子树 Jaccard 去重（同族不同窗=1.0、异族=0.0 实测；`_update` 入池前拦截）；
   ② `param_heavy` + `too_many_features`（MAX_BASE_FEATURES=6 固定上限）；
@@ -118,12 +178,33 @@ done
   仍无增量，与 stack_blend 7 成员旧结论一致）。**h1020 = 920 后候选升级项**
   （+1.37pp vs 生产基线，882 存量 pred 口径，重跑后复验再议）。
   证据 `reports/member_blend12/`。ir/calmar 另类标签重训仍挂 920。
-- [ ] **`model/labels.py` 加 IR/Calmar 标签分支**（AI29，半天；注意研报如实披露的代价：
-  另类标签的超额最大回撤**更差**，实验须同口径报回撤）。
-- [ ] **预测层观点注入等价实现**（AI43：特征复制×k / 两段模型，与 BL 优化层注入做三臂对照）。
-- [ ] **CVaR 约束进 solve_portfolio**（华安 226 转译）：历史模拟场景 + RU 线性化，
-  可选约束 `CVaR_α(loss) ≤ c`；`optimize/risk.py` 已有度量，缺的是变成 QP 约束。
-  不依赖 RL、独立有价值。
+- [x] **`model/labels.py` 加 IR/Calmar 标签分支**（09-23，AI29 转译；`build_labels(method="ir"/"calmar", bench_close_panel=)`
+  —— IR = 区间超额收益 ÷ 区间内日度超额 σ，Calmar = 区间超额收益 ÷ |几何超额净值 MaxDD|；
+  method="return" 默认零回归（36 既有测试逐位一致）+ 7 个新测试。
+  **实验待跑**（挂 920 后新 pred）；注意研报如实披露的代价：另类标签的超额最大回撤
+  **更差**，实验须同口径报回撤）。
+- [x] **预测层观点注入等价实现**（09-23，AI43 等价实现非源码复现；`model/views.py`）：
+  ① `inject_by_feature_duplication`（观点因子复制 ×k，软注入——改变分裂概率/收缩结构）；
+  ② `TwoStagePredictor`（观点因子逐日中位数分层，层内各训一个底层预测器，硬注入——
+  树顶部 k 层分裂的离散版；predict 分组判定用输入面板自身网格，OOS 折内可用）。
+  与 BL 优化层注入（`bl_views_from_factor`）构成对照臂；**三臂对照实验待跑**（挂 920 后，
+  同一观点下 BL 注入 vs 预测层注入 vs 不注入，且须披露观点因子单因子 IC——观点可能是错的）。
+- [x] **CVaR 约束进 solve_portfolio**（09-23，华安 226 转译）：`scenario_returns` (S×N)
+  历史模拟场景 + RU 线性化，约束 `CVaR_α(loss) ≤ c`（loss=−场景收益·w）；面板级
+  `optimize_weights_qp` 自动构造场景矩阵（< t 的最近 window 行，与 rolling_covariance
+  同防前视纪律）。**工程注意**：RU 辅助变量（S+1 个）使紧约束下 OSQP 默认 max_iter=4000
+  不够（user_limit）→ CVaR 激活时 max_iter=200k + eps 1e-8；校验口径必须用 RU 分式
+  尾部（⌊(1−α)S⌋ 全额 + 下一场景分数权重），整数 floor 口径会误报超限。6 个新测试
+  （绑定/空转/手算/α 语义/参数校验/面板透传）。实验待跑（挂 920 后）。
+- [x] **微软 RD-Agent / RD-Agent(Q) 研读归档**（09-24，不复现不替换）：量化 R&D 自动化
+  多 Agent 框架（NeurIPS 2025，Qlib 绑定）——与 AI97/东吴 MCTS 同题不同栈。**不复现理由**：
+  口径防线缺失（无纸面/T+1/执行价收口、无正交化/DPP）、数据管道断链（Qlib bin 格式）、
+  仅 Linux+Docker、"2x ARR"基准（Alpha158 CSI300）与我们口径不可比（第三方实测 IC 仅 0.0152）。
+  **机制抽取 8 条**：① 逐日 IC_max≥0.99 数值去重（比 AST 去重多数值防线）+ ④ 连续失败换向/
+  复杂度渐进 prompt 规则 + ⑦ 公式禁省略号 JSON 纪律 → **随 MCTS Phase 0 落地**；
+  ② bandit 方向调度（8 维状态 Thompson 采样）记录待查；⑥ `fin_factor_report`
+  自动 vs 手工转译对照列 **P2（挂 920 后 + 好机器 WSL2，产出须过纸面三判据 + 920 IC）**。
+  笔记 `reports/docs/research_notes/微软RD-Agent_研读_量化RND自动化多Agent框架与机制抽取.md`。
 - [ ] **AI97 研报消融补齐**（5 组）：因子复杂度约束（研报示 `[3,8]` 最高 18.71%、
   `[3,7]` 崩 −1.56%，极敏感）/ LSTM vs Transformer / IC vs ICIR Pool / 奖励 6 版 /
   因子数量扫描（10 个最优）。
@@ -350,6 +431,7 @@ python -m scripts.factors.run_portfolio_phase2 --pool zz1000 \
 |---|---|---|
 | **0** | **920 治本口径基线重跑**（TODO §一，命令已写明，≈5–7h）→ **好机器长实验队列**：① AI97 三臂 ×3 seed → ② 国金24 残余⑤ 校准轮（1 臂 1 seed）→ 视耗时铺三臂 → ③ mf10 T 扫描全量 → ④ stage2 Phase 2 zz1000 全量（快档→全档，命令见 §二）；**920 重跑完成后追加 E1'' horizon 定版臂**（`python -m scripts.evaluation.horizon_mix --pred-dir <920产物目录>` + buffer 20/30 臂，§一 基本面诊断 P1）。**全部批次/命令/验收已汇总定稿 → [GOOD_MACHINE_TASKS.md](GOOD_MACHINE_TASKS.md)** | **迁移清单**：代码仓库（git clone）+ `E:\data` 数据面（因子库 parquet / min5_hs300 / 日线缓存，~GB 级；panels_neu 920 已含）+ Python 环境（系统解释器 D:/Python/Python312 有全依赖；.venv 缺 rl 依赖）+ `DEEPSEEK_API_KEY`（AI97 llm 臂需要）；产物 CSV/报告拷回本机入库归档 |
 | 1 | 本机半天级穿插（§一 🥉 六项；+基本面 E3 双层叠加回测，零重训） | 均挂已有基础设施 |
+| **1.5** | **llm_pool 机制抽取**（QuantaAlpha 转译，半天级，本机）：AST 结构去重 + 复杂度三维约束（≤250字符/自由参数<50%/底层特征≤6）；语义一致性前置校验 opt-in | 与 MCTS Phase 0 无依赖可先行，见 `东方0407_研读_*` §三；MCTS Phase 0 代码（~600-800 行）就绪后入好机器队列（§一 🥈，key 同 AI97） |
 | 2 | ~~研读批~~ **全部完成**：银河 0706+华安 226（09-20）、西南 T2RL（09-18）、国金19 Mamba2 归档（09-20）、AI43/AI29（09-20）、大模型投研速读批（09-20） | 报告均见 `reports/docs/research_notes/` |
 | 3 | 华泰3128 全频段 | 依赖分钟特征扩容，资源墙后置 |
 | 4 | 国金24 残余②：全A 分钟扩容 | 先跑吞吐探针估成本，再决定是否投入 |
@@ -363,7 +445,7 @@ python -m scripts.factors.run_portfolio_phase2 --pool zz1000 \
 | 目录 | 篇数 | 已完成 | 待推进 | 不细读 |
 |---|---|---|---|---|
 | 华泰人工智能（主目录） | 44 | 21/23 GP、14/16 CPCV、11 stacking、6 Boosting、AI39 核对、AI29 研读、AI19/22 PBO、AI43 研读 | AI32/34/42/13/27/40/45 | ~19 |
-| 因子挖掘 | 7 | 国金22、国泰君安 GP、国金24 主体、AI97 P0、银河 0608 研读 | AI26、国金24 残余②③④⑤、AI97 正式实验 | — |
+| 因子挖掘 | 9 | 国金22、国泰君安 GP、国金24 主体、AI97 P0、银河 0608 研读、东吴0623 研读、东方0407 归档、微软 RD-Agent(Q) 归档 | AI26、国金24 残余②③④⑤、AI97 正式实验、**东吴0623 Phase 0（代码待实现，吸收 RD-Agent 机制 ①④⑦）** | — |
 | 因子合成 | 9 | 申万 ML、多因子10 补齐+T 扫描脚本、国金19 归档 | T 扫描全量+多窗口对比、华泰3128 | AI28 |
 | 文本挖掘 | 6 | 51/57/63/41 全部 | 华泰 LLM_FADT | — |
 | 强化学习 | 6 | T2RL 研读、银河0706+华安226 研读、stage2 Phase 0/1 | **stage2 Phase 2 全量**、东方 DFQ、DQN | — |
