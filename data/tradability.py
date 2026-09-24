@@ -64,10 +64,17 @@ from config import Config
 
 def build_tradable_mask(close_adj: pd.DataFrame,
                         bwd: pd.DataFrame | None = None,
-                        cache_root: str | None = None) -> pd.DataFrame:
+                        cache_root: str | None = None,
+                        execution_lag: int = 1) -> pd.DataFrame:
     """构建**可交易性掩码**（bool 宽表，True=该日信号可进入组合）。
 
     口径：信号 T 日收盘产生、**T+1 日** VWAP 成交（国君研报执行链口径）。
+    ``execution_lag`` 控制状态取哪一天（2026-09-24 补，供"信号与成交同日"
+    的调用方使用，如 stage2 的 :mod:`scripts.factors.run_portfolio_phase2`
+    在决策日收盘调仓）：
+
+    - ``1``（默认）：T+1 状态——现行回测/适应度口径，零回归；
+    - ``0``：T 日状态——成交发生在 T 日收盘时，封板/停牌/ST 看 T 日本身。
 
     ⚠️ **调用方前置条件**：本掩码只在「成交日 = T+1」时成立。若调用方的回测在
     **T 日收盘**成交（信号与成交同日），掩码必须改用 T 日状态 —— 否则口径不自洽
@@ -120,22 +127,23 @@ def build_tradable_mask(close_adj: pd.DataFrame,
     hi_lim = _wide("high_limited")
     lo_lim = _wide("low_limited")
 
-    # T+1 状态（封板/停牌用次日信号对齐：T 日信号 → T+1 成交）
-    susp_next = susp.shift(-1).fillna(False)
-    hi_next = hi_lim.shift(-1)
-    lo_next = lo_lim.shift(-1)
+    # 执行日状态（默认 T+1：T 日信号 → T+1 成交；execution_lag=0 则取 T 日）
+    lag = int(execution_lag)
+    susp_next = susp.shift(-lag).fillna(False) if lag > 0 else susp.fillna(False)
+    hi_next = hi_lim.shift(-lag)
+    lo_next = lo_lim.shift(-lag)
 
     if bwd is not None and len(bwd):
         bwd_al = bwd.reindex(index=idx, columns=cols).ffill()
-        raw_next = (close_adj / bwd_al).shift(-1)
+        raw_next = (close_adj / bwd_al).shift(-lag)
     else:
-        raw_next = close_adj.shift(-1)
+        raw_next = close_adj.shift(-lag)
 
     tol = 1e-6
     sealed_up = (raw_next >= hi_next * (1 - tol)) & hi_next.notna()
     sealed_dn = (raw_next <= lo_next * (1 + tol)) & lo_next.notna()
 
-    st_next = is_st.shift(-1).fillna(False)
+    st_next = is_st.shift(-lag).fillna(False) if lag > 0 else is_st.fillna(False)
     bad = susp_next | sealed_up | sealed_dn | st_next | susp | is_st
     mask = ~bad
     return mask.fillna(True).astype(bool)

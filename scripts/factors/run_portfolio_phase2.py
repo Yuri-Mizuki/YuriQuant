@@ -205,6 +205,17 @@ def make_env(px, mask, codes, f, z, decision_dates, reward_kw, seed):
     pr = (close / prev - 1.0).loc[[d for d in decision_dates[1:]
                                    if d in close.index]]
     bw = mask.reindex(index=decision_dates, columns=codes).fillna(False)
+    # 可交易掩码 = 指数成分 ∩ T 日可交易（封板/停牌/ST，决策日收盘调仓 →
+    # execution_lag=0 取 T 日状态；TODO §三 工程债 2026-09-24 落地——
+    # 此前只剔非成分，zz1000 的 ST/停牌量会放大"买不进"边界）
+    trad = _tradability_cached(px).reindex(
+        index=decision_dates, columns=codes).fillna(True)
+    tradable = bw & trad
+    # 防御：整行不可交易（极端情形，如成分内全线停牌）时退回成分掩码，
+    # 避免 map_actions_to_weights 的"全 False"异常中断训练
+    empty_rows = ~tradable.any(axis=1)
+    if empty_rows.any():
+        tradable.loc[empty_rows] = bw.loc[empty_rows]
     bwm = bw.div(bw.sum(axis=1).replace(0, np.nan), axis=0).fillna(0.0)
     idx_ret = pd.Series({
         d: float(bwm.loc[d] @ (close.loc[d] / prev.loc[d] - 1.0).fillna(0.0))
@@ -213,8 +224,30 @@ def make_env(px, mask, codes, f, z, decision_dates, reward_kw, seed):
         factor=f, aux=z, bench=bwm,
         period_returns=pr, idx_period_returns=idx_ret,
         decision_dates=decision_dates, cost_rate=0.0, seed=seed,
-        tradable_masks=bwm.gt(0), reward_kw=reward_kw,
+        tradable_masks=tradable, reward_kw=reward_kw,
         action_kw={"max_holding_pct": 0.4}), bwm
+
+
+_TRAD_CACHE: dict = {}
+
+
+def _tradability_cached(px) -> pd.DataFrame:
+    """决策日 T 日状态可交易掩码（面板对象级缓存：一次运行只读一次状态表）。
+
+    ⚠️ 复权口径：phase2 的日线 parquet 为未复权价，bwd=None 下封板判定
+    直接用原始 close 对状态表涨跌停价，口径自洽（见 build_tradable_mask
+    docstring 的退化分支）。
+    """
+    key = id(px["close"])
+    hit = _TRAD_CACHE.get(key)
+    if hit is not None:
+        return hit
+    from data.tradability import build_tradable_mask
+
+    trad = build_tradable_mask(px["close"], bwd=None, execution_lag=0)
+    _TRAD_CACHE.clear()          # 单运行单面板，防陈旧
+    _TRAD_CACHE[key] = trad
+    return trad
 
 
 def ppo_arm_rolling(px, mask, codes, signals_by_year, all_dates, model_year, *,
@@ -370,13 +403,20 @@ def solve_galaxy_qp(alpha, risk_t, sigma, w_b, w_prev, *, lam_risk=1.0,
 def qp_arm_galaxy(px, mask, codes, f, z, decision_dates, bw, reward_kw):
     from optimize.solver import estimate_covariance
 
+    # 与 make_env 同款兜底：mdd_66 等长前瞻标签在数据尾部覆盖不足时，
+    # 信号 reindex 到决策日缺失处补 0（中性），否则 z.loc[t] 直接 KeyError
+    if isinstance(f, pd.Series):
+        f = f.unstack().reindex(index=decision_dates, columns=codes).fillna(0.0)
+    if isinstance(z, pd.Series):
+        z = z.unstack().reindex(index=decision_dates, columns=codes).fillna(0.0)
     close = px["close"][codes]
     rets = close.pct_change(fill_method=None)
     w_prev = bw.iloc[0].to_numpy(dtype=float).copy()
     weights, n_fallback = {}, 0
     for t in decision_dates[:-1]:
         hist = rets.loc[:t].iloc[:-1].tail(120)
-        valid = (bw.loc[t] > 0) & hist.notna().all()
+        trad = _tradability_cached(px).loc[t].reindex(codes).fillna(True)
+        valid = (bw.loc[t] > 0) & hist.notna().all() & trad
         cols = valid.index[valid]
         if len(cols) < 60:
             weights[t] = bw.loc[t].to_numpy(dtype=float)

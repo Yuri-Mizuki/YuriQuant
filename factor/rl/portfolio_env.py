@@ -68,7 +68,8 @@ def rank_pct(row: np.ndarray | pd.Series) -> np.ndarray:
     """截面百分位排名（NaN 记 0.5 中性，不参与方向偏置）。"""
     s = pd.Series(np.asarray(row, dtype=float)).fillna(0.5)
     # NaN 先填 0.5 会被 rank 误当作真值——先 rank 再把原 NaN 位置置 0.5
-    r = s.rank(pct=True).to_numpy(dtype=float)
+    # （to_numpy 在 pandas 3.x 返回只读视图，须显式 copy 才能原位覆写）
+    r = np.array(s.rank(pct=True), dtype=float, copy=True)
     r[np.isnan(np.asarray(row, dtype=float))] = 0.5
     return r
 
