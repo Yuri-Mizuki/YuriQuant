@@ -26,11 +26,13 @@
 - 本实验为**验证型网格**（全量报告，不挑赢家）；模型超参沿用项目固化默认，
   不在本数据上重新调参，避免二次数据窥探。
 
-用法:
-    python scripts/pipelines/rolling_grid_alla.py --stage all        # 全流程（断点续跑）
-    python scripts/pipelines/rolling_grid_alla.py --stage predict --horizons 1
-    python scripts/pipelines/rolling_grid_alla.py --stage backtest
-    python scripts/pipelines/rolling_grid_alla.py --stage all --quick   # 冒烟：1年×h1×gbdt
+用法（--preproc 未指定时回退 zscore 对照臂并告警；--preproc ortho 直写
+reports/alla_rolling_ortho/，重跑既有臂须配 --out-tag 防覆盖）:
+    python scripts/pipelines/rolling_grid_alla.py --preproc ortho --stage all        # 全流程（断点续跑）
+    python scripts/pipelines/rolling_grid_alla.py --stage prep                       # _base 重建（与 --preproc 无关）
+    python scripts/pipelines/rolling_grid_alla.py --preproc ortho --stage predict --horizons 1
+    python scripts/pipelines/rolling_grid_alla.py --preproc ortho --stage backtest
+    python scripts/pipelines/rolling_grid_alla.py --preproc ortho --stage all --quick # 冒烟：1年×h1×gbdt
 """
 
 from __future__ import annotations
@@ -1513,10 +1515,12 @@ def main():
                     help="predict 阶段限定 horizon，逗号分隔")
     ap.add_argument("--ablation", action="store_true",
                     help="消融对照组：排除 A+B 基本面族，输出到 alla_rolling_nofund")
-    ap.add_argument("--preproc", default="zscore",
+    ap.add_argument("--preproc", default=None,
                     choices=["zscore", "ortho", "mixed"],
-                    help="特征预处理口径：zscore(全局截面z) / ortho(因子层行业+市值"
-                         "中性化) / mixed(基本面族中性化+量价zscore)")
+                    help="特征预处理口径：zscore(全局截面z，历史主线对照臂) / "
+                         "ortho(因子层行业+市值中性化，主实验最优口径) / "
+                         "mixed(基本面族中性化+量价zscore)；"
+                         "未指定时回退 zscore 并告警")
     ap.add_argument("--execution", default="open", choices=["close", "open", "vwap"],
                     help="backtest/ensemble 阶段成交价口径（2026-09-22 定版）："
                          "open(T+1开盘,可执行定版,正名产物,默认) / "
@@ -1573,6 +1577,15 @@ def main():
         INCLUDE_FUNDAMENTAL = False
         OUT = Path("reports") / "alla_rolling_nofund"
         log.info("+++ 消融模式：关闭 A+B 基本面族，输出 -> %s", OUT)
+    if args.preproc is None:
+        args.preproc = "zscore"
+        if args.stage == "prep":
+            log.info("--preproc 未指定：prep 产物与口径无关，_base 落主臂正本 "
+                     "reports/alla_rolling/_base")
+        else:
+            log.warning("--preproc 未指定 → 回退 zscore 口径（全局截面 z，特征源 "
+                        "panels 非正交化）。主实验最优口径 = ortho（消融 +1.6pp/年），"
+                        "跑最优臂须显式 --preproc ortho")
     if args.preproc == "ortho":
         OUT = Path("reports") / "alla_rolling_ortho"
         PANELS_DIR = ds_root() / "panels_neu"
