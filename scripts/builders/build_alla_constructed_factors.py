@@ -10,7 +10,7 @@
   ② 增长质量      np_rev_gap(利润弹性,正) / rev_recv_gap(营收-应收增速,负)
                    cfo_to_np(经营含金量,正)
   ③ 跨期趋势      margin_delta_ttm(毛利率同比,正) / np_accel_sq(单季盈利加速,正)
-                   roe_vol_pit(ROE稳定性,负)
+                   roe_volpit(ROE稳定性,负)
   ④ 财务健康      altman_zscore(正) / debt_to_ebitda(负) / interest_coverage(正)
   ⑤ 资产结构风险  risky_asset_ratio(易减值资产占比,负)
   ⑥ 股息持续性    div_growth_yoy(每股分红同比,正) / div_consecutive_years(负向剔险)
@@ -87,14 +87,14 @@ def year_offset(df: pd.DataFrame, field: str, mode: str = "delta") -> pd.DataFra
                       on=["code", "ann_date", "report_period"], how="left")
 
 
-def _pit(report_df, cal_idx, codes, field):
+def pit(report_df, cal_idx, codes, field):
     from data.financials import build_pit_panel
     if field not in report_df.columns or report_df[field].isna().all():
         return pd.DataFrame(np.nan, index=cal_idx, columns=codes)
     return build_pit_panel(report_df, cal_idx, field).reindex(index=cal_idx, columns=codes)
 
 
-def _safe(x, denom):
+def safe(x, denom):
     return (x / denom.replace(0.0, np.nan))
 
 
@@ -102,7 +102,7 @@ def build_panels(close_adj, close_raw, inc, bal, cfo, div):
     codes = close_adj.columns
     cal_idx = close_adj.index
     close = close_raw.astype(float)
-    cap_pit = _pit(bal, cal_idx, codes, "TOT_SHARE").astype(float) * close
+    cap_pit = pit(bal, cal_idx, codes, "TOT_SHARE").astype(float) * close
     ln_cap = np.log(cap_pit.clip(lower=1.0))
 
     # ---- income: TTM / 单季 / 加速度 ----
@@ -126,7 +126,7 @@ def build_panels(close_adj, close_raw, inc, bal, cfo, div):
     cfo = add_ttm_yoy(cfo, _CFO_FIELD, "CFO_TTM", None)
 
     def pitf(f):
-        return _pit(inc, cal_idx, codes, f)
+        return pit(inc, cal_idx, codes, f)
 
     p = {}
     for f in ("OPERA_REV_TTM", "OPERA_REV", "NP_YOY", "REV_YOY", "NET_PRO_TTM",
@@ -134,9 +134,9 @@ def build_panels(close_adj, close_raw, inc, bal, cfo, div):
               "OPERA_PROFIT", "TOTAL_PROFIT", "_off_NP_SQ_YOY", "_off_GM_RATIO"):
         p[f] = pitf(f)
 
-    pc = {f: _pit(cfo, cal_idx, codes, f)
+    pc = {f: pit(cfo, cal_idx, codes, f)
           for f in ("CFO_TTM",) if f in cfo.columns}
-    pb = {f: _pit(bal, cal_idx, codes, f)
+    pb = {f: pit(bal, cal_idx, codes, f)
           for f in ("TOTAL_ASSETS", "TOTAL_CUR_ASSETS", "TOTAL_CUR_LIAB",
                     "SURPLUS_RESV", "UNDISTRIBUTED_PRO", "TOTAL_LIAB",
                     "GOODWILL", "ACC_RECEIVABLE", "NOTES_RECEIVABLE", "INV")}
@@ -148,22 +148,22 @@ def build_panels(close_adj, close_raw, inc, bal, cfo, div):
     panels: dict[str, pd.DataFrame] = {}
 
     # ① 盈利质量
-    panels["np_ded_ratio"] = _safe(p["NP_DED_TTM"], np_ttm)            # 负：扣非占比低→靠一次性
-    panels["main_profit_ratio"] = _safe(p["OPERA_PROFIT"], p["TOTAL_PROFIT"])   # 正
-    panels["ebit_margin"] = _safe(p["EBIT_TTM"], rev_ttm)              # 正
+    panels["np_ded_ratio"] = safe(p["NP_DED_TTM"], np_ttm)            # 负：扣非占比低→靠一次性
+    panels["main_profit_ratio"] = safe(p["OPERA_PROFIT"], p["TOTAL_PROFIT"])   # 正
+    panels["ebit_margin"] = safe(p["EBIT_TTM"], rev_ttm)              # 正
     # ④ 财务健康
     if all(k in pb for k in ("TOTAL_CUR_ASSETS", "TOTAL_CUR_LIAB", "TOTAL_LIAB",
                              "SURPLUS_RESV", "UNDISTRIBUTED_PRO")):
         wc = pb["TOTAL_CUR_ASSETS"] - pb["TOTAL_CUR_LIAB"]
         re_ = pb["SURPLUS_RESV"].fillna(0.0) + pb["UNDISTRIBUTED_PRO"]
-        x1 = _safe(wc, ta)
-        x2 = _safe(re_, ta)
-        x3 = _safe(p["EBIT_TTM"], ta)
-        x4 = _safe(cap_pit, pb["TOTAL_LIAB"])
-        x5 = _safe(rev_ttm, ta)
+        x1 = safe(wc, ta)
+        x2 = safe(re_, ta)
+        x3 = safe(p["EBIT_TTM"], ta)
+        x4 = safe(cap_pit, pb["TOTAL_LIAB"])
+        x5 = safe(rev_ttm, ta)
         panels["altman_zscore"] = 1.2 * x1 + 1.4 * x2 + 3.3 * x3 + 0.6 * x4 + 1.0 * x5
-        panels["debt_to_ebitda"] = _safe(pb["TOTAL_LIAB"], p["EBITDA_TTM"])   # 负
-    panels["interest_coverage"] = _safe(p["EBIT_TTM"], p["LESS_FIN_EXP_TTM"])  # 正
+        panels["debt_to_ebitda"] = safe(pb["TOTAL_LIAB"], p["EBITDA_TTM"])   # 负
+    panels["interest_coverage"] = safe(p["EBIT_TTM"], p["LESS_FIN_EXP_TTM"])  # 正
     # ② 增长质量
     panels["np_rev_gap"] = p["NP_YOY"] - p["REV_YOY"]   # 正：利润弹性
     if "ACC_RECEIVABLE" in pb and "NOTES_RECEIVABLE" in pb:
@@ -171,11 +171,11 @@ def build_panels(close_adj, close_raw, inc, bal, cfo, div):
         recv_growth = recv.pct_change(244, fill_method=None)  # 日频近似同比（过去，无未来）
         panels["rev_recv_gap"] = p["REV_YOY"] - recv_growth      # 负：应收涨快于营收
     if "CFO_TTM" in pc:
-        panels["cfo_to_np"] = _safe(pc["CFO_TTM"], np_ttm)      # 正：经营含金量
+        panels["cfo_to_np"] = safe(pc["CFO_TTM"], np_ttm)      # 正：经营含金量
     # ③ 跨期趋势
     panels["margin_delta_ttm"] = p["_off_GM_RATIO"]               # 正：毛利率同比升
     panels["np_accel_sq"] = p["_off_NP_SQ_YOY"]                   # 正：单季盈利加速
-    roe = _safe(np_ttm, _pit(bal, cal_idx, codes,
+    roe = safe(np_ttm, pit(bal, cal_idx, codes,
                              "TOT_SHARE_EQUITY_EXCL_MIN_INT"))
     mu = roe.rolling(252, min_periods=40).mean()
     sd = roe.rolling(252, min_periods=40).std()
@@ -186,10 +186,10 @@ def build_panels(close_adj, close_raw, inc, bal, cfo, div):
         risky = (pb["GOODWILL"].fillna(0.0)
                  + pb["ACC_RECEIVABLE"].fillna(0.0)
                  + pb["NOTES_RECEIVABLE"].fillna(0.0) + pb["INV"].fillna(0.0))
-        panels["risky_asset_ratio"] = _safe(risky, ta)
+        panels["risky_asset_ratio"] = safe(risky, ta)
     # ⑥ 股息持续性
     if div is not None and not div.empty and "cash_per_share_pre_tax" in div.columns:
-        div_cps = _pit(div, cal_idx, codes, "cash_per_share_pre_tax")
+        div_cps = pit(div, cal_idx, codes, "cash_per_share_pre_tax")
         panels["div_growth_yoy"] = div_cps.pct_change(244, fill_method=None)   # 正
         panels["div_consecutive_years"] = _div_consecutive(div, cal_idx, codes)  # 正：连续分红年数
 

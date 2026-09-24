@@ -238,12 +238,12 @@ def _normalize(records: list[dict], direction: str) -> pd.DataFrame:
         return pd.DataFrame(columns=CNINFO_HOLDER_COLS)
     raw = pd.DataFrame([{_KEYMAP[k]: r.get(k) for k in _KEYMAP} for r in records])
 
-    # 代码标准化：复用 source_akshare._std_code6（含北交所 .BJ 段修正）
-    from data.altdata.source_akshare import _std_code6
+    # 代码标准化：复用 source_akshare.std_code6（含北交所 .BJ 段修正）
+    from data.altdata.source_akshare import std_code6
 
     out = pd.DataFrame()
     out["code"] = raw["code_raw"].map(
-        lambda c: _std_code6(str(c).strip()) if pd.notna(c) else None)
+        lambda c: std_code6(str(c).strip()) if pd.notna(c) else None)
     out["sec_name"] = raw["sec_name"]
     out["ann_date"] = raw["ann_date"].map(_to_int_date)
     out["chg_date"] = raw["chg_date"].map(_to_int_date)

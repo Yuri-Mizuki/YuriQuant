@@ -137,9 +137,12 @@ class TestBuildMarketStateFeatures:
         含 NaN 行（std=NaN），只在有效行上断言。"""
         feats, _ = self._build()
         for p in feats.values():
-            sd = p.std(axis=1)
-            valid = sd.dropna().index
-            assert (sd.loc[valid] == 0).all(), "存在非同值行 → 被截面变换污染"
+            # 逐位同值才是模块契约；std==0 断言过严——pandas 对 float32 面板的
+            # 行方差走单遍累积，逐位同值行也会产生 ~4e-18 方差痕迹（std ~2e-9，
+            # 实测 5 列时 82/400 行），与广播语义无关
+            same = p.eq(p.iloc[:, 0], axis=0)
+            valid = p.iloc[:, 0].notna()          # 整行 NaN 的洞日不参与
+            assert same.where(valid, other=True).all().all(),                 "存在非同值行 → 被截面变换污染"
 
     def test_index_gap_dates_nan(self):
         """指数序列中断的日期整行 NaN（reindex 造洞，不依赖交易日历）。"""

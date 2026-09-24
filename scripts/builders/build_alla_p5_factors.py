@@ -49,13 +49,13 @@ from scripts.builders.build_alla_fundamental_factors import (  # noqa: E402
     load_panels, add_ttm_yoy, add_single_quarter,
 )
 from scripts.builders.build_alla_constructed_factors import (  # noqa: E402
-    year_offset, _pit, _safe,
+    year_offset, pit, safe,
 )
 
 
 def _pit32(df, cal_idx, codes, field):
     """PIT 展开 + float32（本 builder 面板多，峰值内存敏感）。"""
-    return _pit(df, cal_idx, codes, field).astype(np.float32)
+    return pit(df, cal_idx, codes, field).astype(np.float32)
 
 
 def build_panels(close_adj, close_raw, inc, bal, cfo, div):
@@ -70,22 +70,22 @@ def build_panels(close_adj, close_raw, inc, bal, cfo, div):
     inc["SUE_STD"] = (inc.groupby("code")["_off_NP_DED_SQ"]
                       .transform(lambda s: s.rolling(8, min_periods=4).std()))
     inc["SUE_Q"] = inc["_off_NP_DED_SQ"] / inc["SUE_STD"].replace(0.0, np.nan)
-    panels["sue_q"] = _pit32(inc, cal_idx, codes, "SUE_Q")   # 正：超预期
+    panels["sue_q"] = pit32(inc, cal_idx, codes, "SUE_Q")   # 正：超预期
 
     # ---- ② 总资产同比 ----
     bal = year_offset(bal, "TOTAL_ASSETS", "ratio")
-    panels["asset_growth_yoy"] = _pit32(bal, cal_idx, codes, "_off_TOTAL_ASSETS")
+    panels["asset_growth_yoy"] = pit32(bal, cal_idx, codes, "_off_TOTAL_ASSETS")
 
     # ---- ③ 投资强度：投资活动净现金流 TTM / 总资产 ----
     cfo = add_ttm_yoy(cfo, "NET_CASH_FLOWS_INV_ACT", "INV_CF_TTM", None)
-    inv_ttm = _pit32(cfo, cal_idx, codes, "INV_CF_TTM")
-    ta = _pit32(bal, cal_idx, codes, "TOTAL_ASSETS")
-    panels["capex_intensity"] = -_safe(inv_ttm, ta)        # 净流出为正=投入
+    inv_ttm = pit32(cfo, cal_idx, codes, "INV_CF_TTM")
+    ta = pit32(bal, cal_idx, codes, "TOTAL_ASSETS")
+    panels["capex_intensity"] = -safe(inv_ttm, ta)        # 净流出为正=投入
 
     # ---- ④ 送转预期：每股资本公积 + 近3年送转次数 ----
-    cap_resv = _pit32(bal, cal_idx, codes, "CAP_RESV")
-    tot_share = _pit32(bal, cal_idx, codes, "TOT_SHARE")
-    panels["spsr"] = _safe(cap_resv, tot_share)            # 正：高送转潜力
+    cap_resv = pit32(bal, cal_idx, codes, "CAP_RESV")
+    tot_share = pit32(bal, cal_idx, codes, "TOT_SHARE")
+    panels["spsr"] = safe(cap_resv, tot_share)            # 正：高送转潜力
     if div is not None and not div.empty and "bonus_rate" in div.columns:
         dv = div[["code", "ann_date", "bonus_rate"]].copy()
         dv["ann_date"] = pd.to_datetime(dv["ann_date"], errors="coerce")
@@ -98,20 +98,20 @@ def build_panels(close_adj, close_raw, inc, bal, cfo, div):
                                .rolling("1095D").count().to_numpy())
         dv = dv.reset_index().drop_duplicates(subset=["code", "ann_date"],
                                               keep="last")
-        panels["bonus_freq_3y"] = _pit32(dv, cal_idx, codes, "bonus_freq_3y")
+        panels["bonus_freq_3y"] = pit32(dv, cal_idx, codes, "bonus_freq_3y")
 
     # ---- ⑤ 现金转换周期 CCC = DSO + DIO - DPO（负向：占用越久越差） ----
     inc = add_ttm_yoy(inc, "OPERA_REV", "OPERA_REV_TTM", None)
     inc = add_ttm_yoy(inc, "LESS_OPERA_COST", "LESS_OPERA_COST_TTM", None)
     inc = add_ttm_yoy(inc, "NET_PRO_INCL_MIN_INT_INC", "NET_PRO_TTM", None)
-    rev_ttm = _pit32(inc, cal_idx, codes, "OPERA_REV_TTM")
-    cost_ttm = _pit32(inc, cal_idx, codes, "LESS_OPERA_COST_TTM")
-    ar = _pit32(bal, cal_idx, codes, "ACC_RECEIVABLE")
-    inv = _pit32(bal, cal_idx, codes, "INV")
-    ap = _pit32(bal, cal_idx, codes, "ACCT_PAYABLE")
-    dso = _safe(ar, rev_ttm) * 244.0
-    dio = _safe(inv, cost_ttm) * 244.0
-    dpo = _safe(ap, cost_ttm) * 244.0
+    rev_ttm = pit32(inc, cal_idx, codes, "OPERA_REV_TTM")
+    cost_ttm = pit32(inc, cal_idx, codes, "LESS_OPERA_COST_TTM")
+    ar = pit32(bal, cal_idx, codes, "ACC_RECEIVABLE")
+    inv = pit32(bal, cal_idx, codes, "INV")
+    ap = pit32(bal, cal_idx, codes, "ACCT_PAYABLE")
+    dso = safe(ar, rev_ttm) * 244.0
+    dio = safe(inv, cost_ttm) * 244.0
+    dpo = safe(ap, cost_ttm) * 244.0
     panels["ccc"] = dso + dio.fillna(0.0) - dpo.fillna(0.0)
     del ar, inv, ap, dso, dio, dpo
 
@@ -127,7 +127,7 @@ def build_panels(close_adj, close_raw, inc, bal, cfo, div):
     d["delay_med"] = (d.groupby(["code", "qtype"])["delay"]
                       .transform(lambda s: s.rolling(8, min_periods=4).median()))
     d["report_delay"] = d["delay"] - d["delay_med"]   # 正=比历史晚披露
-    panels["report_delay"] = _pit32(d, cal_idx, codes, "report_delay")
+    panels["report_delay"] = pit32(d, cal_idx, codes, "report_delay")
 
     # ---- ⑦ Piotroski F-Score：9 项 0/1 打分 ----
     bal_k = bal[["code", "ann_date", "report_period", "TOTAL_ASSETS",
@@ -145,31 +145,31 @@ def build_panels(close_adj, close_raw, inc, bal, cfo, div):
     r = r.merge(bal_k.drop(columns=["ann_date"]), on=["code", "report_period"],
                 how="left").merge(
         cfo_k.drop(columns=["ann_date"]), on=["code", "report_period"], how="left")
-    r["ROA"] = _safe(r["NET_PRO_TTM"], r["TOTAL_ASSETS"])
-    r["LEV"] = _safe(r["TOTAL_LIAB"], r["TOTAL_ASSETS"])
-    r["CUR"] = _safe(r["TOTAL_CUR_ASSETS"], r["TOTAL_CUR_LIAB"])
-    r["TURN"] = _safe(r["OPERA_REV_TTM"], r["TOTAL_ASSETS"])
-    r["GM_RATIO"] = _safe(r["OPERA_REV_TTM"] - r["LESS_OPERA_COST_TTM"],
+    r["ROA"] = safe(r["NET_PRO_TTM"], r["TOTAL_ASSETS"])
+    r["LEV"] = safe(r["TOTAL_LIAB"], r["TOTAL_ASSETS"])
+    r["CUR"] = safe(r["TOTAL_CUR_ASSETS"], r["TOTAL_CUR_LIAB"])
+    r["TURN"] = safe(r["OPERA_REV_TTM"], r["TOTAL_ASSETS"])
+    r["GM_RATIO"] = safe(r["OPERA_REV_TTM"] - r["LESS_OPERA_COST_TTM"],
                           r["OPERA_REV_TTM"])
-    roa = _pit32(r, cal_idx, codes, "ROA")
-    cfo_ttm = _pit32(r, cal_idx, codes, "NET_CASH_FLOWS_OPERA_ACT")
-    np_ttm = _pit32(r, cal_idx, codes, "NET_PRO_TTM")
+    roa = pit32(r, cal_idx, codes, "ROA")
+    cfo_ttm = pit32(r, cal_idx, codes, "NET_CASH_FLOWS_OPERA_ACT")
+    np_ttm = pit32(r, cal_idx, codes, "NET_PRO_TTM")
     score = (roa > 0).astype(np.float32) + (cfo_ttm > 0).astype(np.float32) \
         + (cfo_ttm > np_ttm).astype(np.float32)
     for fld, direction in (("ROA", "up"), ("LEV", "down"), ("CUR", "up"),
                            ("TOT_SHARE", "down"), ("GM_RATIO", "up"),
                            ("TURN", "up")):
         rr = year_offset(r, fld, "delta")
-        sig = _pit32(rr, cal_idx, codes, f"_off_{fld}")
+        sig = pit32(rr, cal_idx, codes, f"_off_{fld}")
         good = (sig > 0) if direction == "up" else (sig < 0)
         score = score + good.astype(np.float32)
     panels["piotroski_f"] = score  # 0-9，正=质量高
 
     # ---- ⑧ 存货异动：存货同比 - 营收同比（正=压货，负向） ----
     bal = year_offset(bal, "INV", "ratio")
-    inv_yoy = _pit32(bal, cal_idx, codes, "_off_INV")
+    inv_yoy = pit32(bal, cal_idx, codes, "_off_INV")
     inc = add_ttm_yoy(inc, "OPERA_REV", "OPERA_REV_TTM", "REV_YOY")
-    rev_yoy = _pit32(inc, cal_idx, codes, "REV_YOY")
+    rev_yoy = pit32(inc, cal_idx, codes, "REV_YOY")
     panels["inv_rev_gap"] = inv_yoy - rev_yoy
 
     return {n: q.reindex(index=cal_idx, columns=codes) for n, q in panels.items()}

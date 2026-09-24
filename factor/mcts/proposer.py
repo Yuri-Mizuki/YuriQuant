@@ -33,9 +33,9 @@ from factor.rl.alphapool_env import CONSTANTS, FIELDS, MAX_EXPR_LENGTH, WINDOWS
 from factor.rl.llm_pool import (
     OpenAICompatibleProposer,
     RNode,
-    _fmt_const,
     check_report_formula,
     extract_formulas,
+    fmt_const,
     parse_report_formula,
     to_report,
 )
@@ -87,7 +87,7 @@ def _grammar_lines(windows: Sequence[int] = WINDOWS,
         "可用字段（6 个，须带 $ 前缀）：",
         "  $OPEN $HIGH $LOW $CLOSE $VOLUME $VWAP",
         "可用常数（只能用下列值）：",
-        "  " + "、".join(_fmt_const(c) for c in CONSTANTS),
+        "  " + "、".join(fmt_const(c) for c in CONSTANTS),
         "可用算子（只能用下列标准算子，禁止使用 Seed 专属算子如 Slope/Rsquare/"
         "Resi/Quantile/Rank/IdxMax/IdxMin）：",
         "  一元：Abs(x) Log(x)",

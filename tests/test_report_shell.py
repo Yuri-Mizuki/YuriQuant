@@ -27,6 +27,14 @@ _SKIP_DIRS = {".venv", "venv", ".git", "oneoff", "archive", "node_modules",
               "tests", "__pycache__", "reports"}
 _SHELL_RE = re.compile(r"<!DOCTYPE|<html\b", re.I)
 
+#: 豁免名单（路径相对仓库根，写明理由）：
+#: - ``scripts/reporting/md_to_email_html.py`` —— 邮件 HTML **必须**内联样式
+#:   自包含（邮件客户端剥离外链 CSS/JS，html_report.page 的浏览器外壳不可用），
+#:   刻意自拼最小外壳（2026-09-24 存量红灯清欠时登记）。
+_SHELL_EXEMPT = {
+    "scripts/reporting/md_to_email_html.py",
+}
+
 
 def _code_without_comments(path: Path) -> str:
     """去掉整行注释与行末 ``#`` 注释后的代码（避免 docstring/注释里的字样误伤）。"""
@@ -52,6 +60,8 @@ def test_only_html_report_owns_the_document_shell():
         if set(rel.parts) & _SKIP_DIRS:
             continue
         if p == SHELL_SOURCE:
+            continue
+        if str(rel).replace("\\", "/") in _SHELL_EXEMPT:
             continue
         if _SHELL_RE.search(_code_without_comments(p)):
             offenders.append(str(rel))

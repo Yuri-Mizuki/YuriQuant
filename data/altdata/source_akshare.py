@@ -191,7 +191,7 @@ _PREFIX_RE = re.compile(r"^(SH|SZ|BJ)\s*(\d{6})$", re.I)
 _BJ_PREFIX2 = ("43", "83", "87", "88", "92")
 
 
-def _std_code6(c6: str) -> str:
+def std_code6(c6: str) -> str:
     """6 位代码 → 项目标准格式（``600519.SH``）。
 
     ⚠️ 局部修正 ``source_ths.to_code_std`` 的一处口径 bug：它按首字符判市场
@@ -211,7 +211,7 @@ def _code(series: pd.Series) -> pd.Series:
     """各类代码写法 → 项目标准代码（``600519.SH``）。
 
     实测需覆盖三种写法：``600328``（纯数字）/ ``600328.SH``（带后缀）/
-    ``SH600328``（雪球的前缀式）。前两种走 ``to_code6``→``_std_code6``，
+    ``SH600328``（雪球的前缀式）。前两种走 ``to_code6``→``std_code6``，
     前缀式直接重组，避免 ``to_code6("SH600328")`` 原样返回后判错市场。
     """
     def conv(v):
@@ -225,8 +225,8 @@ def _code(series: pd.Series) -> pd.Series:
             # ⚠️ 不能直接重组 ``f"{code}.{exch}"``：雪球会把北交所个股标成
             # ``SH920242``（实测），而项目口径**按代码段定市场**（920xxx = .BJ）
             # ⇒ 前缀只用于剥离，判市场一律交给 _std_code6。
-            return _std_code6(m.group(2))
-        return _std_code6(to_code6(s))
+            return std_code6(m.group(2))
+        return std_code6(to_code6(s))
 
     return series.map(conv)
 
@@ -294,7 +294,7 @@ def fetch_inner_trade(name_to_code: Mapping[str, str] | None = None) -> pd.DataF
         # 回补路径同样必须走 _std_code6（北交所段修正）—— 用裸 to_code_std 会让
         # 回补出来的 920xxx 与主路径分歧
         code = code.where(code.notna(),
-                          filled.map(lambda c: _std_code6(to_code6(c)) if pd.notna(c) else None))
+                          filled.map(lambda c: std_code6(to_code6(c)) if pd.notna(c) else None))
         log.info("[altdata] inner_trade 代码缺失 %d/%d，按名称回补后剩 %d",
                  n_missing, len(raw), int(code.isna().sum()))
     elif n_missing:

@@ -86,6 +86,7 @@ __all__ = [
     "check_report_formula",
     "check_many",
     "extract_formulas",
+    "fmt_const",
     "is_structural_duplicate",
     "llm_semantic_check",
     "make_proposer",
@@ -215,7 +216,7 @@ def _parse_args(text: str, toks: list[tuple[str, str]], pos: int):
 # 2) 语法转换
 # ===========================================================================
 
-def _fmt_const(c: float) -> str:
+def fmt_const(c: float) -> str:
     """常数 → 项目语法字面量（整数去掉小数点；小数保留，2026-09-16 已支持）。"""
     f = float(c)
     return str(int(f)) if f.is_integer() else repr(round(f, 6))
@@ -226,7 +227,7 @@ def to_project(node: RNode) -> str:
     if node.kind == "field":
         return str(node.value)
     if node.kind == "const":
-        return _fmt_const(float(node.value))
+        return fmt_const(float(node.value))
     name, win = node.value
     reg_name = REPORT_OPERATORS[name]
     inner = ",".join(to_project(c) for c in node.children)
@@ -239,7 +240,7 @@ def to_report(node: RNode) -> str:
     if node.kind == "field":
         return f"${node.value}"
     if node.kind == "const":
-        return _fmt_const(float(node.value))
+        return fmt_const(float(node.value))
     name, win = node.value
     args = [to_report(c) for c in node.children]
     if win is not None:
@@ -869,7 +870,7 @@ def build_prompt(n: int, *, existing: Sequence[str] = (),
         "  （依次为开盘价、最高价、最低价、收盘价、成交量、成交量加权均价）",
         "",
         "可用常数（只能用下列值）：",
-        "  " + "、".join(_fmt_const(c) for c in CONSTANTS),
+        "  " + "、".join(fmt_const(c) for c in CONSTANTS),
         "",
         "可用算子（只能用下列算子）：",
         "  一元：Abs(x) Log(x)",
@@ -1023,7 +1024,7 @@ def _project_node_to_report(node) -> str:
     if kind == "feat":
         return f"${node[1]}"
     if kind == "const":
-        return _fmt_const(float(node[1]))
+        return fmt_const(float(node[1]))
     if kind != "call":
         raise FormulaSyntaxError(f"未知 AST 节点类型：{kind!r}")
 

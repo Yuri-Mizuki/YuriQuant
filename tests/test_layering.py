@@ -317,7 +317,6 @@ _TESTS_ONLY_PRIVATE: set[tuple[str, str]] = {
     ("scripts.evaluation.mf10_t_scan", "_usable_train_dates"),
     ("stats.pbo", "_avg_rank"),
     ("scripts.factors.mine_factors", "_apply_gtja_preset"),
-    ("scripts.pipelines.e2e_backtest", "_enforce_caps"),
     # 2026-09-11 把守卫改为**通用规则**后新暴露的测试白盒用例（生产侧已一并清干净）
     ("backtest.engine", "_apply_executable_mask"),
     ("research.factor_library", "_coerce_date"),
@@ -339,6 +338,25 @@ _TESTS_ONLY_PRIVATE: set[tuple[str, str]] = {
     ("data.textmining.source_cninfo", "_CATEGORY_MAP"),
     ("data.textmining.source_cninfo", "_download_pdf_text"),
     ("data.textmining.source_ths", "_parse_report_json"),
+    # 2026-09-24：altdata / holder_dyn 构建器的白盒回归（另类源字段标准化、
+    # PIT 滚动窗口——tests 直连验证实现细节，非跨模块 API 消费）
+    ("data.altdata.source_akshare", "_code"),
+    ("data.altdata.fetch", "_FILES"),
+    ("data.altdata.fetch", "_as_date"),
+    ("data.altdata.fetch", "_ts_cst"),
+    ("data.altdata.fetch", "_DEDUP_KEYS"),
+    ("data.altdata.cninfo_holder", "_to_int_date"),
+    ("scripts.builders.build_alla_holder_dyn_factors", "_rolling_sum_panel"),
+    ("scripts.builders.build_alla_holder_dyn_factors", "_apply_lag"),
+    # e2e_backtest 归档（09-24 三口同裁）后 mock 链路测试改指 archive，钉子随路径
+    ("scripts.archive.e2e_backtest", "_enforce_caps"),
+    # 2026-09-24 清欠：以下为守卫在 master 上的存量红灯（各会话白盒用例），
+    # 逐条登记而非放行整文件——规则保持"白名单按 (模块, 私有名) 精确放行"
+    ("factor.classic", "_rolling_zscore"),
+    ("scripts.pipelines.rolling_grid_alla", "_fp"),
+    ("scripts.pipelines.rolling_grid_alla", "_fp_match"),
+    ("scripts.pipelines.rolling_grid_alla", "_fp_write"),
+    ("scripts.pipelines.rolling_grid_alla", "_backtest_fp"),
 }
 
 #: 暂豁免的**被引用方**前缀：
