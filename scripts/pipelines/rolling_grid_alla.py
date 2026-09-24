@@ -607,6 +607,45 @@ def select_features_for_year(year: int, horizon: int, ic_cache: pd.DataFrame,
     return reserved + res["selected"]
 
 
+def _panel_path(name: str) -> Path:
+    """因子面板路径（mixed 口径的逐因子目录覆盖与 FeatureStore 同源）。"""
+    src = NAME_DIR.get(name, PANELS_DIR or ds_root() / "panels")
+    return src / f"{name}.parquet"
+
+
+def check_panels_existence(names: list[str], *, horizon: int | None = None,
+                           strict: bool = True) -> list[str]:
+    """**方案 B：面板存在性门槛**（TODO P0 收尾③，2026-09-24 落地）。
+
+    背景（09-21 事故）：panels_neu 实际 882 张、registry/ic 缓存认为有 920 张
+    ——selection 照常跑完，但每轮选中的 50 特征与补齐后**0/18 相同**，产出
+    与数据面静默脱钩。本门槛在 select 入口对**候选全集**（ic 缓存列）逐一
+    核对面板文件存在性，缺失即失败并列出名单与补救路径，杜绝静默缩量。
+
+    当前 920=920 时为空操作（零成本防复发）。`strict=False`（或环境变量
+    ``YURIQUANT_PANEL_CHECK=warn``）降级为告警，供临时容忍已知缺失。
+
+    Returns:
+        缺失名单（空列表 = 通过）。
+    """
+    import os as _os
+
+    missing = [n for n in names if not _panel_path(n).exists()]
+    if not missing:
+        return []
+    tag = f"（h={horizon}）" if horizon is not None else ""
+    msg = (f"面板存在性门槛未过{tag}：{len(missing)}/{len(names)} 张因子面板"
+           f"缺失（registry/ic 缓存与 panels 目录不一致）。缺失样例 {missing[:8]}。"
+           "补救：跑 panels_neu 补齐（参考 reports/panels_neu_backfill/），"
+           "或重建 ic 缓存使二者对齐；确认要容忍缺失时设 "
+           "YURIQUANT_PANEL_CHECK=warn。")
+    degrade = _os.environ.get("YURIQUANT_PANEL_CHECK", "").lower() == "warn"
+    if strict and not degrade:
+        raise SystemExit(msg)
+    log.warning("%s", msg)
+    return missing
+
+
 def stage_select(quick: bool = False):
     t0 = time.time()
     root = ds_root()
@@ -622,6 +661,7 @@ def stage_select(quick: bool = False):
     sfp = _selection_fp()
     for h in horizons:
         ic_cache = pd.read_parquet(root / f"ic_h{h}.parquet")
+        check_panels_existence(list(ic_cache.columns), horizon=h)
         for year in years:
             out = sel_dir / f"y{year}__h{h}.json"
             if _fp_match(out, sfp):

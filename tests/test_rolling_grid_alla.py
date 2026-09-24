@@ -503,3 +503,25 @@ def test_fp_backtest_senses_pred_file_change(tmp_path):
     os.utime(pf, ns=(old.st_atime_ns, old.st_mtime_ns - 1_000_000))
     pf.write_bytes(b"pred-v2-longer")
     assert fp1 != _backtest_fp("open", pf)
+
+
+def test_check_panels_existence_gate(tmp_path, monkeypatch):
+    """方案 B 面板存在性门槛（TODO P0 收尾③）：缺失即 SystemExit + 名单，
+    环境变量降级 warn；920=920 时零成本通过。"""
+    from scripts.pipelines import rolling_grid_alla as RG
+
+    monkeypatch.setattr(RG, "PANELS_DIR", tmp_path)
+    monkeypatch.setattr(RG, "NAME_DIR", {})
+    (tmp_path / "f_ok.parquet").write_bytes(b"x")
+
+    # 全存在 → 通过
+    assert RG.check_panels_existence(["f_ok"]) == []
+
+    # 缺失 → strict 抛 SystemExit 且信息含补救指引
+    with pytest.raises(SystemExit, match="面板存在性门槛未过"):
+        RG.check_panels_existence(["f_ok", "f_missing"])
+
+    # env 降级 → 返回缺失名单不抛
+    monkeypatch.setenv("YURIQUANT_PANEL_CHECK", "warn")
+    got = RG.check_panels_existence(["f_ok", "f_missing"])
+    assert got == ["f_missing"]
