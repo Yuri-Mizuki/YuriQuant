@@ -291,7 +291,7 @@ v1 实测在 HS300 上静态 IR 最差（−2.72）、全靠滚动短窗口翻�
 - [x] 冒烟：`--panel mock` 四臂全通（mcts 0.5s / oneshot 4s / gp 42s /
   gflownet 74s）+ **真实 hs300 离线缓存冒烟通过**（vwap 复权重建自检
   中位数 1.0003；Corr(close,volume,20) IS/OOS RankIC −0.031/−0.031 方向一致，
-  `reports/llm_mcts_phase0_realsmoke/`）
+  `reports/llm_mcts_phase0/mcts_template_0924_115617_realsmoke/`）
 - [x] `tests/test_llm_mcts.py` 23 用例全绿（含 **IS/OOS 子树缓存隔离回归锚**：
   `formula_builder` 的 node_cache 键不含面板，共用会把 IS 面板错配给 OOS）
 - ⚠️ 已知边界：本机 hs300 日线缓存 2019 起（设计口径 2015），`--is` 切片
