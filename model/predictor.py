@@ -11,6 +11,8 @@
   LabelBuilder 的 rank/zscore 标签实现，与 rank IC 评价口径对齐）
 - ``TabICLPredictor``：TabICL 表格基础模型（in-context learning，零显式
   训练；context 截最近 ``max_context_samples`` 样本，预测时分块 forward）
+- ``TabPFNPredictor``：TabPFN v3 表格基础模型（同 ICL 范式，context 上限
+  1M 行 × 200 特征；权重走 HuggingFace，国内需 HF_ENDPOINT 镜像）
 
 ``fit_predict_oos``：一次性 OOS 面板（按交易日边界切折 + embargo purge，
 复用统一切分调度器 ``factor.cv.make_folds``——stacking 防泄漏纪律的直接继承，支持切换
@@ -34,8 +36,8 @@ log = logging.getLogger(__name__)
 
 __all__ = [
     "BasePredictor", "RidgePredictor", "LGBMPredictor", "LGBRankerPredictor",
-    "TabICLPredictor", "PREDICTORS", "fit_predict_oos", "rolling_oos",
-    "grid_of",
+    "TabICLPredictor", "TabPFNPredictor", "PREDICTORS", "fit_predict_oos",
+    "rolling_oos", "grid_of",
 ]
 
 
@@ -370,11 +372,81 @@ class LGBRankerPredictor(BasePredictor):
         return standardize_zscore(_to_panel(pred, idx, cols))
 
 
+class TabPFNPredictor(BasePredictor):
+    """TabPFN v3 表格基础模型（in-context learning，Prior Labs）。
+
+    与 :class:`TabICLPredictor` 同范式（fit 只存 context、predict 分块
+    forward），差异仅在三处：① ``TabPFNRegressor``（v3，PyPI 包名 tabpfn，
+    2026-05 发布，1M 行 × 200 特征上限——远超 v2 的 10k，滚动窗口不再需要
+    严格截断，但保留 ``max_context_samples`` 作为 CPU 冒烟的速度旋钮）；
+    ② 权重首次 forward 时自动从 HuggingFace 下载（国内环境需
+    ``HF_ENDPOINT=https://hf-mirror.com``）；③ ``n_estimators``→``n_estimators``
+    同名但 v3 默认更激进的 post-hoc ensemble（CPU 冒烟压到 1–2）。
+
+    NaN 约定与 TabICLPredictor 一致：fit 丢 any-NaN 行；predict 的 NaN
+    特征填 0（截面标准化后 0 = 截面均值）。v3 宣称原生容忍缺失/异常值，
+    但为保持与 gbdt/tabicl 对照公平，fit 侧统一剔除。
+    """
+
+    name = "tabpfn"
+
+    def __init__(self, max_context_samples: int = 50000, device: str = "cpu",
+                 chunk_size: int = 5000, n_estimators: int = 2, seed: int = 42):
+        self.max_context_samples = int(max_context_samples)
+        self.device = device
+        self.chunk_size = int(chunk_size)
+        self.n_estimators = int(n_estimators)
+        self.seed = seed
+
+    def fit(self, features: Mapping[str, pd.DataFrame],
+            labels: pd.DataFrame) -> "TabPFNPredictor":
+        try:
+            from tabpfn import TabPFNRegressor
+        except ImportError as e:
+            raise ImportError(
+                "TabPFNPredictor 需要 tabpfn v3：pip install tabpfn") from e
+
+        idx, cols = _grid(features, labels)
+        self.feature_names_ = sorted(features.keys())
+        X = _long_matrix(features, self.feature_names_, idx, cols)
+        y = labels.reindex(index=idx, columns=cols).values.ravel()
+
+        valid = ~np.isnan(X).any(axis=1) & ~np.isnan(y)
+        Xv, yv = X[valid], y[valid]
+        if len(yv) < 200:
+            raise ValueError(f"tabpfn 有效样本不足: {len(yv)} < 200")
+
+        Xv = Xv[-self.max_context_samples:]
+        yv = yv[-self.max_context_samples:]
+        # tabpfn>=8.x：v3 默认模型，random_state 仍在；CPU 大样本须显式放开
+        # （v3 默认 CPU 上限 5000 行；v2.x 时代是 1000 行）。
+        allow_cpu = {"ignore_pretraining_limits": True} if self.device == "cpu" else {}
+        self._model = TabPFNRegressor(
+            device=self.device, n_estimators=self.n_estimators,
+            random_state=self.seed, **allow_cpu)
+        self._model.fit(Xv, yv)
+        self.n_samples_ = int(len(yv))
+        return self
+
+    def predict(self, features: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
+        self._check_features(features)
+        idx, cols = _grid(features)
+        X = _long_matrix(features, self.feature_names_, idx, cols)
+        X = np.nan_to_num(X, nan=0.0)
+
+        out = np.full(X.shape[0], np.nan)
+        for s in range(0, X.shape[0], self.chunk_size):
+            e = min(s + self.chunk_size, X.shape[0])
+            out[s:e] = self._model.predict(X[s:e])
+        return standardize_zscore(_to_panel(out, idx, cols))
+
+
 PREDICTORS: dict[str, type[BasePredictor]] = {
     "ridge": RidgePredictor,
     "gbdt": LGBMPredictor,
     "ranker": LGBRankerPredictor,
     "tabicl": TabICLPredictor,
+    "tabpfn": TabPFNPredictor,
 }
 
 
