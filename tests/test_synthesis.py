@@ -345,6 +345,36 @@ def test_ic_max_no_lookahead_v_uses_last_snapshot(synth_parts):
         c.name, c.panel.iloc[:-1], ic=c.ic, ir=c.ir) for c in comps]), atol=1e-12)
 
 
+def test_ic_max_v_decision_point_follows_train_dates(synth_parts):
+    """决策时点跟随 ``train_dates``：扰动训练段末之后的因子值不得改变权重。
+
+    2026-09-24 修复回归锚：``mf10_t_scan`` 形态 = 全时段面板 + train_dates，
+    原实现恒取 ``panel.index[-1]``（= 测试段末）算 V 截面 → 09-16 的
+    "决策时点截面"修复在该调用形态下未生效（前视换个位置回归）。
+    """
+    ret_panel, comps = synth_parts
+    train = ret_panel.index[:150]
+
+    _, diag_base = synthesize_ic_max(comps, ret_panel, train,
+                                     returns_diagnostics=True)
+    assert diag_base["as_of"] == train[-1]
+
+    # 打乱训练段末之后的所有因子值 → V 截面（train 末）不变 → 权重逐点相同
+    rng = np.random.default_rng(3)
+    tampered = []
+    for c in comps:
+        p = c.panel.copy()
+        tail = p.iloc[150:]
+        p.iloc[150:] = tail.iloc[rng.permutation(len(tail))].to_numpy()
+        tampered.append(CompositeInput(c.name, p, ic=c.ic, ir=c.ir))
+    _, diag_t = synthesize_ic_max(tampered, ret_panel, train,
+                                  returns_diagnostics=True)
+    assert diag_t["as_of"] == train[-1]
+    for k in diag_base["weights"]:
+        assert diag_t["weights"][k] == pytest.approx(
+            diag_base["weights"][k], abs=1e-12)
+
+
 def test_ic_ir_max_rejects_too_few_periods(synth_parts):
     """训练段有效 IC 期数 < 3 时无法估 Σ → 明确报错。"""
     ret_panel, comps = synth_parts

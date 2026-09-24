@@ -541,9 +541,11 @@ def synthesize_ic_max(
     （``panels.index[-1]``，通常为训练段末）截面 + 与 IC_IR 相同的对角收缩
     （0.5，自拟）。
 
-    **两种防未来函数口径（2026-09-16 补齐）**：
+    **两种防未来函数口径（2026-09-16 补齐，09-24 修正②的决策时点）**：
     1. ``ĪC`` 只由 ``train_dates`` 段估计（与 :func:`synthesize_ic_ir_max` 一致）；
-    2. ``V`` 只取决策时点单截面，不铺全样本（原实现用全样本 → 已修复）。
+    2. ``V`` 只取**决策时点单截面**：给了 ``train_dates`` 取其末位（训练段末），
+       否则取 ``panel.index[-1]``——此时调用方必须只传训练段面板；传全时段
+       面板而不给 ``train_dates`` 会引入未来函数。
     """
     if not components:
         raise ValueError("components 为空")
@@ -560,11 +562,25 @@ def synthesize_ic_max(
     else:
         mu = np.array([c.ic for c in comps], dtype=float)
 
-    # V：**决策时点**（训练段末）的截面因子值相关阵。
-    # 2026-09-16 修复：原实现用 long_matrix(comps, None) 铺全样本 → V 隐式含测试段
-    # 截面结构（look-ahead），与 docstring 声明的"训练段末"不符。现显式取末截面。
-    last_date = comps[0].panel.index[-1]
-    snap = [CompositeInput(name=c.name, panel=c.panel.loc[[last_date]], ic=c.ic, ir=c.ir)
+    # V：**决策时点**的截面因子值相关阵。决策时点 = ``train_dates[-1]``
+    # （给了 train_dates 时）；未给时退 ``panel.index[-1]``（调用方须保证
+    # 面板只含训练段，见 docstring）。
+    # 2026-09-16 修复：原实现用 long_matrix(comps, None) 铺全样本 → V 隐式
+    # 含测试段截面结构。2026-09-24 再修：恒取 ``panel.index[-1]`` 在
+    # 「全时段面板 + train_dates」调用形态（mf10_t_scan）下仍取到测试段末
+    # ——决策时点必须跟随 train_dates。
+    if train_dates is not None and len(list(train_dates)):
+        last_date = pd.Timestamp(pd.DatetimeIndex(train_dates)[-1])
+    else:
+        last_date = comps[0].panel.index[-1]
+
+    def _row_at(panel: pd.DataFrame) -> pd.DataFrame:
+        pos = panel.index.searchsorted(last_date, side="right") - 1
+        if pos < 0:
+            raise ValueError(f"面板早于决策时点 {last_date}，无法取 V 截面")
+        return panel.iloc[pos:pos + 1]
+
+    snap = [CompositeInput(name=c.name, panel=_row_at(c.panel), ic=c.ic, ir=c.ir)
             for c in comps]
     X, _obs, (idx, cols) = long_matrix(snap, None)
     V = np.corrcoef(np.nan_to_num(X, nan=0.0), rowvar=False)
