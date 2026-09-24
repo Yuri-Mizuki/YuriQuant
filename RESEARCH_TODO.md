@@ -145,8 +145,10 @@ python -u scripts/factors/run_llm_mcts.py --panel hs300_2015_2026 \
 
 `python -m scripts.evaluation.mf10_t_scan --dataset hs300_2022_2025 --top 8`
 + 两方法（IC_IR 最大 / IC 最大）与现有 pipeline 的多窗口对比实验。
-防未来函数 = 训练窗再截标签实现期 horizon 天（单测已锁）；**已知 caveat**：`synthesize_ic_max`
-曾用全样本 V（隐式 look-ahead）——全量跑前先核对该点。
+防未来函数 = 训练窗再截标签实现期 horizon 天（单测已锁）；**caveat 已清
+（09-24）**：`synthesize_ic_max` 的 V 决策时点在「全时段面板 + train_dates」
+形态下仍取测试段末（前视换个位置回归），已修为跟随 `train_dates[-1]` 并加
+回归锚测试——全量可放心挂。
 
 ### 🥉 补短板低成本项（半天级，本机穿插）
 
@@ -380,7 +382,11 @@ python -m scripts.factors.run_portfolio_phase2 --pool zz1000 \
 ```
 
 跑完接 `stats/pbo.py` 做选择偏差检验；判读守双门槛口径。
-**前置工程项**：涨跌停/停牌掩码注入 `data/tradability`（TODO §三）。
+**前置工程项已清（09-24）**：`portfolio_env`/QP 臂接入 `data/tradability`
+（`build_tradable_mask(execution_lag=0)` T 日状态口径——决策日收盘调仓自洽；
+`make_env` 掩码 = 指数成分 ∩ 可交易 + 全 False 行回退；QP `valid` 同口径 +
+信号 reindex 兜底）；hs300 ppo/qp/ew 全臂冒烟通过。测试
+`tests/test_phase2_tradability.py`（lag 语义 + 掩码合成 + 回退）。
 
 **Phase 3（全A 规模化，Phase 2 验证 RL 超额机制后才启动）**：池=全A、基准=全A 等权
 （T2RL 口径）；工程项=可交易掩码（全A ST/停牌量大）、动作维度 ~5800 训练稳定性、

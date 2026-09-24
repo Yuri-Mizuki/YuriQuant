@@ -11,11 +11,11 @@
 | 1 | 920 治本重跑 + 定版臂 | ≈8–10h | 🖥️💾 CPU 密集 + 大内存（全A 面板 float32 ~24GB + 滚动工作副本） |
 | 2 | AI97 三臂 ×3 seed | ≈2–2.5h | 🖥️ 纯 CPU（多核受益小） |
 | 3 | GFlowNet 正式实验 | 校准 1–1.5h → 9–14h | 🖥️ CPU 可跑（GPU 可加速非必需，模型小） |
-| 4 | mf10 T 扫描全量 | 半天级 | 🖥️ CPU |
+| 4 | mf10 T 扫描全量 | 半天级 | 🖥️ CPU（caveat 已清：ic_max 决策时点 bug 09-24 修复+回归锚，见批次 4 节） |
 | 5 | stage2 Phase 2 zz1000 | 快档 6–9h → 全档 1–2 天 | 🖥️ CPU 多核（sb3 PPO 常规 CPU 训练） |
 | 6 | 口径修复重训 E5/E4/P5 | 各 ≈5–7h | 🖥️💾 同批次 1 |
 | 7 | e2e 族年化口径重跑 | 未实测 | 🖥️ CPU，队列末尾 |
-| **8** | **表格基础模型对照（TabPFN-3.5 / TabICL 2.2 vs LightGBM）** | 冒烟✅（09-22 本机完成，CPU 实测见 §批次 8）→ 全量未实测（先 hs300 外推） | **🎮 GPU 强受益（实测后升级为硬前置：CPU pred 27.7min/窗口，全量不可行）**；全量版建议单卡 ≥8GB 显存；hs300 小窗口 CPU 也能跑 |
+| **8** | **表格基础模型对照（TabPFN-3.5 / TabICL 2.2 vs LightGBM）** | **runner 已就绪**（09-24 `scripts/evaluation/tabpfn_rolling_compare.py`：逐月滚动 W∈{2,3}×test_step=1 + 可交易 IC/NWt + Top10% 月频 open 组合 + 秩相关诊断，gbdt 臂 hs300 真实冒烟通过 IC 0.026~0.027/NWt≈3）→ tabpfn/tabicl 臂全量待 GPU | **🎮 GPU 强受益（实测后升级为硬前置：CPU pred 27.7min/窗口，全量不可行）**；全量版建议单卡 ≥8GB 显存；hs300 小窗口 CPU 也能跑 |
 | **9** | **东吴 LLM-MCTS Phase 0**（同题四引擎对照） | **代码已就绪**（09-24 本机落地：`factor/mcts/` 五模块 + `run_llm_mcts.py` 四臂 runner，23 用例 + mock/真实双冒烟通过）→ 全量待跑（耗时未实测，template 四臂 mock 冒烟 mcts 0.5s/gflownet 74s/onestot 4s/gp 42s@60 求值） | 🖥️ CPU + LLM API（key 同批次 2，仅 mcts/llm_oneshot 臂需要）；候选评测互相独立可多进程 |
 | 10 | 920 后收尾对照包（member_blend12 / 消融 5 组等） | 各分钟级~小时级 | 🖥️ CPU，依赖批次 1 新 pred |
 
@@ -153,8 +153,11 @@ python -m scripts.factors.run_gflownet_phase1 ... --iters 600 --batch 12   # im 
 python -m scripts.evaluation.mf10_t_scan --dataset hs300_2022_2025 --top 8
 ```
 
-两方法（IC_IR 最大 / IC 最大）与现 pipeline 多窗口对比；**已知 caveat**：
-`synthesize_ic_max` 曾用全样本 V（隐式 look-ahead），全量跑前先核对。
+两方法（IC_IR 最大 / IC 最大）与现 pipeline 多窗口对比。~~已知 caveat~~
+**已清（09-24）**：09-16 的"决策时点截面"修复在「全时段面板 + train_dates」
+调用形态下未生效（V 恒取 `panel.index[-1]` = 测试段末）——已改为决策时点
+跟随 `train_dates[-1]` + 回归锚（`tests/test_synthesis.py::
+test_ic_max_v_decision_point_follows_train_dates`），mf10 T 扫描可放心全量。
 
 ## 批次 5：stage2 Phase 2 zz1000 全量（快档 6–9h → 全档 1–2 天）
 
@@ -171,8 +174,12 @@ python -m scripts.factors.run_portfolio_phase2 --pool zz1000 \
   --ppo-timesteps 100000 --out reports/portfolio_phase2_full
 ```
 
-**前置工程债**：`portfolio_env` 涨跌停/停牌掩码注入（接 `data/tradability`，
-zz1000 的 ST/停牌量会放大该边界）；跑完接 `stats/pbo.py`、判读守双门槛。
+**前置工程债已清（09-24）**：`portfolio_env`/QP 臂接入 `data/tradability`
+（`build_tradable_mask` 新增 `execution_lag=0` T 日状态口径，决策日收盘调仓
+自洽）；`make_env` 掩码 = 成分 ∩ 可交易 + 整行全 False 回退；QP `valid` 过滤
+同口径 + 信号 reindex 兜底（mdd_66 长标签尾部覆盖不足不再 KeyError）。
+hs300 全臂冒烟通过（`reports/portfolio_phase2_mask_smoke`）。跑完接
+`stats/pbo.py`、判读守双门槛。
 
 ## 批次 6：口径修复重训实验（依赖批次 1 裁决，各 ≈5–7h）
 

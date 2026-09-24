@@ -51,7 +51,10 @@
   正名 `metrics_overall.csv`（T+1 open 可执行）**，`_close` 仅作乐观上限对照；
   ② open 口径年化变化 >±1pp ⇒ 更新 MEMORY.md 主实验口径段（主数字换 open），
   旧数字补「882 口径」标注；
-  ③ 顺带落地 `_extra` 方案 B（面板存在性门槛；当前 920=920 下是空操作，纯防复发）；
+  ③ ~~`_extra` 方案 B~~ **已提前落地（09-24，不依赖重跑）**：
+  `rolling_grid_alla.check_panels_existence`（select 入口对 ic 缓存列全量
+  核对面板文件，缺失即 SystemExit + 名单 + 补救指引；env
+  `YURIQUANT_PANEL_CHECK=warn` 可降级；920=920 时零成本空操作）；
   ④ 若治本臂不及旧基线，先看 `--tradable-labels` 单开关消融再定口径去留——
   **不允许因「治本臂数字低」而回退标签掩码**（掩掉纸面收益是修正偏差，不是损失）；
   ⑤ E1'' horizon 定版（RESEARCH_TODO §一）在新 pred 上以 **open 口径**复核
@@ -126,6 +129,15 @@
   （底层特征 >`MAX_BASE_FEATURES=6`，固定常数不随字段表扩容放松）；③ 语义一致性前置校验
   `llm_semantic_check`（LLM-judged，opt-in 依赖注入设计，解析失败=未通过不静默放行）。
   `tests/test_ai97_llm_pool.py` 73→118 用例全绿；机制④归 MCTS Phase 0、机制⑤备选未做。
+- [x] **批次 8 表格基础模型对照 runner（09-24 完成，tabpfn/tabicl 臂待 GPU）**：
+  `scripts/evaluation/tabpfn_rolling_compare.py`：逐月重训 × 月内逐日预测
+  （test_step=1，v1 抽样高估项直接修掉）× W∈{2m,3m} 窗口扫描；四臂
+  （gbdt / tabpfn-3.5 / tabicl-2.2 / 秩平均，走 PREDICTORS 注册零分叉）；
+  评估 = 可交易 IC（T+1 掩码）+ NW t + Top10% 月频 **open 正名口径**组合 +
+  两臂逐日秩相关诊断；`--device cuda` 好机器全量入口。本机 hs300 gbdt 臂
+  冒烟通过（tradableIC 0.0255/0.0271、NWt 3.0/3.2，W=3m>2m 与 08-08 方向
+  一致）。**顺手修窗口语义 bug**：`MonthBegin(W)` 从月内日期回退只覆盖
+  W−1 个月（2m 窗实测仅 17~20 日），改 `DateOffset(months=W)`。
 - [x] **东吴 LLM-MCTS Phase 0 代码落地（09-24 完成，全量挂好机器）**：
   `factor/mcts/` 五模块（seeds：29 Seed = Alpha158 rolling 全类 × w=20，
   **求值走原生 callable 零转译**；reward：周度六项 + 防前视切片评测器；
@@ -153,15 +165,17 @@
 - [ ] **在线 dashboard**：报告均为静态 HTML，无增量刷新监控页面。
 - [ ] **监控链收敛（非阻塞余项）**：`monitoring/` 包与 `monitor_performance.py` 留在仓库
   供手动跑；复活前提 = ① 全A 库 evals 补齐 ② runner 行情源参数化。
-- [ ] **HS300 时代入口剩余项裁决**：同族 `e2e_backtest` / `optimize_e2e` 证据与已归档者相同
-  （`daily_hs300.parquet` 停更、产物 09-16 清理）但属**独立回测实验**，待拍板是否归档。
-  09-22 全仓死代码普查补充：`investment_report` 同属本族——零引用入口（仅 mock 测试
-  保活）且 import `e2e_backtest` 四个函数（perf_stats / 两只组合回测 / walk_forward
-  预测），归档需三口同裁并同步退休 `test_metrics` 的 perf_stats 一致性用例与
-  `test_layering` 的 `_enforce_caps` 钉子。普查其余结论：核心库包零孤儿，墓地已收敛在
-  scripts/archive + scripts/oneoff 两区，无新增待清项。
-- [ ] **调度余项**：`.workbuddy/memory/automations/` 下残留的旧自动化 `71e2d7a5`
-  记忆文件（已加退役标注，可择机清）。
+- [x] **HS300 时代入口三口同裁归档（09-24 完成）**：`e2e_backtest` /
+  `optimize_e2e` / `investment_report` → `scripts/archive/`（证据与已归档者
+  相同：数据口径停更、产物已清理）；同步退休 `test_metrics` perf_stats
+  一致性用例与 `test_layering` 旧路径钉子；mock 链路测试按 09-21
+  e2e_stock_picks 先例改指 archive 保活；归档件/oneoff/README 引用全部改指。
+  **顺手清欠**：`test_layering` 私有名守卫在 master 上的存量红灯（altdata/
+  builders/p5/galaxy/rolling_grid 白盒用例 + mcts `_fmt_const`）——业务侧
+  公开化（`fmt_const`/`std_code6`/`pit`/`safe`），测试侧白名单精确登记，
+  守卫恢复全绿。
+- [x] **调度余项（09-24 完成）**：`.workbuddy/memory/automations/71e2d7a5`
+  退役记忆文件已删（现役 `3b31c720` 日报自动化保留不动）。
 
 ### 已完成归档（2026-09-18~20 交付批次）
 
@@ -190,12 +204,17 @@
 
 ## 三、工程层剩余债务
 
-- [ ] **.venv 缺 rl 依赖**：gymnasium/sb3 等只在系统解释器（D:/Python/Python312）可用，
-  .venv 跑不了 RL 测试（test_ai97_llm_pool / test_portfolio_env / test_gflownet_im_features
-  需用系统 python）；统一环境或在 .venv 补装 rl extra。
-- [ ] **portfolio_env 涨跌停/停牌掩码注入**：当前 tradable_masks 只剔非成分；
-  Phase 2 全量前接 `data/tradability`（一字板不可成交语义）——zz1000 的 ST/停牌量
-  会放大该边界。
+- [x] **.venv rl 依赖债核销（09-24 实测）**：gymnasium/sb3/sb3-contrib/torch
+  在 .venv 已齐（torch 2.13）；真实堵点是 pandas 3.x 下 `Series.rank().to_numpy()`
+  返回只读视图令 `portfolio_env.rank_pct` 原位覆写炸——已修（显式 copy），
+  双解释器（sys pandas 2.3.3 / venv pandas 3.0.5）rl 测试全绿，**.venv 保留
+  pandas 3 作兼容性金丝雀**（日更计划任务运行中，不降级）。
+- [x] **portfolio_env 涨跌停/停牌掩码注入（09-24 完成）**：
+  `build_tradable_mask` 增 `execution_lag` 参数（0=T 日状态，决策日收盘调仓
+  自洽；默认 1 零回归）；`run_portfolio_phase2.make_env` 掩码 = 指数成分 ∩
+  T 日可交易 + 整行全 False 回退防炸训练；QP 臂 `valid` 过滤同口径 + 信号
+  reindex 兜底（mdd_66 长标签尾部覆盖不足不再 KeyError）。测试
+  `tests/test_phase2_tradability.py`；hs300 ppo/qp/ew 冒烟通过。
 - [x] **`stage_backtest`/`stage_ensemble` eq 缓存失效（P0 附带，09-23 完成 commit f4d3172）**：
   rolling_grid_alla 三处 exists-skip（backtest eq / select json / pred parquet）全部接
   产物指纹 sidecar（`.fp.json`），失配自动重算（eq/selection 分钟级自动；pred warning 后
@@ -236,8 +255,10 @@
 2. **好机器长实验队列**（清单与命令见 RESEARCH_TODO 第六节序 0）：
    920 治本重跑 → AI97 三臂 ×3 seed → 国金24 残余⑤ 校准轮 → mf10 T 扫描全量 →
    stage2 Phase 2 zz1000 全量（快档→全档）
-3. **本机半天级穿插**（均挂已有基础设施）：CVaR 约束进 solve_portfolio、
-   labels.py IR/Calmar 标签分支、预测层观点注入等价实现、实验产物接 PBO
+3. ~~本机半天级穿插~~ **全部清账（09-24）**：CVaR/IR-Calmar/观点注入/PBO/
+   MCTS Phase 0 代码 + 批次 4 caveat 修复 + 批次 5 掩码注入 + 批次 8 runner +
+   方案 B 门槛 + HS300 三口归档 + 守卫存量红灯清欠；本机再无待办，
+   全部剩余项挂好机器队列（批次 1→10）
 4. e2e 族历史报告年化口径重跑（~3% 系统性偏移）
 5. 分钟频第三层扩原料 + all_a 分钟数据扩容 + 另类数据因子轮次（资源墙/挖掘轮次，后置）
 6. 生产级执行（实盘对接、实时行情）
