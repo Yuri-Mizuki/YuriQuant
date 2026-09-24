@@ -35,7 +35,7 @@
 | 华泰 AI14/16 CPCV / AI11 stacking / AI6 Boosting | `[x]` | `cpcv_eval` + `cpcv_h1_eval`；`model/stacking.py`；GBDT 已成主基线 |
 | 国金24 GFlowNet+AlphaEval 分钟频 | `[x]` 主体 + 残余 | AlphaEval 漏斗 / RRE / DPP / 42 `im_*` 接 GP / e2e 三臂 / GFlowNet 接 im；**残余见 §一** |
 | 华泰 AI97 大模型+RL | `[x]` P0 完成 | `factor/rl/` 四模块 + `run_alphapool_ppo` + LLM 池真实联网验证；**正式三臂实验待跑（§一）** |
-| 东吴0623 LLM-MCTS 因子迭代 | `[~]` 研读完成，**P0 待立项** | 笔记 `reports/docs/research_notes/东吴0623_研读_LLM_MCTS因子迭代框架与Phase0设计.md`；Phase 0 设计定稿（复用 `llm_pool`，同题四引擎对照），**代码待实现（§一）** |
+| 东吴0623 LLM-MCTS 因子迭代 | `[x]` 研读 + **代码落地（09-24）** | `factor/mcts/` 五模块（seed/reward/tree/proposer/engine）+ `scripts/factors/run_llm_mcts.py` 四臂 runner（mcts/llm_oneshot/gp/gflownet）+ 23 用例；吸收 RD-Agent 机制①④⑦；mock/真实双冒烟通过；**全量 29 Seed 挂好机器（§一、GOOD_MACHINE_TASKS 批次 9 命令已定稿）** |
 | 东方0407 QuantaAlpha | `[x]` 研读归档，**不复现** | 论文主结果有测试集泄露（东方自述）、修正复现仅 21 因子 ICIR 偏低；5 机制抽取进 `llm_pool` 增强清单（TODO §二） |
 | 微软 RD-Agent(Q)（NeurIPS 2025） | `[x]` 研读归档，**不复现不替换** | 量化 R&D 自动化多 Agent 框架（LLM 提假设→Co-STEER 写码→Qlib 回测→反馈，bandit 选 factor/model 方向）；**同题不同栈**（AI97/东吴 MCTS 同题）；机制抽取 8 条：数值去重/失败换向/JSON 纪律进 MCTS Phase 0 设计，`fin_factor_report` 自动 vs 手工对照列 P2（挂 920+好机器 WSL2）。笔记 `reports/docs/research_notes/微软RD-Agent_研读_*.md` |
 | 华泰 AI39 组合优化实证 | `[x]` 口径核对 | `reports/口径核对_AI39_多因子10.md`；最大差异=主动 vs 绝对权重空间；3 项低成本对齐已落地 |
@@ -100,7 +100,7 @@ done
 `reasoning_content` 共享 `max_tokens`，思维链吃光预算 → 空 content + HTTP 200 无异常，
 实测 `max_tokens=16000` 可用（已固化默认）。
 
-### 🥈 东吴 LLM-MCTS Phase 0 试点（新引擎同题对照，**代码待实现**）
+### 🥈 东吴 LLM-MCTS Phase 0 试点（新引擎同题对照，**代码已落地 09-24，全量待好机器**）
 
 > 设计真源：`reports/docs/research_notes/东吴0623_研读_LLM_MCTS因子迭代框架与Phase0设计.md`
 > （reward 六项公式 / UCT / virtual expansion / 参数表 / 验收口径 / 复现边界全在笔记里）。
@@ -126,11 +126,12 @@ RankIC/换手/相关性统计。先写 1 Seed × 3 iters 冒烟（对齐国金24
 **执行**（代码就绪 + `DEEPSEEK_API_KEY` 后挂好机器，≈1450 次 LLM 扩展/臂，单臂评测可并行）：
 
 ```bash
-# 命令待实现后定稿；骨架：
+# 命令已定稿（09-24，命令真源 = GOOD_MACHINE_TASKS 批次 9.2）；主臂：
 python -u scripts/factors/run_llm_mcts.py --panel hs300_2015_2026 \
   --is 2016-01-01:2023-12-31 --oos 2024-01-01:2026-08-21 --horizon 5 \
-  --arm mcts --iterations 10 --variants 5 --max-depth 3 --seeds-n 3 \
-  --out reports/llm_mcts_phase0
+  --arm mcts --iterations 10 --variants 5 --max-depth 3 --seeds-n 29 \
+  --llm openai --out reports/llm_mcts_phase0
+# 对照臂 --arm llm_oneshot/gp/gflownet（不需 key）；链路自检 --panel mock --smoke
 ```
 
 **复现边界（引用必须注明）**：① 东吴未披露模型→项目 `deepseek-flash`（同族不同版本）；
@@ -445,7 +446,7 @@ python -m scripts.factors.run_portfolio_phase2 --pool zz1000 \
 | 目录 | 篇数 | 已完成 | 待推进 | 不细读 |
 |---|---|---|---|---|
 | 华泰人工智能（主目录） | 44 | 21/23 GP、14/16 CPCV、11 stacking、6 Boosting、AI39 核对、AI29 研读、AI19/22 PBO、AI43 研读 | AI32/34/42/13/27/40/45 | ~19 |
-| 因子挖掘 | 9 | 国金22、国泰君安 GP、国金24 主体、AI97 P0、银河 0608 研读、东吴0623 研读、东方0407 归档、微软 RD-Agent(Q) 归档 | AI26、国金24 残余②③④⑤、AI97 正式实验、**东吴0623 Phase 0（代码待实现，吸收 RD-Agent 机制 ①④⑦）** | — |
+| 因子挖掘 | 9 | 国金22、国泰君安 GP、国金24 主体、AI97 P0、银河 0608 研读、东吴0623 研读+**代码落地**、东方0407 归档、微软 RD-Agent(Q) 归档 | AI26、国金24 残余②③④⑤、AI97 正式实验、**东吴0623 Phase 0 全量（代码就绪 09-24，吸收 RD-Agent 机制①④⑦）** | — |
 | 因子合成 | 9 | 申万 ML、多因子10 补齐+T 扫描脚本、国金19 归档 | T 扫描全量+多窗口对比、华泰3128 | AI28 |
 | 文本挖掘 | 6 | 51/57/63/41 全部 | 华泰 LLM_FADT | — |
 | 强化学习 | 6 | T2RL 研读、银河0706+华安226 研读、stage2 Phase 0/1 | **stage2 Phase 2 全量**、东方 DFQ、DQN | — |

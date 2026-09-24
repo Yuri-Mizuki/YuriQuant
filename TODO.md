@@ -126,6 +126,16 @@
   （底层特征 >`MAX_BASE_FEATURES=6`，固定常数不随字段表扩容放松）；③ 语义一致性前置校验
   `llm_semantic_check`（LLM-judged，opt-in 依赖注入设计，解析失败=未通过不静默放行）。
   `tests/test_ai97_llm_pool.py` 73→118 用例全绿；机制④归 MCTS Phase 0、机制⑤备选未做。
+- [x] **东吴 LLM-MCTS Phase 0 代码落地（09-24 完成，全量挂好机器）**：
+  `factor/mcts/` 五模块（seeds：29 Seed = Alpha158 rolling 全类 × w=20，
+  **求值走原生 callable 零转译**；reward：周度六项 + 防前视切片评测器；
+  tree：UCT + virtual expansion；proposer：MCTS 上下文 prompt + LLM 扩展器
+  + 离线变异兜底；engine：主循环 + 三层去重）+ `scripts/factors/run_llm_mcts.py`
+  四臂 runner（mcts/llm_oneshot/gp/gflownet，双口径验收 + PBO/DSR 自动出数）。
+  吸收 RD-Agent 机制①（周度 IC ≥0.99 数值去重）④（失败换向）⑦（JSON 纪律）。
+  23 用例全绿；**真实 hs300 冒烟顺手暴露并修复缓存 vwap 未复权坑**（复用 AI97
+  attach_vwap 防线内联，自检中位数 1.0003）。命令定稿见 GOOD_MACHINE_TASKS
+  批次 9.2（本机缓存 2019 起 → IS 切片自动 2019-2023，好机器拉全 2015 缓存则自动扩满）。
 - [x] **多模型×多标签预测合成对照（09-23 完成）**：12 成员（gbdt/ranker/ridge ×
   h1/h5/h10/h20）等权逐级 + walk-forward 学权（`scripts/evaluation/member_blend12.py`，
   与 stack_blend 同参）。结论：**增量在 horizon（标签）维度不在模型族维度**

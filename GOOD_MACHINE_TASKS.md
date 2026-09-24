@@ -16,7 +16,7 @@
 | 6 | 口径修复重训 E5/E4/P5 | 各 ≈5–7h | 🖥️💾 同批次 1 |
 | 7 | e2e 族年化口径重跑 | 未实测 | 🖥️ CPU，队列末尾 |
 | **8** | **表格基础模型对照（TabPFN-3.5 / TabICL 2.2 vs LightGBM）** | 冒烟✅（09-22 本机完成，CPU 实测见 §批次 8）→ 全量未实测（先 hs300 外推） | **🎮 GPU 强受益（实测后升级为硬前置：CPU pred 27.7min/窗口，全量不可行）**；全量版建议单卡 ≥8GB 显存；hs300 小窗口 CPU 也能跑 |
-| **9** | **东吴 LLM-MCTS Phase 0**（同题四引擎对照） | **代码待实现**（~600-800 行，本机 ≈1 天；先 1 Seed×3 iters 冒烟）→ 全量未实测 | 🖥️ CPU + LLM API（key 同批次 2）；候选评测互相独立可多进程 |
+| **9** | **东吴 LLM-MCTS Phase 0**（同题四引擎对照） | **代码已就绪**（09-24 本机落地：`factor/mcts/` 五模块 + `run_llm_mcts.py` 四臂 runner，23 用例 + mock/真实双冒烟通过）→ 全量待跑（耗时未实测，template 四臂 mock 冒烟 mcts 0.5s/gflownet 74s/onestot 4s/gp 42s@60 求值） | 🖥️ CPU + LLM API（key 同批次 2，仅 mcts/llm_oneshot 臂需要）；候选评测互相独立可多进程 |
 | 10 | 920 后收尾对照包（member_blend12 / 消融 5 组等） | 各分钟级~小时级 | 🖥️ CPU，依赖批次 1 新 pred |
 
 ---
@@ -263,28 +263,52 @@ v1 实测在 HS300 上静态 IR 最差（−2.72）、全靠滚动短窗口翻�
 
 ---
 
-## 批次 9：东吴 LLM-MCTS Phase 0（同题四引擎对照；**代码待实现**）
+## 批次 9：东吴 LLM-MCTS Phase 0（同题四引擎对照；**代码已就绪 09-24**）
 
 > 设计真源：`reports/docs/research_notes/东吴0623_研读_LLM_MCTS因子迭代框架与Phase0设计.md`；
 > 立项理由与复现边界见 RESEARCH_TODO §一 🥈。
 
-### 9.1 前置（本机，≈1 天）
+### 9.1 前置（已完成，09-24 本机）
 
-- `factor/mcts/`（tree / reward 六项 / engine：select-expand-eval-backprop + virtual expansion）
-  + `scripts/factors/run_llm_mcts.py`；复用 `llm_pool.py`（`OpenAICompatibleProposer`
-  + 解析 + 4 校验）、`alphapool_env`、`alpha158.py`（29 Seed，窗口统一 20）
-- **冒烟先行**（对齐国金24 教训：噪声带可超臂间差异）：1 Seed × 3 iters，验证
-  LLM 往返 → 公式求值 → reward → 回传全链，再铺全量
+- [x] `factor/mcts/` 五模块：`seeds.py`（29 Seed = Alpha158 rolling 全类 × w=20，
+  **求值走原生 ALPHA158 callable 零转译风险**，展示伪代码仅供 LLM 阅读）、
+  `reward.py`（周度六项 reward + 防前视切片评测器）、`tree.py`（UCT +
+  virtual expansion + 深度上限）、`proposer.py`（MCTS 上下文 prompt + LLM
+  扩展器 + 离线变异兜底 `SeedMutationProposer`）、`engine.py`（主循环 +
+  三层去重：静态校验/结构同族→logic_review→**周度 IC 相关 ≥0.99 数值去重**
+  （RD-Agent 机制①）+ 机制④失败换向 + 机制⑦ JSON 纪律双防线）
+- [x] `scripts/factors/run_llm_mcts.py`：四臂 runner（mcts / llm_oneshot /
+  gp / gflownet，gp/gflownet 复用项目引擎、报告层统一走周度六项评测）；
+  双口径验收（正式选择对标 65.5% / 候选池诊断对标 75.4%）+ 两两相关分布 +
+  PBO/DSR 自动出数
+- [x] 冒烟：`--panel mock` 四臂全通（mcts 0.5s / oneshot 4s / gp 42s /
+  gflownet 74s）+ **真实 hs300 离线缓存冒烟通过**（vwap 复权重建自检
+  中位数 1.0003；Corr(close,volume,20) IS/OOS RankIC −0.031/−0.031 方向一致，
+  `reports/llm_mcts_phase0_realsmoke/`）
+- [x] `tests/test_llm_mcts.py` 23 用例全绿（含 **IS/OOS 子树缓存隔离回归锚**：
+  `formula_builder` 的 node_cache 键不含面板，共用会把 IS 面板错配给 OOS）
+- ⚠️ 已知边界：本机 hs300 日线缓存 2019 起（设计口径 2015），`--is` 切片
+  自动适配为 2019-2023；好机器若拉全 2015 起缓存则 IS 自动扩满，无需改参
 
-### 9.2 全量（命令骨架，实现后定稿）
+### 9.2 全量（命令定稿，09-24）
 
 ```bash
+# 主臂（LLM 扩展 + logic_review 自动开；需 DEEPSEEK_API_KEY）
 python -u scripts/factors/run_llm_mcts.py --panel hs300_2015_2026 \
   --is 2016-01-01:2023-12-31 --oos 2024-01-01:2026-08-21 --horizon 5 \
-  --arm mcts --iterations 10 --variants 5 --max-depth 3 --seeds-n 3 \
-  --out reports/llm_mcts_phase0
-# 四臂：--arm {mcts,gp,gflownet,llm_oneshot}；平行臂换 --panel 全A 920 库
+  --arm mcts --iterations 10 --variants 5 --max-depth 3 --seeds-n 29 \
+  --llm openai --out reports/llm_mcts_phase0
+# 对照臂（不需要 key，template=离线变异兜底；GP/GFlowNet 走项目引擎）
+for arm in llm_oneshot gp gflownet; do
+  python -u scripts/factors/run_llm_mcts.py --panel hs300_2015_2026 \
+    --arm $arm --iterations 10 --variants 5 --seeds-n 29 \
+    --out reports/llm_mcts_phase0
+done
+# 链路自检（零数据/零网络，秒级）：--panel mock --arm mcts --smoke
 ```
+
+（`--seeds-n 29` = 东吴全量；试点可先 `--seeds-n 3`。llm_oneshot 臂想测真实
+LLM 时加 `--llm openai`。全A 920 平行臂待接 panels 数据面后另行挂载。）
 
 ### 9.3 口径与验收
 
