@@ -12,6 +12,10 @@
 > （`reports/docs/research_notes/东吴0623_*`、`东方0407_*`）；东吴列为 **P0 试点**
 > （同题四引擎对照，Phase 0 设计定稿见笔记，代码待实现），QuantaAlpha 仅抽 5 个机制
 > 进 `llm_pool` 增强清单、**不复现**。
+> **09-24 增量**：东吴 LLM-MCTS 代码落地（见 §〇）；兴业 0526《智能体与深度学习双范式》
+> （海外文献综述 189）**速读归档不复现**——六篇被引文献三篇已有更深对应物（东吴/东方/RD-Agent），
+> 唯一增量 = Hu(2026)「市场结构决定范式选择」框架（A 股结构判定 DL 占优，为增量枯竭后引入
+> 非线性表达留文献动机）；笔记 `reports/docs/research_notes/兴业0526_速读_*.md`。
 > **长实验一律不跑、写成显式待办，执行环境 = 另一台更强的机器**。
 
 > **核心判断：全库 87 篇中 2025–2026 年仅 14 篇，恰好覆盖项目全部短板方向。**
@@ -38,6 +42,7 @@
 | 东吴0623 LLM-MCTS 因子迭代 | `[x]` 研读 + **代码落地（09-24）** | `factor/mcts/` 五模块（seed/reward/tree/proposer/engine）+ `scripts/factors/run_llm_mcts.py` 四臂 runner（mcts/llm_oneshot/gp/gflownet）+ 23 用例；吸收 RD-Agent 机制①④⑦；mock/真实双冒烟通过；**全量 29 Seed 挂好机器（§一、GOOD_MACHINE_TASKS 批次 9 命令已定稿）** |
 | 东方0407 QuantaAlpha | `[x]` 研读归档，**不复现** | 论文主结果有测试集泄露（东方自述）、修正复现仅 21 因子 ICIR 偏低；5 机制抽取进 `llm_pool` 增强清单（TODO §二） |
 | 微软 RD-Agent(Q)（NeurIPS 2025） | `[x]` 研读归档，**不复现不替换** | 量化 R&D 自动化多 Agent 框架（LLM 提假设→Co-STEER 写码→Qlib 回测→反馈，bandit 选 factor/model 方向）；**同题不同栈**（AI97/东吴 MCTS 同题）；机制抽取 8 条：数值去重/失败换向/JSON 纪律进 MCTS Phase 0 设计，`fin_factor_report` 自动 vs 手工对照列 P2（挂 920+好机器 WSL2）。笔记 `reports/docs/research_notes/微软RD-Agent_研读_*.md` |
+| 兴业 0526 双范式综述（海外文献 189） | `[x]` 速读归档，**不复现** | 海外文献综述（Agentic AI 闭环 / 东吴 MCTS / QuantaAlpha / PPO 加权 / 残差分布预测 / E2EAI 六篇转述）；三篇已有更深对应物；唯一增量 = Hu(2026) 市场结构框架（A 股判定 DL 占优）；笔记 `reports/docs/research_notes/兴业0526_速读_*.md` |
 | 华泰 AI39 组合优化实证 | `[x]` 口径核对 | `reports/口径核对_AI39_多因子10.md`；最大差异=主动 vs 绝对权重空间；3 项低成本对齐已落地 |
 | 华泰多因子10 合成口径 | `[x]` + 补齐 | 两主力方法（`synthesize_ic_ir_max`/`synthesize_ic_max`）+ 半衰加权 + T 扫描脚本；全量扫描待跑 |
 | 银河 0608 时序截面三层预测 | `[x]` 研读 + L1 落地 | L1 结论：**风险标签可测成立**（mdd test 0.25/0.40）；L2 不触发，倾向归档；L3 并入 stage2 |
@@ -452,7 +457,7 @@ python -m scripts.factors.run_portfolio_phase2 --pool zz1000 \
 | 目录 | 篇数 | 已完成 | 待推进 | 不细读 |
 |---|---|---|---|---|
 | 华泰人工智能（主目录） | 44 | 21/23 GP、14/16 CPCV、11 stacking、6 Boosting、AI39 核对、AI29 研读、AI19/22 PBO、AI43 研读 | AI32/34/42/13/27/40/45 | ~19 |
-| 因子挖掘 | 9 | 国金22、国泰君安 GP、国金24 主体、AI97 P0、银河 0608 研读、东吴0623 研读+**代码落地**、东方0407 归档、微软 RD-Agent(Q) 归档 | AI26、国金24 残余②③④⑤、AI97 正式实验、**东吴0623 Phase 0 全量（代码就绪 09-24，吸收 RD-Agent 机制①④⑦）** | — |
+| 因子挖掘 | 9 | 国金22、国泰君安 GP、国金24 主体、AI97 P0、银河 0608 研读、东吴0623 研读+**代码落地**、东方0407 归档、微软 RD-Agent(Q) 归档、兴业0526 综述速读归档 | AI26、国金24 残余②③④⑤、AI97 正式实验、**东吴0623 Phase 0 全量（代码就绪 09-24，吸收 RD-Agent 机制①④⑦）** | — |
 | 因子合成 | 9 | 申万 ML、多因子10 补齐+T 扫描脚本、国金19 归档 | T 扫描全量+多窗口对比、华泰3128 | AI28 |
 | 文本挖掘 | 6 | 51/57/63/41 全部 | 华泰 LLM_FADT | — |
 | 强化学习 | 6 | T2RL 研读、银河0706+华安226 研读、stage2 Phase 0/1 | **stage2 Phase 2 全量**、东方 DFQ、DQN | — |
