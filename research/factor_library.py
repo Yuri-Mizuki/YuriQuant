@@ -111,7 +111,7 @@ SOURCE_PREFIXES: frozenset[str] = frozenset({
     # 因子集名——builder 通道的**首选前缀**，与 hs300 既有口径一致
     # （``alpha101:build_alpha_factors:20220101-20260821``）
     "evt", "event", "sentiment", "constructed", "style", "pledge", "sue_pledge",
-    "disc_holder_dyn", "holder_dyn", "significant_synthesis",
+    "disc_holder_dyn", "holder_dyn", "significant_synthesis", "p5",
 })
 
 #: 无法识别产出脚本时 ``source_for`` 的默认 producer 段。

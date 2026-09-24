@@ -107,16 +107,16 @@ HORIZON = 1                    # 单模型臂口径（--horizons 1）；也是 t
 HORIZONS: tuple[int, ...] = (1, 5)
 # 硬剔除的特征（生产 selection 层面，先于四条入选路径）；空元组 = 不剔除。
 # `limit_pos`（封板位置）实测：可交易口径 IC 为负、正向选股全池 +71.1%/年 vs
-# 池内 −55.6%/年（纸面缺口 +126.7pp，reports/limit_pos_tradable_p0/report.md），
+# 池内 −55.6%/年（纸面缺口 +126.7pp，reports/limit_pos/tradable_p0/report.md），
 # 且它的收益 100% 来自买不到的封板股。生产形态（h1 单模型）剔除后 4/4 格
-# 全项改善（+0.3~1.2pp，reports/limit_pos_ablation_p1b/report.md）。
+# 全项改善（+0.3~1.2pp，reports/limit_pos/ablation_p1b/report.md）。
 EXCLUDE_FEATURES: tuple[str, ...] = ("limit_pos",)
 # 训练标签口径（2026-09-17 接入，P0 报告 §六 P1-a 的治本项）：
 #   False（默认）= 标签 = 全样本前瞻收益截面 rank —— 现行口径，零回归；
 #   True         = 标签掩掉"买不进的样本"（``data.tradability::build_tradable_mask``
 #                  的 T+1 成交口径掩码置 NaN，等价于从训练集剔除）。
 # 为什么：无掩码时标签把"T 日封涨停 → T+1 继续封板"的**买不进**收益当监督信号
-# （reports/limit_pos_tradable_p0/report.md）。掩码在尾部面板上实时构建 ——
+# （reports/limit_pos/tradable_p0/report.md）。掩码在尾部面板上实时构建 ——
 # ``tail`` 已含 ``bwd``（后复权因子）与 ``close_adj``，无需离线面板。
 DEFAULT_TRADABLE_LABELS = False
 DEFAULT_WINDOW = 500           # gbdt 滚动训练窗（--window 750 = gbdt_w750 变体）

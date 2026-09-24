@@ -168,7 +168,7 @@ reports/    实验与交付物（模型/监控/因子库/设计文档/HTML报告
 | **全A超额归因与显著性复核** | `scripts/pipelines/alla_excess_attribution.py` | 对上证超额 +10.2%/年中约一半来自风格敞口（β=1.10），对全A等权纯选股 α=+5.1%/年（t=2.14 显著）；Brinson：超额全部来自行业内选股（选择 +64.1%）→ `reports/alla_attribution/` |
 | **模型增强组合（正式投产入口）** | `scripts/pipelines/run_model_portfolio.py` | 全A · ortho · ens_h1h5 · raw · 月频 Top10%，参数真源 `config/settings.yaml` `model_portfolio` 段；2026 样本外实测（net）年化 +8.6%、超额上证 +8.2%；导出当日 Top10% 选股清单 → `reports/model_portfolio/` |
 | **论文复现因子族（awesome 21 式）** | `factor/paper_factors.py` + `scripts/factors/build_paper_factors.py` | awesome-systematic-trading 复现库 21 个可 A 股实现策略入库：短期反转 IC=0.038/t=11.3、低波 t=8.2、价值 t=8.5 显著为正；月频动量族为负（A 股动量反转复现） |
-| **另类数据管道 P0** | `data/altdata/` + `scripts/pipelines/fetch_altdata_daily.py` | 7 源落地（快讯 119.2 万条 / 宏观日历 6.5 万行 / 巨潮增减持 26.6 万行全历史等）；**holder_dyn 9 因子强制纳入消融 Δ=−0.85pp，无增量价值结案**（`reports/holder_dyn_forced/`）；其余表通道就绪待因子挖掘轮次 |
+| **另类数据管道 P0** | `data/altdata/` + `scripts/pipelines/fetch_altdata_daily.py` | 7 源落地（快讯 119.2 万条 / 宏观日历 6.5 万行 / 巨潮增减持 26.6 万行全历史等）；**holder_dyn 9 因子强制纳入消融 Δ=−0.85pp，无增量价值结案**（`reports/holder_dyn/forced/`）；其余表通道就绪待因子挖掘轮次 |
 | **RL 组合优化 stage2（银河 0706 复现线）** | `factor/rl/portfolio_env.py` + `scripts/factors/run_portfolio_ppo.py` / `run_portfolio_phase2.py` | Phase 0 env 骨架（22 用例）+ Phase 1 hs300 平价验证（PPO 贴基准打平/QP 大偏离者输，与银河 HS300 形态一致）+ 银河 0608 L1 落地（**风险标签可测成立**：mdd test 0.25/0.40）+ Phase 2 zz1000 runner 冒烟通过；**全量待好机器**（命令见 RESEARCH_TODO） |
 | **生产口径 IC 监控（现役）** | `scripts/reporting/monitor_production_ic.py` | 全A · ens_h1h5 · ortho 每日 IC / 中性化 IC / 风格暴露台账 → `reports/monitoring/production_ic_daily.csv` |
 
