@@ -177,12 +177,12 @@ reports/    实验与交付物（模型/监控/因子库/设计文档/HTML报告
 | 实验 | 入口 | 结论 / 交付 |
 |---|---|---|
 | 模型 walk-forward | `scripts/evaluation/walk_forward_model.py` | mock/real 滚动再训练，模型因子回写因子库 → `reports/models(_mock)/` |
-| 端到端策略回测 | `scripts/pipelines/e2e_backtest.py` | walk-forward 月频回测（2024-01~2026-08 跑输全池基准——信号强度不足以支撑集中持仓）→ `reports/e2e_backtest/` |
+| 端到端策略回测（已归档 09-24） | `scripts/archive/e2e_backtest.py` | walk-forward 月频回测（2024-01~2026-08 跑输全池基准——信号强度不足以支撑集中持仓）→ `reports/e2e_backtest/`；HS300 口径停更，三口同裁归档 |
 | ML 因子合成 | `scripts/archive/ml_synthesis_experiment.py` | h=5 valid IC 0.055-0.061 但 test 归零（29/35 特征方向翻转）；h=1 OOS IC 0.039-0.041 → `reports/archive/ml-synthesis-hs300-report/` |
 | 算法对比 | `scripts/archive/ml_algorithm_compare.py` | Ridge/GBDT/TabICL + 窗口/再训频率对比 → `reports/ml_algorithm_compare/` |
 | 组合方法对比 | `scripts/portfolio/compare_portfolio_methods.py` | projection/min_var/tev/risk_parity/hrp 五法 → `reports/portfolio_methods_compare.csv` |
 | 多期执行 | `scripts/portfolio/multi_period_backtest.py` | 2025 与 2026H1 两段样本外 → `reports/multi_period/`、`reports/two_periods/` |
-| 投资收益报告 | `scripts/reporting/investment_report.py` | 模型预测作因子检验 + 组合 vs 大盘指数基准（沪深300→000300.SH，全A→000001.SH）→ `reports/investment_report/` |
+| 投资收益报告（已归档 09-24） | `scripts/archive/investment_report.py` | 模型预测作因子检验 + 组合 vs 大盘指数基准（沪深300→000300.SH，全A→000001.SH）→ `reports/investment_report/`；零引用，随 e2e_backtest 归档 |
 | 因子库检验/交互报告 | `scripts/reporting/factor_library_full_report.py`、`factor_explorer_report.py` | 全量检验表 + 交互检测（时间段×来源×指标排序）→ `reports/factor_library_report_*.html` |
 | 调仓频率精修 / 多年度 OOS | `scripts/evaluation/freq_tune.py`、`multiyear_oos.py` | h1×M 是唯一三年一致稳健解；日频超额 −40% → `reports/freq_tune/`、`reports/multiyear/` |
 | HS300 选股清单入口（已归档） | `scripts/archive/e2e_stock_picks.py`、`select_stocks.py` | 09-21 归档：数据口径停更、职责被 `alla_daily_rank` 取代 |
@@ -306,7 +306,7 @@ python -m scripts.common.task_scheduler install alla_daily_rank
 | `rolling_grid_alla` | 全A多年度滚动训练实验（主实验入口） |
 | `run_model_portfolio` | 模型增强组合正式入口（ortho · ens_h1h5 · 月频 Top10%） |
 | `alla_excess_attribution` | 全A主策略超额归因（α/β + Brinson） |
-| `e2e_backtest` | 端到端选股 walk-forward 回测 |
+| `e2e_backtest`（已归档） | 端到端选股 walk-forward 回测 |
 
 ### `scripts/portfolio/` — 组合构建 / 信号 / 执行
 
@@ -316,7 +316,7 @@ python -m scripts.common.task_scheduler install alla_daily_rank
 | `multi_period_backtest` | 多期组合执行回测（QP + 成本 + 约束） |
 | `compare_portfolio_methods` | 组合法对比 |
 | `run_etf_rotation` | ETF 轮动最小闭环 |
-| `optimize_e2e` | 调仓频率 × 风格中性化端到端优化（HS300 口径） |
+| `optimize_e2e`（已归档） | 调仓频率 × 风格中性化端到端优化（HS300 口径） |
 
 > 注：需要 Σ 的 QP / HRP / BL 在 `optimize/` 包；本目录只做「无风险模型的权重生产」。
 
@@ -340,7 +340,7 @@ python -m scripts.common.task_scheduler install alla_daily_rank
 
 | 脚本 | 职责 |
 |---|---|
-| `investment_report` | 投资收益报告 |
+| `investment_report`（已归档） | 投资收益报告 |
 | `factor_explorer_report` / `factor_library_full_report` | 因子库交互检测 / 全量检验报告 |
 | `rolling_grid_report` | 全A滚动实验收益曲线 + 分年绩效 HTML |
 | `jq_style_report` | 聚宽风格收益曲线页 |
@@ -373,7 +373,7 @@ python -m scripts.common.task_scheduler install alla_daily_rank
 `ml_synthesis_experiment`；2026-09-21 新增 `e2e_stock_picks`、`select_stocks`
 （HS300 时代选股清单入口：数据口径停更、被 `alla_daily_rank` 取代）。
 
-> 未随批归档的同名家族：`e2e_backtest` / `optimize_e2e` 属独立回测实验入口，保留原处。
+> 2026-09-24 三口同裁归档：`e2e_backtest` / `optimize_e2e` / `investment_report` （数据口径停更、产物已清理；mock 链路测试改指 archive 保活）。
 
 ### `scripts/textmining/` / `scripts/data_tools/` / `scripts/oneoff/`
 
@@ -419,7 +419,7 @@ pip install AmazingData-*.whl
 跑一次 Mock 数据端到端回测（不需要数据源凭证）：
 
 ```bash
-python scripts/pipelines/e2e_backtest.py --top 20 --model ridge --n-days 400 --n-codes 30
+python scripts/archive/e2e_backtest.py --top 20 --model ridge --n-days 400 --n-codes 30
 ```
 
 用真实数据（需先配置 `AMAZINGDATA_USER/PWD/HOST/PORT` 环境变量）：

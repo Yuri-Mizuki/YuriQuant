@@ -28,7 +28,7 @@ from data.cache_helpers import load_index_returns  # noqa: E402
 from factor.classic import compute_classic_features  # noqa: E402
 from model.labels import build_label_pair  # noqa: E402
 from research.factor_analysis import calc_ic_series  # noqa: E402
-from scripts.pipelines.e2e_backtest import (  # noqa: E402
+from scripts.archive.e2e_backtest import (  # noqa: E402
     perf_stats,
     run_equal_weight_backtest,
     walk_forward_predictions,

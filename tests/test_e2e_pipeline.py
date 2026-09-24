@@ -1,5 +1,6 @@
 """
-端到端选股工作流测试（e2e_common / e2e_stock_picks / e2e_backtest）。
+端到端选股工作流测试（e2e_common / e2e_stock_picks / e2e_backtest
+——后两者已归档，mock 链路改指 archive 保活）。
 
 覆盖：
 - e2e_common：经典因子形状、标签构建、mock 数据形状
@@ -10,6 +11,9 @@
 
 2026-09-21：`e2e_stock_picks.py` 已归档到 `scripts/archive/`（HS300 口径、职责被生产
 入口 `alla_daily_rank` 取代），本测试路径随之改指 —— mock 链路本身仍在验证范围内。
+2026-09-24：`e2e_backtest.py` 三口同裁归档（optimize_e2e / investment_report 随行），
+测试同样改指 archive；`test_metrics` 的 perf_stats 一致性用例与 `test_layering` 的
+_enforce_caps 钉子按裁决退休（重复实现已随入口归档）。
 """
 from __future__ import annotations
 
@@ -75,7 +79,7 @@ def test_load_library_factors_excludes_model():
 
 
 def test_enforce_caps_constraints():
-    from scripts.pipelines.e2e_backtest import _enforce_caps
+    from scripts.archive.e2e_backtest import _enforce_caps
     w = pd.Series({"a": 0.5, "b": 0.3, "c": 0.2, "d": 0.0})
     out = _enforce_caps(w, cap=0.3)
     assert abs(out.sum() - 1.0) < 1e-9
@@ -109,7 +113,7 @@ def test_e2e_stock_picks_mock(tmp_path):
 def test_e2e_backtest_mock(tmp_path):
     out_dir = tmp_path / "bt"
     cmd = [
-        sys.executable, str(ROOT / "scripts" / "pipelines" / "e2e_backtest.py"),
+        sys.executable, str(ROOT / "scripts" / "archive" / "e2e_backtest.py"),
         "--top", "20", "--model", "ridge", "--skip-rp",
         "--n-days", "400", "--n-codes", "30", "--seed", "1",
         "--out", str(out_dir),
