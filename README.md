@@ -86,7 +86,7 @@ reports/    实验与交付物（模型/监控/因子库/设计文档/HTML报告
 | # | 阶段 | 状态与入口 | 说明 |
 |---|---|---|---|
 | 1 | 研究分析 | ✅ `data/`、`scripts/evaluation/intraday_analysis.py`、`scripts/ingest/check_data_quality.py` | SDK → 行情/财务/日内结构画像，数据质量检查无 ERROR |
-| 2 | 提出想法 | ✅ `scripts/factors/mine_factors.py`（`--exhaustive`/`--gp`）、`factor/gflownet/`、`factor/rl/` | 穷举 + 遗传规划 + GFlowNet(TB/PPO) + AlphaPool RL 自动生成候选公式 |
+| 2 | 提出想法 | ✅ `scripts/factors/mine_factors.py`（`--exhaustive`/`--gp`）、`factor/gflownet/`、`factor/rl/`、`factor/mcts/` | 穷举 + 遗传规划 + GFlowNet(TB/PPO) + AlphaPool RL + LLM-MCTS 四引擎自动生成候选公式 |
 | 3 | 开发准备 | ✅ `scripts/ingest/update_data.py` | SDK → Parquet 缓存 + PIT 面板 + 股票池，增量水位正确、PIT 无未来函数 |
 | 4 | 开发实现 | ✅ `scripts/factors/build_{technical,fundamental,intraday}_factors.py` + `scripts/builders/` 全A构建器 13 个 | 技术面/基本面/日内因子 + 全A数据集 `all_a_2018_2026`（920 因子 × 2471 日 × 5549 股） |
 | 5 | 因子分析 | ✅ `research/factor_analysis.py`、`scripts/reporting/factor_correlation.py` | 因子面板 → IC/IR/衰减/分层/NW t/FDR，显著性基于 Newey-West t |
@@ -103,7 +103,8 @@ reports/    实验与交付物（模型/监控/因子库/设计文档/HTML报告
 **自动化挖掘算法**：
 - **GP 遗传规划** `factor/genetic_mining.py`：DEAP，HallOfFame 精英保留，门诊/滚动 IC 评估。
 - **GFlowNet** `factor/gflownet/`：`FactorMDP` 因子构造 MDP + `TBPolicy`/`PPONet`，Trajectory Balance 与 PPO 对照训练。
-- **AlphaPool RL** `factor/rl/`：`AlphaPool` 环境 + gymnasium 包装，MaskablePPO + LSTMSharedNet；含 LLM 初始池（`llm_pool.py`，真实 deepseek-flash 联网验证）；组合优化 env（`portfolio_env.py`，银河 0706 口径主动权重空间）。
+- **AlphaPool RL** `factor/rl/`：`AlphaPool` 环境 + gymnasium 包装，MaskablePPO + LSTMSharedNet；含 LLM 初始池（`llm_pool.py`，真实 deepseek-flash 联网验证）；组合优化 env（`portfolio_env.py`，银河 0706 口径主动权重空间，2026-09-24 起接涨跌停/停牌可交易掩码）。
+- **LLM-MCTS** `factor/mcts/`（2026-09-24，东吴 0623 转译）：29 Seed（Alpha158 rolling 全类 × w=20）+ 周度六项 reward + UCT/virtual expansion + 三层去重（静态校验/结构同族/周度 IC ≥0.99 数值去重，吸收 RD-Agent 机制①④⑦）；四臂对照 runner `run_llm_mcts.py`（mcts/llm_oneshot/gp/gflownet），全量挂好机器（批次 9）。
 
 ### 02 模型层（✅ 主要能力已就绪）
 
@@ -171,6 +172,8 @@ reports/    实验与交付物（模型/监控/因子库/设计文档/HTML报告
 | **另类数据管道 P0** | `data/altdata/` + `scripts/pipelines/fetch_altdata_daily.py` | 7 源落地（快讯 119.2 万条 / 宏观日历 6.5 万行 / 巨潮增减持 26.6 万行全历史等）；**holder_dyn 9 因子强制纳入消融 Δ=−0.85pp，无增量价值结案**（`reports/holder_dyn/forced/`）；其余表通道就绪待因子挖掘轮次 |
 | **RL 组合优化 stage2（银河 0706 复现线）** | `factor/rl/portfolio_env.py` + `scripts/factors/run_portfolio_ppo.py` / `run_portfolio_phase2.py` | Phase 0 env 骨架（22 用例）+ Phase 1 hs300 平价验证（PPO 贴基准打平/QP 大偏离者输，与银河 HS300 形态一致）+ 银河 0608 L1 落地（**风险标签可测成立**：mdd test 0.25/0.40）+ Phase 2 zz1000 runner 冒烟通过；**全量待好机器**（命令见 RESEARCH_TODO） |
 | **生产口径 IC 监控（现役）** | `scripts/reporting/monitor_production_ic.py` | 全A · ens_h1h5 · ortho 每日 IC / 中性化 IC / 风格暴露台账 → `reports/monitoring/production_ic_daily.csv` |
+| **东吴 LLM-MCTS Phase 0（四引擎对照）** | `factor/mcts/` + `scripts/factors/run_llm_mcts.py` | 同 29 Seed × 同六项 reward 下 mcts / llm_oneshot / gp / gflownet 四臂对照（分离「LLM 语义生成」与「MCTS 控制增益」）；mock + 真实 hs300 冒烟通过、23 用例，**全量挂好机器**（批次 9，命令见 GOOD_MACHINE_TASKS）→ `reports/llm_mcts_phase0/` |
+| **表格基础模型对照（批次 8）** | `scripts/evaluation/tabpfn_rolling_compare.py` | TabPFN-3.5 / TabICL 2.2 vs LightGBM：逐月滚动 W∈{2,3}m × test_step=1，可交易 IC + NW t + Top10% 月频 open 组合 + 秩相关诊断；gbdt 臂 hs300 冒烟 IC≈0.026/NWt≈3（与 09-22 冒烟同量级），tabpfn/tabicl 臂全量待 GPU → `reports/tabpfn_rolling_compare/` |
 
 ### HS300 时代（历史基线，已压缩）
 
