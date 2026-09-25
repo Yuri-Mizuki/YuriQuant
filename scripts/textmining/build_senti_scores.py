@@ -68,7 +68,7 @@ def load_model(max_len: int = 256):
         d = Config.get().get("textmining", {}).get("bert_model_dir")
     except Exception:
         d = None
-    model_dir = str(d).replace("//", "/") if d else r"E:/data/models/finbert_tone_chinese"
+    model_dir = str(d).replace("//", "/") if d else r"D:/data/models/finbert_tone_chinese"
     torch.set_num_threads(max(1, args_threads[0]))
     tok = AutoTokenizer.from_pretrained(model_dir)
     model = AutoModelForSequenceClassification.from_pretrained(model_dir)

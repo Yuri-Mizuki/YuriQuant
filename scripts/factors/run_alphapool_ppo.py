@@ -185,9 +185,14 @@ def build_real_panel(begin: int, end: int, cache_root: str | None = None,
     try:
         from data.cache import DataCache
         from data.cache_helpers import load_backward_factor
-        from data.datasource import create_datasource
-        from config import Config
-        ds = create_datasource(Config.datasource())
+        if offline:
+            # --offline 时绝不开真实 SDK（登录+接口 hang 曾卡死主流程 2.5h，09-24 修）
+            from data.offline import OfflineDataSource
+            ds = OfflineDataSource()
+        else:
+            from data.datasource import create_datasource
+            from config import Config
+            ds = create_datasource(Config.datasource())
         cache = DataCache(ds, cache_root=cache_root) if cache_root else DataCache(ds)
         backward = load_backward_factor(cache, list(panel["close"].columns))
     except Exception as exc:                        # noqa: BLE001 —— 复权因子缺失不应中断主流程
@@ -327,6 +332,23 @@ def evaluate_pool(pool: AlphaPool, panel: dict[str, pd.DataFrame],
             out["composite_ic"] = float(portfolio_ic(valid, pool.weights, rets))
         except Exception as exc:                       # noqa: BLE001
             out["composite_ic_error"] = str(exc)[:80]
+        try:
+            # 逐日复合 IC 序列（PBO/DSR 的 T×N 输入；与 portfolio_ic 同口径：
+            # 逐日截面标准化后加权）
+            import numpy as np
+            from factor.rl.alphapool_env import _panels_to_np, _standardize_panel, _ic_np
+            arr = _panels_to_np(valid)
+            w = np.asarray(pool.weights, dtype=float)
+            w = w / (np.abs(w).sum() + 1e-12)
+            r = rets.reindex_like(valid[0]).to_numpy(dtype=np.float64)
+            f0 = np.zeros(arr.shape[:2], dtype=np.float64)
+            for k in range(arr.shape[2]):
+                f0 += w[k] * _standardize_panel(arr[:, :, k])
+            ic_daily = _ic_np(f0, r)
+            ic_daily = [float(x) for x in ic_daily if np.isfinite(x)]
+            out["composite_daily_ic"] = ic_daily
+        except Exception as exc:                       # noqa: BLE001 —— 序列缺省不致命
+            out["composite_daily_ic_error"] = str(exc)[:80]
     return out
 
 

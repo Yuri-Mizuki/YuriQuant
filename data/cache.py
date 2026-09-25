@@ -44,6 +44,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import logging
+import time
 from pathlib import Path
 from typing import Iterable
 
@@ -646,55 +647,51 @@ class DataCache:
         return df
 
     # ---- 股本结构 ----
-    def get_equity_structure(self, code_list: Iterable[str]) -> pd.DataFrame:
-        """稀疏事件表，没有"增量"概念，整表覆盖缓存（同 get_code_info）。"""
-        p = self._root / "equity_structure.parquet"
-        codes = list(code_list)
-        df = self._ds.get_equity_structure(codes)
-        if not df.empty:
-            self._merge_sparse_table(p, codes, df)
-            return df
+    def _get_sparse_table(self, filename: str, codes: list[str],
+                          fetch_fn) -> pd.DataFrame:
+        """稀疏事件表（股本/分红/十大股东/股东户数）：分批 + 每批重试 + 每批落盘。
+
+        与 ``_get_financial`` 同因同治（见其注释）：整池一次性请求时，服务端
+        偶发抖动会让整张表拉取失败、update_data 直接 exit；分批后单批抖动
+        最多损失一批，已得批次不受影响，重跑即断点续拉。
+        """
+        p = self._root / filename
+        parts, failed, aborted = self._fetch_batched(filename, codes, fetch_fn)
+        if parts:
+            if failed or aborted:
+                log.warning("%s 有 %d 批未取到（熔断=%s），重跑本步骤可断点续拉",
+                            filename, len(failed), aborted)
+            return pd.concat(parts, ignore_index=True)
         if p.exists():
             cached = pd.read_parquet(p)
-            return cached[cached["code"].isin(codes)]
-        return df
+            return cached[cached["code"].isin(codes)] if "code" in cached.columns else cached
+        return pd.DataFrame()
+
+    def get_equity_structure(self, code_list: Iterable[str]) -> pd.DataFrame:
+        """稀疏事件表，没有"增量"概念，整表覆盖缓存（同 get_code_info）。"""
+        codes = list(code_list)
+        return self._get_sparse_table(
+            "equity_structure.parquet", codes, self._ds.get_equity_structure
+        )
 
     # ---- 分红 / 十大股东 / 股东户数（稀疏事件表，整表覆盖缓存，同股本结构）----
     def get_dividend(self, code_list: Iterable[str]) -> pd.DataFrame:
-        p = self._root / "dividend.parquet"
         codes = list(code_list)
-        df = self._ds.get_dividend(codes)
-        if not df.empty:
-            self._merge_sparse_table(p, codes, df)
-            return df
-        if p.exists():
-            cached = pd.read_parquet(p)
-            return cached[cached["code"].isin(codes)] if "code" in cached.columns else cached
-        return df
+        return self._get_sparse_table(
+            "dividend.parquet", codes, self._ds.get_dividend
+        )
 
     def get_share_holder(self, code_list: Iterable[str]) -> pd.DataFrame:
-        p = self._root / "share_holder.parquet"
         codes = list(code_list)
-        df = self._ds.get_share_holder(codes)
-        if not df.empty:
-            self._merge_sparse_table(p, codes, df)
-            return df
-        if p.exists():
-            cached = pd.read_parquet(p)
-            return cached[cached["code"].isin(codes)] if "code" in cached.columns else cached
-        return df
+        return self._get_sparse_table(
+            "share_holder.parquet", codes, self._ds.get_share_holder
+        )
 
     def get_holder_num(self, code_list: Iterable[str]) -> pd.DataFrame:
-        p = self._root / "holder_num.parquet"
         codes = list(code_list)
-        df = self._ds.get_holder_num(codes)
-        if not df.empty:
-            self._merge_sparse_table(p, codes, df)
-            return df
-        if p.exists():
-            cached = pd.read_parquet(p)
-            return cached[cached["code"].isin(codes)] if "code" in cached.columns else cached
-        return df
+        return self._get_sparse_table(
+            "holder_num.parquet", codes, self._ds.get_holder_num
+        )
 
     # ---- 财务报表（稀疏报告期表，整表覆盖 + code 过滤）----
     def _merge_sparse_table(self, p: Path, codes: list[str], df: pd.DataFrame) -> pd.DataFrame:
@@ -713,22 +710,92 @@ class DataCache:
         df.to_parquet(p, compression="snappy")
         return df
 
+    # 财务三表（利润表/资产负债表/现金流量表）单次请求的代码批量。
+    # 2026-09-22：原先整池一次性请求，服务端偶发
+    #   error_code<301010> 查询语句异常：… ORA-00942: table or view does not exist
+    # （同一时刻同池同接口重试即成功，判定为服务端瞬时抖动，非权限/表缺失）。
+    # 一次性请求下，这种抖动会让**整张表**拉取失败、update_data 直接 exit 1，
+    # 前面已跑完的行情/行业/股本全部作废。改为分批 + 每批独立重试 + 每批即落盘：
+    # 单批抖动最多损失 100 只，且已得批次不受影响（断点续拉由本地 parquet 兜底）。
+    _FINANCIAL_BATCH = 100
+    _FINANCIAL_ATTEMPTS = 4
+    # 连续多少批「重试耗尽仍全败」就判定该表当前不可用、放弃剩余批次。
+    # 单批 4 次重试（退避 2/4/8s）已能滤掉瞬时抖动；**连续两批**全败基本只有
+    # 「服务端该表本身不可用」一种解释（2026-09-22 实测：资产负债表整表
+    # ORA-00942，而同池同口径 20 分钟前还全部成功——服务端在抖）。
+    # 不熔断的话，全 A（5807 只 = 59 批）会在这张坏表上白烧约 2 小时。
+    _FINANCIAL_CIRCUIT_BREAK = 2
+
+    def _fetch_batched(self, filename: str, codes: list[str], fetch_fn):
+        """分批 + 每批重试 + 每批落盘；返回 (已得 parts, 受限批次, 是否熔断)。
+
+        ``parts`` 只含真正取到的批次；``failed`` 是重试耗尽仍失败的批次；
+        熔断触发后剩余批次直接不再尝试（省掉在坏表上的等待）。
+        """
+        batches = [codes[i:i + self._FINANCIAL_BATCH]
+                   for i in range(0, len(codes), self._FINANCIAL_BATCH)]
+        parts: list[pd.DataFrame] = []
+        failed: list[list[str]] = []
+        consecutive_fail = 0
+        aborted = False
+
+        for bi, sub in enumerate(batches):
+            part: pd.DataFrame | None = None
+            for attempt in range(1, self._FINANCIAL_ATTEMPTS + 1):
+                try:
+                    part = fetch_fn(sub)
+                    break
+                except Exception as exc:  # noqa: BLE001 - 服务端偶发，重试后再定论
+                    if attempt == self._FINANCIAL_ATTEMPTS:
+                        log.warning("财务表 %s 批次 %d/%d（%d 只）%d 次重试仍失败，跳过: %s",
+                                    filename, bi + 1, len(batches), len(sub), attempt, exc)
+                        failed.append(sub)
+                    else:
+                        log.warning("财务表 %s 批次 %d/%d（%d 只）第 %d 次失败，%.0fs 后重试: %s",
+                                    filename, bi + 1, len(batches), len(sub), attempt,
+                                    2 ** attempt, exc)
+                        time.sleep(2 ** attempt)
+            if part is None or part.empty:
+                consecutive_fail += 1
+                if consecutive_fail >= self._FINANCIAL_CIRCUIT_BREAK:
+                    rest = len(batches) - bi - 1
+                    if rest:
+                        log.warning("财务表 %s 连续 %d 批全败，判定该表当前不可用，"
+                                    "放弃剩余 %d 批（共 %d 只）以省掉无效等待；"
+                                    "服务端恢复后重跑本步骤即可断点续拉",
+                                    filename, consecutive_fail, rest,
+                                    sum(len(b) for b in batches[bi + 1:]))
+                    aborted = True
+                    break
+                continue
+            consecutive_fail = 0
+            # 每批即合并落盘——后续批次全部失败也不丢已得数据
+            self._merge_sparse_table(self._root / filename, sub, part)
+            parts.append(part)
+        return parts, failed, aborted
+
     def _get_financial(self, filename: str, table_name: str,
                        codes: list[str], fetch_fn) -> pd.DataFrame:
         p = self._root / filename
-        df = fetch_fn(codes)
-        if not df.empty:
-            merged = self._merge_sparse_table(p, codes, df)
+        parts, failed, aborted = self._fetch_batched(filename, codes, fetch_fn)
+
+        if parts:
+            if failed or aborted:
+                log.warning("财务表 %s 有 %d 批未取到（熔断=%s），重跑本步骤可断点续拉",
+                            table_name, len(failed), aborted)
+            merged_full = pd.read_parquet(p)
             self._meta.setdefault(table_name, {})["last_date"] = (
-                int(pd.Timestamp(merged["ann_date"].max()).strftime("%Y%m%d"))
-                if "ann_date" in merged.columns and not merged["ann_date"].isna().all() else 0
+                int(pd.Timestamp(merged_full["ann_date"].max()).strftime("%Y%m%d"))
+                if "ann_date" in merged_full.columns and not merged_full["ann_date"].isna().all() else 0
             )
             self._save_meta()
-            return df
+            return pd.concat(parts, ignore_index=True)
+
+        # 全部分批失败：回退到本地既有缓存，不阻断主流程
         if p.exists():
             cached = pd.read_parquet(p)
             return cached[cached["code"].isin(codes)] if "code" in cached.columns else cached
-        return df
+        return pd.DataFrame()
 
     def get_balance_sheet(self, code_list: Iterable[str],
                           begin_date: int | None = None,

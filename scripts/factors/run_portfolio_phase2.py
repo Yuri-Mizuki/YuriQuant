@@ -40,6 +40,18 @@ DECISION_FREQ = 10
 GATE = 0.05                     # 验证集 RankIC 质量门槛（研报口径）
 
 
+def _trad_mask(px, dates, codes) -> pd.DataFrame:
+    """决策日 × 码表可交易掩码（px["_trad"]，data/tradability T+1 成交口径）。
+
+    main 在 load_pool_panels 后用 build_tradable_mask 算一次挂进 px；缺失
+    （如旧调用方/单测直接造 px）时退回全 True，行为与注入前一致。
+    """
+    trad = px.get("_trad")
+    if trad is None:
+        return pd.DataFrame(True, index=dates, columns=codes)
+    return trad.reindex(index=dates, columns=codes).fillna(True).astype(bool)
+
+
 # ===========================================================================
 # 数据与信号
 # ===========================================================================
@@ -261,6 +273,7 @@ def ppo_arm_rolling(px, mask, codes, signals_by_year, all_dates, model_year, *,
     「DL 模型逐年滚动、RL 在其输出的历年信号上训练」同构。
     """
     from stable_baselines3 import PPO
+    from scripts.factors.run_portfolio_ppo import rl_device
 
     def _sig(y):
         if y not in signals_by_year:
@@ -294,7 +307,8 @@ def ppo_arm_rolling(px, mask, codes, signals_by_year, all_dates, model_year, *,
                         < pd.Timestamp(f"{model_year}-01-01")]
             env, _ = make_env(px, mask, codes, f_tr, z_tr, tr_dates,
                               reward_kw, seed)
-            model = PPO("MlpPolicy", env, seed=seed, device="cpu", verbose=0,
+            model = PPO("MlpPolicy", env, seed=seed, device=rl_device(),
+                        verbose=0,
                         **PPO_KW | {"n_steps": min(256, max(64, len(tr_dates)))})
             model.learn(total_timesteps=timesteps)
 
@@ -384,9 +398,10 @@ def solve_galaxy_qp(alpha, risk_t, sigma, w_b, w_prev, *, lam_risk=1.0,
                        + float(lam_aux) * cp.square(risk_t @ w)
                        + float(lam_turn) * cp.sum(cp.abs(w - w_prev))))
     prob = cp.Problem(obj, cons)
-    # norm1 约束+惩罚与 quad_form 组合 OSQP 不接受（cvxpy reduction 限制），
-    # SCS 锥求解器可解；N≈1000 子集秒级
-    prob.solve(solver=cp.SCS, verbose=False, eps=1e-5, max_iters=200000)
+    # norm1 约束+惩罚与 quad_form 组合 OSQP 不接受；SCS 在 N≈950（zz1000）
+    # 会**原生段错误带走整个进程**（rc=127、绕过 try/except，09-25 两次复现），
+    # 改用 CLARABEL（锥求解器，同规模实测 optimal）
+    prob.solve(solver=cp.CLARABEL, verbose=False)
     if prob.status not in ("optimal", "optimal_inaccurate"):
         raise RuntimeError(f"galaxy QP status={prob.status}")
     wv = np.asarray(w.value, dtype=float).reshape(-1)
@@ -411,6 +426,7 @@ def qp_arm_galaxy(px, mask, codes, f, z, decision_dates, bw, reward_kw):
         z = z.unstack().reindex(index=decision_dates, columns=codes).fillna(0.0)
     close = px["close"][codes]
     rets = close.pct_change(fill_method=None)
+    tm = _trad_mask(px, decision_dates, codes)
     w_prev = bw.iloc[0].to_numpy(dtype=float).copy()
     weights, n_fallback = {}, 0
     for t in decision_dates[:-1]:
@@ -534,6 +550,12 @@ def main(argv: list[str] | None = None) -> None:
 
     px, mask = load_pool_panels(args.pool, args.begin, args.end)
     codes = list(mask.columns)
+    from data.tradability import build_tradable_mask
+    # 前置工程债偿还（09-23）：涨跌停/停牌/ST 掩码注入（T+1 成交口径；
+    # px["close"] 为未复权价 → bwd=None 走 raw 路径，正是该口径的前提）。
+    px["_trad"] = build_tradable_mask(px["close"], bwd=None)
+    _t = px["_trad"].to_numpy(dtype=float).mean()
+    log.info("可交易掩码注入: 保留率 %.2f%%（停牌/封板/ST 剔除，T+1 口径）", _t * 100)
     df = build_frame(px, mask, codes)
     log.info("信号样本 %d 行", len(df))
 
@@ -597,35 +619,48 @@ def main(argv: list[str] | None = None) -> None:
             for arm in arms_for_abl:
                 key = f"{year}_{abl}_{arm}"
                 log.info("=== %s ===", key)
-                if arm == "ppo":
-                    weights, info = ppo_arm_rolling(
-                        px, mask, codes, year_signals, eval_dates, year,
-                        timesteps=args.ppo_timesteps, n_seeds=args.ppo_seeds,
-                        n_retries=args.ppo_retries, seed0=args.seed,
-                        reward_kw=reward_kw)
-                    results[key + "|meta"] = {"info": json.dumps(info)}
-                    if info.get("status") != "ok":
-                        weights = {d: bwm.loc[d].to_numpy(dtype=float)
-                                   for d in y_dates[:-1]}      # 回退持有基准
-                elif arm == "qp":
-                    weights = qp_arm_galaxy(px, mask, codes, f_use, z,
-                                            y_dates, bwm, reward_kw)
-                elif arm == "ew":
-                    weights = {d: bwm.loc[d].to_numpy(dtype=float)
-                               for d in y_dates[:-1]}
-                elif arm == "topn":
-                    weights = {}
-                    for t in y_dates[:-1]:
-                        sig = f_use.loc[t].reindex(codes)
-                        sig = sig.where(bwm.loc[t] > 0)
-                        pick = sig.nlargest(max(1, len(codes) // 10)).index
-                        w = pd.Series(0.0, index=codes)
-                        w[pick] = 1.0 / max(len(pick), 1)
-                        weights[t] = w.to_numpy(dtype=float)
-                else:
-                    raise ValueError(arm)
-                m, eq = _evaluate(key, weights, codes, y_dates,
-                                  period_returns, bwm)
+                try:
+                    if arm == "ppo":
+                        weights, info = ppo_arm_rolling(
+                            px, mask, codes, year_signals, eval_dates, year,
+                            timesteps=args.ppo_timesteps, n_seeds=args.ppo_seeds,
+                            n_retries=args.ppo_retries, seed0=args.seed,
+                            reward_kw=reward_kw)
+                        results[key + "|meta"] = {"info": json.dumps(info)}
+                        if info.get("status") != "ok":
+                            weights = {d: bwm.loc[d].to_numpy(dtype=float)
+                                       for d in y_dates[:-1]}      # 回退持有基准
+                    elif arm == "qp":
+                        weights = qp_arm_galaxy(px, mask, codes, f_use, z,
+                                                y_dates, bwm, reward_kw)
+                    elif arm == "ew":
+                        # 等权持有基准的可实现版：决策日不可交易（停牌/封板/ST）的
+                        # 成分名权重摊给其余成员；全员不可交易时回退未掩码基准
+                        tm_y = _trad_mask(px, y_dates, codes)
+                        weights = {}
+                        for d in y_dates[:-1]:
+                            w = bwm.loc[d] * tm_y.loc[d]
+                            s = float(w.sum())
+                            weights[d] = (w / s).to_numpy(dtype=float) if s > 1e-12 \
+                                else bwm.loc[d].to_numpy(dtype=float)
+                    elif arm == "topn":
+                        tm_y = _trad_mask(px, y_dates, codes)
+                        weights = {}
+                        for t in y_dates[:-1]:
+                            sig = f_use.loc[t].reindex(codes)
+                            sig = sig.where((bwm.loc[t] > 0) & tm_y.loc[t])
+                            pick = sig.nlargest(max(1, len(codes) // 10)).index
+                            w = pd.Series(0.0, index=codes)
+                            w[pick] = 1.0 / max(len(pick), 1)
+                            weights[t] = w.to_numpy(dtype=float)
+                    else:
+                        raise ValueError(arm)
+                    m, eq = _evaluate(key, weights, codes, y_dates,
+                                      period_returns, bwm)
+                except Exception as exc:  # noqa: BLE001 —— 单臂失败不拖垮整跑
+                    log.error("%s 失败: %s", key, str(exc)[:300])
+                    results[key] = {"error": str(exc)[:200]}
+                    continue
                 results[key] = m
                 equities[key] = eq
                 log.info("%s: 超额 %.2f%% | IR %.2f", key,

@@ -35,6 +35,30 @@ if str(ROOT) not in sys.path:
 
 log = logging.getLogger("portfolio_ppo")
 
+
+def rl_device() -> str:
+    """RL 训练设备：环境变量 ``YQ_RL_DEVICE`` 控制。
+
+    - ``auto``（默认）：有 CUDA 就用 GPU，否则 CPU；
+    - ``cpu`` / ``cuda`` / ``cuda:0``：显式指定。
+
+    2026-09-20 加入：此前 PPO 训练硬编码 ``device="cpu"``，在无 GPU 机器上
+    是唯一可行选择；迁到 RTX 4060（cu126）后 MlpPolicy 的小网络在 GPU 上
+    收益有限，但长 timesteps 训练仍有提速，故默认改为 auto 并允许显式回退。
+    """
+    import os
+
+    want = os.environ.get("YQ_RL_DEVICE", "auto").strip().lower()
+    if want != "auto":
+        return want
+    try:
+        import torch
+
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    except Exception:
+        return "cpu"
+
+
 #: 决策频率（交易日）——与 h=10 预测期对齐，非重叠持有期
 DECISION_FREQ = 10
 #: TopN 臂持仓只数（hs300 的 20%）
@@ -126,8 +150,10 @@ def run_arm_ppo(env_kwargs: dict, timesteps: int, seed: int, out_dir: Path
 
     torch.set_num_threads(max(1, torch.get_num_threads()))
     env = PortfolioEnv(**env_kwargs)
+    dev = rl_device()
+    log.info("PPO 训练设备：%s", dev)
     model = PPO("MlpPolicy", env, seed=seed, verbose=0,
-                device="cpu", **PPO_KW)
+                device=dev, **PPO_KW)
     model.learn(total_timesteps=timesteps, progress_bar=False)
 
     obs, _ = env.reset()

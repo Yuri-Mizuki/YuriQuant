@@ -48,7 +48,7 @@ def _bert_model_dir() -> str:
             return str(d).replace("//", "/")
     except Exception:
         pass
-    return r"E:/data/models/finbert_tone_chinese"
+    return r"D:/data/models/finbert_tone_chinese"
 
 MODEL_DIR = _bert_model_dir()
 log = setup_logging("encode_bert")

@@ -78,7 +78,7 @@ def run(pool: str = "zz1000", batch_size: int = 32, threads: int = 22,
         d = Config.get().get("textmining", {}).get("bert_model_dir")
     except Exception:
         d = None
-    model_dir = str(d).replace("//", "/") if d else r"E:/data/models/finbert_tone_chinese"
+    model_dir = str(d).replace("//", "/") if d else r"D:/data/models/finbert_tone_chinese"
     tok = AutoTokenizer.from_pretrained(model_dir)
     model = AutoModel.from_pretrained(model_dir).eval()
 

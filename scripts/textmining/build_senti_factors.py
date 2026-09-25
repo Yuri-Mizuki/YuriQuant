@@ -177,7 +177,7 @@ def validate_sentence_agreement(pool: str, n_reports: int = 300) -> str:
         d = Config.get().get("textmining", {}).get("bert_model_dir")
     except Exception:
         d = None
-    model_dir = str(d).replace("//", "/") if d else r"E:/data/models/finbert_tone_chinese"
+    model_dir = str(d).replace("//", "/") if d else r"D:/data/models/finbert_tone_chinese"
     torch.set_num_threads(22)
 
     sp = OUT_DIR / f"senti_scores_{pool}.parquet"

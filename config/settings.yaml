@@ -16,16 +16,18 @@ datasource:
     host: ${AMAZINGDATA_HOST:}
     port: ${AMAZINGDATA_PORT:0}
     # SDK 本地缓存目录（AmazingData 自带的 is_local 方案，SDK 内部用 pickle 格式）
-    sdk_local_path: e://data//sdk_cache//
+    # 2026-09-20 迁移：原为 e://data//，但本机 E 盘仅 0.9GB 容量，改为 D 盘
+    sdk_local_path: d://data//sdk_cache//
 
   csv:
     # 备用 CSV 数据源：指向一个目录，里面按 表名/代码.csv 组织
-    root: e://data//csv//
+    root: d://data//csv//
 
 # --- 本地缓存（自建 Parquet 层，在数据源之上） ---
 cache:
   # 自建 Parquet 缓存根目录
-  root: e://data//parquet//
+  # 2026-09-20 迁移：原为 e://data//，E 盘容量不足
+  root: d://data//parquet//
   # 压缩方式: snappy | zstd | gzip
   compression: snappy
 
@@ -104,12 +106,14 @@ discipline:
 # --- 因子库（Factor Library / Factor Zoo）---
 factor_library:
   # 因子持久化根目录：registry.csv + panels/*.parquet + evals/*.parquet
-  root: e://data//factor_library//
+  # 2026-09-20 迁移：原为 e://data//，E 盘容量不足
+  root: d://data//factor_library//
 
 # --- 文本挖掘（data/textmining + scripts/textmining）---
 textmining:
   # 本地 FinBERT 模型目录（hf-mirror 下载的 finbert-tone-chinese，非代码仓库内容）
-  bert_model_dir: e://data//models//finbert_tone_chinese
+  # 2026-09-20 迁移：原为 e://data//，E 盘容量不足
+  bert_model_dir: d://data//models//finbert_tone_chinese
 
 # --- 生产化监控（monitoring/ 包；因子与模型预测的性能监控调度）---
 monitoring:

@@ -608,8 +608,12 @@ def select_features_for_year(year: int, horizon: int, ic_cache: pd.DataFrame,
 
 
 def _panel_path(name: str) -> Path:
-    """因子面板路径（mixed 口径的逐因子目录覆盖与 FeatureStore 同源）。"""
-    src = NAME_DIR.get(name, PANELS_DIR or ds_root() / "panels")
+    """因子面板路径（mixed 口径的逐因子目录覆盖与 FeatureStore 同源）。
+
+    NAME_DIR 仅 mixed 口径非空——ortho/zscore 下为 None，须守卫（否则
+    check_panels_existence（方案 B）在非 mixed 模式全崩，09-25 实测）。
+    """
+    src = (NAME_DIR or {}).get(name, PANELS_DIR or ds_root() / "panels")
     return src / f"{name}.parquet"
 
 
@@ -1556,10 +1560,12 @@ def main():
     ap.add_argument("--ablation", action="store_true",
                     help="消融对照组：排除 A+B 基本面族，输出到 alla_rolling_nofund")
     ap.add_argument("--preproc", default=None,
-                    choices=["zscore", "ortho", "mixed"],
+                    choices=["zscore", "ortho", "mixed", "ortho_fundind"],
                     help="特征预处理口径：zscore(全局截面z，历史主线对照臂) / "
                          "ortho(因子层行业+市值中性化，主实验最优口径) / "
-                         "mixed(基本面族中性化+量价zscore)；"
+                         "mixed(基本面族中性化+量价zscore) / "
+                         "ortho_fundind(E5臂：基本面族只剥行业保市值风格，"
+                         "读 panels_neu_fundind，批次 6)；"
                          "未指定时回退 zscore 并告警")
     ap.add_argument("--execution", default="open", choices=["close", "open", "vwap"],
                     help="backtest/ensemble 阶段成交价口径（2026-09-22 定版）："
@@ -1630,6 +1636,10 @@ def main():
         OUT = Path("reports") / "alla_rolling_ortho"
         PANELS_DIR = ds_root() / "panels_neu"
         log.info("+++ 因子层正交化：特征源 -> panels_neu，输出 -> %s", OUT)
+    if args.preproc == "ortho_fundind":
+        OUT = Path("reports") / "alla_rolling_ortho"
+        PANELS_DIR = ds_root() / "panels_neu_fundind"
+        log.info("+++ E5 臂：基本面族只剥行业（特征源 panels_neu_fundind），输出 -> %s", OUT)
     if args.preproc == "mixed":
         OUT = Path("reports") / "alla_rolling_mixed"
         _neu = ds_root() / "panels_neu"

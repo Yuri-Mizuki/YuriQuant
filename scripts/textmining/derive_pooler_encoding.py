@@ -38,7 +38,7 @@ def _pooler_weights() -> tuple[np.ndarray, np.ndarray]:
         d = Config.get().get("textmining", {}).get("bert_model_dir")
     except Exception:
         d = None
-    model_dir = str(d).replace("//", "/") if d else r"E:/data/models/finbert_tone_chinese"
+    model_dir = str(d).replace("//", "/") if d else r"D:/data/models/finbert_tone_chinese"
     from safetensors import safe_open
     with safe_open(str(Path(model_dir) / "model.safetensors"), framework="pt") as fh:
         w = fh.get_tensor("bert.pooler.dense.weight").numpy()
@@ -72,7 +72,7 @@ def run(task: str = "fadt", pool: str = "zz1000", check_live: bool = True):
             d = Config.get().get("textmining", {}).get("bert_model_dir")
         except Exception:
             d = None
-        model_dir = str(d).replace("//", "/") if d else r"E:/data/models/finbert_tone_chinese"
+        model_dir = str(d).replace("//", "/") if d else r"D:/data/models/finbert_tone_chinese"
         sp = OUT_DIR / f"{task}_samples_{pool}.parquet"
         samples = pd.read_parquet(sp).reset_index(names="row_idx").head(4)
         texts = (samples["title"].fillna("") + " " + samples["summary"].fillna(""))

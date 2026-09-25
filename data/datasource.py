@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+import os
 from pathlib import Path
 from typing import Iterable
 
@@ -194,6 +195,87 @@ class DataSource(ABC):
 # ---------------------------------------------------------------------------
 # AmazingData 实现
 # ---------------------------------------------------------------------------
+def _probe_login_failure(cfg: dict) -> str:
+    """登录失败后，另起子进程直连 tgw 图层，取服务端的真实拒绝原因。
+
+    AmazingData 的 ``login`` 在失败时只 ``print("login fail")`` 然后 ``exit(0)``，
+    把 tgw 返回的 status/reason 一起吞掉。本函数绕过 SDK 直接调 ``tgw.Login``，
+    并用**正确签名的** ``ILogSpi.OnLog(self, level, log, len)`` 回调接住日志，
+    因此能拿到形如::
+
+        Logon failed, id[0], status[-97], reason<Wrong user or password>
+
+    的原始信息，附到上层异常里，避免排查时只能看到无信息量的 "login fail"。
+
+    必须在**子进程**里做：SDK 的失败路径已经调用过 ``exit()``，当前进程的 tgw
+    全局状态已损坏（实测二次 ``tgw.Login`` 永不返回日志），只有全新进程才干净。
+
+    任何异常都吞掉并返回空串 —— 探测失败不应掩盖原本的登录错误。
+    """
+    import subprocess
+
+    code = r"""
+import sys
+try:
+    import tgw
+except Exception:
+    sys.exit(0)
+
+class LogSpi(tgw.ILogSpi):
+    def __init__(self):
+        super().__init__()
+        self.max_limitation = False
+        self.lines = []
+    # 签名必须是 (level, log, len) 三参数，否则 SWIG 回调静默失效
+    def OnLog(self, level, log, length):
+        self.lines.append(str(log))
+    def OnLogon(self):
+        pass
+    def OnEvent(self, *a):
+        pass
+    def OnIndicator(self, *a):
+        pass
+
+spi = LogSpi()
+try:
+    c = tgw.Cfg()
+    c.username = sys.argv[1]
+    c.password = sys.argv[2]
+    c.server_vip = sys.argv[3]
+    c.server_port = int(sys.argv[4])
+    c.force_logout = True
+    tgw.SetLogSpi(spi)
+    tgw.Login(c, tgw.ApiMode.kInternetMode)
+except Exception:
+    pass
+finally:
+    try:
+        tgw.Close()
+    except Exception:
+        pass
+
+for ln in spi.lines:
+    if ("Logon failed" in ln or "reason" in ln
+            or "init failed" in ln or "connect" in ln.lower()):
+        print("PROBE|" + ln)
+"""
+    try:
+        p = subprocess.run(
+            [os.sys.executable, "-c", code,
+             str(cfg["username"]), str(cfg["password"]),
+             str(cfg["host"]), str(cfg["port"])],
+            capture_output=True, text=True, timeout=60,
+        )
+    except Exception:
+        return ""
+
+    lines = [ln[len("PROBE|"):] for ln in (p.stdout or "").splitlines()
+             if ln.startswith("PROBE|")]
+    if not lines:
+        return ""
+    return "\n  [tgw 底层日志] " + "\n  [tgw 底层日志] ".join(lines[-6:])
+
+
 class AmazingDataSource(DataSource):
     """银河证券 AmazingData SDK 封装。
 
@@ -203,7 +285,7 @@ class AmazingDataSource(DataSource):
 
     def __init__(self, cfg: dict):
         self._cfg = cfg
-        self._local_path = cfg.get("sdk_local_path", "e://data//sdk_cache//")
+        self._local_path = cfg.get("sdk_local_path", "d://data//sdk_cache//")
         self._ad = None       # 模块句柄
         self._base = None     # BaseData 实例
         self._market = None   # MarketData 实例
@@ -235,14 +317,51 @@ class AmazingDataSource(DataSource):
                 port=int(cfg["port"]),
             )
         except SystemExit as exc:
+            # 2026-09-20：SDK 失败时只打印 "login fail" 并 exit(0)，真实原因
+            # （服务端返回的 status/reason）被吞掉，排查时只能看到一句无信息量的
+            # 提示。这里补一次底层探测，把服务端的实际拒绝原因带进异常信息。
+            # 注意：SystemExit 后解释器正在退出，Python 层的 print/stderr 缓冲
+            # 会丢，必须用 os.write 直写 fd=2（stderr）。
+            detail = _probe_login_failure(cfg)
+            if detail:
+                try:
+                    os.write(2, (detail + "\n").encode("utf-8", "replace"))
+                except Exception:
+                    pass
             raise ConnectionError(
                 "AmazingData login failed. Verify AMAZINGDATA_HOST/PORT, "
-                "credentials, and network access."
+                f"credentials, and network access.{detail}"
             ) from exc
         self._base = ad.BaseData()
         calendar = self._base.get_calendar()
         self._market = ad.MarketData(calendar)
         self._info = ad.InfoData()
+
+    # ---- 登出 ----
+    def logout(self) -> None:
+        """主动释放本进程 SDK 连接（best-effort，不抛异常）。
+
+        ⚠️ **2026-09-22 实测：本方法不能解决「单点登录互斥」。**
+        调用后服务端**并不会**释放该账号的登录位：另起进程 login 时仍会收到
+        ``status[-98] reason<Connections of this user exceed the max>``，
+        重试后服务端照样向本进程推 ``RspForceLogout`` → 本进程 SDK ``exit(0)``
+        静默终止（退出码 0）。实测：logout 后起子进程 login，父进程日志在
+        「已调用 ds.logout()」之后立即中断，不再有下一行。
+
+        即：**同一账号的两个进程无法共存**，且无法靠单侧 logout 规避。
+        需要「起一个会自行 login 的子进程」时，唯一可靠做法是让子进程
+        **脱离本进程独立运行**（detached + 不等待），并接受本进程随后被
+        顶下线；参见 ``scripts/ingest/update_data.py::fetch_status_table``。
+
+        保留本方法仅为显式释放连接（例如同一进程内先登出再重登的场景）。
+        """
+        ad = self._ad
+        if ad is None:
+            return
+        try:
+            ad.logout()
+        except Exception:  # noqa: BLE001 - 释放连接是尽力而为，失败不阻断
+            pass
 
     # ---- 交易日历 ----
     def get_calendar(self, begin: int = 20100101, end: int | None = None) -> list[int]:
