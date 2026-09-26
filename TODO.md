@@ -246,6 +246,36 @@
 
 ---
 
+## 五、好机器批次出数后的后续立项（2026-09-25 批次 1-8 出数后新增，按 ROI 排序）
+
+> 证据与数字：`reports/batch1_920_收尾对照表.md`、`reports/batch2385_结果速览.md`。
+> 定版已拍板：信号口径 = h1020 等权 + buffer(20/30) 执行版（09-25）。
+
+- [ ] **批次 8 组合层传导研究**（表格基础模型最大遗留，建议首个立项）：
+  TabPFN-3/TabICL V2 的 OOS IC 全面高于 gbdt（0.055/0.051 vs 0.042，NW t≥7.6），
+  但组合层未同步（tabpfn3 组合年仅 3.9%，组合最优 tabicl_w3m 9.5%/Sharpe 0.74）——
+  研究头部排序与全截面 IC 的传导机制（头部加权 / TopFrac 变体 / 分层集成）；
+  先 zz1000 复验再论全A；版本口径随远端升级 TabPFN-3.5，官方 runner 用
+  `scripts/evaluation/tabpfn_rolling_compare.py`（本机 `tabfm_rolling.py` 为先行变体，
+  权重 ckpt 已缓存）。
+- [ ] **GFlowNet 旋钮增量**（国金24 残余③④）：raw+im 最优臂已定（OOS |IC| 0.117，
+  三 seed 稳定），开 `--min-autocorr` RRE 门槛（降换手）+ 挖掘预算放大
+  （pop/gen/patience），观察能否再抬升；成本 ≈9-14h。
+- [ ] **AI97 步长归因**：10k 步下 PBO=0.704（过拟合选择），与批次 5 PPO 的
+  「50k 步 0/4 门槛」同构——挂 100k 步 × 1 臂 1 seed 判「未收敛 vs 真实失效」，
+  决定该线彻底归档或继续（≈1.5h/轮，纯 CPU）。
+- [ ] **E4 交互特征换注入方式**：池竞争路径证伪（15 个交互因子 |IC| 不入
+  top-150 候选池、选股逐位同基线）；若再验「基本面当条件变量」，改特征级
+  强制拼接（选中量价因子 × 基本面状态桶显式拼接进模型输入）或给保留席位；
+  builder 已就绪（`scripts/builders/build_alla_e4_interaction_factors.py`，
+  面板需用 bf 修复后的全A 复权价重建）。
+- [ ] **方案 B 缺面板对齐**（小工程）：ic_h 缓存 824 列中 4 列无对应 panels_neu
+  文件（coverage 过滤与 ic 融合的口径差：alpha191_138 / alpha101_096 /
+  alpha101_097 / unlock_ratio_20d），当前靠 `YURIQUANT_PANEL_CHECK=warn` 容忍；
+  补齐面板或 ic 融合按 coverage 同步过滤，消除长期 warn。
+
+---
+
 ## 建议推进顺序（2026-09-21 刷新；研报线见 RESEARCH_TODO 第六节）
 
 1. **P0 新口径（920 面板）治本口径基线重跑**（见一，命令已写明，挂机 ≈5–7h，
