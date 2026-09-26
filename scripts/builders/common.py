@@ -37,6 +37,9 @@ KEEP_FROM = "2016-07-01"
 HORIZONS = (1, 5, 10, 20)
 #: IC 抽稀取列步长（全市场 5500+ 股，逐日 Spearman 抽 1/3 列加速）
 IC_CODE_STRIDE = 3
+#: ic 融合的 coverage 下限——与 panels_neu 中性化的 MIN_COVERAGE 对齐，
+#  保证「ic_h 有列 ⟹ panels_neu 有文件」，方案 B 存在性门槛不再误触
+MIN_IC_COVERAGE = 0.3
 
 
 def load_close_adj(with_raw: bool = False):
@@ -112,6 +115,20 @@ def fuse_horizon_ic(ds_dir: Path, h: int, family: str, *,
     from stats.ic import calc_ic_series
 
     names = [s["name"] for s in read_stats(ds_dir, family)]
+    if not names:
+        return
+    # coverage 对齐（09-25）：coverage < MIN_IC_COVERAGE 的因子不进 ic_h——
+    # 否则 ic_h 有列而 panels_neu 无文件（中性化按 coverage 过滤），触发
+    # rolling_grid 方案 B 存在性门槛（alpha191_138 等四因子实测）。
+    reg_p = ds_dir / "registry.csv"
+    if reg_p.exists():
+        reg = pd.read_csv(reg_p)
+        cov = reg.drop_duplicates(subset="name", keep="last").set_index("name")["coverage"]
+        low = [n for n in names if float(cov.get(n, 0.0)) < MIN_IC_COVERAGE]
+        if low:
+            log.info("ic_h%d 跳过低覆盖因子 %d 个（<%.2f）: %s",
+                     h, len(low), MIN_IC_COVERAGE, ", ".join(low[:6]))
+            names = [n for n in names if n not in set(low)]
     if not names:
         return
     ic = pd.read_parquet(ds_dir / f"ic_h{h}.parquet")

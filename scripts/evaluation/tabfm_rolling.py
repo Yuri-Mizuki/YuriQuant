@@ -244,6 +244,8 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--top", type=int, default=50, help="定型期固定选择的特征数")
     ap.add_argument("--test-begin", default="2025-01-01")
     ap.add_argument("--frac", type=float, default=0.10)
+    ap.add_argument("--save-preds", action="store_true",
+                    help="逐臂 OOS 预测面板落盘（组合层传导研究用）")
     ap.add_argument("--out", default="reports/tabfm_rolling")
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO)
@@ -274,6 +276,8 @@ def main(argv: list[str] | None = None) -> None:
             if pred.empty:
                 continue
             preds_by[key] = pred
+            if args.save_preds:
+                pred.astype(np.float32).to_parquet(out / f"pred_{key}.parquet")
             td = test_days.intersection(pred.index)
             m = eval_ic(pred.loc[td], fwd.loc[td], trad)
             m.update(portfolio_arm(pred, panel, trad, args.frac))
