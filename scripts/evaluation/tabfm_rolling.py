@@ -132,6 +132,8 @@ def rolling_predict(method: str, features: dict, labels: pd.DataFrame,
     bounds = [b for b in _month_boundaries(days) if b >= tb]
     preds = []
     timing = []
+    # 合并后远端注册键为 "tabpfn"（本脚本的 tabpfn3 为旧键，做别名兼容）
+    method = {"tabpfn3": "tabpfn"}.get(method, method)
     cls = PREDICTORS[method]
     for j, b in enumerate(bounds):
         w_start = b - pd.DateOffset(months=window_months)
