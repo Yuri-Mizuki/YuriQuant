@@ -154,6 +154,14 @@ INCLUDE_ALT = True
 # CLI: --exclude-features limit_pos [--out-tag nolp]
 EXCLUDE_FEATURES: set[str] = set()
 
+# 特征强制入模表（E4 换注入方式，2026-09-27）：名字进此集合的特征在 select
+# 阶段**绕过候选池竞争**（|IC| top-150 + DPP）直接追加进最终特征集——用于检验
+# "交互类因子在池竞争下进不了候选池，但强制入模是否有增量"（批次 6 E4 后续）。
+# 加载路径：这类因子若只有 panels/ 原始版（构造型 zscore，无需中性化），main 里
+# 会为它们设 NAME_DIR -> panels，与 ortho 的 panels_neu 共存。
+# CLI: --force-features e4_bp_x_mom_20,... [--out-tag e4force]
+FORCE_FEATURES: tuple[str, ...] = ()
+
 # 训练标签口径（2026-09-17 接入，P0 报告 §六 P1-a 的治本项）：
 #   False（默认）= 标签 = 全样本前瞻收益截面 rank —— 主实验现行口径，零回归；
 #   True         = 标签掩掉"买不进的样本"（T+1 成交口径 tradable_mask 为 False
@@ -676,6 +684,10 @@ def stage_select(quick: bool = False):
             feats = select_features_for_year(year, h, ic_cache, registry,
                                              store, all_days,
                                              exclude=EXCLUDE_FEATURES)
+            if FORCE_FEATURES:
+                _add = [n for n in FORCE_FEATURES if n not in set(feats)]
+                feats = list(feats) + _add
+                log.info("  强制入模 +%d: %s", len(_add), _add)
             out.write_text(json.dumps(feats, ensure_ascii=False, indent=1),
                            encoding="utf-8")
             _fp_write(out, sfp, {"year": year, "h": h})
@@ -1575,6 +1587,10 @@ def main():
     ap.add_argument("--exclude-features", default=None,
                     help="消融臂：逗号分隔的特征名，select 阶段硬剔除"
                          "（候选池 + 全部保留席位）；须配 --out-tag 防覆盖主实验")
+    ap.add_argument("--force-features", default=None,
+                    help="强制入模臂：逗号分隔的特征名，select 阶段绕过候选池竞争"
+                         "直接追加进最终特征集（E4 换注入方式）；只有 panels/ 原始版"
+                         "的因子自动走 name_dir 旁路；须配 --out-tag 防覆盖")
     ap.add_argument("--tradable-labels", action="store_true",
                     help="训练标签掩掉买不进的样本（T+1 成交口径可交易掩码）；"
                          "默认关闭 = 主实验现行口径。须配 --out-tag 防覆盖")
@@ -1590,7 +1606,7 @@ def main():
     args = ap.parse_args()
 
     global INCLUDE_FUNDAMENTAL, OUT, PANELS_DIR, NAME_DIR, EXCLUDE_FEATURES
-    global USE_TRADABLE_LABELS, SC_MODEL, MARKET_FEATURES_ON
+    global USE_TRADABLE_LABELS, SC_MODEL, MARKET_FEATURES_ON, FORCE_FEATURES
     if args.sc_model:
         SC_MODEL = args.sc_model
         log.info("+++ smallcap 信号模型 -> %s（产物加 __%s 后缀）",
@@ -1619,6 +1635,12 @@ def main():
         EXCLUDE_FEATURES.update(
             n.strip() for n in args.exclude_features.split(",") if n.strip())
         log.info("+++ 消融臂：select 阶段硬剔除 %s", sorted(EXCLUDE_FEATURES))
+    if args.force_features:
+        if not args.out_tag:
+            ap.error("--force-features 须配 --out-tag：否则 select/pred 产物"
+                     "与主实验同目录同名，exists-skip 不会重跑（静默混口径）")
+        FORCE_FEATURES = tuple(
+            n.strip() for n in args.force_features.split(",") if n.strip())
     if args.ablation:
         INCLUDE_FUNDAMENTAL = False
         OUT = Path("reports") / "alla_rolling_nofund"
@@ -1649,6 +1671,21 @@ def main():
     if args.out_tag:
         OUT = Path("reports") / f"alla_rolling_{args.out_tag}"
         log.info("+++ 输出重定向 -> %s（防覆盖主实验产物）", OUT)
+    if FORCE_FEATURES:
+        # 强制入模因子的加载路径：目标面板目录（ortho=panels_neu）没有的，
+        # 旁路到 panels/ 原始版（e4 交互因子为构造型组内 zscore，无需再中性化）
+        src = PANELS_DIR or ds_root() / "panels"
+        _raw = ds_root() / "panels"
+        _bypass = [n for n in FORCE_FEATURES if not (src / f"{n}.parquet").exists()
+                   and (_raw / f"{n}.parquet").exists()]
+        if _bypass:
+            NAME_DIR = {**NAME_DIR, **{n: _raw for n in _bypass}}
+        _miss = [n for n in FORCE_FEATURES
+                 if not (NAME_DIR or {}).get(n, src).joinpath(f"{n}.parquet").exists()]
+        if _miss:
+            raise FileNotFoundError(f"--force-features 找不到面板: {_miss}")
+        log.info("+++ 强制入模臂：%d 因子绕过候选池竞争（旁路 panels/: %s）",
+                 len(FORCE_FEATURES), _bypass)
 
     OUT.mkdir(parents=True, exist_ok=True)
     stages = [args.stage] if args.stage != "all" else \
