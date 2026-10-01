@@ -67,12 +67,21 @@ def main() -> None:
     names = (args.only if args.only else
              reg.loc[reg["name"].isin(reg["name"]), "name"].tolist())
     if not args.only:
-        cov_ok = reg.set_index("name")["coverage"]
-        names = [n for n in names if cov_ok.get(n, 0) >= MIN_COVERAGE]
+        # drop_duplicates：registry 偶发重复名会让 .get 返回 Series（真值歧义崩溃）
+        cov_ok = (reg.drop_duplicates(subset="name", keep="last")
+                  .set_index("name")["coverage"])
+        names = [n for n in names if float(cov_ok.get(n, 0)) >= MIN_COVERAGE]
     out_dir = ds / "panels_neu"
     out_dir.mkdir(parents=True, exist_ok=True)
     done = {f.stem for f in out_dir.glob("*.parquet")}
     todo = [n for n in names if n not in done]
+    # registry 行存在但 panels/ 文件缺失的因子跳过（builder 重跑失败/数据墙所致），
+    # 不让单点缺失崩掉整批（09-27 ctrl_change_cnt_60d 实测）
+    _no_panel = [n for n in todo if not (ds / "panels" / f"{n}.parquet").exists()]
+    if _no_panel:
+        print(f"跳过 {len(_no_panel)} 个无原始面板的因子: {', '.join(_no_panel[:8])}",
+              flush=True)
+        todo = [n for n in todo if n not in set(_no_panel)]
     print(f"待中性化因子: {len(todo)}；已存在跳过: {len(done)}", flush=True)
 
     t0 = time.time()

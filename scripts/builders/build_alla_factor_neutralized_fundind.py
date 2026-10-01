@@ -81,6 +81,12 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     done = {f.stem for f in out_dir.glob("*.parquet")}
     todo = [n for n in names if n not in done]
+    # registry 行存在但 panels/ 文件缺失的因子跳过（与主变体同款容错，09-27）
+    _no_panel = [n for n in todo if not (ds / "panels" / f"{n}.parquet").exists()]
+    if _no_panel:
+        print(f"跳过 {len(_no_panel)} 个无原始面板的因子: {', '.join(_no_panel[:8])}",
+              flush=True)
+        todo = [n for n in todo if n not in set(_no_panel)]
     print(f"E5 变体待中性化因子: {len(todo)}（基本面族 "
           f"{len([n for n in todo if n in FUNDAMENTAL_FAMILY_SETS])}）；"
           f"已存在跳过: {len(done)}", flush=True)
