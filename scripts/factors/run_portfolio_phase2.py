@@ -229,11 +229,19 @@ def make_env(px, mask, codes, f, z, decision_dates, reward_kw, seed):
     if empty_rows.any():
         tradable.loc[empty_rows] = bw.loc[empty_rows]
     bwm = bw.div(bw.sum(axis=1).replace(0, np.nan), axis=0).fillna(0.0)
+    # er 基准口径修正（2026-10-02 诊断）：env 的超额基准必须是**可交易基准**
+    # （bwm×掩码重归一）。此前用全成分 bwm——组合被掩码重分配后与不可捕获的
+    # 理论基准比，zz1000 上封板/停牌名造成 -10%/半年 的结构性拖累，门槛 +8%
+    # 叠加后 4/4 数学上不可能通过（ppo_diag Q2 零动作实测 -10.9%/-9.7%）。
+    # QP/EW/TopN 的 _evaluate 仍对比全成分 bwm（"对指数总超额"口径，另行注记）。
+    bwm_trad = (bwm * tradable)
+    bwm_trad = bwm_trad.div(bwm_trad.sum(axis=1).replace(0, np.nan),
+                            axis=0).fillna(0.0)
     idx_ret = pd.Series({
-        d: float(bwm.loc[d] @ (close.loc[d] / prev.loc[d] - 1.0).fillna(0.0))
+        d: float(bwm_trad.loc[d] @ (close.loc[d] / prev.loc[d] - 1.0).fillna(0.0))
         for d in decision_dates[1:] if d in close.index})
     return PortfolioEnv(
-        factor=f, aux=z, bench=bwm,
+        factor=f, aux=z, bench=bwm_trad,
         period_returns=pr, idx_period_returns=idx_ret,
         decision_dates=decision_dates, cost_rate=0.0, seed=seed,
         tradable_masks=tradable, reward_kw=reward_kw,
