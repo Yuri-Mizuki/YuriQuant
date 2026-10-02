@@ -272,8 +272,13 @@ def _tradability_cached(px) -> pd.DataFrame:
 
 def ppo_arm_rolling(px, mask, codes, signals_by_year, all_dates, model_year, *,
                     timesteps, n_seeds, n_retries, seed0, reward_kw,
-                    gate_reward=0.02, gate_excess=0.08, attempt_dir=None):
+                    gate_reward=0.005, gate_excess=0.04, attempt_dir=None):
     """银河滚动协议：验证年双窗口双门槛 → 候选 Softmax 集成 → 预测年权重。
+
+    门槛数值按 zz1000 重校（2026-10-02）：研报原值 0.02/0.08 系**科创50**口径
+    （原报告无 zz1000；0706 报告 p10），照搬到小票宽池后 +8%/半年叠加可交易
+    基准口径数学上不可达（ppo_diag 实测）。重校值取已观测尝试分布 ~P75；
+    双窗双门槛结构语义不变。
 
     信号逐年口径：训练窗（Y-2 年）用 signal_model[Y-2] 的样本外预测、
     验证年（Y-1）双窗用 signal_model[Y-1]、预测年（Y）用 signal_model[Y]
