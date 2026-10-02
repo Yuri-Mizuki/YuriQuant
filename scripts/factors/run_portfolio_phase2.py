@@ -272,7 +272,7 @@ def _tradability_cached(px) -> pd.DataFrame:
 
 def ppo_arm_rolling(px, mask, codes, signals_by_year, all_dates, model_year, *,
                     timesteps, n_seeds, n_retries, seed0, reward_kw,
-                    gate_reward=0.02, gate_excess=0.08):
+                    gate_reward=0.02, gate_excess=0.08, attempt_dir=None):
     """银河滚动协议：验证年双窗口双门槛 → 候选 Softmax 集成 → 预测年权重。
 
     信号逐年口径：训练窗（Y-2 年）用 signal_model[Y-2] 的样本外预测、
@@ -305,47 +305,81 @@ def ppo_arm_rolling(px, mask, codes, signals_by_year, all_dates, model_year, *,
     windows = [va_dates[:half], va_dates[half:]]
 
     candidates = []
+    all_attempts: list[dict] = []
     attempts = 0
+    att_dir = Path(attempt_dir) / f"y{model_year}" if attempt_dir else None
+    if att_dir is not None:
+        att_dir.mkdir(parents=True, exist_ok=True)
     for si in range(n_seeds):
         for retry in range(n_retries):
             attempts += 1
             seed = seed0 + si * 100 + retry
-            tr_dates = [d for d in all_dates
-                        if pd.Timestamp(f"{model_year - 2}-01-01") <= d
-                        < pd.Timestamp(f"{model_year}-01-01")]
-            env, _ = make_env(px, mask, codes, f_tr, z_tr, tr_dates,
-                              reward_kw, seed)
-            model = PPO("MlpPolicy", env, seed=seed, device=rl_device(),
-                        verbose=0,
-                        **PPO_KW | {"n_steps": min(256, max(64, len(tr_dates)))})
-            model.learn(total_timesteps=timesteps)
+            akey = f"s{seed}"
+            aj = att_dir / f"{akey}.json" if att_dir is not None else None
+            am = att_dir / f"{akey}.zip" if att_dir is not None else None
+            scores = excess = None
+            model = None
+            if aj is not None and aj.exists():
+                _d = json.loads(aj.read_text(encoding="utf-8"))
+                scores, excess = _d["scores"], _d["excess"]
+                if am is not None and am.exists():
+                    model = PPO.load(str(am), device="cpu")
+            if model is None:
+                tr_dates = [d for d in all_dates
+                            if pd.Timestamp(f"{model_year - 2}-01-01") <= d
+                            < pd.Timestamp(f"{model_year}-01-01")]
+                env, _ = make_env(px, mask, codes, f_tr, z_tr, tr_dates,
+                                  reward_kw, seed)
+                model = PPO("MlpPolicy", env, seed=seed, device=rl_device(),
+                            verbose=0,
+                            **PPO_KW | {"n_steps": min(256, max(64, len(tr_dates)))})
+                model.learn(total_timesteps=timesteps)
 
-            scores, excess = [], []
-            for wdates in windows:
-                ev, _ = make_env(px, mask, codes, f_va, z_va,
-                                 wdates, reward_kw, seed)
-                obs, _ = ev.reset()
-                rew, ex = [], []
-                done = False
-                while not done:
-                    a, _ = model.predict(obs, deterministic=True)
-                    obs, r, term, trunc, info = ev.step(a)
-                    rew.append(r)
-                    ex.append(info["reward"]["er"])
-                    done = term or trunc
-                scores.append(float(np.mean(rew)))
-                excess.append(float(np.sum(ex)))
+            if scores is None:
+                scores, excess = [], []
+                for wdates in windows:
+                    ev, _ = make_env(px, mask, codes, f_va, z_va,
+                                     wdates, reward_kw, seed)
+                    obs, _ = ev.reset()
+                    rew, ex = [], []
+                    done = False
+                    while not done:
+                        a, _ = model.predict(obs, deterministic=True)
+                        obs, r, term, trunc, info = ev.step(a)
+                        rew.append(r)
+                        ex.append(info["reward"]["er"])
+                        done = term or trunc
+                    scores.append(float(np.mean(rew)))
+                    excess.append(float(np.sum(ex)))
+            if att_dir is not None and aj is not None and not aj.exists():
+                model.save(str(am))
+                aj.write_text(json.dumps(
+                    {"seed": seed, "scores": scores, "excess": excess,
+                     "sc": sum(1 for s in scores if s > gate_reward)
+                           + sum(1 for e in excess if e > gate_excess)}),
+                    encoding="utf-8")
             sc = sum(1 for s in scores if s > gate_reward) \
                 + sum(1 for e in excess if e > gate_excess)
             log.info("  PPO seed%d retry%d: score=%d/4 (rew=%s ex=%s)",
                      si, retry, sc, [f"{s:.3f}" for s in scores],
                      [f"{e:.2%}" for e in excess])
+            all_attempts.append({"seed": seed, "model": model,
+                                 "excess": float(np.sum(excess)), "sc": sc})
             if sc >= 2:
                 candidates.append({"seed": seed, "model": model,
                                    "excess": float(np.sum(excess))})
                 break                                  # 达标提前结束该 seed 区间
     if not candidates:
-        return {}, {"status": "fallback", "attempts": attempts}
+        # 降级最优（2026-10-02）：门槛全灭时取 best-of-attempts（sc,excess 词典序）
+        # 而非回退基准——否则消融臂全部退化为持有基准、判读零信息量。
+        # status=degraded 供判读区分；若后续门槛校准后存在达标者则仍走研报口径。
+        if not all_attempts:
+            return {}, {"status": "fallback", "attempts": attempts}
+        best = max(all_attempts, key=lambda c: (c["sc"], c["excess"]))
+        candidates = [{"seed": best["seed"], "model": best["model"],
+                       "excess": best["excess"]}]
+        log.warning("  门槛全灭 → 降级采用 best-of-%d（seed%d, ex=%.2f%%）",
+                    len(all_attempts), best["seed"], best["excess"] * 100)
 
     tau = 0.05
     exs = np.array([c["excess"] for c in candidates])
@@ -658,7 +692,8 @@ def main(argv: list[str] | None = None) -> None:
                             px, mask, codes, year_signals, eval_dates, year,
                             timesteps=args.ppo_timesteps, n_seeds=args.ppo_seeds,
                             n_retries=args.ppo_retries, seed0=args.seed,
-                            reward_kw=reward_kw)
+                            reward_kw=reward_kw,
+                            attempt_dir=out_dir / "ppo_attempts" / key)
                         results[key + "|meta"] = {"info": json.dumps(info)}
                         if info.get("status") != "ok":
                             weights = {d: bwm.loc[d].to_numpy(dtype=float)
