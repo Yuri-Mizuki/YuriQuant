@@ -583,6 +583,28 @@ def main(argv: list[str] | None = None) -> None:
     decision_dates = list(eval_dates[::DECISION_FREQ])
 
     results, equities = {}, {}
+
+    # ---- 增量持久化（2026-10-02，方案 B）：逐臂写盘 + 断点续跑 ----
+    # 此前只在全部结束时写 summary——进程被杀即全丢（10/01 误杀实测 4 天进度清零）。
+    # 现在每个臂评估完立即写 partial_*；重跑时已完成的臂自动跳过。
+    def _persist_partial():
+        pd.DataFrame({k: v for k, v in results.items()
+                      if "meta" not in k}).T.to_csv(
+            out_dir / "partial_summary.csv", encoding="utf-8-sig")
+        if equities:
+            pd.concat({k: v["nav"] for k, v in equities.items()}, axis=1) \
+                .to_csv(out_dir / "partial_equity.csv", encoding="utf-8-sig")
+
+    if (out_dir / "partial_summary.csv").exists():
+        _prev = pd.read_csv(out_dir / "partial_summary.csv", index_col=0)
+        for k in _prev.index:
+            results[str(k)] = {kk: vv for kk, vv in _prev.loc[k].dropna().items()}
+        if (out_dir / "partial_equity.csv").exists():
+            _eq = pd.read_csv(out_dir / "partial_equity.csv", index_col=0)
+            for k in _eq.columns:
+                equities[str(k)] = pd.DataFrame({"nav": _eq[k]})
+        log.info("断点续跑：恢复 %d 个已完成臂（partial_summary）", len(_prev.index))
+
     for year in model_years:
         f, z, _meta = year_signals[year]
         y_dates = [d for d in decision_dates
@@ -618,6 +640,9 @@ def main(argv: list[str] | None = None) -> None:
                             else ["ppo"]) if "ppo" in args.arms else                            [a.strip() for a in args.arms.split(",")]
             for arm in arms_for_abl:
                 key = f"{year}_{abl}_{arm}"
+                if key in results:
+                    log.info("=== %s === 已有结果（断点续跑），跳过", key)
+                    continue
                 log.info("=== %s ===", key)
                 try:
                     if arm == "ppo":
@@ -663,6 +688,7 @@ def main(argv: list[str] | None = None) -> None:
                     continue
                 results[key] = m
                 equities[key] = eq
+                _persist_partial()
                 log.info("%s: 超额 %.2f%% | IR %.2f", key,
                          m.get("excess_cagr", np.nan) * 100,
                          m.get("ir", np.nan))
