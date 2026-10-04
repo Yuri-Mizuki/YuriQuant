@@ -43,6 +43,8 @@
 | 东方0407 QuantaAlpha | `[x]` 研读归档，**不复现** | 论文主结果有测试集泄露（东方自述）、修正复现仅 21 因子 ICIR 偏低；5 机制抽取进 `llm_pool` 增强清单（TODO §二） |
 | 微软 RD-Agent(Q)（NeurIPS 2025） | `[x]` 研读归档，**不复现不替换** | 量化 R&D 自动化多 Agent 框架（LLM 提假设→Co-STEER 写码→Qlib 回测→反馈，bandit 选 factor/model 方向）；**同题不同栈**（AI97/东吴 MCTS 同题）；机制抽取 8 条：数值去重/失败换向/JSON 纪律进 MCTS Phase 0 设计，`fin_factor_report` 自动 vs 手工对照列 P2（挂 920+好机器 WSL2）。笔记 `reports/docs/research_notes/微软RD-Agent_研读_*.md` |
 | 兴业 0526 双范式综述（海外文献 189） | `[x]` 速读归档，**不复现** | 海外文献综述（Agentic AI 闭环 / 东吴 MCTS / QuantaAlpha / PPO 加权 / 残差分布预测 / E2EAI 六篇转述）；三篇已有更深对应物；唯一增量 = Hu(2026) 市场结构框架（A 股判定 DL 占优）；笔记 `reports/docs/research_notes/兴业0526_速读_*.md` |
+| SSRN 7494298 Label Alchemy（10-04 转读） | `[x]` 研读归档，**不复现** | 标签工程三维度（Location/Scale/Shape）；美股月频固定 GBDT：raw Sharpe 0.68 → 高斯化排名 1.69、行业 z 1.56、vol_scaled 0.36/0.66 **更差**；标签解释力 0.87 vs 模型 0.04；转译 4 点见 §二 |
+| 易方达 ICML 2026 Label Horizon Paradox（10-04 转读） | `[x]` 研读归档，**不复现** | 最优训练标签 horizon δ*≠目标 Δ（日频隔夜场景 δ*≈close-to-open）；BLO 双层优化自动学 δ*，A 股 10 骨干一致提升；与 member_blend12「增量全在 horizon 维」互证；转译点见 §二 |
 | 华泰 AI39 组合优化实证 | `[x]` 口径核对 | `reports/口径核对_AI39_多因子10.md`；最大差异=主动 vs 绝对权重空间；3 项低成本对齐已落地 |
 | 华泰多因子10 合成口径 | `[x]` + 补齐 | 两主力方法（`synthesize_ic_ir_max`/`synthesize_ic_max`）+ 半衰加权 + T 扫描脚本；全量扫描待跑 |
 | 银河 0608 时序截面三层预测 | `[x]` 研读 + L1 落地 | L1 结论：**风险标签可测成立**（mdd test 0.25/0.40）；L2 不触发，倾向归档；L3 并入 stage2 |
@@ -191,6 +193,33 @@ python -u scripts/factors/run_llm_mcts.py --panel hs300_2015_2026 \
   method="return" 默认零回归（36 既有测试逐位一致）+ 7 个新测试。
   **实验待跑**（挂 920 后新 pred）；注意研报如实披露的代价：另类标签的超额最大回撤
   **更差**，实验须同口径报回撤）。
+- [x] **标签工程双论文研读**（10-04，SSRN 7494298《Label Alchemy》+ 易方达 ICML 2026
+  《The Label Horizon Paradox》arXiv 2602.03395；微信/小红书转读全文，非研报库）：
+  **Label Alchemy**（美股 2002-2026 月频、固定 GBDT/弹性网络/NN、扩展窗口滚动）：
+  标签三维度 Location/Scale/Shape——raw 收益 L-S Sharpe 0.68 → **高斯化排名 1.69**
+  （全部 15 标签最佳 1.74）、行业 z-score 1.56、普通截面 z 1.53、仅去市场均值 1.15、
+  PCA/FF6 残差 1.16–1.28；**vol_scaled 0.36 / vol_scaled_rank 0.66 比 raw 更差且换手高**
+  （历史波动≠未来波动，除法重排横截面削弱信号）；方差分解：标签解释力 **0.87 vs
+  模型 0.04（≈20×）**；预测期越短差距越大（1m ΔSharpe 1.01 → 12m 0.30）。
+  **Label Horizon Paradox**（A 股 CSI300/500/1000、10 骨干、分钟特征→日频/30m/90m 三
+  场景）：最优训练标签 horizon δ*≠目标 Δ（边际信息实现 vs 边际噪声累积权衡，定理 3.2
+  分解）；**日频隔夜场景 δ*≪Δ，close-to-open 代理标签优于 close-to-close**；BLO 双层
+  优化（λ softmax 加权多 horizon 损失 + 3 epoch warm-up 防捷径 + 熵正则防塌缩）单次
+  训练自动找 δ*，CSI500 LSTM IC 0.0845→0.1029 / ICIR 0.724→0.861；开源
+  `Chenhui-Song/label-horizon-paradox`（Alpha158 demo）。
+  **转译 4 点**：① 主线 rank 标签方向获外部支持，但项目是均匀百分位秩（−0.5, 0.5）、
+  论文最佳是**高斯化排名**（rank→Φ⁻¹ 一行变换）——`model/labels.py` 加 `gauss_rank`
+  mode 单臂对照（挂 920 后，与 ir/calmar 臂同批；注意论文是美股月频，日频外部效度
+  须打折）；② **vol_scaled 证据 = AI29 IR/Calmar 臂预期管理**：除以波动类标签在该论文
+  跑输 raw（口径差异：AI29 用区间未来实现波动、论文用历史波动，机制不完全等同，但
+  「同口径报回撤+换手」要求再 +1，不达标即弃）；③ **隔夜标签臂**：训练标签改
+  close→next open 收益、预测目标/执行不变（Scenario 1 证据），与 `--execution open`
+  口径天然对齐，单臂便宜；④ 「标签 20× 模型解释力 + 短期收益最大」与 member_blend12
+  「增量全在 horizon 维」互证，E1'' horizon 定版优先级获文献背书；BLO 作为 E1'' 的
+  自动化升级备选（非现在做）。
+  指针：SSRN `papers.ssrn.com/sol3/papers.cfm?abstract_id=7494298`；arXiv `2602.03395`；
+  微信转读 `mp.weixin.qq.com/s/uKFYF6eb1Ox008ct009cNA`；小红书 QuantML 转读
+  「易方达｜预测次日收益，模型要用同样标签吗」。
 - [x] **预测层观点注入等价实现**（09-23，AI43 等价实现非源码复现；`model/views.py`）：
   ① `inject_by_feature_duplication`（观点因子复制 ×k，软注入——改变分裂概率/收缩结构）；
   ② `TwoStagePredictor`（观点因子逐日中位数分层，层内各训一个底层预测器，硬注入——
