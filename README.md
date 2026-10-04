@@ -116,7 +116,7 @@ reports/    实验与交付物（模型/监控/因子库/设计文档/HTML报告
 | 4 | 模型迭代 | ✅ 同名再注册 + `research/experiments.py` | 新版本自动入 registry，实验留痕 |
 | 5 | 模型上线 | ✅ `model/serving.py`（`register_model_as_factor`） | 模型预测面板回写因子库，血缘双向溯源 |
 
-**预测器与算法**：`model/features.py` 三级特征漏斗；`model/labels.py` horizon 前瞻收益（rank/zscore/raw，embargo=horizon）；
+**预测器与算法**：`model/features.py` 三级特征漏斗；`model/labels.py` horizon 前瞻收益（rank/gauss_rank/zscore/raw + AI29 ir/calmar 超额口径 + co 隔夜窗口，embargo=horizon；10-04 标签工程三臂 `rolling_grid_alla --label-mode/--label-window/--label-method`）；
 `model/predictor.py` Ridge / LightGBM / TabICL + `fit_predict_oos()` 扩展窗口 CV；`model/stacking.py` 四种合成器。
 
 ### 03 优化层（✅ 组合优化/风险归因/多期执行已就绪）
