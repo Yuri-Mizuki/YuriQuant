@@ -172,6 +172,19 @@ FORCE_FEATURES: tuple[str, ...] = ()
 # CLI: --tradable-labels（须配 --out-tag 防覆盖主实验产物）
 USE_TRADABLE_LABELS: bool = False
 
+# 标签工程三臂（2026-10-04 立项，RESEARCH_TODO §二 标签工程双论文转译）：
+#   LABEL_MODE   rank（默认，主实验口径）/ gauss_rank（Label Alchemy SSRN 7494298：
+#                截面正态得分，其 15 标签中最佳形态 1.74 vs raw 0.68）/ zscore / raw
+#   LABEL_WINDOW cc（默认，close→close）/ co（Label Horizon Paradox arXiv 2602.03395：
+#                隔夜段 close[t]→open[t+1] 训练标签，仅 h=1；评价/回测仍 cc —— 训练
+#                标签与预测目标解耦正是该论文主旨）
+#   LABEL_METHOD return（默认）/ ir / calmar（AI29 另类标签，超额口径需基准）
+# 评价口径不动（IC/回测对 cc 原始收益），只换训练标签 —— 与基线逐项可比。
+# CLI: --label-mode / --label-window / --label-method（任一非默认须配 --out-tag）
+LABEL_MODE: str = "rank"
+LABEL_WINDOW: str = "cc"
+LABEL_METHOD: str = "return"
+
 # ---------------------------------------------------------------------------
 # 市场状态特征（2026-09-23 接入，国金19 转译）：指数点位派生的日级广播特征。
 # 出处：国金19 研读笔记 §1.1 —— 研报三大信息注入中**只有指数点位带来稳定增益**
@@ -761,7 +774,10 @@ def stage_predict(quick: bool = False, only_horizons: list[int] | None = None):
     models = _build_model_grid()
     if quick:
         models = {"gbdt": models["gbdt"]}
-        horizons, years = [1], [2019]
+        # quick 尊重 --horizons（ir/calmar 臂 h=1 无定义，冒烟需 h≥2）；
+        # 不传时保持历史行为 [1]
+        horizons = only_horizons or [1]
+        years = [2019]
     else:
         horizons = only_horizons or HORIZONS
         years = YEARS
@@ -792,9 +808,24 @@ def stage_predict(quick: bool = False, only_horizons: list[int] | None = None):
         else:
             log.warning("--market-features 开启但无可用指数缓存 → 特征空集"
                         "（pred 指纹已含开关，不会静默混口径）")
+    # 标签工程臂（10-04）：隔夜窗口的执行价面板 / 另类标签的基准收盘
+    # （基准从 bench_index 日收益累计复原——起点常数不影响"1 元投资"口径
+    #  的区间收益/σ/MaxDD，labels.forward_excess_stats 只用相对项）
+    open_panel = None
+    if LABEL_WINDOW == "co":
+        open_panel = pd.read_parquet(OUT / "_base" / "open_adj.parquet")
+    bench_close = None
+    if LABEL_METHOD != "return":
+        bench_close = (1.0 + base["bench_index"]).cumprod()
     for h in horizons:
-        labels, _embargo = build_labels(close, horizon=h, mode="rank",
-                                        tradable_mask=lab_mask)
+        labels, _embargo = build_labels(close, horizon=h, mode=LABEL_MODE,
+                                        tradable_mask=lab_mask,
+                                        method=LABEL_METHOD,
+                                        bench_close_panel=bench_close,
+                                        window=LABEL_WINDOW,
+                                        open_panel=open_panel)
+        # 评价口径固定 cc 原始前瞻收益（与基线可比；训练-评价解耦是
+        # Label Horizon Paradox 的设计本身，评价侧不跟随训练标签换窗口）
         fwd = close.pct_change(h, fill_method=None).shift(-h)
         for mname, mcfg in models.items():
             if mcfg.get("h1_only") and h != 1:
@@ -1061,6 +1092,8 @@ def _predict_fp(years: list[int]) -> str:
         "select": _selection_fp(),
         "sel_files": _sel_files_fingerprint(),
         "tradable_labels": USE_TRADABLE_LABELS,
+        # 标签工程臂（10-04）：mode/window/method 任一变化 → pred 失配重训
+        "label": [LABEL_MODE, LABEL_WINDOW, LABEL_METHOD],
         "grid": grid,
         "model_params": str(DEFAULT_MODEL_PARAMS),
         "roll": [N_FOLDS, N_FOLDS_LONG, MIN_TRAIN],
@@ -1594,6 +1627,19 @@ def main():
     ap.add_argument("--tradable-labels", action="store_true",
                     help="训练标签掩掉买不进的样本（T+1 成交口径可交易掩码）；"
                          "默认关闭 = 主实验现行口径。须配 --out-tag 防覆盖")
+    ap.add_argument("--label-mode", default=None,
+                    choices=["rank", "gauss_rank", "zscore", "raw"],
+                    help="标签工程臂①（Label Alchemy 转译）：训练标签截面变换。"
+                         "gauss_rank = 截面正态得分（该论文最佳形态）。"
+                         "须配 --out-tag 防覆盖")
+    ap.add_argument("--label-window", default=None, choices=["cc", "co"],
+                    help="标签工程臂②（Label Horizon Paradox 转译）：训练标签"
+                         "前瞻窗口。co = 隔夜段 close→next open（仅 h=1，"
+                         "须配 --horizons 1）。须配 --out-tag 防覆盖")
+    ap.add_argument("--label-method", default=None,
+                    choices=["return", "ir", "calmar"],
+                    help="标签工程臂③（AI29）：另类标签。ir/calmar 走超额口径"
+                         "（基准 = bench_index 累计复原）。须配 --out-tag 防覆盖")
     ap.add_argument("--market-features", action="store_true",
                     help="市场状态特征臂（国金19 转译）：指数点位派生日级广播"
                          "特征旁路并入 GBDT 特征集（不过 select 漏斗）；"
@@ -1607,6 +1653,7 @@ def main():
 
     global INCLUDE_FUNDAMENTAL, OUT, PANELS_DIR, NAME_DIR, EXCLUDE_FEATURES
     global USE_TRADABLE_LABELS, SC_MODEL, MARKET_FEATURES_ON, FORCE_FEATURES
+    global LABEL_MODE, LABEL_WINDOW, LABEL_METHOD
     if args.sc_model:
         SC_MODEL = args.sc_model
         log.info("+++ smallcap 信号模型 -> %s（产物加 __%s 后缀）",
@@ -1627,6 +1674,35 @@ def main():
                      "否则会覆盖主实验 pred/（exists-skip 不会重跑，静默混口径）")
         USE_TRADABLE_LABELS = True
         log.info("+++ 训练标签：可交易掩码口径（治本，P0 §六 P1-a）")
+    if any((args.label_mode, args.label_window, args.label_method)):
+        if not args.out_tag:
+            ap.error("--label-mode/--label-window/--label-method 须配 --out-tag："
+                     "否则会覆盖主实验 pred/（exists-skip 不会重跑，静默混口径）")
+        if args.label_mode:
+            LABEL_MODE = args.label_mode
+        if args.label_window:
+            LABEL_WINDOW = args.label_window
+        if args.label_method:
+            LABEL_METHOD = args.label_method
+        if LABEL_WINDOW == "co":
+            # 隔夜段仅 h=1 定义；HORIZONS 默认含 5/10/20，必须显式 --horizons 1
+            horizons_arg = (args.horizons or "").replace(" ", "")
+            if horizons_arg != "1":
+                ap.error("--label-window co 仅 horizon=1 定义，须同时显式 "
+                         "--horizons 1（避免默认 HORIZONS 混入 h>1 后中途崩）")
+        if LABEL_METHOD != "return":
+            # ir/calmar 是区间路径标签（日度超额 σ / 超额 MaxDD），h=1 窗口
+            # 只有 1 个日度观测 → σ 无定义必全 NaN（2026-10-04 实证）
+            horizons_arg = (args.horizons or "").replace(" ", "")
+            if not horizons_arg or any(h == "1" for h in horizons_arg.split(",")):
+                ap.error("--label-method ir/calmar 需 ≥2 日窗口（h=1 的区间 σ/MaxDD "
+                         "无定义），须显式 --horizons 且不含 1（如 --horizons 5,10,20）")
+        log.info("+++ 标签工程臂：mode=%s window=%s method=%s（评价口径仍 cc 原始"
+                 "收益，只换训练标签）", LABEL_MODE, LABEL_WINDOW, LABEL_METHOD)
+        if LABEL_METHOD != "return":
+            log.info("+++ AI29 另类标签：%s（超额口径，基准 = bench_index 累计"
+                     "复原）；Label Alchemy 预期管理——除波动类标签在其证据中"
+                     "跑输 raw，验收须同口径报回撤+换手", LABEL_METHOD)
     if args.exclude_features:
         if not args.out_tag:
             ap.error("--exclude-features 须配 --out-tag：否则 select/pred 产物"

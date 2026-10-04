@@ -601,3 +601,121 @@ class TestRollingOOS:
         with pytest.raises(RuntimeError, match="无任何 OOS 预测"):
             rolling_oos(RidgePredictor, feats, labels, test_days, all_days,
                         n_folds=2, embargo_days=5, min_train_days=10**6)
+
+
+# ===========================================================================
+# ② LabelBuilder —— 标签工程臂（10-04 立项）
+#   gauss_rank：Label Alchemy (SSRN 7494298) 最佳标签形态（截面正态得分）
+#   window="co"：Label Horizon Paradox (arXiv 2602.03395) 隔夜段训练标签
+# ===========================================================================
+class TestLabelEngineering:
+    @staticmethod
+    def _ppf(u: float) -> float:
+        from scipy.stats import norm
+        return norm.ppf(u)
+
+    def test_gauss_rank_hand_computed(self):
+        """4 只股票手算：u = (rank-0.5)/n 过 Φ⁻¹，NaN 不参与秩。"""
+        idx = pd.date_range("2023-01-02", periods=1)
+        close = pd.DataFrame(
+            {"a": [100.0], "b": [110.0], "c": [105.0], "d": [np.nan]}, index=idx)
+        fwd = pd.DataFrame({"a": [0.10], "b": [0.20], "c": [0.15],
+                            "d": [np.nan]}, index=idx)
+        labels, embargo = build_labels(fwd_returns_panel=fwd, horizon=1,
+                                       mode="gauss_rank")
+        row = labels.iloc[0]
+        # n=3 只有效股票：rank ∈ {1,2,3} → u ∈ {1/6, 1/2, 5/6}
+        assert row["a"] == pytest.approx(self._ppf(1 / 6))
+        assert row["c"] == pytest.approx(self._ppf(1 / 2))   # 中位 → 0
+        assert row["b"] == pytest.approx(self._ppf(5 / 6))
+        assert np.isnan(row["d"])
+        assert embargo == 1
+
+    def test_gauss_rank_preserves_order_like_rank(self, market):
+        """保序性：与 rank mode 的截面序一致（Spearman 等价性）。"""
+        close, _ = market
+        gauss, _ = build_labels(close, horizon=5, mode="gauss_rank")
+        rank, _ = build_labels(close, horizon=5, mode="rank")
+        d = gauss.index[50]
+        np.testing.assert_array_equal(
+            np.argsort(gauss.loc[d].dropna().values),
+            np.argsort(rank.loc[d].dropna().values))
+
+    def test_gauss_rank_no_inf_and_symmetric(self, market):
+        """无 ±inf（开区间映射）且截面均值≈0（对称形态）。"""
+        close, _ = market
+        labels, _ = build_labels(close, horizon=5, mode="gauss_rank")
+        vals = labels.values[~np.isnan(labels.values)]
+        assert np.isfinite(vals).all()
+        row = labels.iloc[100].dropna()
+        assert row.mean() == pytest.approx(0.0, abs=1e-9)
+
+    def test_gauss_rank_single_stock_row_and_nan_stays(self):
+        """n=1 的行（单只有效股票）→ u=0.5 → z=0；NaN 保持 NaN 不参与秩。"""
+        idx = pd.date_range("2023-01-02", periods=3)
+        close = pd.DataFrame({"a": [100.0, 101.0, np.nan],
+                              "b": [np.nan, np.nan, 102.0]}, index=idx)
+        labels, _ = build_labels(close, horizon=1, mode="gauss_rank")
+        assert np.isnan(labels.iloc[0, 1])
+        assert labels.iloc[0, 0] == pytest.approx(0.0)
+
+    def test_window_cc_default_is_zero_regression(self, market):
+        """window 默认 'cc' = 历史行为逐位一致（防静默改口径）。"""
+        close, _ = market
+        ref, _ = build_labels(close, horizon=5, mode="rank")
+        out, _ = build_labels(close, horizon=5, mode="rank", window="cc")
+        pd.testing.assert_frame_equal(out, ref)
+
+    def test_window_co_hand_computed(self):
+        """隔夜段手算：fwd[t] = open[t+1]/close[t] - 1，尾日 NaN。"""
+        idx = pd.date_range("2023-01-02", periods=3)
+        close = pd.DataFrame({"a": [100.0, 100.0, 100.0]}, index=idx)
+        open_p = pd.DataFrame({"a": [90.0, 110.0, 105.0]}, index=idx)
+        labels, embargo = build_labels(close, horizon=1, mode="raw",
+                                       window="co", open_panel=open_p)
+        assert labels.iloc[0, 0] == pytest.approx(110.0 / 100.0 - 1.0)
+        assert labels.iloc[1, 0] == pytest.approx(105.0 / 100.0 - 1.0)
+        assert np.isnan(labels.iloc[2, 0])   # 无 t+1 开盘
+        assert embargo == 1
+
+    def test_window_co_combines_with_mode(self, market):
+        """隔夜收益照常过 mode 变换（rank/gauss_rank 可组合）。"""
+        close, _ = market
+        rng = np.random.default_rng(11)
+        open_p = close * (1.0 + rng.normal(0, 0.01, close.shape))
+        lab_raw, _ = build_labels(close, horizon=1, mode="raw",
+                                  window="co", open_panel=open_p)
+        lab_rank, _ = build_labels(close, horizon=1, mode="rank",
+                                   window="co", open_panel=open_p)
+        d = lab_raw.index[50]
+        np.testing.assert_array_equal(
+            np.argsort(lab_rank.loc[d].dropna().values),
+            np.argsort(lab_raw.loc[d].dropna().values))
+
+    def test_window_co_validations(self, market):
+        close, _ = market
+        open_p = close * 1.01
+        with pytest.raises(ValueError, match="horizon=1"):
+            build_labels(close, horizon=2, window="co", open_panel=open_p)
+        with pytest.raises(ValueError, match="open_panel"):
+            build_labels(close, horizon=1, window="co")
+        with pytest.raises(ValueError, match="method"):
+            build_labels(close, horizon=1, window="co", open_panel=open_p,
+                         method="ir", bench_close_panel=close["600000.SH"])
+        with pytest.raises(ValueError, match="window"):
+            build_labels(close, horizon=1, window="xx", open_panel=open_p)
+
+    def test_window_co_tradable_mask_still_applies(self, market):
+        """掩码语义不变：False 处置 NaN，其余逐位一致。"""
+        close, _ = market
+        open_p = close * 1.01
+        ref, _ = build_labels(close, horizon=1, mode="rank",
+                              window="co", open_panel=open_p)
+        mask = pd.DataFrame(True, index=close.index, columns=close.columns)
+        mask.iloc[100, 3] = False
+        out, _ = build_labels(close, horizon=1, mode="rank", window="co",
+                              open_panel=open_p, tradable_mask=mask)
+        assert np.isnan(out.iloc[100, 3])
+        patched = out.copy()
+        patched.iloc[100, 3] = ref.iloc[100, 3]
+        pd.testing.assert_frame_equal(patched, ref)

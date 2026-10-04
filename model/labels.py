@@ -9,8 +9,19 @@
 - ``mode``：目标变换。
     - ``rank``   当日截面百分比秩 - 0.5（推荐：与 rank IC 评价口径对齐，
                  对收益厚尾稳健；Spearman 下与 raw 收益完全等价）
+    - ``gauss_rank`` 截面秩 → 正态得分（(rank-0.5)/n 过逆正态；Label
+                 Alchemy, SSRN 7494298 的最佳标签形态：保序 + 把分布修成
+                 回归损失好学的正态形，抑制均匀秩两端密度塌缩与极端收益
+                 对平方损失的支配）
     - ``zscore`` 当日截面标准化（保留收益强弱幅度信息）
     - ``raw``    原始 horizon 日收益（回归直接拟合收益值）
+- ``window``（标签前瞻窗口的内容，2026-10-04 接入，Label Horizon Paradox
+   arXiv 2602.03395 转译）：**训练标签与预测目标解耦**的自由度。
+    - ``cc``  close[t] → close[t+h]（默认，历史行为）
+    - ``co``  close[t] → open[t+1]（隔夜段；仅 horizon=1 定义，须给
+              ``open_panel``）。日频隔夜任务的最优训练标签常在隔夜段
+              （论文 Scenario 1：信息隔夜实现、日内噪声累积）；**评价/
+              回测仍用 cc 口径** —— 解耦是训练侧的事，调用方不换评价。
 - ``method``（华泰 AI29 另类标签，2026-09-23 接入）：把 horizon 日区间
   映射为标量的方式，作用于**超额**口径（需 ``bench_close_panel``）：
     - ``return`` 区间收益本身（默认，历史行为逐位一致）
@@ -19,7 +30,7 @@
                  超额收益的样本标准差，含无风险=0 简化）
     - ``calmar`` 区间超额收益 ÷ 区间内超额收益最大回撤
 
-注意：zscore/rank 均为**当日截面内**的单调变换，因此对任一 mode，
+注意：zscore/rank/gauss_rank 均为**当日截面内**的单调变换，因此对任一 mode，
 Spearman(pred, label) == Spearman(pred, 原始 horizon 收益)——
 用 label 面板直接算 IC 与用原始收益算 IC 口径一致。
 **例外**：ir/calmar 标签含区间路径信息（σ/MaxDD），与区间收益**不再单调
@@ -41,14 +52,30 @@ __all__ = ["build_labels", "build_label_pair", "forward_returns",
 def forward_returns(
     close_panel: pd.DataFrame,
     horizon: int = 5,
+    window: str = "cc",
+    open_panel: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """未来 horizon 日收益率面板：fwd[t] = close[t+horizon]/close[t] - 1。
 
     尾部 horizon 日无完整前瞻窗口 → NaN（自然截断，无未来函数）。
     fill_method=None：价格缺口（停牌等）不前向填充，缺口的收益如实为 NaN。
+
+    window="co"（Label Horizon Paradox 转译，2026-10-04）：隔夜段收益
+    fwd[t] = open[t+1]/close[t] - 1，仅 horizon=1 定义（隔夜段天然一日），
+    须给 ``open_panel``（date×code 开盘价面板，与 close 同复权口径）。
     """
     if horizon < 1:
         raise ValueError(f"horizon 必须 >= 1，收到 {horizon}")
+    if window not in ("cc", "co"):
+        raise ValueError(f"未知 window {window!r}，可选: cc / co")
+    if window == "co":
+        if horizon != 1:
+            raise ValueError(f"window='co'（隔夜段）仅 horizon=1 定义，收到 {horizon}")
+        if open_panel is None:
+            raise ValueError("window='co' 须给 open_panel（date×code 开盘价面板）")
+        op = open_panel.reindex(index=close_panel.index,
+                                columns=close_panel.columns)
+        return op.shift(-1) / close_panel - 1.0
     return close_panel.pct_change(horizon, fill_method=None).shift(-horizon)
 
 
@@ -130,6 +157,25 @@ def forward_excess_stats(
     return et, ev, em
 
 
+def _gauss_rank_scores(panel: pd.DataFrame) -> pd.DataFrame:
+    """截面正态得分（van der Waerden）：u = (rank - 0.5)/n → Φ⁻¹(u)。
+
+    (rank-0.5)/n 把秩映射到 (0,1) **开区间**——直接用 pct 秩（含 0/1 端点）
+    过逆正态会产生 ±inf。与 ``rank`` mode 同为截面内严格单调变换
+    （Spearman 等价性不变），差别只在分布形态：正态形消除均匀秩两端的
+    密度塌缩，让平方损失不被截面中部/尾部的样本量差异支配
+    （Label Alchemy, SSRN 7494298：raw 0.68 → 高斯化排名 1.69，全 15 标签
+    最佳 1.74；美股月频口径，日频外部效度须实验自证）。
+    """
+    from scipy.stats import norm
+
+    r = panel.rank(axis=1)                       # 1..n，NaN → NaN
+    n = panel.notna().sum(axis=1)
+    u = (r - 0.5).div(n.where(n > 0), axis=0)    # n=0（全 NaN 行）→ NaN
+    z = norm.ppf(u.to_numpy(dtype=float))
+    return pd.DataFrame(z, index=panel.index, columns=panel.columns)
+
+
 def build_labels(
     close_panel: pd.DataFrame | None = None,
     horizon: int = 5,
@@ -138,17 +184,20 @@ def build_labels(
     tradable_mask: pd.DataFrame | None = None,
     method: str = "return",
     bench_close_panel: pd.DataFrame | pd.Series | None = None,
+    window: str = "cc",
+    open_panel: pd.DataFrame | None = None,
 ) -> tuple[pd.DataFrame, int]:
     """构建模型训练标签 + 对应 embargo 长度。
 
     Args:
         close_panel: date×code 收盘价面板（与 horizon 一起给出 horizon 日前瞻收益）。
         horizon: 预测视野（交易日）。embargo = horizon。
-        mode: rank / zscore / raw（见模块 docstring）。
+        mode: rank / gauss_rank / zscore / raw（见模块 docstring）。
         fwd_returns_panel: 已算好的 horizon 日前瞻收益面板（给了则忽略
             close_panel/horizon 的收益推导，仅做 mode 变换；embargo 仍取
-            horizon 参数——调用方须保证两者一致）。**method≠"return" 时忽略
-            此参数**（另类标签须从价格面板重算区间路径，不接受预制收益）。
+            horizon 参数——调用方须保证两者一致）。**method≠"return" 或
+            window≠"cc" 时忽略此参数**（另类/隔夜标签须从价格面板重算，
+            不接受预制收益）。
         tradable_mask: 可选的可交易性掩码（date×code bool，**T+1 成交口径**，
             即 ``data.tradability::build_tradable_mask`` 的产物）。给定时，
             ``False`` 处的标签置 NaN —— 等价于把这些样本从训练集剔除。
@@ -157,6 +206,11 @@ def build_labels(
             docstring）。``ir``/``calmar`` 须同时给 ``bench_close_panel``。
         bench_close_panel: 基准收盘价面板（date×1）或 Series（date×，广播到
             全部个股列）。仅 ``method``≠``return`` 时需要。
+        window: ``cc`` / ``co``（标签前瞻窗口内容，见模块 docstring）。
+            ``co`` 须给 ``open_panel`` 且仅 horizon=1、method="return" 定义
+            （隔夜段无"区间路径"，ir/calmar 不适用）。
+        open_panel: date×code 开盘价面板（与 close 同复权口径），仅
+            ``window="co"`` 时需要。
 
     Returns:
         (labels: date×code 标签面板, embargo_days: int = horizon)
@@ -177,8 +231,19 @@ def build_labels(
     """
     if method not in ("return", "ir", "calmar"):
         raise ValueError(f"未知 method {method!r}，可选: return / ir / calmar")
+    if window not in ("cc", "co"):
+        raise ValueError(f"未知 window {window!r}，可选: cc / co")
+    if window == "co" and method != "return":
+        raise ValueError(
+            f"window='co'（隔夜段）不支持 method={method!r}——ir/calmar 的"
+            "区间路径口径仅对 cc 多日窗口定义")
     if method == "return":
-        if fwd_returns_panel is not None:
+        if window == "co":
+            if close_panel is None or open_panel is None:
+                raise ValueError("window='co' 须给 close_panel + open_panel")
+            fwd = forward_returns(close_panel, horizon, window="co",
+                                  open_panel=open_panel)
+        elif fwd_returns_panel is not None:
             fwd = fwd_returns_panel
         else:
             if close_panel is None:
@@ -201,12 +266,14 @@ def build_labels(
 
     if mode == "rank":
         labels = fwd.rank(axis=1, pct=True) - 0.5
+    elif mode == "gauss_rank":
+        labels = _gauss_rank_scores(fwd)
     elif mode == "zscore":
         labels = standardize_zscore(fwd)
     elif mode == "raw":
         labels = fwd.copy()
     else:
-        raise ValueError(f"未知 mode {mode!r}，可选: rank / zscore / raw")
+        raise ValueError(f"未知 mode {mode!r}，可选: rank / gauss_rank / zscore / raw")
 
     labels = labels.astype(float)
 
