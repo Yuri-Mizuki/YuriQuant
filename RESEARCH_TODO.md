@@ -220,6 +220,18 @@ python -u scripts/factors/run_llm_mcts.py --panel hs300_2015_2026 \
   指针：SSRN `papers.ssrn.com/sol3/papers.cfm?abstract_id=7494298`；arXiv `2602.03395`；
   微信转读 `mp.weixin.qq.com/s/uKFYF6eb1Ox008ct009cNA`；小红书 QuantML 转读
   「易方达｜预测次日收益，模型要用同样标签吗」。
+- [ ] **标签臂 ①gauss_rank**（10-04 立项，Label Alchemy 转译）：`model/labels.py` 加
+  `mode="gauss_rank"`（截面秩 → Φ⁻¹，一行变换 + 单测）；`rolling_grid_alla` 同口径
+  单臂对照（对照基线 = rank 臂）。**依赖**：920 治本重跑基线出来后同口径挂（否则无
+  可信对照）；半天级。
+- [ ] **标签臂 ②隔夜标签**（10-04 立项，Label Horizon Paradox 转译）：训练标签改
+  close→next open 收益、预测目标/执行不变，与 `--execution open` 口径对齐。**注意**：
+  `build_labels` 现只吃 close 面板，需加 open 面板参数（工程点在标签构造，不在管线）；
+  半天级代码 + 单臂重训。
+- [ ] **标签臂 ③ir/calmar**（AI29 转译，代码 09-23 已落地）：`build_labels(method="ir"/
+  "calmar", bench_close_panel=)` 就绪；**Label Alchemy 预期管理**——除波动类标签在该
+  论文跑输 raw（0.36/0.66），若臂结果低于 rank 不意外，验收同口径报回撤+换手，
+  不达标即弃。
 - [x] **预测层观点注入等价实现**（09-23，AI43 等价实现非源码复现；`model/views.py`）：
   ① `inject_by_feature_duplication`（观点因子复制 ×k，软注入——改变分裂概率/收缩结构）；
   ② `TwoStagePredictor`（观点因子逐日中位数分层，层内各训一个底层预测器，硬注入——
