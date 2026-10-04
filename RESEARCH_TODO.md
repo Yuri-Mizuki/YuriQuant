@@ -43,8 +43,8 @@
 | 东方0407 QuantaAlpha | `[x]` 研读归档，**不复现** | 论文主结果有测试集泄露（东方自述）、修正复现仅 21 因子 ICIR 偏低；5 机制抽取进 `llm_pool` 增强清单（TODO §二） |
 | 微软 RD-Agent(Q)（NeurIPS 2025） | `[x]` 研读归档，**不复现不替换** | 量化 R&D 自动化多 Agent 框架（LLM 提假设→Co-STEER 写码→Qlib 回测→反馈，bandit 选 factor/model 方向）；**同题不同栈**（AI97/东吴 MCTS 同题）；机制抽取 8 条：数值去重/失败换向/JSON 纪律进 MCTS Phase 0 设计，`fin_factor_report` 自动 vs 手工对照列 P2（挂 920+好机器 WSL2）。笔记 `reports/docs/research_notes/微软RD-Agent_研读_*.md` |
 | 兴业 0526 双范式综述（海外文献 189） | `[x]` 速读归档，**不复现** | 海外文献综述（Agentic AI 闭环 / 东吴 MCTS / QuantaAlpha / PPO 加权 / 残差分布预测 / E2EAI 六篇转述）；三篇已有更深对应物；唯一增量 = Hu(2026) 市场结构框架（A 股判定 DL 占优）；笔记 `reports/docs/research_notes/兴业0526_速读_*.md` |
-| SSRN 7494298 Label Alchemy（10-04 转读） | `[x]` 研读归档，**不复现** | 标签工程三维度（Location/Scale/Shape）；美股月频固定 GBDT：raw Sharpe 0.68 → 高斯化排名 1.69、行业 z 1.56、vol_scaled 0.36/0.66 **更差**；标签解释力 0.87 vs 模型 0.04；转译 4 点见 §二 |
-| 易方达 ICML 2026 Label Horizon Paradox（10-04 转读） | `[x]` 研读归档，**不复现** | 最优训练标签 horizon δ*≠目标 Δ（日频隔夜场景 δ*≈close-to-open）；BLO 双层优化自动学 δ*，A 股 10 骨干一致提升；与 member_blend12「增量全在 horizon 维」互证；转译点见 §二 |
+| SSRN 7494298 Label Alchemy（10-04 转读） | `[x]` 研读归档，**转译实验完成** | 标签工程三维度（Location/Scale/Shape）；美股月频固定 GBDT：raw Sharpe 0.68 → 高斯化排名 1.69、行业 z 1.56、vol_scaled 0.36/0.66 **更差**；标签解释力 0.87 vs 模型 0.04；**10-04 三臂实验**：gauss_rank 零增量（主线 rank 已在最优族）、ir 判负（vol_scaled 预警应验）——见 §二 |
+| 易方达 ICML 2026 Label Horizon Paradox（10-04 转读） | `[x]` 研读归档，**转译实验完成** | 最优训练标签 horizon δ*≠目标 Δ（日频隔夜场景 δ*≈close-to-open）；BLO 双层优化自动学 δ*；**10-04 co 隔夜臂判负**（−1.0pp/回撤换手双恶化；分钟特征+深度模型的机制不自迁移到日线 GBDT）——见 §二；BLO 留作 horizon 混合线的自动化备选 |
 | 华泰 AI39 组合优化实证 | `[x]` 口径核对 | `reports/口径核对_AI39_多因子10.md`；最大差异=主动 vs 绝对权重空间；3 项低成本对齐已落地 |
 | 华泰多因子10 合成口径 | `[x]` + 补齐 | 两主力方法（`synthesize_ic_ir_max`/`synthesize_ic_max`）+ 半衰加权 + T 扫描脚本；全量扫描待跑 |
 | 银河 0608 时序截面三层预测 | `[x]` 研读 + L1 落地 | L1 结论：**风险标签可测成立**（mdd test 0.25/0.40）；L2 不触发，倾向归档；L3 并入 stage2 |
@@ -220,18 +220,38 @@ python -u scripts/factors/run_llm_mcts.py --panel hs300_2015_2026 \
   指针：SSRN `papers.ssrn.com/sol3/papers.cfm?abstract_id=7494298`；arXiv `2602.03395`；
   微信转读 `mp.weixin.qq.com/s/uKFYF6eb1Ox008ct009cNA`；小红书 QuantML 转读
   「易方达｜预测次日收益，模型要用同样标签吗」。
-- [ ] **标签臂 ①gauss_rank**（10-04 立项，Label Alchemy 转译）：`model/labels.py` 加
-  `mode="gauss_rank"`（截面秩 → Φ⁻¹，一行变换 + 单测）；`rolling_grid_alla` 同口径
-  单臂对照（对照基线 = rank 臂）。**依赖**：920 治本重跑基线出来后同口径挂（否则无
-  可信对照）；半天级。
-- [ ] **标签臂 ②隔夜标签**（10-04 立项，Label Horizon Paradox 转译）：训练标签改
-  close→next open 收益、预测目标/执行不变，与 `--execution open` 口径对齐。**注意**：
-  `build_labels` 现只吃 close 面板，需加 open 面板参数（工程点在标签构造，不在管线）；
-  半天级代码 + 单臂重训。
-- [ ] **标签臂 ③ir/calmar**（AI29 转译，代码 09-23 已落地）：`build_labels(method="ir"/
-  "calmar", bench_close_panel=)` 就绪；**Label Alchemy 预期管理**——除波动类标签在该
-  论文跑输 raw（0.36/0.66），若臂结果低于 rank 不意外，验收同口径报回撤+换手，
-  不达标即弃。
+  **实验闭环（10-04 当日，三臂全量跑完）**：gauss_rank 零增量 / co 判负 / ir 判负
+  ——现行 rank+cc+return 即标签工程维局部最优，详见下方三条臂记录。
+- [x] **标签臂 ①gauss_rank**（10-04 立项，10-04 完成，Label Alchemy 转译）：
+  `model/labels.py` `mode="gauss_rank"`（截面秩→Φ⁻¹）+ `rolling_grid_alla
+  --label-mode`（指纹含 label 口径）。全量对照 `ortho920tl_lblgauss` vs 基线
+  `ortho920tl`（同口径 ortho+剔 limit_pos+可交易标签+open/close 双执行价）：
+  **零增量**——IC 差 ±0.001 内（ranker d≡0 为数学必然：排序损失对单调变换不变，
+  内置一致性验证）；月频组合中位差 0.00pp（close 52 组合正负 25/15，open 28 组合
+  12/12）；gbdt_deep h1 Top10 +0.6pp 为孤例不达分布；回撤/换手不变。**归因**：Label
+  Alchemy 增益大头在 raw→截面变换这一步，主线 rank 已在最优族内，rank→gauss_rank
+  只是分布形态微调（其美股月频证据不自迁移到 A 股日频 GBDT）。**保留 mode 代码
+  不换主线**。
+- [x] **标签臂 ②隔夜标签**（10-04 立项/完成，Label Horizon Paradox 转译）：`window="co"`
+  （close[t]→open[t+1] 训练标签，仅 h=1，`_base/open_adj` 复用；评价仍 cc 解耦）+
+  `--label-window` 防线（须显式 --horizons 1）。全量 `ortho920tl_lblco`：**负增量
+  弃用**——IC 全模型 h1 −0.003~−0.009（ICIR 反升 17→18 但不转化为组合优势）；月频
+  组合中位 **−1.0pp（close）/−1.2pp（open）**，回撤 +1.3~1.6pp、换手 +1.3pp 双恶化。
+  **归因**：论文 Scenario 1 是分钟特征+深度时序模型；日线因子集的信息已在收盘价中
+  实现，隔夜段标签 = 丢日内信息量 + 引入隔夜跳空噪声。**归档，不动主线**。
+- [x] **标签臂 ③ir**（AI29 转译 09-23 落码，10-04 全量判负）：`--label-method ir
+  --horizons 5,10,20`（h=1 数学无定义——区间 σ 需 ≥2 日观测，实证全 NaN 已加管线
+  防线）。全量 `ortho920tl_lblir`：**判负弃用**——IC 全线 −52~−191×10⁻⁴（gbdt h5
+  0.1111→0.1047、h20 0.1351→0.1256）；对标签自身 IC 也降（gbdt h5 0.1000 <
+  基线对 cc 0.1111）= 学到更弱而非学到不同；组合层月频 12/12 分裂、中位 +0.04pp
+  无增量、**回撤中位 +1.27pp 恶化**（ridge h5 −1.5pp/回撤 +7.6pp 典型）。AI29 研报
+  自述的回撤代价 + Label Alchemy vol_scaled 预警（0.36/0.66）**双双应验**。
+  **calmar 不再跑**（同族分母更病态）；AI29 标签转译线闭环。
+  **三臂总结论**：现行 rank+cc+return 标签口径 = 标签工程维度的局部最优；两个 2026
+  外部证据（SSRN 7494298 / ICML 2026）的可迁移部分在本口径无低垂果实——反证标签
+  形态预算应转投 horizon 混合（member_blend12 +1.37pp 实证）。证据
+  `reports/alla_rolling_ortho920tl_lbl{gauss,co,ir}/`（ic_stats + metrics_overall
+  ×open/close + 驱动日志 predict/backtest*.log）。
 - [x] **预测层观点注入等价实现**（09-23，AI43 等价实现非源码复现；`model/views.py`）：
   ① `inject_by_feature_duplication`（观点因子复制 ×k，软注入——改变分裂概率/收缩结构）；
   ② `TwoStagePredictor`（观点因子逐日中位数分层，层内各训一个底层预测器，硬注入——
