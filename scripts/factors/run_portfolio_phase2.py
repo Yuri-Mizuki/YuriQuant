@@ -402,7 +402,7 @@ def ppo_arm_rolling(px, mask, codes, signals_by_year, all_dates, model_year, *,
             obs, _r, term, trunc, info = ev.step(a)
             seq.append((info["date"], info["weights"]))
             done = term or trunc
-        per_model.append(dict(seq))
+        per_model.append({"seq": seq})
     merged = {}
     for date, _w in per_model[0]["seq"]:
         acc = np.zeros(len(codes))
