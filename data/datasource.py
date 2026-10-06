@@ -375,7 +375,11 @@ class AmazingDataSource(DataSource):
         return self._base.get_code_list(security_type=security_type)
 
     def get_index_constituent(self, index_code: str) -> pd.DataFrame:
-        raw = self._info.get_index_constituent([index_code], is_local=False)
+        # SDK 默认 local_path 是 D://AmazingData_local_data//，必须显式传入，
+        # 否则缓存散落到默认目录（2026-10-06 已清理过一次残留）。
+        raw = self._info.get_index_constituent(
+            [index_code], local_path=self._local_path, is_local=False
+        )
         df = raw[index_code]
         return df[["CON_CODE", "INDATE", "OUTDATE", "INDEX_NAME"]].rename(
             columns={"CON_CODE": "con_code", "INDATE": "in_date", "OUTDATE": "out_date"}
@@ -542,7 +546,9 @@ class AmazingDataSource(DataSource):
         name_col = f"LEVEL{level}_NAME"
         name_map = level_info.set_index("INDEX_CODE")[name_col].to_dict()
 
-        constituent = self._info.get_industry_constituent(level_codes, is_local=False)
+        constituent = self._info.get_industry_constituent(
+            level_codes, local_path=self._local_path, is_local=False
+        )
         frames = []
         for industry_code, df in constituent.items():
             sub = df[["CON_CODE", "INDATE", "OUTDATE"]].copy()
