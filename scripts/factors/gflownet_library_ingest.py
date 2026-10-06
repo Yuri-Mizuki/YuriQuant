@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import time
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -89,13 +90,23 @@ def main():
     ap.add_argument("--test-begin", type=int, default=20250101)
     ap.add_argument("--test-end", type=int, default=20260716)
     ap.add_argument("--register", action="store_true", help="注册进 factor_library")
+    ap.add_argument("--feat-source", default="raw",
+                    help="终端特征集（同 phase1：raw / im_all / raw+im_all…）——"
+                         "ckpt 必须用与训练一致的集合加载（维度对齐）")
+    ap.add_argument("--im-dataset", default="hs300_2022_2025")
     args = ap.parse_args()
 
     t0 = time.time()
     from scripts.factors.run_gflownet_phase1 import build_real_panel
     panel, close, market_cap, _mask = build_real_panel(
         args.train_begin, args.test_end, offline=args.offline)
-    print(f"面板: {panel['close'].shape}", flush=True)
+    # 特征集对齐（2026-10-06）：raw+im ckpt 的 n_actions 与 raw 版不同，
+    # 必须经 attach_im_features 展开同名特征集再建 MDP（移植自 phase1）
+    from scripts.common.e2e_common import attach_im_features
+    panel, features, _im_idx = attach_im_features(
+        panel, args.feat_source, dataset=args.im_dataset)
+    print(f"面板: {panel['close'].shape} | 特征集: {args.feat_source} "
+          f"({len(features)})", flush=True)
 
     train_mask = close.index < pd.Timestamp(str(args.test_begin))
     train_panel = {k: v.loc[train_mask] for k, v in panel.items()}
@@ -103,7 +114,7 @@ def main():
     test_returns = close.pct_change().shift(-1)
 
     # ---- 恢复 TB 策略并复现 v4 入选集 ----
-    mdp = FactorMDP(OP_NAMES, WINDOWS, FEATURES, max_depth=3, max_nodes=9)
+    mdp = FactorMDP(OP_NAMES, WINDOWS, features, max_depth=3, max_nodes=9)
     net = TBPolicy(mdp.n_actions, init_logz=9.0)
     net.load_state_dict(torch.load(args.ckpt, map_location="cpu")["model"])
     print("ckpt 加载完成（logZ 由训练保存值恢复）", flush=True)
@@ -112,18 +123,22 @@ def main():
 
     from factor.gflownet.reward import RewardCache
     cache = RewardCache()
-    reward_fn = make_reward_fn(train_panel, None, FEATURES, cache=cache,
+    reward_fn = make_reward_fn(train_panel, None, features, cache=cache,
                                market_cap=train_mc, horizon=10)
     samples = sample_formulas(net, mdp, reward_fn, args.samples, seed=0)
-    selected = select_low_corr(samples, train_panel, FEATURES,
+    selected = select_low_corr(samples, train_panel, features,
                                threshold=args.threshold, progress=True)
     gf_formulas = [f for f, _ in selected]
     print(f"GFlowNet 入选: {len(gf_formulas)} 因子", flush=True)
 
-    # ---- GP 池 ----
-    gp_df = pd.read_csv(args.gp_csv)
-    gp_formulas = [str(f).strip().strip('"') for f in gp_df["formula"]]
-    print(f"GP 池: {len(gp_formulas)} 因子", flush=True)
+    # ---- GP 池（可选：csv 缺失则跳过，仅入库 GF 因子）----
+    gp_formulas = []
+    if Path(args.gp_csv).exists():
+        gp_df = pd.read_csv(args.gp_csv)
+        gp_formulas = [str(f).strip().strip('"') for f in gp_df["formula"]]
+        print(f"GP 池: {len(gp_formulas)} 因子", flush=True)
+    else:
+        print(f"GP csv 缺失（{args.gp_csv}）→ 跳过 GP 池，仅处理 GF 因子", flush=True)
 
     # ---- 全期因子面板 ----
     node_cache: dict = {}
