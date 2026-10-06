@@ -34,6 +34,9 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--entry", type=float, default=0.20)
     ap.add_argument("--exit", dest="exit_frac", type=float, default=0.30)
     ap.add_argument("--execution", default="open", choices=["close", "open", "vwap"])
+    ap.add_argument("--variant", default="h1020", choices=["h1020", "defv"],
+                    help="h1020=四 horizon 秩平均；defv=定版 h1020⊕s0.5"
+                         "（0.5·rank(h1020)+0.5·rank(slow)，E3 口径复刻）")
     args = ap.parse_args(argv)
 
     from backtest.costs import default_costs
@@ -51,6 +54,15 @@ def main(argv: list[str] | None = None) -> None:
     sig = RG._rank_average([h1, h5, h10, h20])
 
     base = RG.load_base()
+    if args.variant == "defv":
+        # 定版 h1020⊕s0.5：0.5·rank(h1020) + 0.5·rank(slow)（fundamental_blend 同口径：
+        # trailing 24 月 ICIR、embargo 2 月末、min_cov 0.5、min_months 12）
+        from scripts.evaluation.fundamental_blend import build_slow_panel
+        slow, _slow_max, _w = build_slow_panel(
+            base, sig.index, 24, 2, 0.5, 12, log=print)
+        sig = 0.5 * sig.rank(axis=1, pct=True) + 0.5 * slow.rank(axis=1, pct=True)
+        log.info("定版变体：h1020⊕s0.5 构造完成（slow 面板 %d 日）", slow.shape[0])
+
     close = base["close"]
     mask = base["mask"].astype(bool)
     costs = default_costs()

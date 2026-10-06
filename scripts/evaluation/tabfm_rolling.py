@@ -80,8 +80,13 @@ def _ns(idx) -> pd.DatetimeIndex:
     return pd.DatetimeIndex(idx).as_unit("ns")
 
 
-def load_setup(dataset: str, top: int, test_begin: str):
-    """特征（定型期固定选择，无前视）+ 复权 close + 可交易掩码 + 基准。"""
+def load_setup(dataset: str, top: int, test_begin: str,
+               prefilter: int = 0):
+    """特征（定型期固定选择，无前视）+ 复权 close + 可交易掩码 + 基准。
+
+    prefilter>0：全A 等大库防 OOM 用——按 ic_h1 的 |IC 均值| 预筛前 N 个面板
+    再进标准漏斗（跳过 load_library_features 的全库加载）。
+    """
     from config import Config
     from data.cache_helpers import build_panel
     from data.tradability import build_tradable_mask
@@ -90,6 +95,45 @@ def load_setup(dataset: str, top: int, test_begin: str):
     from scripts.common.e2e_common import select_features
 
     tb = pd.Timestamp(test_begin)
+    if dataset == "all_a_2018_2026":
+        # 全A：直接读 rolling prep 的 _base 面板（hs300 口径的 build_panel 不适用）
+        from scripts.pipelines import rolling_grid_alla as RG
+        # open_adj/tradable_mask 只在带执行价的 prep 产物里（out-tag 目录的 _base）
+        bdir = Path("reports") / "alla_rolling_ortho920v2" / "_base"
+        close = pd.read_parquet(bdir / "close_adj.parquet")
+        close.index = _ns(close.index)
+        open_ = pd.read_parquet(bdir / "open_adj.parquet")
+        open_.index = _ns(open_.index)
+        open_ = open_.reindex(index=close.index, columns=close.columns)
+        trad = pd.read_parquet(bdir / "tradable_mask.parquet")
+        trad.index = _ns(trad.index)
+        trad = trad.reindex(index=close.index, columns=close.columns)             .fillna(True).astype(bool)
+        days = close.index
+        dev_days = days[days < tb]
+        valid_days = dev_days[dev_days > tb - pd.Timedelta(days=365)]
+        root = RG.ds_root()
+        ic1 = pd.read_parquet(root / "ic_h1.parquet")
+        ranked = ic1.mean().abs().sort_values(ascending=False)
+        cand = list(ranked.index[:prefilter]) if prefilter else list(ranked.index)
+        feats = {}
+        for n in cand:
+            fp = (root / "panels_neu" / f"{n}.parquet")
+            if not fp.exists():
+                continue
+            df = pd.read_parquet(fp)
+            df.index = _ns(df.index)
+            feats[n] = standardize_zscore(
+                df.reindex(index=days, columns=close.columns)).astype("float32")
+            del df
+        log.info("全A 特征预筛：%d 个候选面板已加载（ic_h1 |IC| top%d）",
+                 len(feats), prefilter)
+        sel, _q = select_features(feats,
+                                  (close.shift(-1) / close - 1.0).loc[valid_days],
+                                  quality_days=valid_days, panel_days=dev_days,
+                                  max_features=top)
+        log.info("全A 特征漏斗：%d -> %d", len(feats), len(sel))
+        return sel, close, trad, {"open": open_}
+
     panel, _ = build_panel(Config.get(), int(Config.discipline()["begin"]),
                            20261231, offline=True, include_market_cap=True)
     close = panel["close"]
@@ -246,6 +290,8 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--top", type=int, default=50, help="定型期固定选择的特征数")
     ap.add_argument("--test-begin", default="2025-01-01")
     ap.add_argument("--frac", type=float, default=0.10)
+    ap.add_argument("--prefilter", type=int, default=0,
+                    help="全A 防OOM：按 ic_h1 |IC| 预筛前 N 面板（0=全库加载）")
     ap.add_argument("--save-preds", action="store_true",
                     help="逐臂 OOS 预测面板落盘（组合层传导研究用）")
     ap.add_argument("--out", default="reports/tabfm_rolling")
@@ -256,7 +302,8 @@ def main(argv: list[str] | None = None) -> None:
     out = Path(args.out) / f"{args.dataset}_tb{args.test_begin[:7]}"
     out.mkdir(parents=True, exist_ok=True)
 
-    sel, close, trad, panel = load_setup(args.dataset, args.top, args.test_begin)
+    sel, close, trad, panel = load_setup(args.dataset, args.top,
+                                         args.test_begin, args.prefilter)
     labels, _emb = build_labels(close, horizon=1, mode="rank")
     # IC 口径：pred(d) vs d→d+1 前瞻收益（build_labels 同向；组合臂用开盘价独立算）
     fwd = (close.shift(-1) / close - 1.0)

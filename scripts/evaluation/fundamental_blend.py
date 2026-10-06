@@ -41,11 +41,12 @@ def month_lasts(days: pd.DatetimeIndex) -> pd.DatetimeIndex:
     return pd.DatetimeIndex(s.groupby(s.index.to_period("M")).last())
 
 
-def load_family_slices(names: set, dates: pd.DatetimeIndex, root: Path) -> dict:
-    """逐个加载 panels_neu 因子面板并只保留 needed 日期（控制内存峰值）。"""
+def load_family_slices(names: set, dates: pd.DatetimeIndex, root: Path,
+                       subdir: str = "panels_neu") -> dict:
+    """逐个加载因子面板（默认 panels_neu）并只保留 needed 日期（控制内存峰值）。"""
     out = {}
     for n in sorted(names):
-        p = root / "panels_neu" / f"{n}.parquet"
+        p = root / subdir / f"{n}.parquet"
         if not p.exists():
             continue
         df = pd.read_parquet(p)
@@ -57,6 +58,7 @@ def load_family_slices(names: set, dates: pd.DatetimeIndex, root: Path) -> dict:
 def build_slow_panel(base: dict, oos_days: pd.DatetimeIndex, ic_months: int,
                      embargo_months: int, min_cov: float, min_months: int,
                      extra_family: set | None = None,
+                     panels_subdir: str = "panels_neu",
                      log=print) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """返回 (ICIR 慢信号面板, max-ICIR 慢信号面板, 末月权重表)。
 
@@ -73,7 +75,7 @@ def build_slow_panel(base: dict, oos_days: pd.DatetimeIndex, ic_months: int,
 
     needed = pd.DatetimeIndex(sorted(set(t0_days) | set(ic_days_all)))
     family = set(RG.FUNDAMENTAL_FAMILY_SETS) | set(extra_family or ())
-    panels = load_family_slices(family, needed, RG.ds_root())
+    panels = load_family_slices(family, needed, RG.ds_root(), panels_subdir)
     names = sorted(panels)
     log(f"[slow] 家族因子 {len(family)} 个、面板就绪 "
         f"{len(names)} 个（缺失 {sorted(family - set(names))}）")
@@ -160,6 +162,8 @@ def main():
     ap.add_argument("--embargo-months", type=int, default=2)
     ap.add_argument("--min-cov", type=float, default=0.5)
     ap.add_argument("--min-months", type=int, default=12)
+    ap.add_argument("--panels-subdir", default="panels_neu",
+                    help="慢信号因子面板子目录（E5 交叉用 panels_neu_fundind）")
     ap.add_argument("--include-holder-dyn", action="store_true",
                     help="慢信号家族并入 holder_dyn 增减持/高管持股 9 因子"
                          "（P5 盘点：mgmt_netbuy 系 h20 IC 0.012~0.013）")
@@ -192,7 +196,8 @@ def main():
     slow, slow_max, weights = build_slow_panel(
         base, oos_days, args.ic_months, args.embargo_months,
         args.min_cov, args.min_months,
-        extra_family=(hold_dyn if args.include_holder_dyn else None))
+        extra_family=(hold_dyn if args.include_holder_dyn else None),
+        panels_subdir=args.panels_subdir)
     weights.to_csv(dest / "slow_weights.csv", index=False, encoding="utf-8-sig")
 
     fast = RG._rank_average([h1, h5]).reindex(index=oos_days,
