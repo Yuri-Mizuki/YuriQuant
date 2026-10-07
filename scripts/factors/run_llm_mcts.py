@@ -69,6 +69,8 @@ log = logging.getLogger("run_llm_mcts")
 #: 面板预设：名字 → (universe, begin, end)。
 PANEL_PRESETS: dict[str, tuple[str, int, int]] = {
     "hs300_2015_2026": ("hs300", 20150108, 20260821),
+    # 全A 域（2026-10-08 增）：raw 6 字段公式天然全A 可求值，产物直接进主模型席位竞争
+    "all_a_2019_2026": ("all_a", 20190108, 20260922),
 }
 
 DEFAULT_IS = "2016-01-01:2023-12-31"

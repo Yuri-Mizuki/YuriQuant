@@ -164,6 +164,8 @@ def main():
     ap.add_argument("--min-months", type=int, default=12)
     ap.add_argument("--panels-subdir", default="panels_neu",
                     help="慢信号因子面板子目录（E5 交叉用 panels_neu_fundind）")
+    ap.add_argument("--include-alt-news", action="store_true",
+                    help="快讯另类族并入慢信号家族（alt_news_*，2026-10-08）")
     ap.add_argument("--include-holder-dyn", action="store_true",
                     help="慢信号家族并入 holder_dyn 增减持/高管持股 9 因子"
                          "（P5 盘点：mgmt_netbuy 系 h20 IC 0.012~0.013）")
@@ -196,7 +198,9 @@ def main():
     slow, slow_max, weights = build_slow_panel(
         base, oos_days, args.ic_months, args.embargo_months,
         args.min_cov, args.min_months,
-        extra_family=(hold_dyn if args.include_holder_dyn else None),
+        extra_family=(hold_dyn if args.include_holder_dyn else None)
+        or ({n for n in pd.read_parquet(RG.ds_root() / "ic_h1.parquet").columns
+             if n.startswith("alt_news_")} if args.include_alt_news else None),
         panels_subdir=args.panels_subdir)
     weights.to_csv(dest / "slow_weights.csv", index=False, encoding="utf-8-sig")
 
