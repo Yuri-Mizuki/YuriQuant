@@ -120,8 +120,16 @@
   时段动量，原料不够）。
 - [ ] **分钟频扩容（资源墙）**：all_a 池物化（~5500 码 × 48 bar，MemMap 分块性能待验）、
   1 分钟档位（存储 ×5）；先跑吞吐探针（`scripts/oneoff/_probe_minute_throughput.py`）估成本。
-- [ ] **另类数据因子轮次**：快讯/宏观/公告表通道就绪但因子未建（刻意留白），
-  等下一次因子挖掘轮次消费；PIT 对齐规则见 `reports/docs/另类数据管道_数据源说明.md` §四。
+- [x] **另类数据因子轮次（altf 首轮，10-07 完成）**：`scripts/builders/build_alla_altfactors.py`
+  三族 20 因子入 all_a_2018_2026（panels + factor_stats_altf.jsonl + registry 922→942 +
+  ic_h{1,5,10,20} 融合）——增减持 7（公告日对齐 lag0，金额比流通市值）/ 宏观日历 7
+  （15:00 收盘闸门 + 方向表，广播族截面 IC 按构造 NaN，1 个 ×波动率交互变体可测）/
+  快讯情绪 6（cls 词典代理情绪 + 条数/加红计数；**|IC| 全场最高**：attention 反转
+  h1 −0.021 → h20 −0.043）。坑与备注：① 09-23 缓存重建后 cls/宏观存档丢失，本次
+  经通道回补（宏观 65,419 行全量；cls 回补至 2022-09 共 63 万条后停，快讯族覆盖
+  2022-09~2026-09，每日 17:30 续传任务会继续推早水位，重跑 builder 即扩覆盖）；
+  ② `altf` 尚未登记 `SET_TO_FAMILY`/`SOURCE_PREFIXES`（本轮禁改该文件），registry
+  family=其他 + subfamily 区分三族，下次动 `research/factor_library.py` 时补。
 - [x] **llm_pool 机制抽取（QuantaAlpha 转译，09-23 完成）**：① AST 结构去重
   （`structure_similarity` 子树 Jaccard ≥0.6 判同族变体——去窗口、终端占位、交换律排序，
   `_update` 求值前拦截省评估预算，`struct_dedup=False` 可关）；② 复杂度三维约束两项新校验

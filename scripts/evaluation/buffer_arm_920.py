@@ -34,6 +34,8 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--entry", type=float, default=0.20)
     ap.add_argument("--exit", dest="exit_frac", type=float, default=0.30)
     ap.add_argument("--execution", default="open", choices=["close", "open", "vwap"])
+    ap.add_argument("--freq", default="M", choices=["M", "W"],
+                    help="调仓频率（P2 扫描用）")
     ap.add_argument("--variant", default="h1020", choices=["h1020", "defv"],
                     help="h1020=四 horizon 秩平均；defv=定版 h1020⊕s0.5"
                          "（0.5·rank(h1020)+0.5·rank(slow)，E3 口径复刻）")
@@ -94,7 +96,7 @@ def main(argv: list[str] | None = None) -> None:
     ]
     rows = []
     for name, make_strat in variants:
-        bt = VectorBacktest(strategy=make_strat(), rebalance_freq="M",
+        bt = VectorBacktest(strategy=make_strat(), rebalance_freq=args.freq,
                             initial_capital=1_000_000.0, costs=costs)
         if exec_split is not None:
             res = bt.run(sig_in.shift(1).where(mask_oos), fwd, horizon=1,
