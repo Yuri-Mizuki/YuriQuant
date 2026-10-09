@@ -365,32 +365,56 @@ def test_build_industry_table_l1():
     assert out4.loc["电子", "top_stock"] == "c2"
 
 
-def test_write_outputs_industry_l1(tmp_path):
-    """一级行业表落盘：industry_rank_l1_<ds>.csv + paths 键（2026-10-09 起无 latest 副本）。"""
-    from scripts.pipelines.alla_daily_rank import write_outputs
+def test_write_outputs_industry_merged(tmp_path):
+    """行业表合并单文件（level 列区分 L1/L2），不再单列 l1 文件（2026-10-09 精简）。"""
+    from scripts.pipelines.alla_daily_rank import merge_industry_tables, write_outputs
     d = pd.Timestamp("2026-09-04")
     ranking = pd.DataFrame({
         "rank": [1, 2], "name": ["贵州茅台", "宁德时代"],
-        "industry_l1": ["食品饮料", "电力设备"],
+        "industry_l2": ["白酒Ⅱ", "电池"], "industry_l1": ["食品饮料", "电力设备"],
         "score": [3.0, 1.0], "pct_rank": [1.0, 0.9],
         "top_frac": [True, True], "tradable": [True, True],
     }, index=["c0", "c1"])
-    ind_l1 = pd.DataFrame({"rank": [1], "n_stocks": [1], "mean_score": [3.0]},
-                          index=["食品饮料"])
+    l2 = pd.DataFrame({"rank": [1], "n_stocks": [1], "mean_score": [3.0]}, index=["白酒Ⅱ"])
+    l1 = pd.DataFrame({"rank": [1], "n_stocks": [1], "mean_score": [3.0]}, index=["食品饮料"])
+    merged = merge_industry_tables(l2, l1)
     paths = write_outputs(ranking, ranking.copy(), d, {"n_scored": 2},
-                          industry_table_l1=ind_l1, out_dir=tmp_path)
-    assert paths["industry_l1"].endswith("industry_rank_l1_20260904.csv")
-    # 2026-10-09 精简：除 latest_picks 外不再写 latest 副本
-    assert not (tmp_path / "latest_industry_rank_l1.csv").exists()
-    # 首列名统一为 industry（与二级表一致）
-    back = pd.read_csv(tmp_path / "industry_rank_l1_20260904.csv")
+                          industry_table=merged, out_dir=tmp_path)
+    assert paths["industry"].endswith("industry_rank_20260904.csv")
+    # 一级不再单列文件
+    assert not (tmp_path / "industry_rank_l1_20260904.csv").exists()
+    back = pd.read_csv(tmp_path / "industry_rank_20260904.csv")
     assert back.columns[0] == "industry"
-    assert back.loc[0, "industry"] == "食品饮料"
-    # 不传 → 不产出该键、不生成文件（换目录，避免命中上一份产物）
-    sub = tmp_path / "no_l1"
+    assert list(back["level"]) == ["L2", "L1"]
+    # 不传行业表 → 不产出该键、不落盘（换目录，避免命中上一份产物）
+    sub = tmp_path / "no_ind"
     paths2 = write_outputs(ranking, ranking.copy(), d, {}, out_dir=sub)
-    assert "industry_l1" not in paths2
-    assert not (sub / "industry_rank_l1_20260904.csv").exists()
+    assert "industry" not in paths2
+    assert not (sub / "industry_rank_20260904.csv").exists()
+
+
+def test_merge_industry_tables():
+    """二级/一级合并：level 列置首、列取并集、对方独有列留空。"""
+    from scripts.pipelines.alla_daily_rank import merge_industry_tables
+    l2 = pd.DataFrame({"rank": [1, 2], "n_stocks": [3, 5],
+                       "industry_l1": ["食品饮料", "电子"]},
+                      index=["白酒Ⅱ", "半导体"])
+    l1 = pd.DataFrame({"rank": [1, 2], "n_stocks": [3, 5], "n_picks": [1, 2],
+                       "pick_share": [0.3, 0.4], "top_stock_tradable": ["a", "b"]},
+                      index=["食品饮料", "电子"])
+    out = merge_industry_tables(l2, l1)
+    assert out.columns[0] == "level"
+    assert list(out["level"]) == ["L2", "L2", "L1", "L1"]
+    assert list(out.index) == ["白酒Ⅱ", "半导体", "食品饮料", "电子"]
+    assert out.index.name == "industry"
+    # L2 行无 n_picks（一级独有列留空）；L1 行有
+    assert pd.isna(out.loc["白酒Ⅱ", "n_picks"])
+    assert out.loc["食品饮料", "n_picks"] == 1
+    assert out.loc["白酒Ⅱ", "industry_l1"] == "食品饮料"
+    # 空输入 / 单边输入
+    assert merge_industry_tables(pd.DataFrame(), pd.DataFrame()).empty
+    assert len(merge_industry_tables(l2, pd.DataFrame())) == 2
+    assert len(merge_industry_tables(pd.DataFrame(), l1)) == 2
 
 
 def _mk_daily(tmp_path) -> Path:
@@ -478,58 +502,14 @@ def test_write_outputs(tmp_path):
     assert "industry" in paths
     assert (tmp_path / "industry_rank_20260904.csv").exists()
     assert not (tmp_path / "latest_industry_rank.csv").exists()
-    # 唯一保留的稳定入口
-    assert (tmp_path / "latest_picks.csv").exists()
+    # 2026-10-09 精简：latest 机制整体移除，不再写任何 latest 副本
+    assert not (tmp_path / "latest_picks.csv").exists()
     # 排名/持仓 CSV 含中文名列（utf-8-sig 回读）
     rk = pd.read_csv(tmp_path / "ranking_20260904.csv", index_col=0)
     assert rk.loc["c0", "name"] == "贵州茅台"
     # 无行业表 → 不产出 industry 键
     paths2 = write_outputs(ranking, picks, d, {}, out_dir=tmp_path)
     assert "industry" not in paths2
-
-
-def test_write_latest_locked(tmp_path, monkeypatch):
-    """latest 副本原子替换被占用时：降级直接覆写（告警），不中断主输出。
-
-    2026-09-17 语义变更：旧行为是 `os.replace` 失败即返回 False；现降级为直写
-    （文件本身仍可写，实测 Windows 下被共享读打开时 replace 报 WinError 5 但 write
-    成功），避免 6 分钟计算为最后一步写盘白跑。彻底写不进才返回 False。
-    """
-    import scripts.pipelines.alla_daily_rank as mod
-    d = pd.Timestamp("2026-09-04")
-    ranking = pd.DataFrame({
-        "rank": [1], "name": ["贵州茅台"], "score": [3.0],
-        "pct_rank": [1.0], "top_frac": [True], "tradable": [True],
-    }, index=["c0"])
-    picks = ranking.copy()
-
-    def _boom(src, dst):
-        raise PermissionError(13, "used by another process", str(dst))
-
-    # 单个副本：replace 被占用 → 降级直写成功（内容确已落盘）
-    with monkeypatch.context() as m:
-        m.setattr(mod.os, "replace", _boom)
-        src = tmp_path / "x.csv"
-        src.write_text("a", encoding="utf-8-sig")
-        dst = tmp_path / "latest_picks.csv"
-        assert mod._write_latest(dst, src) is True
-        assert dst.read_text(encoding="utf-8-sig") == "a"
-
-    # 连直写也失败 → 返回 False（不抛异常）
-    def _boom_write(*a, **k):
-        raise PermissionError(13, "denied")
-
-    with monkeypatch.context() as m:
-        m.setattr(mod.os, "replace", _boom)
-        m.setattr(type(dst), "write_text", _boom_write, raising=False)
-        assert mod._write_latest(dst, src) is False
-
-    # 整体输出：latest 副本失败（已内部吞掉）不中断，主文件照常产出
-    monkeypatch.setattr(mod, "_write_latest", lambda p, src: False)
-    paths = mod.write_outputs(ranking, picks, d, {}, out_dir=tmp_path)
-    assert (tmp_path / "ranking_20260904.csv").exists()
-    assert (tmp_path / "history.csv").exists()
-    assert paths["ranking"].endswith("ranking_20260904.csv")
 
 
 def test_write_main_locked_raises(tmp_path, monkeypatch):
@@ -671,34 +651,6 @@ def test_explain_stocks():
                                  "drv1_feature", "drv1_name", "drv1_contrib", "drv1_z",
                                  "drv2_feature", "drv2_name", "drv2_contrib", "drv2_z",
                                  "summary"]
-
-
-def test_build_leaders():
-    from scripts.pipelines.alla_daily_rank import build_leaders
-
-    codes = [f"c{i}" for i in range(6)]
-    ranking = pd.DataFrame({
-        "rank": list(range(1, 7)),   # 全A名次（build_ranking 产物），应被层内名次替换
-        "name": [f"股{i}" for i in range(6)],
-        "industry_l2": ["半导体"] * 6,
-        "industry_l1": ["电子"] * 6,
-        "score": [2.0, 1.8, 1.5, 1.2, 0.9, 0.5],
-        "tradable": [True] * 6,
-    }, index=codes)
-    mktcap = pd.Series({"c0": 50.0, "c1": 900.0, "c2": 800.0, "c3": 700.0,
-                        "c4": 600.0, "c5": 100.0})  # 亿元；c5/c0 为小票
-    out = build_leaders(ranking, mktcap, n_leaders=4, top_k=2)
-    # 市值前 4 = c1,c2,c3,c4；其中模型分前 2 = c1(1.8), c2(1.5)
-    assert list(out.index) == ["c1", "c2"]
-    assert list(out["rank"]) == [1, 2]
-    # cap_rank 为全市场市值名次（c1=1, c2=2, c3=3, c4=4）
-    assert list(out["cap_rank"]) == [1, 2]
-    assert list(out["mktcap"]) == [900.0, 800.0]
-    # 小票 c0/c5 被市值分层排除
-    assert "c5" not in out.index and "c0" not in out.index
-    # 列集合固定
-    assert list(out.columns) == ["rank", "cap_rank", "name", "industry_l2",
-                                 "industry_l1", "mktcap", "score", "tradable"]
 
 
 def test_compute_market_cap_scale(tmp_path):

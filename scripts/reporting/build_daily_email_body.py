@@ -20,18 +20,20 @@
     - 跨口径对比时必须用 --prev-dir 指向**同口径**产物目录，否则会把口径差异误报成榜单变化
       （例如 reports/alla_daily 内 09-16 那份是 zscore 老口径，而 09-17 起是 ortho 新口径）。
 
-产物列（与口径无关，新老口径同结构）：
+产物列（2026-10-09 精简后每期 6 个文件）：
     ranking_<ds>.csv        code/rank/name/industry_l2/industry_l1/score/pct_rank/
-                            top_frac/tradable/flag
+                            top_frac/tradable/flag/buffer_hold/cap_rank/mktcap
     picks_<ds>.csv          同上 + weight
-    industry_rank_<ds>.csv  industry/rank/n_stocks/mean_score/median_score/mean_pct_rank/
-                            n_top_frac/industry_l1/top_frac_share/top_stock
-    industry_rank_l1_<ds>.csv
-                            申万一级上卷（同上口径）+ n_picks/pick_share/
-                            top_stock_tradable（可交易口径）；2026-09-18 起产出，
-                            缺失时第三节自动降级为一行说明
-    leaders_<ds>.csv        code/rank/cap_rank/name/industry_l2/industry_l1/mktcap/score/tradable
-    history.csv             每轮摘要（新口径含 preproc/ensemble/excluded_features/horizons）
+    industry_rank_<ds>.csv  单文件含 L1+L2（level 列区分）：industry/level/rank/
+                            n_stocks/mean_score/median_score/mean_pct_rank/n_top_frac/
+                            industry_l1/top_frac_share/top_stock（L2 行）；
+                            L1 行另有 n_picks/pick_share/top_stock_tradable
+    feature_importance_<ds>.csv  模型级 gain Top-n（中文名/因子族/累计占比）
+    explain_top_<ds>.csv    Top20 个股 SHAP 归因（drv1~3 + summary）
+    history.csv             每轮摘要（含 preproc/ensemble/excluded_features/horizons）
+
+注：原 `industry_rank_l1_<ds>.csv` / `leaders_<ds>.csv` 已合并——一级行业进
+`industry_rank_<ds>.csv`（level=L1 行），龙头视图由 ranking 的 cap_rank≤200 派生。
 """
 
 from __future__ import annotations
@@ -218,11 +220,23 @@ def main() -> int:
 
     rank = pd.read_csv(d / f"ranking_{ds}.csv")
     picks = pd.read_csv(d / f"picks_{ds}.csv")
-    ind = pd.read_csv(d / f"industry_rank_{ds}.csv")
-    # 一级行业表为可选产物（2026-09-18 起由出榜链落盘）；缺失时第三节降级为说明行
-    ind_l1_p = d / f"industry_rank_l1_{ds}.csv"
-    ind_l1 = pd.read_csv(ind_l1_p) if ind_l1_p.exists() else None
-    lead = pd.read_csv(d / f"leaders_{ds}.csv")
+    # 2026-10-09 起行业表合并为单文件（level 列区分 L2/L1），不再单列 l1 文件
+    ind_all = pd.read_csv(d / f"industry_rank_{ds}.csv")
+    if "level" in ind_all.columns:
+        ind = ind_all[ind_all["level"] == "L2"].copy()
+        ind_l1 = ind_all[ind_all["level"] == "L1"].copy()
+        ind_l1 = ind_l1 if len(ind_l1) else None
+    else:  # 老格式产物兼容：单表即二级，一级另读（若存在）
+        ind = ind_all
+        _l1p = d / f"industry_rank_l1_{ds}.csv"
+        ind_l1 = pd.read_csv(_l1p) if _l1p.exists() else None
+    # 龙头视图：由 ranking 的 mktcap/cap_rank 派生（原 leaders_<ds>.csv 已并入 ranking）
+    lead = None
+    if {"mktcap", "cap_rank"} <= set(rank.columns):
+        _lg = rank[rank["cap_rank"].notna() & (rank["cap_rank"] <= 200)] \
+            .sort_values("score", ascending=False).head(20).reset_index(drop=True)
+        _lg.insert(0, "rank", range(1, len(_lg) + 1))  # 市值层内模型名次
+        lead = _lg
     hist = pd.read_csv(d / "history.csv")
     h = hist[hist["predict_date"].astype(str) == ds]
     h = h.iloc[-1] if len(h) else hist.iloc[-1]
@@ -363,7 +377,7 @@ def main() -> int:
                      f"「可交易龙头」= 组内可交易成员中的最高分 —— "
                      f"全池第一名可能落在 ST／停牌上（判定见 `data/tradability.py`），"
                      f"故另给可交易口径。完整 {len(ind_l1)} 行见附件 "
-                     f"`industry_rank_l1_{ds}.csv`。")
+                     f"`industry_rank_{ds}.csv`（level=L1 行）。")
     else:
         lines.append("## 三、一级行业排名（申万一级）")
         lines.append("")
@@ -373,14 +387,18 @@ def main() -> int:
     lines.append("---")
     lines.append("")
 
-    # ---- 四、龙头股 ----
+    # ---- 四、龙头股（由 ranking 的市值列派生：市值前 200 中模型分最高 5 只）----
     lines.append("## 四、龙头股榜 Top 5（大市值口径）")
     lines.append("")
-    lead5 = lead.nsmallest(5, "rank")
-    rows = [[int(r["rank"]), r["code"], r["name"], r["industry_l2"], r["industry_l1"],
-             f"{r['mktcap']:.0f}", f"{r['score']:.4f}"] for _, r in lead5.iterrows()]
-    lines.append(md_table(["排名", "代码", "名称", "二级行业", "一级行业",
-                           "市值(亿)", "分数"], rows))
+    if lead is not None and len(lead):
+        lead5 = lead.nsmallest(5, "rank")
+        rows = [[int(r["rank"]), r["code"], r["name"], r["industry_l2"],
+                 r["industry_l1"], f"{r['mktcap']:.0f}", f"{r['score']:.4f}"]
+                for _, r in lead5.iterrows()]
+        lines.append(md_table(["排名", "代码", "名称", "二级行业", "一级行业",
+                               "市值(亿)", "分数"], rows))
+    else:
+        lines.append("> 本日产物缺市值列（`mktcap`/`cap_rank`），本节跳过。")
     lines.append("")
     lines.append("---")
     lines.append("")
@@ -527,10 +545,8 @@ def main() -> int:
     lines.append("---")
     lines.append("")
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
-    prod = f"`ranking_{ds}.csv` / `picks_{ds}.csv` / `industry_rank_{ds}.csv`"
-    if ind_l1 is not None:
-        prod += f" / `industry_rank_l1_{ds}.csv`"
-    prod += f" / `leaders_{ds}.csv`"
+    prod = (f"`ranking_{ds}.csv` / `picks_{ds}.csv` / `industry_rank_{ds}.csv`"
+            f" / `feature_importance_{ds}.csv` / `explain_top_{ds}.csv` / `history.csv`")
     lines.append(f"*生成时间：{now} · 数据源 AmazingData (PIT) · 产物：{prod}*")
     lines.append("")
 

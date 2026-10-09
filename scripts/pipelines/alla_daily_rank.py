@@ -852,6 +852,34 @@ def build_industry_table_l1(ranking: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def merge_industry_tables(l2: pd.DataFrame, l1: pd.DataFrame) -> pd.DataFrame:
+    """二级/一级行业表合并为单表（``level`` 列区分 L2/L1），列取并集。
+
+    2026-10-09 精简：原 ``industry_rank_<ds>.csv`` 与 ``industry_rank_l1_<ds>.csv``
+    是同源同口径的两种粒度，合并落一个文件。``level=L2`` 行来自
+    :func:`build_industry_table`、``level=L1`` 行来自 :func:`build_industry_table_l1`；
+    两级各有对方没有的列（二级有 ``industry_l1`` 归属，一级有 ``n_picks`` /
+    ``pick_share`` / ``top_stock_tradable``），合并后对方位置留空。
+    空输入返回空表（上层据此跳过落盘）。
+    """
+    parts, levels = [], []
+    if l2 is not None and len(l2):
+        parts.append(l2.copy())
+        levels.append("L2")
+    if l1 is not None and len(l1):
+        parts.append(l1.copy())
+        levels.append("L1")
+    if not parts:
+        return pd.DataFrame()
+    out = pd.concat(parts, axis=0, sort=False)
+    lv: list[str] = []
+    for p, lvl in zip(parts, levels):
+        lv.extend([lvl] * len(p))
+    out.insert(0, "level", lv)
+    out.index.name = "industry"
+    return out
+
+
 def explain_features(importance: pd.Series) -> pd.DataFrame:
     """模型级：gain 特征重要性 → 排序表（中文名/释义/因子族/归一化贡献）。"""
     df = pd.DataFrame({"feature": importance.index.astype(str)})
@@ -1143,32 +1171,6 @@ def compute_market_cap(close_raw: pd.DataFrame,
         index=cal_idx, columns=codes)
     cap = tot_share.astype(float) * close_raw.astype(float)
     return cap / 1e8  # 元 → 亿元
-
-
-def build_leaders(ranking: pd.DataFrame, mktcap: pd.Series,
-                  n_leaders: int = 200, top_k: int = 20,
-                  min_cap: float | None = None) -> pd.DataFrame:
-    """龙头股视图：市值最大的 n_leaders 只中，模型分数最高的 top_k 只。
-
-    主排名（raw 不中性化）天然偏向小市值，此视图按市值分层后单独排序，
-    回答"市值前 n 的龙头里，模型最看好谁"。列：rank(市值内模型名次)/
-    cap_rank(全市场市值名次)/mktcap(亿元)/score 及排名表原有标注。
-    """
-    cap = mktcap.reindex(ranking.index).dropna().sort_values(ascending=False)
-    if min_cap is not None:
-        cap = cap[cap >= min_cap]
-    cap_rank = cap.rank(ascending=False, method="first").astype(int)
-    leaders = cap.head(n_leaders)
-    sub = ranking.loc[leaders.index].copy()
-    if "rank" in sub.columns:
-        sub = sub.drop(columns="rank")  # 全A名次，换成市值层内名次
-    sub["mktcap"] = leaders
-    sub["cap_rank"] = cap_rank.reindex(sub.index)
-    sub = sub.sort_values("score", ascending=False)
-    sub.insert(0, "rank", np.arange(1, len(sub) + 1))
-    cols = [c for c in ("rank", "cap_rank", "name", "industry_l2", "industry_l1",
-                        "mktcap", "score", "tradable") if c in sub.columns]
-    return sub.head(top_k)[cols].copy()
 
 
 def compute_constructed_features(
@@ -1532,20 +1534,6 @@ def _atomic_or_direct(path: Path, write) -> bool:
         return False
 
 
-def _write_latest(p: Path, src: Path) -> bool:
-    """latest 稳定副本写入（原子优先、占用降级）；彻底失败时告警不中断。
-
-    latest_picks.csv 只是当日 picks_{ds}.csv 的稳定路径副本，
-    被外部进程（如预览/同步）短暂独占时不应拖垮整次运行。
-    """
-    ok = _atomic_or_direct(
-        p, lambda t: t.write_text(src.read_text(encoding="utf-8-sig"),
-                                  encoding="utf-8-sig"))
-    if not ok:
-        log.warning("latest 副本 %s 未更新（不影响当日主输出）", p.name)
-    return ok
-
-
 def _write_table(path: Path, df: pd.DataFrame) -> bool:
     """主 CSV 写入（原子优先、占用降级）；彻底失败时返回 False。"""
     return _atomic_or_direct(path, lambda t: df.to_csv(t, encoding="utf-8-sig"))
@@ -1554,15 +1542,20 @@ def _write_table(path: Path, df: pd.DataFrame) -> bool:
 def write_outputs(ranking: pd.DataFrame, picks: pd.DataFrame,
                   predict_date: pd.Timestamp, meta: dict,
                   industry_table: pd.DataFrame | None = None,
-                  industry_table_l1: pd.DataFrame | None = None,
                   feature_importance: pd.DataFrame | None = None,
                   explain_top: pd.DataFrame | None = None,
-                  leaders: pd.DataFrame | None = None,
                   out_dir: Path | None = None):
-    """排名/持仓/行业排名（二级+一级）/解释 CSV，仅持仓写 latest 稳定路径副本。
+    """排名/持仓/行业排名（单文件含 L1+L2）/解释 CSV。
 
-    返回文件路径 dict（键：ranking/picks/industry/industry_l1/feature_importance/
-    explain_top/leaders，仅含实际落盘的项）。
+    2026-10-09 精简（每期 6 个文件）：
+      - 不再写 latest 稳定副本（实测无消费者，纯冗余）；
+      - 一级行业并入 ``industry_rank_<ds>.csv``（``level`` 列区分 L1/L2），
+        不再单列 ``industry_rank_l1_<ds>.csv``；
+      - 龙头视图由 ``ranking_<ds>.csv`` 的 ``cap_rank``/``mktcap`` 列派生，
+        不再单列 ``leaders_<ds>.csv``。
+
+    返回文件路径 dict（键：ranking/picks/industry/feature_importance/
+    explain_top，仅含实际落盘的项）。
     """
     d = out_dir or OUT_DIR
     d.mkdir(parents=True, exist_ok=True)
@@ -1576,9 +1569,6 @@ def write_outputs(ranking: pd.DataFrame, picks: pd.DataFrame,
         raise PermissionError(
             f"主输出写入失败：{rank_path.name} / {picks_path.name} 被其他进程占用"
             "（如 IDE/Excel 打开着文件，请关闭后重跑）")
-    # 2026-10-09 精简：只保留 latest_picks.csv 作为稳定路径入口（消费主力），
-    # 其余当日文件不再写 latest 副本——实测无消费者，纯冗余占文件数一半。
-    _write_latest(d / "latest_picks.csv", picks_path)
 
     ind_path = None
     if industry_table is not None and len(industry_table):
@@ -1587,14 +1577,6 @@ def write_outputs(ranking: pd.DataFrame, picks: pd.DataFrame,
         if not _write_table(ind_path, industry_table):
             raise PermissionError(
                 f"行业排名写入失败：{ind_path.name} 被其他进程占用，请关闭后重跑")
-
-    ind_l1_path = None
-    if industry_table_l1 is not None and len(industry_table_l1):
-        ind_l1_path = d / f"industry_rank_l1_{ds}.csv"
-        industry_table_l1.index.name = "industry"
-        if not _write_table(ind_l1_path, industry_table_l1):
-            raise PermissionError(
-                f"一级行业排名写入失败：{ind_l1_path.name} 被其他进程占用，请关闭后重跑")
 
     imp_path = None
     if feature_importance is not None and len(feature_importance):
@@ -1610,25 +1592,14 @@ def write_outputs(ranking: pd.DataFrame, picks: pd.DataFrame,
             raise PermissionError(
                 f"个股归因写入失败：{exp_path.name} 被其他进程占用，请关闭后重跑")
 
-    lead_path = None
-    if leaders is not None and len(leaders):
-        lead_path = d / f"leaders_{ds}.csv"
-        if not _write_table(lead_path, leaders):
-            raise PermissionError(
-                f"龙头股视图写入失败：{lead_path.name} 被其他进程占用，请关闭后重跑")
-
     append_history({"predict_date": ds, **meta}, out_dir=d)
     paths = {"ranking": str(rank_path), "picks": str(picks_path)}
     if ind_path is not None:
         paths["industry"] = str(ind_path)
-    if ind_l1_path is not None:
-        paths["industry_l1"] = str(ind_l1_path)
     if imp_path is not None:
         paths["feature_importance"] = str(imp_path)
     if exp_path is not None:
         paths["explain_top"] = str(exp_path)
-    if lead_path is not None:
-        paths["leaders"] = str(lead_path)
     return paths
 
 
@@ -1854,11 +1825,12 @@ def run(args) -> dict:
         log.info("缓冲带 picks: entry=%.2f exit=%.2f | 期初持仓 %d → 本期 %d 只"
                  "（naive top%.0f%% = %d 只）", _entry, _exit, len(_prev),
                  len(picks), args.frac * 100, int(ranking["top_frac"].sum()))
-    ind_table = build_industry_table(ranking) if "industry_l2" in ranking.columns \
-        else pd.DataFrame()
-    # 一级行业表（上卷）：与二级表同源同口径，缺 industry_l1 列时跳过
-    ind_table_l1 = build_industry_table_l1(ranking) \
-        if "industry_l1" in ranking.columns else pd.DataFrame()
+    # 行业表：二级 + 一级合并为单文件（level 列区分），与 ranking 同源同口径
+    ind_table = merge_industry_tables(
+        build_industry_table(ranking) if "industry_l2" in ranking.columns
+        else pd.DataFrame(),
+        build_industry_table_l1(ranking) if "industry_l1" in ranking.columns
+        else pd.DataFrame())
 
     # 选股解释：模型级（当日特征重要性）+ 个股级（Top20 SHAP 归因）
     imp_table = explain_features(predictor.feature_importance("gain"))
@@ -1870,13 +1842,17 @@ def run(args) -> dict:
     log.info("解释: 特征重要性 %d 个 | Top%d SHAP 归因完成",
              len(imp_table), len(explain_top))
 
-    # 龙头股视图：市值前 200 中模型分最高的 20 只（ortho 口径下前面已算过，复用）
+    # 市值标注并入 ranking（mktcap 亿元 / cap_rank 全市场市值名次）。
+    # 原独立 leaders 视图由此派生：cap_rank ≤ 200 中 score 最高若干。
     if cap_panel is None:
         cap_panel = compute_market_cap(tail["close_raw"], long_tables)
     mktcap = cap_panel.loc[predict_date]
-    leaders_table = build_leaders(ranking, mktcap)
-    log.info("龙头视图: 市值前 200 中模型 Top%d（市值口径 TOT_SHARE×收盘）",
-             len(leaders_table))
+    _cap = mktcap.reindex(ranking.index).dropna().sort_values(ascending=False)
+    ranking["cap_rank"] = _cap.rank(ascending=False, method="first") \
+        .reindex(ranking.index).astype("Int64")
+    ranking["mktcap"] = mktcap.reindex(ranking.index)
+    log.info("市值标注: 已并入 ranking（mktcap/cap_rank；前 200 = 龙头视图口径，"
+             "市值 = TOT_SHARE×收盘）")
 
     meta = {"model": "gbdt", **train_meta, "frac": args.frac, "preproc": preproc,
             "preset": getattr(args, "preset", None) or "legacy",
@@ -1889,15 +1865,14 @@ def run(args) -> dict:
             "selection_year": sel[expl_h]["year"],
             "n_scored": n_raw, "n_top_frac": int(ranking["top_frac"].sum()),
             "n_picks": len(picks),
-            "n_industries": 0 if ind_table.empty else len(ind_table),
+            "n_industries": 0 if ind_table.empty
+            else int((ind_table["level"] == "L2").sum()),
             "top5": "|".join(ranking.index[:5].astype(str)),
             "runtime_sec": round(time.time() - t0, 1)}
     paths = write_outputs(ranking, picks, predict_date, meta,
                           industry_table=ind_table,
-                          industry_table_l1=ind_table_l1,
                           feature_importance=imp_table,
                           explain_top=explain_top,
-                          leaders=leaders_table,
                           out_dir=out_dir)
 
     log.info("=" * 70)
@@ -1905,8 +1880,9 @@ def run(args) -> dict:
              predict_date.date(), n_raw, args.frac * 100,
              meta["n_top_frac"], len(picks), meta["n_industries"],
              time.time() - t0)
-    log.info("行业表: 申万二级 %d 行 | 申万一级 %d 行",
-             len(ind_table), len(ind_table_l1))
+    log.info("行业表: 申万二级 %d 行 | 申万一级 %d 行（合并单文件）",
+             0 if ind_table.empty else int((ind_table["level"] == "L2").sum()),
+             0 if ind_table.empty else int((ind_table["level"] == "L1").sum()))
     log.info("Top 20 预览 (code, name, 行业, score, 可交易):")
     for i, (code, row) in enumerate(ranking.head(20).iterrows(), 1):
         nm = row.get("name", "")
@@ -1936,14 +1912,10 @@ def run(args) -> dict:
     out_msg = f"输出: {paths['ranking']} | {paths['picks']}"
     if "industry" in paths:
         out_msg += f" | 行业排名: {paths['industry']}"
-    if "industry_l1" in paths:
-        out_msg += f" | 一级行业: {paths['industry_l1']}"
     if "feature_importance" in paths:
         out_msg += f" | 特征重要性: {paths['feature_importance']}"
     if "explain_top" in paths:
         out_msg += f" | 个股归因: {paths['explain_top']}"
-    if "leaders" in paths:
-        out_msg += f" | 龙头视图: {paths['leaders']}"
     log.info(out_msg)
     log.info("=" * 70)
     return {"predict_date": str(predict_date.date()), "meta": meta, "paths": paths}
