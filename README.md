@@ -11,17 +11,26 @@
 全 A 市场（5549 只股票，含退市回补）、因子层全正交、2018–2026 逐年 walk-forward
 样本外、**T+1 开盘可执行口径**（含交易成本，非纸面收益）：
 
-| 配置 | 年化 | 超额 | Sharpe | 最大回撤 |
+| 配置 | 年化 | Sharpe | 最大回撤 | 换手 |
 |---|---|---|---|---|
-| **定版信号**：h1+h5+h10+h20 多周期混合 ⊕ 慢信号 blend，月频 | **17.87%** | 上证 +15.3pp | 0.78 | 34.2% |
-| 主基线：GBDT 单周期 · 月频 Top10% | 11.67% | 上证 +9.6pp | 0.49 | — |
+| **定版信号**：fundind 面板 h1+h5+h10+h20 混合 ⊕ 慢信号 blend + buffer(15/40) 执行层 | **18.07%** | 0.81 | — | **19.1%** |
+| 同信号 · 月频 TopFrac 口径（无 buffer） | 18.68% | 0.813 | 34.0% | 49.6% |
+| 主基线：GBDT 单周期 · 月频 Top10% | 11.67% | 0.49 | — | — |
 
-慢信号单独成军也有年化 12.8%、换手仅 22% 的防御性配置。口径与逐项消融见
-`reports/batch1_920_收尾对照表.md`。
+慢信号单独成军也有年化 12.8%、换手仅 22% 的防御性配置。定版演进与逐项消融见
+`reports/batch1_920_收尾对照表.md`（§⑩–⑯：污染事故更正 → v2 完整口径 →
+fundind 快信号采纳 → buffer 参数网格上修 15/40）。
 
-系统同样诚实地告诉你什么不行——日频调仓在交易成本下直接转负，RL 挖掘管线被
-自己的 PBO 过拟合检验判负后照样归档，基本面族面板污染事故连更正重跑的全程记录
-都在 `reports/` 里。**没有幸存者偏差的战绩表。**
+> **口径诚实注记**：定版数字为 income 财报数据补齐（4383 只）**之前**的 v2 数据态
+> 存档；同一配置在补齐后的当前数据态重跑约 **17.0–17.2%**（v3/v4 双证）。本项目
+> 按纪律不回退数据换数字，引用时须注明数据态（income 4383 前后）。
+
+系统同样诚实地告诉你什么不行——日频调仓在交易成本下直接转负；AlphaPool RL
+挖掘被自己的 PBO 检验判负（0.704）后追加 10 倍步长归因确认真实失效才归档；
+zz1000 上的 RL/QP 组合优化 24 臂消融无稳健超额；LLM-MCTS 是唯一产出超门槛
+因子的挖掘引擎（席位 4/14 突破）但组合层增量 +0.16pp 噪声级、不采纳；另类
+数据三族因子席位 0/36；GP/GFlowNet 双双预算饱和。基本面族面板污染事故连更正
+重跑的全程记录都在 `reports/` 里。**没有幸存者偏差的战绩表。**
 
 ## ✨ 能力巡礼
 
@@ -39,14 +48,14 @@
 
 - **多因子谱系**：50+ 算子注册表、通达信口径指标 57 个、Alpha101/158/191/360、经典 + 券商特征族 36 个、论文复现 21 式
 - **全 A 因子库**：**920+ 因子 × 5549 股（含退市）× 2018–2026**，registry + panels + evals 三件套，血缘全程可溯
-- **五种自动挖掘引擎**：穷举搜索、遗传规划（DEAP）、GFlowNet（Trajectory Balance 与 PPO 对照训练）、AlphaPool 强化学习（MaskablePPO + LSTM，含 LLM 生成的初始因子池）、LLM-MCTS（UCT 搜索 + 三层去重）
+- **五种自动挖掘引擎**：穷举搜索、遗传规划（DEAP）、GFlowNet（Trajectory Balance 与 PPO 对照训练）、AlphaPool 强化学习（MaskablePPO + LSTM，含 LLM 生成的初始因子池）、LLM-MCTS（UCT 搜索 + 三层去重）——全部引擎已跑到可引用终审：GFlowNet raw+im 臂 114 因子入库（族层 PBO 0.114 稳健），LLM-MCTS all-A 正式跑 750 候选收编 14（族层 PBO 0.039，唯一产出超 top-150 门槛因子的引擎），GP/AlphaPool 预算饱和与真实失效分别归档
 - **合成七法**：IC 加权 / PCA / IC_IR 最大 / 半衰加权 / 等权 / 正交 / ML Stacking
 - **预处理流水线**：去极值 → 行业 + 市值中性化 → 标准化，向量化实现 **2.96x 提速且与逐日实现逐位一致**
 
 ### 🤖 模型层：从因子到预测
 
-- **预测器**：Ridge / LightGBM / TabICL，滚动时序 CV；表格基础模型（TabPFN/TabICL）对照实验框架就位
-- **标签工程**：多 horizon × 多变换（rank / gauss_rank / zscore / raw）× 超额口径（IR / Calmar）× 隔夜窗口，embargo = horizon 防泄漏
+- **预测器**：Ridge / LightGBM / TabICL，滚动时序 CV；表格基础模型三级对照收官——TabICL 在 hs300/zz1000 为最优单臂（头部内加权成中小池组合冠军），全A 大截面上 GBDT 不可替代（IC 反超 4.4 倍）
+- **标签工程**：多 horizon × 多变换（rank / gauss_rank / zscore / raw）× 超额口径（IR / Calmar）× 隔夜窗口，embargo = horizon 防泄漏；gauss_rank / 隔夜 / IR 三臂全量裁决均为负结果，现行 rank+cc 口径即标签工程维局部最优（两篇 2026 外部文献转译闭环）
 - **模型注册表**：持久化版本管理，同名再注册即新版本，实验全留痕
 - **模型即因子**：预测面板一键回写因子库，模型 ↔ 因子血缘双向溯源
 
@@ -81,10 +90,10 @@ strategy/   因子值 → 组合权重
 research/   研究工具：IC/分层、归因、DPP、实验台账、报告渲染
 stats/      稳健统计与反过拟合（PBO / DSR）
 monitoring/ 生产监控：IC 台账、告警规则、账本
-scripts/    60+ CLI 入口（ingest / factors / pipelines / portfolio /
+scripts/    150+ 脚本入口（ingest / factors / pipelines / portfolio /
             evaluation / reporting / builders / common …）
 config/     settings.yaml（参数真源）+ schedule.yaml（调度登记表）
-tests/      85 个文件 / 1186 个用例
+tests/      86 个文件 / 1186 个用例
 reports/    实验产物、监控台账与设计文档
 ```
 
