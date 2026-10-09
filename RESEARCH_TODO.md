@@ -326,7 +326,7 @@ ic_max 0.0215→0.0147）；但 NW t ≤1.4 不显著、绝对量级弱——该
 
 ### 基本面因子权重过低的诊断与双频融合（09-22 研读+本机诊断完成）
 
-**现象**（`reports/alla_daily_ortho/latest_feature_importance.csv`）：gain Top5
+**现象**（`reports/alla_daily_ortho/feature_importance_20260916.csv`）：gain Top5
 全量价、累计 71.5%（alpha158_KLEN 23.4%），`ln_mktcap` 5.0% 第 6，其余基本面
 单因子仅 0.02–0.2%，与量价头部差 2–3 个数量级。
 
@@ -341,7 +341,7 @@ ic_max 0.0215→0.0147）；但 NW t ≤1.4 不显著、绝对量级弱——该
    另类接入，920 重跑后复核另类席位是否兑现）。
 2. **正交化二次压制**：bp/ep/div_yield 的主信息恰是风格暴露本身，剥完行业+市值
    残差短周期更弱（与"信号层必须 raw"同源）。
-3. **头部归因（D2）**：`latest_explain_top.csv` Top20 选股前三驱动全为量价+市值
+3. **头部归因（D2）**：`explain_top_20260916.csv` Top20 选股前三驱动全为量价+市值
    （alpha360_LOW0 / alpha191_070 / ln_mktcap），基本面不构成头部直接驱动。
 
 **E1' horizon 混合回测（09-22 本机已跑，复用 882 口径 pred，固化脚本
