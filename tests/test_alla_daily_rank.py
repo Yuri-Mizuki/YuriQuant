@@ -366,7 +366,7 @@ def test_build_industry_table_l1():
 
 
 def test_write_outputs_industry_l1(tmp_path):
-    """一级行业表落盘：industry_rank_l1_<ds>.csv + latest 副本 + paths 键。"""
+    """一级行业表落盘：industry_rank_l1_<ds>.csv + paths 键（2026-10-09 起无 latest 副本）。"""
     from scripts.pipelines.alla_daily_rank import write_outputs
     d = pd.Timestamp("2026-09-04")
     ranking = pd.DataFrame({
@@ -380,7 +380,8 @@ def test_write_outputs_industry_l1(tmp_path):
     paths = write_outputs(ranking, ranking.copy(), d, {"n_scored": 2},
                           industry_table_l1=ind_l1, out_dir=tmp_path)
     assert paths["industry_l1"].endswith("industry_rank_l1_20260904.csv")
-    assert (tmp_path / "latest_industry_rank_l1.csv").exists()
+    # 2026-10-09 精简：除 latest_picks 外不再写 latest 副本
+    assert not (tmp_path / "latest_industry_rank_l1.csv").exists()
     # 首列名统一为 industry（与二级表一致）
     back = pd.read_csv(tmp_path / "industry_rank_l1_20260904.csv")
     assert back.columns[0] == "industry"
@@ -476,7 +477,9 @@ def test_write_outputs(tmp_path):
 
     assert "industry" in paths
     assert (tmp_path / "industry_rank_20260904.csv").exists()
-    assert (tmp_path / "latest_industry_rank.csv").exists()
+    assert not (tmp_path / "latest_industry_rank.csv").exists()
+    # 唯一保留的稳定入口
+    assert (tmp_path / "latest_picks.csv").exists()
     # 排名/持仓 CSV 含中文名列（utf-8-sig 回读）
     rk = pd.read_csv(tmp_path / "ranking_20260904.csv", index_col=0)
     assert rk.loc["c0", "name"] == "贵州茅台"
@@ -508,7 +511,7 @@ def test_write_latest_locked(tmp_path, monkeypatch):
         m.setattr(mod.os, "replace", _boom)
         src = tmp_path / "x.csv"
         src.write_text("a", encoding="utf-8-sig")
-        dst = tmp_path / "latest_ranking.csv"
+        dst = tmp_path / "latest_picks.csv"
         assert mod._write_latest(dst, src) is True
         assert dst.read_text(encoding="utf-8-sig") == "a"
 

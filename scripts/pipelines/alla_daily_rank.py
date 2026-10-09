@@ -1535,7 +1535,7 @@ def _atomic_or_direct(path: Path, write) -> bool:
 def _write_latest(p: Path, src: Path) -> bool:
     """latest 稳定副本写入（原子优先、占用降级）；彻底失败时告警不中断。
 
-    latest_*.csv 只是当日主输出（ranking_{ds}.csv 等）的稳定路径副本，
+    latest_picks.csv 只是当日 picks_{ds}.csv 的稳定路径副本，
     被外部进程（如预览/同步）短暂独占时不应拖垮整次运行。
     """
     ok = _atomic_or_direct(
@@ -1559,7 +1559,7 @@ def write_outputs(ranking: pd.DataFrame, picks: pd.DataFrame,
                   explain_top: pd.DataFrame | None = None,
                   leaders: pd.DataFrame | None = None,
                   out_dir: Path | None = None):
-    """排名/持仓/行业排名（二级+一级）/解释 CSV + latest 稳定路径副本。
+    """排名/持仓/行业排名（二级+一级）/解释 CSV，仅持仓写 latest 稳定路径副本。
 
     返回文件路径 dict（键：ranking/picks/industry/industry_l1/feature_importance/
     explain_top/leaders，仅含实际落盘的项）。
@@ -1576,7 +1576,8 @@ def write_outputs(ranking: pd.DataFrame, picks: pd.DataFrame,
         raise PermissionError(
             f"主输出写入失败：{rank_path.name} / {picks_path.name} 被其他进程占用"
             "（如 IDE/Excel 打开着文件，请关闭后重跑）")
-    _write_latest(d / "latest_ranking.csv", rank_path)
+    # 2026-10-09 精简：只保留 latest_picks.csv 作为稳定路径入口（消费主力），
+    # 其余当日文件不再写 latest 副本——实测无消费者，纯冗余占文件数一半。
     _write_latest(d / "latest_picks.csv", picks_path)
 
     ind_path = None
@@ -1586,7 +1587,6 @@ def write_outputs(ranking: pd.DataFrame, picks: pd.DataFrame,
         if not _write_table(ind_path, industry_table):
             raise PermissionError(
                 f"行业排名写入失败：{ind_path.name} 被其他进程占用，请关闭后重跑")
-        _write_latest(d / "latest_industry_rank.csv", ind_path)
 
     ind_l1_path = None
     if industry_table_l1 is not None and len(industry_table_l1):
@@ -1595,7 +1595,6 @@ def write_outputs(ranking: pd.DataFrame, picks: pd.DataFrame,
         if not _write_table(ind_l1_path, industry_table_l1):
             raise PermissionError(
                 f"一级行业排名写入失败：{ind_l1_path.name} 被其他进程占用，请关闭后重跑")
-        _write_latest(d / "latest_industry_rank_l1.csv", ind_l1_path)
 
     imp_path = None
     if feature_importance is not None and len(feature_importance):
@@ -1603,7 +1602,6 @@ def write_outputs(ranking: pd.DataFrame, picks: pd.DataFrame,
         if not _write_table(imp_path, feature_importance):
             raise PermissionError(
                 f"特征重要性写入失败：{imp_path.name} 被其他进程占用，请关闭后重跑")
-        _write_latest(d / "latest_feature_importance.csv", imp_path)
 
     exp_path = None
     if explain_top is not None and len(explain_top):
@@ -1611,7 +1609,6 @@ def write_outputs(ranking: pd.DataFrame, picks: pd.DataFrame,
         if not _write_table(exp_path, explain_top):
             raise PermissionError(
                 f"个股归因写入失败：{exp_path.name} 被其他进程占用，请关闭后重跑")
-        _write_latest(d / "latest_explain_top.csv", exp_path)
 
     lead_path = None
     if leaders is not None and len(leaders):
@@ -1619,7 +1616,6 @@ def write_outputs(ranking: pd.DataFrame, picks: pd.DataFrame,
         if not _write_table(lead_path, leaders):
             raise PermissionError(
                 f"龙头股视图写入失败：{lead_path.name} 被其他进程占用，请关闭后重跑")
-        _write_latest(d / "latest_leaders.csv", lead_path)
 
     append_history({"predict_date": ds, **meta}, out_dir=d)
     paths = {"ranking": str(rank_path), "picks": str(picks_path)}
