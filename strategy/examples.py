@@ -185,6 +185,15 @@ class BufferedTopFracLongOnly(Strategy):
         self.name = f"buffered_topfrac_lo_{frac_entry:.2f}_{frac_exit:.2f}"
         self._prev: set = set()
 
+    def seed_holdings(self, codes) -> None:
+        """把上一期的实际持仓灌入缓冲带状态（**仅单期推理/生产出榜用**）。
+
+        回测由引擎按时序逐次调用 ``get_weights`` 自动维护 `_prev`；生产每天只跑
+        一个截面，没有时序驱动，故须由调用方从上一期落盘的 picks 显式灌入。
+        ⚠️ 回测中不要调用 —— 会覆盖引擎已建立的时序持仓，等价于制造前视。
+        """
+        self._prev = set(codes)
+
     def get_weights(self, factor_values: pd.Series) -> pd.Series:
         vals = factor_values.dropna()
         if len(vals) == 0:

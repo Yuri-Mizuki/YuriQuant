@@ -560,30 +560,41 @@ def test_append_history_idempotent(tmp_path):
 
 
 def test_feature_dispatch_sets():
-    """选择文件里的名字必须能被五条路径之一接住（含 2026-09-08 重选后的实际组合）。"""
+    """选择文件里的名字必须能被六条路径之一接住（含 2026-09-08 重选后的实际组合）。
+
+    2026-10-09 新增 P5(B5) 族——fundind 定版清单会选到 sue_q / asset_growth_yoy，
+    此前未接线会被兜底进基本面路径后 KeyError。
+    """
     from scripts.pipelines.alla_daily_rank import (
         _ALPHA_PREFIXES,
         _CONSTRUCTED_KEYS,
         _HOLDER_NUM_KEYS,
         _HOLDER_TOP_KEYS,
+        _P5_KEYS,
         _PLEDGE_KEYS,
         compute_features,
     )
     names = ["bp", "sp_ttm", "div_yield", "ep_ttm", "holder_num_yoy",
              "ln_mktcap", "holder_num_chg", "pcf_ttm", "alpha158_KLEN",
-             "alpha360_VOLUME48", "altman_zscore", "pledge_ratio"]
+             "alpha360_VOLUME48", "altman_zscore", "pledge_ratio",
+             "sue_q", "asset_growth_yoy"]
     alpha = [n for n in names if n.startswith(_ALPHA_PREFIXES)]
     holder = [n for n in names if n in (_HOLDER_NUM_KEYS | _HOLDER_TOP_KEYS)]
     pledge = [n for n in names if n in _PLEDGE_KEYS]
     constructed = [n for n in names if n in _CONSTRUCTED_KEYS]
+    p5 = [n for n in names if n in _P5_KEYS]
     fund = [n for n in names
             if n not in alpha and n not in holder and n not in pledge
-            and n not in constructed]
+            and n not in constructed and n not in p5]
     assert len(alpha) == 2 and len(holder) == 2 and len(fund) == 6
     assert constructed == ["altman_zscore"] and pledge == ["pledge_ratio"]
+    assert p5 == ["sue_q", "asset_growth_yoy"]
     # compute_features 的分派逻辑是纯集合划分，这里静态校验划分无遗漏
     assert set(alpha) | set(holder) | set(fund) | set(pledge) | set(constructed) \
-        == set(names)
+        | set(p5) == set(names)
+    # P5 族是 fundind 面板「只剥行业」域的成员，必须与基本面族同域（口径一致）
+    from scripts.pipelines.rolling_grid_alla import FUNDAMENTAL_FAMILY_SETS
+    assert _P5_KEYS <= FUNDAMENTAL_FAMILY_SETS
     # 防呆：修改分派集合时保持函数签名可导入
     assert callable(compute_features)
 
@@ -752,6 +763,44 @@ def test_ortho_transform_matches_preprocess_factor():
     assert got.dtypes.unique()[0] == np.float32
     # 中性化确实动了值（否则等于没接上）
     assert not np.allclose(got.to_numpy(), p32.to_numpy(), equal_nan=True)
+
+
+def test_ortho_fundind_transform_matches_builder():
+    """E5 fundind 变换：族内只剥行业、族外与标准 ortho 逐位一致。
+
+    族内分支须与 scripts/builders/build_alla_factor_neutralized_fundind::_process_one
+    的 ``preprocess_factor(p, industry_panel=ind)``（不传市值面板）同口径。
+    """
+    from factor.preprocessing import preprocess_factor
+    from scripts.pipelines.alla_daily_rank import (
+        make_ortho_fundind_transform,
+        make_ortho_transform,
+    )
+
+    idx = pd.bdate_range("2024-01-01", periods=5)
+    cols = [f"s{i}" for i in range(12)]
+    rng = np.random.default_rng(7)
+    size = rng.normal(size=(5, 12))
+    p = size * 3.0 + rng.normal(size=(5, 12))      # 明确带市值载荷
+    p = pd.DataFrame(p, index=idx, columns=cols)
+    mc = pd.DataFrame(np.exp(size) * 1e9, index=idx, columns=cols)
+    ind = pd.DataFrame(rng.choice(["801010.SI", "801080.SI"], size=(5, 12)),
+                       index=idx, columns=cols)
+
+    tf = make_ortho_fundind_transform(mc, ind, {"fam_x"})
+    p32 = p.astype(np.float32).replace([np.inf, -np.inf], np.nan)
+
+    want_fam = preprocess_factor(p32, industry_panel=ind)
+    want_fam = (want_fam.replace([np.inf, -np.inf], np.nan).astype(np.float32)
+                .clip(-10.0, 10.0))
+    pd.testing.assert_frame_equal(tf(p, "fam_x"), want_fam)
+
+    # 族外：与标准 ortho（行业 + log 市值）逐位一致
+    pd.testing.assert_frame_equal(tf(p, "other_y"),
+                                  make_ortho_transform(mc, ind)(p))
+    # 两条分支确实不同 —— 否则等于没按族分派（静默退化成标准 ortho）
+    assert not np.allclose(tf(p, "fam_x").to_numpy(),
+                           tf(p, "other_y").to_numpy(), equal_nan=True)
 
 
 def test_ortho_transform_tolerates_unaligned_covariates():

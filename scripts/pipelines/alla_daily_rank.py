@@ -74,6 +74,7 @@
 from __future__ import annotations
 
 import argparse
+import inspect
 import json
 import os
 import re
@@ -134,7 +135,39 @@ SELECTION_DIR = ROOT / "reports" / "alla_rolling" / "selection"
 # ortho 臂的特征清单（按 `panels_neu` 的质量窗 IC 选）—— 必须与 `--preproc ortho` 同用，
 # 否则「清单按中性化面板选、输入却是原始面板」口径错配（reports/prod_pipeline_gap §5.3）。
 ORTHO_SELECTION_DIR = ROOT / "reports" / "alla_rolling_ortho" / "selection"
+# E5 fundind 臂的特征清单（`--preproc ortho_fundind`）。**必须单独一套**：
+# stage_select 的 DPP 相关矩阵取样自 PANELS_DIR，故清单随面板口径变（实测
+# zscore 臂与 ortho 臂的 y2024–2026 清单逐文件不同）。用 ortho 清单顶替 =
+# 「清单按 A 面板选、输入却是 B 面板」，即 prod_pipeline_gap §5.3 口径错配。
+# 产出命令：rolling_grid_alla --preproc ortho_fundind
+#          --out-tag ortho920fundind --stage select
+FUNDIND_SELECTION_DIR = ROOT / "reports" / "alla_rolling_ortho920fundind" / "selection"
 OUT_DIR = ROOT / "reports" / "alla_daily"
+
+# `--preset`：把「某套口径」需要协同变动的多个参数一次配齐，避免手工漏配任一
+# 项而静默跑出混合口径（本项目历史上最贵的一类事故）。显式传参优先于预设。
+#   legacy —— 现行生产口径（h1+h5 × ortho × 无慢信号 × 无 buffer），零改动；
+#   dingban —— README 定版（真源 reports/batch1_920_收尾对照表.md §⑭⑯ 与
+#              scripts/evaluation/buffer_arm_920.py --variant defv）：
+#              fundind 快信号 h1020 ⊕ 慢信号 s0.5 + buffer(15/40) 执行层。
+PRESETS: dict[str, dict] = {
+    "legacy": {},
+    "dingban": {
+        "preproc": "ortho_fundind",
+        "horizons": (1, 5, 10, 20),
+        "slow_blend": 0.5,
+        "slow_panels_subdir": "panels_neu",
+        "selection_dir": FUNDIND_SELECTION_DIR,
+        "out_tag": "_defv",
+        "buffer_entry": 0.15,
+        "buffer_exit": 0.40,
+        # 训练标签口径：批次 1 / 批次 6（E5）的定版臂命令均带 `--tradable-labels`
+        # （GOOD_MACHINE_TASKS.md §1.1 实测命令 + build_alla_factor_neutralized_fundind
+        # 的 docstring 配套命令），故定版复现必须同开关；出榜链自身默认 False。
+        # ⚠️ 这一项超出 TODO §一 列出的「三处切换」，属我需要由莉酱确认的口径点。
+        "tradable_labels": True,
+    },
+}
 TASK_NAME = "YuriQuant AllaDailyRank"
 # 计划任务用的 Python（沿用 monitor_performance 约定：YQ_SYSTEM_PY 可配置）
 SYSTEM_PY = Path(os.environ.get("YQ_SYSTEM_PY") or sys.executable)
@@ -155,6 +188,13 @@ _CONSTRUCTED_KEYS = {"np_ded_ratio", "main_profit_ratio", "ebit_margin",
                      "margin_delta_ttm", "np_accel_sq", "roe_vol_pit",
                      "risky_asset_ratio", "div_growth_yoy",
                      "div_consecutive_years"}
+# P5 补缺基本面族（build_alla_p5_factors.build_panels 输出键，2026-09-22 入库）。
+# 属实验链 FUNDAMENTAL_SETS（rolling_grid_alla §B5），故 fundind 面板对其做「只剥
+# 行业、保市值」处理，DPP 也会把它选进清单；2026-10-09 首次出榜实测被选中，
+# 但出榜链此前无对应现算路径 → 兜底进基本面路径后 KeyError（本次补接线）。
+_P5_KEYS = {"sue_q", "asset_growth_yoy", "capex_intensity", "spsr",
+            "bonus_freq_3y", "ccc", "report_delay", "piotroski_f",
+            "inv_rev_gap"}
 
 # ---------------------------------------------------------------------------
 # 另类数据族输出键（2026-09-12 接入日频主链）
@@ -299,16 +339,36 @@ def tail_n_days(window: int) -> int:
     return window + WARMUP + HORIZON + TAIL_BUFFER
 
 
-# 面板变换钩子：默认 None = 旧行为（zscore + ±10）。`--preproc ortho` 时由 run()
-# 换成 `make_ortho_transform(...)` 的闭包 —— 9 条特征构建路径的 `preprocess_panel`
-# 调用点无需逐个改（分支多必漏，见 reports/prod_pipeline_gap §4）。
-_PANEL_TRANSFORM = None  # Callable[[pd.DataFrame], pd.DataFrame] | None
+# 面板变换钩子：默认 None = 旧行为（zscore + ±10）。`--preproc ortho` /
+# `ortho_fundind` 时由 run() 换成 `make_ortho*_transform(...)` 的闭包 —— 9 条特征
+# 构建路径的 `preprocess_panel` 调用点无需逐个改分支（分支多必漏，见
+# reports/prod_pipeline_gap §4）。
+# 2026-10-09：钩子签名扩为 (panel, name) —— E5 fundind 口径需要**按因子名**分派
+# （基本面/股东族只剥行业、保市值风格，其余族标准三步），无因子名则只能一刀切。
+_PANEL_TRANSFORM = None  # Callable[[pd.DataFrame, str | None], pd.DataFrame] | None
 
 
 def set_panel_transform(fn) -> None:
-    """设置/清除面板变换（None = 恢复默认 zscore 口径）。零回归：不设置即旧行为。"""
+    """设置/清除面板变换（None = 恢复默认 zscore 口径）。零回归：不设置即旧行为。
+
+    ``fn`` 可以是 2 参 ``(panel, name)``，也可以是旧的 1 参 ``(panel)`` —— 后者
+    自动包成 2 参（``name`` 被忽略）。保留 1 参契约是为了不静默打断既有调用方
+    （tests 的零回归探针、scripts/oneoff 下的口径核对脚本）。
+    """
     global _PANEL_TRANSFORM
-    _PANEL_TRANSFORM = fn
+    if fn is None:
+        _PANEL_TRANSFORM = None
+        return
+    try:
+        n_params = len(inspect.signature(fn).parameters)
+    except (TypeError, ValueError):   # 内建/不可内省 callable：按新签名处理
+        n_params = 2
+    if n_params == 1:
+        def _one_arg(p: pd.DataFrame, name: str | None = None) -> pd.DataFrame:
+            return fn(p)
+        _PANEL_TRANSFORM = _one_arg
+    else:
+        _PANEL_TRANSFORM = fn
 
 
 def make_ortho_transform(market_cap_panel: pd.DataFrame,
@@ -321,7 +381,8 @@ def make_ortho_transform(market_cap_panel: pd.DataFrame,
     """
     from factor.preprocessing import preprocess_factor
 
-    def _transform(p: pd.DataFrame) -> pd.DataFrame:
+    def _transform(p: pd.DataFrame,
+                   name: str | None = None) -> pd.DataFrame:  # noqa: ARG001
         p = p.astype(np.float32).replace([np.inf, -np.inf], np.nan)
         # 协变量必须与因子面板**逐列对齐**：neutralize 按行取 panel.loc[d] 与
         # market_cap_panel.loc[d] 做布尔掩码，列不一致会 IndexingError ——
@@ -339,15 +400,52 @@ def make_ortho_transform(market_cap_panel: pd.DataFrame,
     return _transform
 
 
-def preprocess_panel(p: pd.DataFrame) -> pd.DataFrame:
+def make_ortho_fundind_transform(market_cap_panel: pd.DataFrame,
+                                 industry_panel: pd.DataFrame | None,
+                                 family_names):
+    """E5 口径：基本面/股东族**只剥行业**（保市值/价值/红利风格），其余族标准三步。
+
+    与 ``build_alla_factor_neutralized_fundind::_process_one`` 逐字同口径：
+    ``name in FUNDAMENTAL_FAMILY_SETS`` 时 ``preprocess_factor(p, industry_panel=ind)``
+    （``market_cap_panel=None`` ⇒ 跳过市值中性化），否则与 ``make_ortho_transform``
+    完全一致。**差异只在族归属，流程（MAD → 中性化 → zscore → ±10）与列对齐规则相同。**
+    """
+    from factor.preprocessing import preprocess_factor
+
+    fam = set(family_names)
+
+    def _transform(p: pd.DataFrame,
+                   name: str | None = None) -> pd.DataFrame:
+        p = p.astype(np.float32).replace([np.inf, -np.inf], np.nan)
+        # 与 builder 一致：即便走「只剥行业」分支，索引仍是 p ∩ 市值面板日期
+        # （builder 的 common = mc.index ∩ p.index 在两条分支上都要先做）。
+        idx = p.index.intersection(market_cap_panel.index)
+        mc = market_cap_panel.reindex(index=idx, columns=p.columns)
+        ind = (industry_panel.reindex(index=idx, columns=p.columns)
+               if industry_panel is not None else None)
+        if name is not None and name in fam:
+            x = preprocess_factor(p.reindex(index=idx), industry_panel=ind)
+        else:
+            x = preprocess_factor(p.reindex(index=idx), market_cap_panel=mc,
+                                  industry_panel=ind)
+        x = x.replace([np.inf, -np.inf], np.nan).astype(np.float32)
+        return x.clip(-10.0, 10.0)
+
+    return _transform
+
+
+def preprocess_panel(p: pd.DataFrame,
+                     name: str | None = None) -> pd.DataFrame:
     """因子面板统一口径：float32 → inf→NaN → 截面 zscore → ±10 剪裁。
 
     与 FeatureStore 读取冻结面板时的变换一致（astype 先于 replace，防 float64
     巨值溢出成 float32 inf 后漏杀，见 build_alla_alpha_panels 2026-09-01 教训）。
-    ``--preproc ortho`` 下由 `_PANEL_TRANSFORM` 换成正交化，签名与调用点不变。
+    ``--preproc ortho`` / ``ortho_fundind`` 下由 `_PANEL_TRANSFORM` 换成中性化，
+    调用点形状不变；``name`` 供 E5 fundind 口径**按因子名**分派族归属（默认
+    zscore 口径下无意义）。
     """
     if _PANEL_TRANSFORM is not None:
-        return _PANEL_TRANSFORM(p)
+        return _PANEL_TRANSFORM(p, name)
     from factor.preprocessing import standardize_zscore
     p = p.astype(np.float32).replace([np.inf, -np.inf], np.nan)
     return standardize_zscore(p).clip(-10.0, 10.0).astype(np.float32)
@@ -599,6 +697,41 @@ def build_ranking(scores: pd.Series, tradable: pd.Series, frac: float,
     if len(picks):
         picks["weight"] = 1.0 / len(picks)
     return ranking, picks
+
+
+def load_prev_holdings(out_dir: Path, before: pd.Timestamp) -> set:
+    """读**最近一期严格早于预测日**的 picks 清单，作为缓冲带的期初持仓。
+
+    无历史（首次运行/换目录）返回空集 —— 空集下 ``BufferedTopFracLongOnly``
+    退化为「按 entry 门槛等权建仓」，与冷启动语义一致（无旧仓可保留、也无旧仓
+    需换出）。**不读当日文件**：重跑同一天时不会被自己上一步的输出污染。
+    """
+    ds = before.strftime("%Y%m%d")
+    cands = sorted(p for p in out_dir.glob("picks_*.csv")
+                   if p.stem.rsplit("_", 1)[-1].isdigit()
+                   and p.stem.rsplit("_", 1)[-1] < ds)
+    if not cands:
+        return set()
+    df = pd.read_csv(cands[-1], dtype={"code": str}, index_col="code")
+    log.info("缓冲带期初持仓 ← %s（%d 只）", cands[-1].name, len(df))
+    return set(df.index.astype(str))
+
+
+def apply_buffer(scores: pd.Series, tradable: pd.Series, prev: set,
+                 entry: float, exit_frac: float) -> set:
+    """缓冲带单期持仓（复用回测同款 ``BufferedTopFracLongOnly``）。
+
+    与回测同规则：旧仓排名仍在前 ``frac_exit`` 分位内则保留，空缺席位由前
+    ``frac_entry`` 分位内排名最高的非持仓补足。**信号先按可交易性掩码** ——
+    回测中引擎在调用策略前已完成 executable_mask，此处对齐同一口径，否则
+    会把信号日封板/停牌的股票排进持仓（实盘买不进）。
+    """
+    from strategy.examples import BufferedTopFracLongOnly
+
+    strat = BufferedTopFracLongOnly(entry, exit_frac)
+    strat.seed_holdings(prev)
+    masked = scores.where(tradable.reindex(scores.index).fillna(False))
+    return set(strat.get_weights(masked).index.astype(str))
 
 
 def build_industry_table(ranking: pd.DataFrame) -> pd.DataFrame:
@@ -933,7 +1066,7 @@ def compute_alpha_features(names: list[str], px: dict,
     for i, n in enumerate(names, 1):
         setname, reg_name = fns[n]
         p = registry_lookup(setname, reg_name)(data)
-        out[n] = preprocess_panel(p)
+        out[n] = preprocess_panel(p, n)
         if i % 10 == 0:
             log.info("量价因子 %d/%d（最近 %s）", i, len(names), n)
     return out
@@ -984,7 +1117,7 @@ def compute_fundamental_features(
     if missing:
         raise KeyError(f"选择文件包含基本面构建器不产出的因子: {missing}")
     log.info("基本面因子(B族): %d 个（构建器产出 %d 个）", len(names), len(panels))
-    return {n: preprocess_panel(panels[n]) for n in names}
+    return {n: preprocess_panel(panels[n], n) for n in names}
 
 
 def compute_market_cap(close_raw: pd.DataFrame,
@@ -1051,7 +1184,36 @@ def compute_constructed_features(
     if missing:
         raise KeyError(f"选择文件包含构造型基本面不产出的因子: {missing}")
     log.info("构造型基本面(B++族): %d 个", len(names))
-    return {n: preprocess_panel(panels[n]) for n in names}
+    return {n: preprocess_panel(panels[n], n) for n in names}
+
+
+def compute_p5_features(
+        names: list[str], close_adj: pd.DataFrame, close_raw: pd.DataFrame,
+        tables: dict[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
+    """P5 补缺基本面（B5族）：复用 build_alla_p5_factors 构建器（PIT）。
+
+    与 builder main() 同口径：先把宽表（income 95 列 / balance 176 列）瘦身成
+    所需列再传入——build_panels 会就地增列（add_single_quarter / year_offset /
+    add_ttm_yoy），直接传缓存长表既改共享表又撑内存。见
+    build_alla_p5_factors.main() 的同等处理。
+    """
+    from scripts.builders.build_alla_p5_factors import build_panels
+
+    income = tables["income"][[
+        "code", "ann_date", "report_period", "OPERA_REV", "LESS_OPERA_COST",
+        "NET_PRO_INCL_MIN_INT_INC", "NET_PRO_AFTER_DED_NR_GL"]].reset_index(
+        drop=True)
+    balance = tables["balance"][[
+        "code", "ann_date", "report_period", "TOTAL_ASSETS", "TOTAL_LIAB",
+        "TOTAL_CUR_ASSETS", "TOTAL_CUR_LIAB", "ACC_RECEIVABLE", "INV",
+        "ACCT_PAYABLE", "CAP_RESV", "TOT_SHARE"]].reset_index(drop=True)
+    panels = build_panels(close_adj, close_raw, income, balance,
+                          tables["cashflow"], tables["dividend"])
+    missing = [n for n in names if n not in panels]
+    if missing:
+        raise KeyError(f"选择文件包含 P5 补缺基本面不产出的因子: {missing}")
+    log.info("P5 补缺基本面(B5族): %d 个", len(names))
+    return {n: preprocess_panel(panels[n], n) for n in names}
 
 
 def compute_pledge_features(
@@ -1068,7 +1230,7 @@ def compute_pledge_features(
     if missing:
         raise KeyError(f"选择文件包含 B+ 族构建器不产出的因子: {missing}")
     log.info("B+族(商誉/质押/业绩): %d 个", len(names))
-    return {n: preprocess_panel(panels[n]) for n in names}
+    return {n: preprocess_panel(panels[n], n) for n in names}
 
 
 def compute_holder_features(names: list[str],
@@ -1094,7 +1256,7 @@ def compute_holder_features(names: list[str],
     if missing:
         raise KeyError(f"选择文件包含未知股东族因子: {missing}")
     log.info("股东族因子(A族): %d 个", len(names))
-    return {n: preprocess_panel(out[n]) for n in names}
+    return {n: preprocess_panel(out[n], n) for n in names}
 
 
 def _check_missing(names: list[str], panels: dict, tag: str) -> None:
@@ -1116,7 +1278,7 @@ def compute_style_features(names: list[str], close_adj: pd.DataFrame,
                           tables["dividend"])
     _check_missing(names, panels, "风格族")
     log.info("风格族(财务比率): %d 个", len(names))
-    return {n: preprocess_panel(panels[n]) for n in names}
+    return {n: preprocess_panel(panels[n], n) for n in names}
 
 
 def compute_alt_extra_features(
@@ -1162,7 +1324,7 @@ def compute_alt_extra_features(
         else:
             raise ValueError(f"未知另类数据族: {key}")
         _check_missing(names, panels, key)
-        out.update({n: preprocess_panel(panels[n]) for n in names})
+        out.update({n: preprocess_panel(panels[n], n) for n in names})
         log.info("另类族(%s): %d 个", key, len(names))
     return out
 
@@ -1170,9 +1332,9 @@ def compute_alt_extra_features(
 def compute_features(names: list[str], tail: dict,
                      long_tables: dict[str, pd.DataFrame] | None = None
                      ) -> dict[str, pd.DataFrame]:
-    """按因子名分派到 12 条构建路径（与实验同一代码路径）。
+    """按因子名分派到 13 条构建路径（与实验同一代码路径）。
 
-    路径：量价 / 基本面 / 风格 / 质押(B+) / 构造(B++) / 股东(A) / 事件 /
+    路径：量价 / 基本面 / 风格 / 质押(B+) / 构造(B++) / P5(B5) / 股东(A) / 事件 /
     SUE+质押深度 / 两融 / 资金流 / 折价+股东动态 / 停牌状态。
     未登记因子直接抛 KeyError，不再兜底塞进基本面路径（旧行为会在构建器
     深处报错，指向性差且掩盖「因子库新增来源未接线」的真实问题）。
@@ -1187,6 +1349,7 @@ def compute_features(names: list[str], tail: dict,
     holder = _pick(_HOLDER_NUM_KEYS | _HOLDER_TOP_KEYS)
     pledge = _pick(_PLEDGE_KEYS)
     constructed = _pick(_CONSTRUCTED_KEYS)
+    p5 = _pick(_P5_KEYS)
     style = _pick(_STYLE_KEYS)
     event = _pick(_EVENT_KEYS)
     sue_pledge = _pick(_SUE_PLEDGE_KEYS)
@@ -1195,14 +1358,14 @@ def compute_features(names: list[str], tail: dict,
     disc_dyn = _pick(_DISC_HOLDER_DYN_KEYS)
     status = _pick(_STATUS_KEYS)
     claimed = set(alpha) | set(holder) | set(pledge) | set(constructed) \
-        | set(style) | set(event) | set(sue_pledge) | set(margin) \
+        | set(p5) | set(style) | set(event) | set(sue_pledge) | set(margin) \
         | set(moneyflow) | set(disc_dyn) | set(status)
     fund = [n for n in names if n not in claimed]
     log.info("特征分派: 量价 %d / 基本面 %d / 风格 %d / 质押 %d / 构造 %d / "
-             "股东 %d / 事件 %d / SUE质押 %d / 两融 %d / 资金流 %d / "
+             "P5 %d / 股东 %d / 事件 %d / SUE质押 %d / 两融 %d / 资金流 %d / "
              "折价动态 %d / 状态 %d（共 %d）",
              len(alpha), len(fund), len(style), len(pledge), len(constructed),
-             len(holder), len(event), len(sue_pledge), len(margin),
+             len(p5), len(holder), len(event), len(sue_pledge), len(margin),
              len(moneyflow), len(disc_dyn), len(status), len(names))
 
     long_keys: set[str] = set()
@@ -1213,6 +1376,8 @@ def compute_features(names: list[str], tail: dict,
     if pledge:
         long_keys |= {"balance", "pledge", "notice", "express"}
     if constructed:
+        long_keys |= {"income", "balance", "cashflow", "dividend"}
+    if p5:
         long_keys |= {"income", "balance", "cashflow", "dividend"}
     if event:
         long_keys |= {"notice", "express", "restricted"}
@@ -1247,6 +1412,9 @@ def compute_features(names: list[str], tail: dict,
     if constructed:
         feats.update(compute_constructed_features(
             constructed, tail["close_adj"], tail["close_raw"], tables))
+    if p5:
+        feats.update(compute_p5_features(
+            p5, tail["close_adj"], tail["close_raw"], tables))
     if holder:
         feats.update(compute_holder_features(holder, tail["close_adj"].index,
                                              tail["close_adj"].columns))
@@ -1519,7 +1687,12 @@ def run(args) -> dict:
         else OUT_DIR.with_name(OUT_DIR.name + args.out_tag)
 
     preproc = str(getattr(args, "preproc", DEFAULT_PREPROC))
-    sel_dir = ORTHO_SELECTION_DIR if preproc == "ortho" else SELECTION_DIR
+    sel_dir = {"ortho": ORTHO_SELECTION_DIR,
+               "ortho_fundind": FUNDIND_SELECTION_DIR}.get(preproc, SELECTION_DIR)
+    _sel_override = getattr(args, "selection_dir", None)
+    if _sel_override:
+        sel_dir = Path(_sel_override)
+        log.info("特征清单目录被显式覆盖 → %s", sel_dir)
 
     # 每个 horizon 读各自的落盘清单（实验口径：h1/h5 的质量窗 IC 不同，清单不同）
     sel: dict[int, dict] = {}
@@ -1541,8 +1714,8 @@ def run(args) -> dict:
         long_keys |= {"balance", "pledge", "notice", "express"}
     if any(n in _CONSTRUCTED_KEYS for n in names_all):
         long_keys |= {"income", "balance", "cashflow", "dividend"}
-    if preproc == "ortho":
-        long_keys.add("balance")   # 正交化需要 TOT_SHARE × 未复权收盘 的市值面板
+    if preproc in ("ortho", "ortho_fundind"):
+        long_keys.add("balance")   # 中性化需要 TOT_SHARE × 未复权收盘 的市值面板
     long_tables = _load_long_tables(sorted(long_keys))
 
     # 正交化协变量面板：行业取自 tail["industry"]（与实验 cov_industry 同源
@@ -1555,6 +1728,15 @@ def run(args) -> dict:
         log.info("面板口径: 因子层正交化（MAD→行业+log市值中性化→zscore）| "
                  "市值面板 %d×%d | 行业面板 %s",
                  *cap_panel.shape,
+                 "可用" if tail.get("industry") is not None else "缺失(退化为仅市值)")
+    elif preproc == "ortho_fundind":
+        from scripts.pipelines.rolling_grid_alla import FUNDAMENTAL_FAMILY_SETS
+        cap_panel = compute_market_cap(tail["close_raw"], long_tables)
+        set_panel_transform(make_ortho_fundind_transform(
+            cap_panel, tail.get("industry"), FUNDAMENTAL_FAMILY_SETS))
+        log.info("面板口径: E5 fundind（基本面/股东族 %d 个**只剥行业**、保市值风格；"
+                 "其余族标准行业+log市值中性化）| 市值面板 %d×%d | 行业面板 %s",
+                 len(FUNDAMENTAL_FAMILY_SETS), *cap_panel.shape,
                  "可用" if tail.get("industry") is not None else "缺失(退化为仅市值)")
     else:
         set_panel_transform(None)
@@ -1599,6 +1781,42 @@ def run(args) -> dict:
         ens_tag = "+".join(f"h{h}" for h in horizons) + "_rank_avg"
         log.info("集成 %s → 单日截面秩平均，有效股票 %d（各臂交集口径）",
                  ens_tag, int(scores.notna().sum()))
+
+    # 定版慢信号融合（`--slow-blend`，README 定版 = 0.5）：
+    #   scores = (1-λ)·rank(快信号) + λ·rank(慢信号)
+    # 慢信号 = `panels_neu` 的基本面/股东族 trailing 24 月末 ICIR 加权线性合成
+    # （embargo 2 个月末，PIT 安全），逐字复用实验侧 `build_slow_panel` ——
+    # 与 `buffer_arm_920 --variant defv` 的 0.5·rank(h1020)+0.5·rank(slow) 同口径。
+    # ⚠️ 该函数输出按**信号月月初**索引、再 ffill 展开。慢信号读的是**冻结因子库**
+    # `panels_neu`（覆盖止于 2026-09-01），预测日所在月初必然超出覆盖——若只传
+    # 预测日，面板 reindex 后整列 NaN、合成后整榜清空（2026-10-09 实测）。
+    # 故 oos_days 取「最近 24 个月初 + 预测日」两点集合：
+    #   ① 保证 ic_tab 的 tail(24) 不被 t0_days[0]-500d 的裁剪截短（与定版回测同口径）；
+    #   ② 由 build_slow_panel 末尾的 ffill 把「最近可得信号月」带到预测日
+    #      （月度信号 hold 语义）。
+    slow_lam = float(getattr(args, "slow_blend", 0.0) or 0.0)
+    if slow_lam > 0:
+        from scripts.evaluation.fundamental_blend import build_slow_panel, month_firsts
+        from scripts.pipelines import rolling_grid_alla as _RG
+
+        _base = _RG.load_base()
+        _bmf = month_firsts(pd.DatetimeIndex(_base["close"].index))
+        _oos = pd.DatetimeIndex(sorted(set(_bmf[-24:]) | {predict_date}))
+        slow_panel, _slow_max, _slow_w = build_slow_panel(
+            _base, _oos, 24, 2, 0.5, 12,
+            panels_subdir=str(getattr(args, "slow_panels_subdir", None)
+                              or "panels_neu"),
+            log=log.info)
+        slow_row = slow_panel.loc[predict_date].reindex(scores.index)
+        scores = (1.0 - slow_lam) * scores.rank(pct=True) \
+            + slow_lam * slow_row.rank(pct=True)
+        ens_tag = f"{ens_tag}+s{slow_lam:.1f}"
+        # 真实信号月 = 日历上 ≤ 预测日的最后一个月初（其行由 ffill 前推到预测日）
+        _msrc = _bmf[_bmf <= predict_date]
+        log.info("定版慢信号融合: λ=%.2f | 慢信号有效 %d 只 | 合成后有效 %d 只"
+                 "（信号月取自 %s）",
+                 slow_lam, int(slow_row.notna().sum()), int(scores.notna().sum()),
+                 _msrc[-1].date() if len(_msrc) else "无")
     # 解释口径固定 h1（不在集成里时取首个 horizon）：SHAP/重要性只对单模型有意义
     expl_h = 1 if 1 in predictors else horizons[0]
     predictor, feats = predictors[expl_h]
@@ -1624,6 +1842,22 @@ def run(args) -> dict:
     industry = industry if len(industry) else None
     ranking, picks = build_ranking(scores, tradable, args.frac,
                                    names=stock_names, industry=industry)
+    # 缓冲带持仓（`--buffer-entry/--buffer-exit`；README 定版 = 15/40）。
+    # **只改持仓候选 picks 与 ranking 的一列标记，不改排名顺序** —— 榜单是
+    # 定版信号的排序，缓冲带属于执行层规则（进出门槛分离 → 降换手）。
+    # 期初持仓取自上一期落盘的 picks（无历史则退化为按 entry 门槛建仓）。
+    _buf = getattr(args, "buffer", None)
+    if _buf:
+        _entry, _exit = float(_buf[0]), float(_buf[1])
+        _prev = load_prev_holdings(out_dir, predict_date)
+        _hold = apply_buffer(scores, tradable, _prev, _entry, _exit)
+        ranking["buffer_hold"] = ranking.index.isin(_hold)
+        picks = ranking[ranking["buffer_hold"]].copy()
+        if len(picks):
+            picks["weight"] = 1.0 / len(picks)
+        log.info("缓冲带 picks: entry=%.2f exit=%.2f | 期初持仓 %d → 本期 %d 只"
+                 "（naive top%.0f%% = %d 只）", _entry, _exit, len(_prev),
+                 len(picks), args.frac * 100, int(ranking["top_frac"].sum()))
     ind_table = build_industry_table(ranking) if "industry_l2" in ranking.columns \
         else pd.DataFrame()
     # 一级行业表（上卷）：与二级表同源同口径，缺 industry_l1 列时跳过
@@ -1649,6 +1883,10 @@ def run(args) -> dict:
              len(leaders_table))
 
     meta = {"model": "gbdt", **train_meta, "frac": args.frac, "preproc": preproc,
+            "preset": getattr(args, "preset", None) or "legacy",
+            "slow_blend": float(getattr(args, "slow_blend", 0.0) or 0.0),
+            "buffer": (f"{_buf[0]:.2f}/{_buf[1]:.2f}" if _buf else ""),
+            "tradable_labels": bool(getattr(args, "tradable_labels", False)),
             "selection_dir": sel_dir.name,
             "n_features": len(sel[expl_h]["names"]),
             "n_features_union": len(names_all),
@@ -1723,8 +1961,7 @@ def main() -> None:
                     help=f"滚动训练窗（默认 {DEFAULT_WINDOW}；750 = gbdt_w750 变体）")
     ap.add_argument("--frac", type=float, default=DEFAULT_FRAC,
                     help=f"持仓候选分位（默认 {DEFAULT_FRAC}）")
-    ap.add_argument("--horizons", default=",".join(str(h) for h in HORIZONS),
-                    metavar="H[,H...]",
+    ap.add_argument("--horizons", default=None, metavar="H[,H...]",
                     help="集成 horizon 列表（逗号分隔）。默认 "
                          f"{'+'.join('h' + str(h) for h in HORIZONS)} 截面秩平均"
                          "（主实验信号形态）；传 1 回到 h1 单模型口径")
@@ -1732,28 +1969,80 @@ def main() -> None:
                     metavar="F[,F...]",
                     help=f"硬剔除的特征名（逗号分隔）。默认 "
                          f"{','.join(EXCLUDE_FEATURES) or '无'}；传空串 '' 关闭剔除")
-    ap.add_argument("--preproc", choices=("zscore", "ortho"),
-                    default=DEFAULT_PREPROC,
+    ap.add_argument("--preproc", choices=("zscore", "ortho", "ortho_fundind"),
+                    default=None,
                     help="面板预处理口径：ortho（默认，因子层正交化 "
                          "MAD→行业+log市值中性化→zscore，与主实验 panels_neu 同流程、"
-                         "自动改用 ortho 臂特征清单；北交所无行业分类故被排除）或 "
-                         "zscore（原始面板 + 截面 zscore，2026-09-16 前默认）")
+                         "自动改用 ortho 臂特征清单；北交所无行业分类故被排除）；"
+                         "ortho_fundind（E5：基本面/股东族只剥行业、保市值风格，"
+                         "配 fundind 臂特征清单）；zscore（原始面板 + 截面 zscore）")
+    ap.add_argument("--preset", choices=tuple(PRESETS), default=None,
+                    help="口径预设，一次配齐需协同变动的多个参数（显式传参优先）："
+                         "legacy（默认 = 现行生产口径，零改动）或 dingban（README "
+                         "定版 = fundind 快信号 h1020⊕慢信号 s0.5 + buffer(15/40)）")
+    ap.add_argument("--slow-blend", type=float, default=None, metavar="LAMBDA",
+                    help="慢信号融合权重 λ（0=关）。定版 λ=0.5："
+                         "scores=(1-λ)·rank(快)+λ·rank(慢)，慢信号 = panels_neu "
+                         "基本面族 trailing 24 月末 ICIR 加权线性合成")
+    ap.add_argument("--slow-panels-subdir", default=None, metavar="SUBDIR",
+                    help="慢信号因子面板子目录（默认 panels_neu —— 注意定版的慢信号"
+                         "用**标准**面板，不是 fundind，勿顺手改）")
+    ap.add_argument("--selection-dir", default=None, metavar="DIR",
+                    help="覆盖特征清单目录（默认随 --preproc 选 ortho/fundind 目录）")
+    ap.add_argument("--buffer-entry", type=float, default=None, metavar="F",
+                    help="缓冲带建仓分位（定版 0.15）；给值即启用缓冲带持仓")
+    ap.add_argument("--buffer-exit", type=float, default=None, metavar="F",
+                    help="缓冲带保留分位（定版 0.40）")
     ap.add_argument("--tradable-labels", action="store_true",
                     default=DEFAULT_TRADABLE_LABELS,
                     help="训练标签掩掉买不进的样本（T+1 成交口径可交易掩码，"
-                         "P0 §六 P1-a 治本项）；默认关闭 = 现行口径")
-    ap.add_argument("--out-tag", default="", metavar="TAG",
+                         "P0 §六 P1-a 治本项）；默认关闭 = 现行口径。"
+                         "定版预设 dingban 会打开（定版臂跑法带此开关）")
+    ap.add_argument("--out-tag", default=None, metavar="TAG",
                     help="输出目录后缀（如 _h1h5 → reports/alla_daily_h1h5）；"
-                         "默认空 = 写生产目录 reports/alla_daily")
+                         "默认空 = 写生产目录 reports/alla_daily，dingban 预设 = _defv")
     ap.add_argument("--install-task", nargs="?", const="17:30", default=None,
                     metavar="HH:MM", help="注册每日 Windows 计划任务并退出")
     ap.add_argument("--remove-task", action="store_true", help="删除计划任务并退出")
     args = ap.parse_args()
-    args.horizons = tuple(int(x) for x in str(args.horizons).split(",") if x.strip())
+
+    # ---- 预设解析：显式传参 > 预设 > 代码默认（缺省一律走 legacy，零回归）----
+    preset = PRESETS.get(args.preset or "legacy", {})
+    args.preproc = args.preproc or preset.get("preproc", DEFAULT_PREPROC)
+    _h = args.horizons
+    if _h is None:
+        _h = preset.get("horizons", HORIZONS)
+    args.horizons = tuple(int(x) for x in
+                          (str(_h) if isinstance(_h, str)
+                           else ",".join(str(v) for v in _h)).split(",")
+                          if str(x).strip())
+    if args.out_tag is None:
+        args.out_tag = preset.get("out_tag", "")
+    if args.slow_blend is None:
+        args.slow_blend = float(preset.get("slow_blend", 0.0) or 0.0)
+    if args.slow_panels_subdir is None:
+        args.slow_panels_subdir = preset.get("slow_panels_subdir", "panels_neu")
+    if args.selection_dir is None:
+        args.selection_dir = preset.get("selection_dir")
+    _be = args.buffer_entry if args.buffer_entry is not None \
+        else preset.get("buffer_entry")
+    _bx = args.buffer_exit if args.buffer_exit is not None \
+        else preset.get("buffer_exit")
+    args.buffer = (_be, _bx) if _be is not None else None
+    if args.buffer and (_bx is None or not 0 < _be <= _bx <= 1):
+        ap.error(f"--buffer-entry/--buffer-exit 须满足 0 < entry <= exit <= 1"
+                 f"（现 entry={_be}, exit={_bx}）")
+    if preset.get("tradable_labels"):
+        args.tradable_labels = True
     args.exclude_features = tuple(
         x.strip() for x in str(args.exclude_features).split(",") if x.strip())
     if not args.horizons:
         ap.error("--horizons 不能为空")
+    log.info("预设=%s | preproc=%s | horizons=%s | slow_blend=%.2f | buffer=%s | "
+             "tradable_labels=%s | out_tag=%s", args.preset or "legacy",
+             args.preproc, list(args.horizons), float(args.slow_blend or 0.0),
+             f"{_be:.2f}/{_bx:.2f}" if args.buffer else "关",
+             args.tradable_labels, args.out_tag or "(生产目录)")
     if args.install_task:
         print(install_task(args.install_task))
         return
