@@ -112,6 +112,8 @@ SOURCE_PREFIXES: frozenset[str] = frozenset({
     # （``alpha101:build_alpha_factors:20220101-20260821``）
     "evt", "event", "sentiment", "constructed", "style", "pledge", "sue_pledge",
     "disc_holder_dyn", "holder_dyn", "significant_synthesis", "p5",
+    # 另类数据因子集（2026-10-09 首次入库；insider/macro/news 三族）
+    "altf",
 })
 
 #: 无法识别产出脚本时 ``source_for`` 的默认 producer 段。
@@ -136,6 +138,9 @@ SET_TO_FAMILY: dict[str, str] = {
     "moneyflow": "资金流", "margin": "资金流",
     # 其余
     "status": "状态",
+    # 另类数据三族统一归「事件」（增减持公告 / 宏观日历 surprise / 快讯情绪，
+    # 2026-10-09 首次入库；此前 merge_outputs 传 family_tag="其他"）
+    "altf": "事件",
     "technical": "技术", "intraday": "日内",
     "paper": "论文", "model": "模型", "synthesis": "合成", "textmining": "文本",
     "sentiment": "情绪",

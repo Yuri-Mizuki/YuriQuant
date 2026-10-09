@@ -579,7 +579,7 @@ def main() -> None:
                  time.time() - t0)
 
     if not args.only:
-        common.merge_outputs(ds_dir, FAMILY, family_tag="其他",
+        common.merge_outputs(ds_dir, FAMILY, family_tag="事件",
                              empty_log="altf stats 为空，无输出可合并")
     log.info("altf 构建完成 %.0fs", time.time() - t0)
 
