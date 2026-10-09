@@ -120,6 +120,62 @@ class TopKLongOnly(Strategy):
             return long_vals / long_vals.abs().sum()
 
 
+class SectorCappedTopKLongOnly(Strategy):
+    """Top-K 等权多头 + **每行业最多 N 只**（贪心填充）。
+
+    2026-10-09：可交付组合口径。定版榜单的 ``picks`` 是 band 上限
+    （全A Top10% ≈ 500+ 只），不是能下单的组合；实盘按
+    「45~50 只 + 每申万一级 ≤2 只」执行。约束用贪心保证：
+    分数从高到低逐只纳入，行业计数已满则跳过，凑满 k 即停
+    （行业数 × max_per_sector < k 时实际持仓会不足 k）。
+
+    行业截面需按 date 定位，故实现 :meth:`get_weights_at`；
+    :meth:`get_weights` 拿不到日期，直接抛 ``NotImplementedError``。
+    """
+
+    def __init__(self, sectors: pd.DataFrame, k: int = 50,
+                 max_per_sector: int = 2, weight_mode: str = "equal"):
+        if k <= 0:
+            raise ValueError(f"k 必须为正: {k}")
+        if max_per_sector <= 0:
+            raise ValueError(f"max_per_sector 必须为正: {max_per_sector}")
+        self.sectors = sectors
+        self.k = int(k)
+        self.max_per_sector = int(max_per_sector)
+        self.weight_mode = weight_mode
+        self.name = f"sector_cap_topk_{k}_m{max_per_sector}"
+
+    def get_weights(self, factor_values: pd.Series) -> pd.Series:
+        raise NotImplementedError(
+            "行业约束需按日期定位行业截面，请用 get_weights_at(date, vals)")
+
+    def get_weights_at(self, date, factor_values: pd.Series) -> pd.Series:
+        vals = factor_values.dropna()
+        if vals.empty:
+            return pd.Series(dtype=float)
+        sect = (self.sectors.loc[date] if date in self.sectors.index
+                else pd.Series(index=vals.index, dtype=object)).reindex(vals.index)
+        # 与全仓唯一 tie-break 口径一致：降序名次（并列按列序）
+        order = _rank_desc(vals).sort_values().index
+        counts: dict[str, int] = {}
+        picked: list = []
+        for code in order:
+            s = sect.get(code)
+            key = "__NA__" if s is None or pd.isna(s) else str(s)
+            if counts.get(key, 0) >= self.max_per_sector:
+                continue
+            counts[key] = counts.get(key, 0) + 1
+            picked.append(code)
+            if len(picked) >= self.k:
+                break
+        if not picked:
+            return pd.Series(dtype=float)
+        if self.weight_mode == "equal":
+            return pd.Series(1.0 / len(picked), index=picked)
+        sub = vals.loc[picked]
+        return sub / sub.abs().sum()
+
+
 class TopFracLongOnly(Strategy):
     """Top-Frac 重仓多头: 按比例 selected top-股做等权多头。
 
