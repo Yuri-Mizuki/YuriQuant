@@ -1,4 +1,4 @@
-"""生产口径每日 IC / 风格暴露监控 CLI（全A · ens_h1h5 · ortho 预处理）。
+"""生产口径每日 IC / 风格暴露监控 CLI（全A · 定版 dingban · 2026-10-10 起）。
 
 用法::
 
@@ -10,6 +10,11 @@
 
 产物：
     reports/monitoring/production_ic_daily.csv   逐日 IC / 中性化 IC / 风格暴露
+
+⚠️ 口径断点（2026-10-10）：生产出榜切定版（``--preset dingban``，产物目录
+``reports/alla_daily_defv/``）后，本台账的**实时段**改用 defv 榜（dingban 口径），
+而**历史段仍来自 ``reports/alla_rolling_ortho`` 的 ortho 回测基线**（本机无 fundind
+回测 pred）⇒ 切换日处存在一处**口径断点**，跨该日比较 IC 需注明。
 
 设计动机见 ``monitoring/production_ic.py`` 模块 docstring。
 """
@@ -38,7 +43,7 @@ def _fmt(v, width: int = 8, digits: int = 4) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description="生产口径每日 IC / 风格暴露监控")
-    p.add_argument("--rank-dir", default="reports/alla_daily",
+    p.add_argument("--rank-dir", default="reports/alla_daily_defv",
                    help="每日出榜产物目录（ranking_<ds>.csv）")
     p.add_argument("--hist-dir", default="reports/alla_rolling_ortho",
                    help="回测基线目录（pred/ + _base/）")

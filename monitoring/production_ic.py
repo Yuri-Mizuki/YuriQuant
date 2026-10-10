@@ -262,7 +262,7 @@ def collect_daily_scores(rank_dir: str | Path,
 # 主流程
 # ---------------------------------------------------------------------------
 def run_production_ic(
-    rank_dir: str | Path = "reports/alla_daily",
+    rank_dir: str | Path = "reports/alla_daily_defv",
     hist_dir: str | Path = "reports/alla_rolling_ortho",
     cache_root: str | Path | None = None,
     out_path: str | Path | None = None,
@@ -272,8 +272,11 @@ def run_production_ic(
     """跑一轮生产口径 IC/暴露监控，返回并落盘逐日指标表。
 
     Args:
-        rank_dir: 每日出榜产物目录（``ranking_<ds>.csv``）。
-        hist_dir: 回测基线目录（``pred/`` + ``_base/``）。
+        rank_dir: 每日出榜产物目录（``ranking_<ds>.csv``）。**2026-10-10 起默认
+            ``reports/alla_daily_defv``**（定版 dingban 口径）；旧 legacy 口径产物
+            在 ``reports/alla_daily``（停于 2026-09-22）。
+        hist_dir: 回测基线目录（``pred/`` + ``_base/``）。历史段仍是 ortho 口径
+            （本机无 fundind 回测 pred）⇒ 与实时段（dingban）之间存在口径断点。
         cache_root: 行情缓存根（默认 ``Config.cache()["root"]``）。
         out_path: 输出 CSV（默认 ``reports/monitoring/production_ic_daily.csv``）。
         live_begin: 实时区间的面板起点（需留出风格协变量滚动窗口的预热期）。

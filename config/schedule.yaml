@@ -18,6 +18,15 @@
 # 🚨 改完本表后跑 `install <key>` 重注册，任务里的**绝对路径**与参数才会同步；
 #    只改表不重注册 = 表与系统脱钩（doctor 会报，因为时间/参数核对不上）。
 #
+# 2026-10-10 事故复盘（重要，别照抄 09-21 的归因）
+# ------------------------------------------------
+# 出榜/另类两个任务连续两周 rc=0xC000013A、产物停 09-22/09-23。查明：本机只支持
+# **S0 现代待机**，傍晚 18:30–19:43 固定进待机 ⇒ 17:30 启动、要跑 1–2h 的任务正撞
+# 进待机窗口，进程被挂起/强杀。**电池两条条件早已是 false，不是本次根因。**
+# 三处修复：① 脚本内 keep_system_awake 运行期保持唤醒（scripts/common/power.py）；
+# ② 任务加 `--log-file` 落盘（此前无 stdout 重定向、失败零痕迹）；
+# ③ 脚本的 `--install-task` 一律转调 install_from_registry（注册单点 = 本表）。
+#
 # status 取值：
 #   active   —— 应在系统里注册并运行（doctor 会核对存在性/条件/结果码/产物）
 #   planned  —— 代码支持但**有意未启用**（doctor 不报漂移）
@@ -28,7 +37,7 @@
 #   workbuddy —— WorkBuddy 自动化（脚本无法枚举，需人工核对）
 
 version: 1
-updated: '2026-09-21'
+updated: '2026-10-10'
 
 tasks:
   - key: alla_daily_rank
@@ -38,12 +47,18 @@ tasks:
     time: '17:30'
     schedule: daily
     command: 'D:\python\Python312\python.exe'
-    arguments: '"E:\YuriQuant\scripts\pipelines\alla_daily_rank.py"'
+    arguments: '"E:\YuriQuant\scripts\pipelines\alla_daily_rank.py" --preset dingban --log-file logs\alla_daily_rank_task_{date}.log'
     working_dir: 'E:\YuriQuant'
     execution_limit: PT3H
-    product_glob: 'reports/alla_daily/ranking_*.csv'
-    description: 'YuriQuant 全A每日出榜（主实验 ortho 口径，全流程约 60 分钟）'
-    notes: '下游 = daily_report（19:00 读 reports/alla_daily/），缓冲 30 分钟'
+    product_glob: 'reports/alla_daily_defv/ranking_*.csv'
+    description: 'YuriQuant 全A每日出榜（定版口径：fundind 快信号 h1020 ⊕ 慢信号 s0.5 + buffer(15/40)，全流程约 15–60 分钟）'
+    notes: >-
+      2026-10-10 切定版：`--preset dingban` ⇒ 特征源 panels_neu_fundind / 信号
+      h1020⊕s0.5 / 策略 BufferedTopFracLongOnly(0.15,0.40)，产物落
+      `reports/alla_daily_defv/`（旧 legacy 口径产物在 `reports/alla_daily/`，停于 09-22）。
+      `--log-file` = 失败留痕（此前任务无 stdout 重定向、失败零痕迹）；脚本内
+      keep_system_awake 防傍晚 S0 现代待机中断（2026-10-10 事故根因）。
+      下游 = daily_report（19:00 读 reports/alla_daily_defv/），缓冲 30 分钟。
 
   - key: altdata_daily
     name: 'YuriQuant AltDataDaily'
@@ -51,13 +66,19 @@ tasks:
     status: active
     time: '18:00'
     schedule: daily
-    command: 'E:\YuriQuant\.venv\Scripts\python.exe'
-    arguments: '"E:\YuriQuant\scripts\pipelines\fetch_altdata_daily.py" --tables all'
+    command: 'D:\python\Python312\python.exe'
+    arguments: '"E:\YuriQuant\scripts\pipelines\fetch_altdata_daily.py" --tables all --log-file logs\altdata_daily_task_{date}.log'
     working_dir: 'E:\YuriQuant'
     execution_limit: PT3H
     product_glob: 'E:/data/parquet/_alt_meta.json'
     description: 'YuriQuant 另类数据日更（akshare：质押/增减持/高管持股/宏观日历/财联社/新闻）'
-    notes: '解释器必须是 .venv（akshare 是本地 wheel，进不了 uv.lock）；与出榜并行无依赖'
+    notes: >-
+      🔧 2026-10-10 解释器订正：**改用系统 Python**（原写 .venv）。实测 akshare
+      1.18.56 只装在系统 Python、`.venv` 已无 akshare ⇒ 任务 `_check_interpreter`
+      直接 SystemExit(2)（任务层表现为 rc=0x80070002 文件未找到、产物停 09-23）。
+      原「必须 .venv（akshare 是本地 wheel，进不了 uv.lock）」的口径已过时：系统
+      Python 不受 `uv sync` 影响，反而更稳。若日后重装，请仍装进系统 Python。
+      与出榜并行无依赖；`--log-file` = 失败留痕；脚本内 keep_system_awake 防 S0 待机中断。
 
   - key: daily_report
     name: 'WorkBuddy 自动化：全A出榜日报邮件推送'
@@ -66,9 +87,13 @@ tasks:
     time: '19:00'
     schedule: '工作日（周一至周五）'
     automation_id: 3b31c720-1e3b-4eab-bd0b-db35c7213311
-    product_glob: 'reports/alla_daily/email_body_*.html'
+    product_glob: 'reports/alla_daily_defv/email_body_*.html'
     description: '检查当日榜单 → 更新生产口径 IC 台账 → 生成日报正文 → 邮件推送 163'
-    notes: '判断型任务（判日/重试/附件降级），刻意不并入 schtasks'
+    notes: >-
+      判断型任务（判日/重试/附件降级），刻意不并入 schtasks。2026-10-10 随出榜链切定版
+      口径，读盘目录同步改 `reports/alla_daily_defv/`（build_daily_email_body.py /
+      monitor_production_ic.py 默认值已改）；旧 legacy 产物停在 `reports/alla_daily/`。
+      ⚠️ 该自动化当前 status=PAUSED（待用户决定是否开启——开则需先补 09-22 以来的缺口数据）。
 
   - key: monitor
     name: 'YuriQuant Monitor'
@@ -84,7 +109,7 @@ tasks:
     status: planned
     time: '17:30'
     schedule: daily
-    command: 'E:\YuriQuant\.venv\Scripts\python.exe'
+    command: 'D:\python\Python312\python.exe'
     arguments: >-
       "E:\YuriQuant\scripts\pipelines\fetch_altdata_daily.py" --tables cls
       --cls-backfill --cls-max-pages 3000
@@ -101,7 +126,7 @@ tasks:
     schedule: minute
     every_minutes: 10
     end_time: '21:00'
-    command: 'E:\YuriQuant\.venv\Scripts\python.exe'
+    command: 'D:\python\Python312\python.exe'
     arguments: '"E:\YuriQuant\scripts\pipelines\fetch_altdata_daily.py" --tables news'
     working_dir: 'E:\YuriQuant'
     execution_limit: PT1H

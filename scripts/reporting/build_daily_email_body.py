@@ -1,12 +1,12 @@
 """从出榜产物生成每日邮件正文（markdown + 配套 HTML）。
 
 用法（须在项目根目录执行，因为脚本用相对路径读产物）：
-    # 常规：产物在 reports/alla_daily，对比基线取同口径目录
-    python scripts/reporting/build_daily_email_body.py --ds 20260917 \
-        --dir reports/alla_daily --prev-dir reports/alla_daily_ortho
+    # 常规（2026-10-10 起生产 = 定版口径 dingban，产物在 reports/alla_daily_defv）
+    python scripts/reporting/build_daily_email_body.py --ds 20261008 \
+        --dir reports/alla_daily_defv
 
     # 同目录内对比（--dir 与 --prev-dir 相同，可省略 --prev-dir）
-    python scripts/reporting/build_daily_email_body.py --ds 20260916
+    python scripts/reporting/build_daily_email_body.py --ds 20261008
 
 输出两个文件：`email_body_<ds>.md`（存档/可读）与 `email_body_<ds>.html`（**发信用它**）。
 发信务必用 `.html` + `--body-file`：`agently-cli` 对 `.md` 按 Markdown 发送，而国内邮箱
@@ -200,11 +200,12 @@ def render_exposure_block(e: dict, ds: str) -> list[str]:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--ds", required=True, help="预测日 YYYYMMDD")
-    ap.add_argument("--dir", default="reports/alla_daily", help="产物目录")
+    ap.add_argument("--dir", default="reports/alla_daily_defv", help="产物目录")
     ap.add_argument("--out", default=None, help="输出 md 路径（默认 <dir>/email_body_<ds>.md）")
     ap.add_argument("--prev-dir", default=None,
-                    help="对比基线目录（默认同 --dir）。跨口径时指向同口径产物目录，例如"
-                         " --dir reports/alla_daily --prev-dir reports/alla_daily_ortho")
+                    help="对比基线目录（默认同 --dir = 同口径的上一交易日）。仅当基线产物"
+                         "落在别的**同口径**目录时才需显式指定；跨口径（如 legacy 口径的"
+                         " reports/alla_daily）会触发正文里的口径不一致警告")
     ap.add_argument("--html-out", default=None,
                     help="HTML 版输出路径（默认与 --out 同名 .html）。发邮件应发 HTML 版，"
                          "见 md_to_email_html 的说明：.md 会被 CLI 当 Markdown 发，客户端不渲染")
