@@ -855,3 +855,25 @@ def test_train_and_predict_threads_tradable_mask():
     sig = inspect.signature(train_and_predict)
     assert "tradable_mask" in sig.parameters
     assert sig.parameters["tradable_mask"].default is None
+
+
+def test_attach_file_log_with_date_placeholder(tmp_path, monkeypatch):
+    """--log-file 支持 {date} 占位、自动建目录、日志确实落盘（失败留痕的保险）。"""
+    import logging
+
+    from scripts.pipelines import alla_daily_rank as m
+
+    monkeypatch.setattr(m, "ROOT", tmp_path)
+    m.log.setLevel(logging.INFO)  # 生产是全新进程，basicConfig 已设 INFO；pytest 下补上
+    p = m.attach_file_log("logs/rank_{date}.log")
+    assert p.parent == tmp_path / "logs" and p.name.startswith("rank_")
+    assert len(p.name) == len("rank_YYYYMMDD.log")
+    m.log.info("hello-file-log")
+    try:
+        assert "hello-file-log" in p.read_text(encoding="utf-8")
+    finally:  # 摘掉本测试挂的文件句柄，避免泄漏到其它用例
+        for h in list(m.log.handlers):
+            if getattr(h, "baseFilename", None) == str(p):
+                m.log.removeHandler(h)
+                h.close()
+

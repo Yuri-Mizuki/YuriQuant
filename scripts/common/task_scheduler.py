@@ -78,6 +78,7 @@ __all__ = [
     "TASK_PREFIX",
     "build_task_xml",
     "doctor",
+    "install_from_registry",
     "install_task",
     "list_project_tasks",
     "load_schedule",
@@ -339,6 +340,33 @@ def remove_task(task_name: str) -> str:
     return f"cmd: {cmd}\nrc={rc}\n{out}"
 
 
+def install_from_registry(key: str, *, time_str: str | None = None,
+                          dry_run: bool = False) -> str:
+    """按 ``config/schedule.yaml`` 的登记项重注册（注册单点 = 登记表）。
+
+    各脚本自己的 ``--install-task`` 一律转调本函数，杜绝"登记表改了、脚本里那份
+    硬编码没改"⇒ 重注册把任务静默切回旧口径（本项目历史最贵的一类事故）。
+    """
+    by_key = {t.get("key"): t for t in load_schedule()}
+    t = by_key.get(key)
+    if t is None:
+        raise KeyError(f"登记表里没有 key={key}；可用：{sorted(k for k in by_key if k)}")
+    return install_task(
+        t["name"],
+        t["command"],
+        t.get("arguments", ""),
+        time_str or t.get("time", "17:30"),
+        description=t.get("description", ""),
+        working_dir=t.get("working_dir", ""),
+        execution_limit=t.get("execution_limit", "PT3H"),
+        schedule=t.get("schedule", "daily"),
+        days_interval=int(t.get("days_interval", 1)),
+        every_minutes=int(t.get("every_minutes", 10)),
+        end_time=t.get("end_time", "21:00"),
+        dry_run=dry_run,
+    )
+
+
 def query_task_xml(task_name: str) -> dict[str, str] | None:
     """回读任务 XML，返回关心的字段；任务不存在或解析失败返回 None。"""
     rc, out = run_schtasks(f'schtasks /Query /TN "{task_name}" /XML')
@@ -367,6 +395,10 @@ def query_task_xml(task_name: str) -> dict[str, str] | None:
         "multiple_instances": _text("MultipleInstancesPolicy"),
     }
 
+
+#: 表示「任务正在运行」的结果码：``0x41301`` = SCHED_S_TASK_RUNNING（267009）。
+#: 任务在跑时 ``Last Result`` 就是它，属正常瞬态 —— doctor 不当坏码。
+_RUNNING_RCS = ("267009", "0x41301")
 
 _STATUS_KEYS = {
     "state": ("计划任务状态", "Status", "Scheduled Task State"),
@@ -513,8 +545,11 @@ def doctor(*, path: Path | str | None = None, verbose: bool = True) -> int:
         rt = task_runtime_status(name)
         info = query_task_xml(name) or {}
         rc_raw = rt.get("last_result", "?")
-        bad_rc = rc_raw not in ("0", "?")
         state = rt.get("state", "?")
+        # 0x41301 = SCHED_S_TASK_RUNNING（任务正在跑）。此刻 last_result 就是它，
+        # 属正常瞬态，不能当坏码（否则每次恰逢在跑就误报）。
+        running = rc_raw in _RUNNING_RCS or "运行" in state or "Running" in state
+        bad_rc = rc_raw not in ("0", "?") and not running
         warn = bad_rc or ("已禁用" in state)
 
         # 条件核对：电池两条必须是 false（2026-09-21 全灭事故的根因）
@@ -623,23 +658,11 @@ def _cli() -> int:
         return 0
 
     if args.cmd == "install":
-        t = by_key.get(args.key)
-        if t is None:
-            print(f"登记表里没有 key={args.key}；可用：{sorted(k for k in by_key if k)}")
+        try:
+            print(install_from_registry(args.key, time_str=args.time))
+        except KeyError as e:
+            print(e.args[0])
             return 2
-        print(install_task(
-            t["name"],
-            t["command"],
-            t.get("arguments", ""),
-            args.time or t.get("time", "17:30"),
-            description=t.get("description", ""),
-            working_dir=t.get("working_dir", ""),
-            execution_limit=t.get("execution_limit", "PT3H"),
-            schedule=t.get("schedule", "daily"),
-            days_interval=int(t.get("days_interval", 1)),
-            every_minutes=int(t.get("every_minutes", 10)),
-            end_time=t.get("end_time", "21:00"),
-        ))
         return 0
 
     if args.cmd == "remove":

@@ -1,4 +1,4 @@
-"""另类数据每日抓取/存档入口（P0 Step 1a + Step 3）
+r"""另类数据每日抓取/存档入口（P0 Step 1a + Step 3）
 =====================================================
 
 一条链抓齐 P0 计划的数据块。**「免自建」与「可回补」是两件事，分开看**：
@@ -45,14 +45,18 @@ akshare 的 ``stock_hold_management_detail_cninfo`` 把日期写死在函数体�
     python scripts/pipelines/fetch_altdata_daily.py --install-news-task 09:00 --every-minutes 10
     python scripts/pipelines/fetch_altdata_daily.py --remove-task
 
-⚠️ **解释器**：本脚本依赖 akshare，装在 ``.venv``（**不是**系统 Python）。
-计划任务的 TR 写 ``.venv/Scripts/python.exe`` 绝对路径；搬动仓库后须重新
-``--install-task``（TR 内嵌绝对路径，与 ``alla_daily_rank`` 同一坑）。
+⚠️ **解释器（2026-10-10 订正）**：本脚本依赖 akshare。实测 akshare 只装在
+**系统 Python**（``D:\python\Python312\python.exe``，1.18.56），``.venv`` 里**没有**
+akshare ⇒ 用 ``.venv`` 跑会 ``_check_interpreter`` 直接 ``SystemExit(2)``（任务层
+表现为 rc=0x80070002「文件未找到」）。故计划任务用**系统 Python**（登记表
+``config/schedule.yaml`` 为唯一真源；搬动仓库后须 ``task_scheduler install altdata_daily``
+重注册 —— TR/XML 内嵌绝对路径，与 ``alla_daily_rank`` 同一坑）。
 """
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -62,16 +66,41 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.common.cli_common import setup_logging  # noqa: E402
+from scripts.common.power import keep_system_awake  # noqa: E402
 
 log = setup_logging("fetch_altdata")
+
+
+def attach_file_log(template: str) -> Path:
+    """把本 logger 的日志同时写入文件（``--log-file``；``{date}`` → YYYYMMDD）。
+
+    计划任务无 stdout 重定向 ⇒ 失败零痕迹（2026-10-10 排查时正是卡在这）。
+    """
+    from datetime import datetime
+
+    path = Path(str(template).format(date=datetime.now().strftime("%Y%m%d")))
+    if not path.is_absolute():
+        path = ROOT / path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    setup_logging("fetch_altdata", file=path)  # 幂等
+    log.info("日志落盘 → %s", path)
+    return path
 
 #: 计划任务名（三个：全量日更 / 财联社历史回补续跑 / 高频新闻快照）
 TASK_NAME = "YuriQuant AltDataDaily"
 CLS_BACKFILL_TASK = "YuriQuant AltDataClsBackfill"
 NEWS_TASK_NAME = "YuriQuant AltDataNews"
 
-#: 本脚本必须跑在装了 akshare 的解释器上
-VENV_PY = ROOT / ".venv" / "Scripts" / "python.exe"
+#: 本脚本必须跑在装了 akshare 的解释器上。
+#: 2026-10-10 实测：akshare 装在**系统 Python**（``D:\python\Python312``，1.18.56），
+#: ``.venv`` 里没有 ⇒ 原来的 ``.venv`` 常量是错的（用 YQ_ALT_PY 可覆盖）。
+_i = os.environ.get("YQ_ALT_PY")
+if _i:
+    ALT_PY = Path(_i)
+elif sys.platform == "win32":
+    ALT_PY = Path(r"D:\python\Python312\python.exe")
+else:  # 非 Windows（CI）退回当前解释器
+    ALT_PY = Path(sys.executable)
 
 SNAPSHOT_TABLES = ("holder_control", "inner_trade", "mgmt_hold")
 ALL_TABLES = ("holder_control", "inner_trade", "mgmt_hold", "cninfo_holder",
@@ -84,22 +113,19 @@ ALL_TABLES = ("holder_control", "inner_trade", "mgmt_hold", "cninfo_holder",
 def install_task(time_str: str, tables: str = "all") -> str:
     """注册每日全量任务（默认盘后 18:00，出榜之后）。
 
-    参数真源见 ``config/schedule.yaml`` 的 ``altdata_daily`` 条；注册改用 XML
-    导入，顺带绕开旧的 ``/TR`` 多层转义坑：XML 文本节点里的引号原样保留，
-    不会出现"注册成功但运行时路径带反斜杠"那种静默降级。
+    **注册单点 = ``config/schedule.yaml`` 的 ``altdata_daily`` 条**：本函数只转调
+    :func:`scripts.common.task_scheduler.install_from_registry`，杜绝"登记表改了、
+    脚本里那份硬编码没跟上"⇒ 重注册把任务静默切回旧口径/丢参数。
+    ``tables`` 仅接受 ``"all"``（登记表就是 ``--tables all``）；要别的表集合请先改
+    登记表，再 ``python -m scripts.common.task_scheduler install altdata_daily``。
     """
-    from scripts.common.task_scheduler import install_task as _install
+    if tables != "all":
+        raise ValueError(
+            "注册单点 = schedule.yaml（--tables all）；要改表集合请编辑 "
+            "config/schedule.yaml 后跑 task_scheduler install altdata_daily")
+    from scripts.common.task_scheduler import install_from_registry
 
-    py = VENV_PY if VENV_PY.exists() else Path(sys.executable)
-    script = (ROOT / "scripts" / "pipelines" / "fetch_altdata_daily.py").resolve()
-    return _install(
-        task_name=TASK_NAME,
-        command=str(py),
-        arguments=f'"{script}" --tables {tables}',
-        time_str=time_str,
-        description="YuriQuant 另类数据日更（akshare，必须 .venv 解释器）",
-        working_dir=str(ROOT),
-    )
+    return install_from_registry("altdata_daily", time_str=time_str)
 
 
 def install_cls_backfill_task(time_str: str = "17:30", max_pages: int = 3000) -> str:
@@ -112,7 +138,7 @@ def install_cls_backfill_task(time_str: str = "17:30", max_pages: int = 3000) ->
     """
     from scripts.common.task_scheduler import install_task as _install
 
-    py = VENV_PY if VENV_PY.exists() else Path(sys.executable)
+    py = ALT_PY
     script = (ROOT / "scripts" / "pipelines" / "fetch_altdata_daily.py").resolve()
     return _install(
         task_name=CLS_BACKFILL_TASK,
@@ -136,7 +162,7 @@ def install_news_task(time_str: str, every_minutes: int = 10,
     """
     from scripts.common.task_scheduler import install_task as _install
 
-    py = VENV_PY if VENV_PY.exists() else Path(sys.executable)
+    py = ALT_PY
     script = (ROOT / "scripts" / "pipelines" / "fetch_altdata_daily.py").resolve()
     return _install(
         task_name=NEWS_TASK_NAME,
@@ -171,10 +197,11 @@ def _check_interpreter() -> None:
         import akshare  # noqa: F401
     except ImportError:
         log.error(
-            "当前解释器 %s 没有 akshare。另类数据抓取必须用装了 altdata extra 的环境：\n"
-            "  uv pip install -e \".[altdata]\" --python %s\n"
+            "当前解释器 %s 没有 akshare。另类数据抓取必须跑在装了 akshare 的解释器上"
+            "（2026-10-10 实测：akshare 在系统 Python、不在 .venv）：\n"
+            "  uv pip install akshare --python %s\n"
             "或直接指定：%s scripts/pipelines/fetch_altdata_daily.py",
-            sys.executable, VENV_PY, VENV_PY)
+            sys.executable, ALT_PY, ALT_PY)
         raise SystemExit(2)
 
 
@@ -287,6 +314,9 @@ def main() -> None:
     ap.add_argument("--remove-task", action="store_true", help="删除计划任务并退出")
     ap.add_argument("--remove-which", default="all",
                     help="删除哪些：all / daily / cls_backfill / news")
+    ap.add_argument("--log-file", default=None, metavar="PATH",
+                    help="把日志同时写入该文件（支持 {date} 占位 = YYYYMMDD）；"
+                         "计划任务用，避免失败无痕")
     args = ap.parse_args()
 
     if args.install_task:
@@ -305,15 +335,23 @@ def main() -> None:
 
     _check_interpreter()
 
-    if args.loop:
-        log.info("常驻模式：每 %d 秒跑一次 tables=%s（Ctrl-C 退出）", args.loop, args.tables)
-        while True:
+    if args.log_file:
+        attach_file_log(args.log_file)
+
+    # 傍晚本机会进 S0 现代待机（2026-10-10 事故根因：任务被挂起/强杀）——
+    # 运行期间请求保持唤醒。
+    with keep_system_awake() as _awake:
+        log.info("防待机：keep_system_awake 生效=%s", _awake)
+        if args.loop:
+            log.info("常驻模式：每 %d 秒跑一次 tables=%s（Ctrl-C 退出）",
+                     args.loop, args.tables)
+            while True:
+                res = run_once(args)
+                print(json.dumps(res, ensure_ascii=False, indent=2), flush=True)
+                time.sleep(args.loop)
+        else:
             res = run_once(args)
             print(json.dumps(res, ensure_ascii=False, indent=2), flush=True)
-            time.sleep(args.loop)
-    else:
-        res = run_once(args)
-        print(json.dumps(res, ensure_ascii=False, indent=2), flush=True)
 
 
 if __name__ == "__main__":

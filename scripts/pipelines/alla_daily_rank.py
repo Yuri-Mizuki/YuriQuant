@@ -95,11 +95,29 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.common.cli_common import setup_logging  # noqa: E402
+from scripts.common.power import keep_system_awake  # noqa: E402
 
 if TYPE_CHECKING:  # 仅用于类型标注；运行时在 train_and_predict 内延迟导入
     from model.predictor import LGBMPredictor
 
 log = setup_logging("alla_daily_rank")
+
+
+def attach_file_log(template: str) -> Path:
+    """把本 logger 的日志同时写入文件（``--log-file``；``{date}`` → YYYYMMDD）。
+
+    计划任务无 stdout 重定向 ⇒ 失败零痕迹（2026-10-10 排查时正是卡在这）——
+    任务命令行加 ``--log-file`` 后，每次运行落一份 ``logs/alla_daily_rank_task_<date>.log``。
+    """
+    from datetime import datetime
+
+    path = Path(str(template).format(date=datetime.now().strftime("%Y%m%d")))
+    if not path.is_absolute():
+        path = ROOT / path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    setup_logging("alla_daily_rank", file=path)  # 幂等：重复调用不重复挂句柄
+    log.info("日志落盘 → %s", path)
+    return path
 
 # ---------------------------------------------------------------------------
 # 配置（参数与 rolling_grid_alla 实验单一真源对齐）
@@ -172,8 +190,8 @@ PRESETS: dict[str, dict] = {
     },
 }
 TASK_NAME = "YuriQuant AllaDailyRank"
-# 计划任务用的 Python（沿用 monitor_performance 约定：YQ_SYSTEM_PY 可配置）
-SYSTEM_PY = Path(os.environ.get("YQ_SYSTEM_PY") or sys.executable)
+# 计划任务用的解释器/脚本/参数一律以 config/schedule.yaml 为唯一真源
+# （2026-10-10 收口：脚本内不再自持一份，避免与登记表漂移）。
 
 _ALPHA_PREFIXES = ("alpha101_", "alpha158_", "alpha191_", "alpha360_")
 # 股东族因子名（scripts/builders/build_alla_holder_factors 的两组输出键）
@@ -1654,24 +1672,18 @@ def write_outputs(ranking: pd.DataFrame, picks: pd.DataFrame,
 def install_task(time_str: str) -> str:
     """注册/更新每日计划任务（默认跑全流程含数据更新）。
 
-    2026-09-21 起收口到 :mod:`scripts.common.task_scheduler`：改用 XML 定义
-    导入，显式把 ``DisallowStartIfOnBatteries`` / ``StopIfGoingOnBatteries``
-    写成 false —— 旧的 ``schtasks /Create /SC DAILY /TR`` 裸建会继承 Windows
-    默认值 true，是三个任务同日 ``0xC000013A`` 全灭的头号嫌疑。
-    参数真源见 ``config/schedule.yaml`` 的 ``alla_daily_rank`` 条。
-    """
-    from scripts.common.task_scheduler import install_task as _install
+    **注册单点 = ``config/schedule.yaml`` 的 ``alla_daily_rank`` 条**：本函数只转调
+    :func:`scripts.common.task_scheduler.install_from_registry`，命令行/解释器/参数
+    一律从登记表读。这样"登记表已切定版口径、脚本里那份硬编码没跟上 ⇒ 重注册把任务
+    静默切回旧口径"的老坑不复存在（2026-10-10 收口）。
 
-    py = Path(SYSTEM_PY).resolve()
-    script = (ROOT / "scripts" / "pipelines" / "alla_daily_rank.py").resolve()
-    return _install(
-        task_name=TASK_NAME,
-        command=str(py),
-        arguments=f'"{script}"',
-        time_str=time_str,
-        description="YuriQuant 全A每日出榜（主实验 ortho 口径，全流程约 60 分钟）",
-        working_dir=str(ROOT),
-    )
+    （2026-09-21 起改用 XML 定义导入，显式关 ``DisallowStartIfOnBatteries`` /
+    ``StopIfGoingOnBatteries``；但 2026-10-10 事故已查明那两条**不是**本次根因——
+    真凶是傍晚 S0 现代待机撞上 1–2h 的运行窗口，见 :mod:`scripts.common.power`。）
+    """
+    from scripts.common.task_scheduler import install_from_registry
+
+    return install_from_registry("alla_daily_rank", time_str=time_str)
 
 
 def remove_task() -> str:
@@ -2034,6 +2046,9 @@ def main() -> None:
     ap.add_argument("--out-tag", default=None, metavar="TAG",
                     help="输出目录后缀（如 _h1h5 → reports/alla_daily_h1h5）；"
                          "默认空 = 写生产目录 reports/alla_daily，dingban 预设 = _defv")
+    ap.add_argument("--log-file", default=None, metavar="PATH",
+                    help="把日志同时写入该文件（支持 {date} 占位 = YYYYMMDD）；"
+                         "计划任务用，避免失败无痕")
     ap.add_argument("--install-task", nargs="?", const="17:30", default=None,
                     metavar="HH:MM", help="注册每日 Windows 计划任务并退出")
     ap.add_argument("--remove-task", action="store_true", help="删除计划任务并退出")
@@ -2082,7 +2097,13 @@ def main() -> None:
     if args.remove_task:
         print(remove_task())
         return
-    run(args)
+    if args.log_file:
+        attach_file_log(args.log_file)
+    # 傍晚 18:30–19:43 本机会进 S0 现代待机（2026-10-10 事故根因）——
+    # 运行期间请求保持唤醒，防进程被挂起/强杀（0xC000013A）。
+    with keep_system_awake() as _awake:
+        log.info("防待机：keep_system_awake 生效=%s", _awake)
+        run(args)
 
 
 if __name__ == "__main__":
