@@ -636,3 +636,74 @@ def test_cninfo_holder_dedup_keys_are_registered():
     assert "ann_date" in _DEDUP_KEYS["cninfo_holder"]
 
 
+class _FakeResp:
+    def __init__(self, payload):
+        self._payload = payload
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return self._payload
+
+
+class _FakeSession:
+    """最小 Session 替身：记录调用、返回固定 JSON（不触网）。"""
+
+    def __init__(self, payload):
+        self.headers = {}
+        self._payload = payload
+        self.calls = []
+
+    def get(self, url, **kwargs):
+        self.calls.append((url, kwargs))
+        return _FakeResp(self._payload)
+
+
+def test_inner_trade_direct_maps_schema_like_akshare(monkeypatch):
+    """自建会话直连的列名/类型必须与 ``ak.stock_inner_trade_xq`` 逐列一致。
+
+    否则下游 ``fetch_inner_trade`` 的 ``_require`` 会显式失败（防静默降级）。
+    """
+    import requests
+
+    from data.altdata.source_akshare import _XQ_INNER_TRADE_MAP, _fetch_inner_trade_xq_direct
+
+    payload = {"data": {"items": [
+        {"symbol": "SH688403", "name": "汇成股份", "share_changer_name": "陈汉宗",
+         "manage_name": None, "chg_date": 1791475200000, "chg_shares_num": 5000,
+         "trans_avg_price": 18.42, "daily_shares_balance_otd": 40780,
+         "rr_of_chgr_and_manage": None, "duty": "核心技术人员"},
+    ]}}
+    sess = _FakeSession(payload)
+    monkeypatch.setattr(requests, "Session", lambda *a, **k: sess)
+
+    df = _fetch_inner_trade_xq_direct()
+    assert list(df.columns) == list(_XQ_INNER_TRADE_MAP.values())
+    row = df.iloc[0]
+    assert row["股票代码"] == "SH688403"
+    assert row["股票名称"] == "汇成股份"
+    assert row["变动人"] == "陈汉宗"
+    assert row["变动股数"] == 5000
+    assert row["成交均价"] == pytest.approx(18.42)
+    assert row["变动后持股数"] == 40780
+    assert row["董监高职务"] == "核心技术人员"
+    assert str(row["变动日期"]) == "2026-10-09"        # 毫秒时间戳 → CST 日期
+    # 必须先访问首页预热反爬 cookie，再打端点
+    assert sess.calls[0][0] == "https://xueqiu.com/"
+    assert "skholderchg" in sess.calls[1][0]
+
+
+def test_inner_trade_direct_empty_items_returns_typed_empty(monkeypatch):
+    """端点返回空 items 时要给带列名的空表（而不是 KeyError/全 None）。"""
+    import requests
+
+    from data.altdata.source_akshare import _fetch_inner_trade_xq_direct
+
+    monkeypatch.setattr(requests, "Session",
+                        lambda *a, **k: _FakeSession({"data": {"items": []}}))
+    df = _fetch_inner_trade_xq_direct()
+    assert df.empty
+    assert "股票代码" in df.columns
+
+

@@ -13,6 +13,11 @@
 ``macro_info_ws``                         宏观日历（华尔街见闻，按日）      2018-01 起
 ======================================  ================================  ====================
 
+🚨 2026-10-10：``stock_inner_trade_xq`` 雪球端点**新增阿里云反爬**（无 ``acw_tc``
+cookie 即 302 到反爬页 ⇒ akshare 裸 ``requests.get`` 抛 ``JSONDecodeError``）。故
+:func:`fetch_inner_trade` 改为**先走自建会话直连**（:func:`_fetch_inner_trade_xq_direct`
+返回与 akshare 逐列一致的表），akshare 仅作冗余回退。
+
 🚨 PIT 质量三档（本模块最重要的口径标注，因子层必须区别对待）
 ------------------------------------------------------------------
 四个接口的「数据可得时点」质量**不同**：
@@ -269,6 +274,67 @@ def fetch_holder_control(symbol: str = "全部") -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 # ② 内部人交易（雪球）
 # ---------------------------------------------------------------------------
+#: 雪球内部交易端点（与 ``ak.stock_inner_trade_xq`` 同一个）。
+_XQ_INNER_TRADE_URL = "https://xueqiu.com/service/v5/stock/f10/cn/skholderchg"
+#: 端点返回的字段（顺序即接口顺序）→ akshare 输出的中文列名（**按名映射，不按位**，
+#: 比 akshare 自己的 ``temp_df.columns = [...]`` 位置式重命名更抗字段增减）。
+_XQ_INNER_TRADE_MAP = {
+    "symbol": "股票代码",
+    "name": "股票名称",
+    "chg_date": "变动日期",
+    "share_changer_name": "变动人",
+    "chg_shares_num": "变动股数",
+    "trans_avg_price": "成交均价",
+    "daily_shares_balance_otd": "变动后持股数",
+    "rr_of_chgr_and_manage": "与董监高关系",
+    "duty": "董监高职务",
+}
+
+
+def _fetch_inner_trade_xq_direct(timeout: float = 20.0) -> pd.DataFrame:
+    """直连雪球取内部人交易（自建会话 + 反爬 cookie 预热）。
+
+    🚨 2026-10-10：雪球给该端点上了**阿里云反爬**（``acw_tc`` cookie）。akshare 用裸
+    ``requests.get``（无会话、无 cookie）⇒ 302 到反爬页（HTML）⇒ ``r.json()`` 抛
+    ``JSONDecodeError: Expecting value: line 1 column 1 (char 0)``，整表长期 FAIL。
+    akshare 侧无法注入 cookie（函数签名无参数、内部用模块级 ``requests``），故自建：
+    先用 :class:`requests.Session` 访问 ``https://xueqiu.com/`` 拿 ``acw_tc``，再带
+    会话请求（跟随重定向 → ``www.xueqiu.com``）即返回正常 JSON。
+
+    输出的中文列名与 ``ak.stock_inner_trade_xq()`` **逐列一致**（含 ``变动日期`` 由
+    毫秒时间戳转 Asia/Shanghai 日期、三个数值列 to_numeric），因此下游代码零改动。
+    """
+    import requests
+
+    s = requests.Session()
+    s.headers.update({
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                      "(KHTML, like Gecko) Chrome/100.0.4896.127 Safari/537.36",
+        "Accept": "*/*",
+        "Referer": "https://xueqiu.com/hq",
+    })
+    s.get("https://xueqiu.com/", timeout=timeout)  # 预热反爬 cookie（acw_tc）
+    r = s.get(_XQ_INNER_TRADE_URL,
+              params={"size": "100000", "page": "1", "extend": "true"},
+              timeout=timeout)
+    r.raise_for_status()
+    data = r.json()
+    items = (data.get("data") or {}).get("items") or []
+    if not items:
+        return _empty(["股票代码", "股票名称", "变动日期", "变动人", "变动股数",
+                       "成交均价", "变动后持股数", "与董监高关系", "董监高职务"])
+    df = pd.DataFrame(items)
+    df = df.rename(columns=_XQ_INNER_TRADE_MAP)
+    keep = [c for c in _XQ_INNER_TRADE_MAP.values() if c in df.columns]
+    df = df[keep]
+    df["变动日期"] = (pd.to_datetime(df["变动日期"], unit="ms", utc=True)
+                     .dt.tz_convert("Asia/Shanghai").dt.date)
+    for c in ("变动股数", "成交均价", "变动后持股数"):
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+    return df
+
+
 def fetch_inner_trade(name_to_code: Mapping[str, str] | None = None) -> pd.DataFrame:
     """内部人交易 —— 一次调用返回 20.5 个月全市场（实测 25987 行 / 2256 只 / 2.0s）。
 
@@ -278,9 +344,17 @@ def fetch_inner_trade(name_to_code: Mapping[str, str] | None = None) -> pd.DataF
     ⚠️ ``股票代码`` 非空率仅 **94.5%**（缺失集中在北交所等）⇒ 用 ``name_to_code``
     （项目 ``code_info.parquet`` 的名称映射）按 ``股票名称`` 回补；仍缺的置 NaN
     并在日志里报数（**不丢行** —— 名称仍可用于人工核对）。
+
+    取数顺序（2026-10-10）：**先自建会话直连**（见 :func:`_fetch_inner_trade_xq_direct`
+    —— 雪球反爬使 akshare 裸请求 302/JSONDecodeError），失败再退回
+    ``ak.stock_inner_trade_xq``（同端点，作冗余通道）。
     """
-    ak = _ak()
-    raw = ak.stock_inner_trade_xq()
+    try:
+        raw = _fetch_inner_trade_xq_direct()
+    except Exception as e:  # noqa: BLE001
+        log.warning("[altdata] inner_trade 自建会话直连失败（%s: %s），退回 akshare",
+                    type(e).__name__, str(e)[:160])
+        raw = _ak().stock_inner_trade_xq()
     if raw is None or raw.empty:
         return _empty(IT_COLS)
     _require(raw, ["股票代码", "股票名称", "变动日期", "变动人", "变动股数",
