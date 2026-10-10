@@ -203,6 +203,39 @@ MARKET_FEATURE_INDICES = ("000001_SH", "399317_SZ")   # 上证指数 + 国证A�
 MARKET_FEATURES_ON: bool = False
 
 # ---------------------------------------------------------------------------
+# 宏观日历市场状态特征（2026-10-10 接入，altf P1 落地）：alt_macro_* 广播面板。
+# 出处：reports/altf_p1 —— alt_macro 7 因子是**市场级广播**（行 nunique ∈ {0,1}）
+# ⇒ 逐股截面 IC 无定义；正确定位是与指数点位**并列的另一维度市场状态**
+# （价格/交易维度 vs 经济数据维度）。实现 model/macro_features.py（市场级序列
+# → expanding z → 广播）。注入路径与 market_features 完全同（旁路并入 mkt_feats，
+# 不过 select / 不做截面 zscore / 不进 existence_mask）。默认关闭 = 零回归。
+# CLI: --macro-features（须配 --out-tag 防覆盖主实验产物）
+# ---------------------------------------------------------------------------
+MACRO_FEATURES_ON: bool = False
+
+# ---------------------------------------------------------------------------
+# 快讯情绪特征（2026-10-10 接入，altf P1 落地）：alt_news_* stock-level 面板。
+# 出处：reports/altf_p1 —— news 族 6 因子含**独立信息**（与主信号 rank 相关
+# 仅 0.139），但等权线性混合只稀释（ΔIC 随权重单调下降）⇒ 走**模型层非线性
+# 利用**（GBDT 门控/交互），本开关即该路径：面板原值旁路并入 GBDT 特征集
+# （不过 select、不做截面 zscore —— 树模型对单调变换不变；altf 面板也未经
+# panels_neu 预处理，量纲与主特征不同但树模型尺度无关）。默认关闭 = 零回归。
+# CLI: --news-features（须配 --out-tag 防覆盖主实验产物）
+# ---------------------------------------------------------------------------
+NEWS_FEATURES_ON: bool = False
+#: 快讯特征集版本：改清单/口径时 +1（进 pred 指纹，防静默混口径）。
+NEWS_FEAT_VERSION: int = 1
+#: 参与旁路注入的 alt_news 面板（factor_library 名称 → 特征名去 alt_news_ 前缀）。
+NEWS_FEATURE_PANELS: tuple[str, ...] = (
+    "alt_news_cnt_5d",
+    "alt_news_attention_5d",
+    "alt_news_red_cnt_20d",
+    "alt_news_cnt_20d_z",
+    "alt_news_lexsent_20d",
+    "alt_news_mean_len_20d",
+)
+
+# ---------------------------------------------------------------------------
 # RRE 秩稳定性筛选（2026-09-14 接入）：剔除"排名天天变"的高换手因子。
 # 出处：国金 AlphaEval（系列之二十四），项目内既有实现在
 #   factor/gflownet/selection.py::select_low_corr（GFlowNet 路径）与
@@ -808,6 +841,40 @@ def stage_predict(quick: bool = False, only_horizons: list[int] | None = None):
         else:
             log.warning("--market-features 开启但无可用指数缓存 → 特征空集"
                         "（pred 指纹已含开关，不会静默混口径）")
+    if MACRO_FEATURES_ON:
+        from config import Config
+        from model.macro_features import MACRO_STATE_PANELS, build_macro_state_features
+        lib_root = Path(str(Config.get()["factor_library"]["root"]))
+        macro_panels: dict[str, pd.DataFrame] = {}
+        for nm in MACRO_STATE_PANELS:
+            hits = sorted(lib_root.glob(f"*/panels/{nm}.parquet"))
+            if not hits:
+                log.warning("macro 面板 %s 缓存缺失，跳过（其余照常）", nm)
+                continue
+            macro_panels[nm] = pd.read_parquet(hits[-1])
+        if macro_panels:
+            mkt_feats.update(build_macro_state_features(
+                macro_panels, all_days, close.columns))
+        else:
+            log.warning("--macro-features 开启但无可用面板 → 特征空集"
+                        "（pred 指纹已含开关，不会静默混口径）")
+    if NEWS_FEATURES_ON:
+        from config import Config
+        lib_root = Path(str(Config.get()["factor_library"]["root"]))
+        news_feats: dict[str, pd.DataFrame] = {}
+        for nm in NEWS_FEATURE_PANELS:
+            hits = sorted(lib_root.glob(f"*/panels/{nm}.parquet"))
+            if not hits:
+                log.warning("news 面板 %s 缓存缺失，跳过（其余照常）", nm)
+                continue
+            p = pd.read_parquet(hits[-1]).reindex(
+                index=all_days, columns=close.columns)
+            news_feats[f"news_{nm.removeprefix('alt_news_')}"] = p.astype("float32")
+        if news_feats:
+            mkt_feats.update(news_feats)
+        else:
+            log.warning("--news-features 开启但无可用面板 → 特征空集"
+                        "（pred 指纹已含开关，不会静默混口径）")
     # 标签工程臂（10-04）：隔夜窗口的执行价面板 / 另类标签的基准收盘
     # （基准从 bench_index 日收益累计复原——起点常数不影响"1 元投资"口径
     #  的区间收益/σ/MaxDD，labels.forward_excess_stats 只用相对项）
@@ -1102,6 +1169,11 @@ def _predict_fp(years: list[int]) -> str:
         # model/market_features.MARKET_FEAT_VERSION 须 +1，此处自动失配重训）
         "market_features": (MARKET_FEATURES_ON, list(MARKET_FEATURE_INDICES),
                             _market_feat_version()),
+        # 宏观市场状态特征臂（altf P1）：开关 + 特征集版本
+        "macro_features": (MACRO_FEATURES_ON, _macro_feat_version()),
+        # 快讯情绪特征臂（altf P1）：开关 + 面板清单 + 版本
+        "news_features": (NEWS_FEATURES_ON, list(NEWS_FEATURE_PANELS),
+                          NEWS_FEAT_VERSION),
     })
 
 
@@ -1110,6 +1182,15 @@ def _market_feat_version() -> int:
     try:
         from model.market_features import MARKET_FEAT_VERSION
         return int(MARKET_FEAT_VERSION)
+    except ImportError:
+        return 0
+
+
+def _macro_feat_version() -> int:
+    """macro_features 特征集版本（懒 import；模块缺失时视为 0）。"""
+    try:
+        from model.macro_features import MACRO_FEAT_VERSION
+        return int(MACRO_FEAT_VERSION)
     except ImportError:
         return 0
 
@@ -1644,6 +1725,14 @@ def main():
                     help="市场状态特征臂（国金19 转译）：指数点位派生日级广播"
                          "特征旁路并入 GBDT 特征集（不过 select 漏斗）；"
                          "指数清单 MARKET_FEATURE_INDICES。须配 --out-tag 防覆盖")
+    ap.add_argument("--macro-features", action="store_true",
+                    help="宏观日历市场状态特征臂（altf P1）：alt_macro_* 市场级"
+                         "广播面板 → expanding z 广播旁路并入 GBDT 特征集"
+                         "（与 --market-features 并列的另一维度）。须配 --out-tag")
+    ap.add_argument("--news-features", action="store_true",
+                    help="快讯情绪特征臂（altf P1）：alt_news_* stock-level 面板"
+                         "原值旁路并入 GBDT 特征集（模型层非线性利用，"
+                         "对照等权合成稀释）。须配 --out-tag")
     ap.add_argument("--out-tag", default=None,
                     help="消融臂输出目录后缀 -> reports/alla_rolling_<tag>")
     ap.add_argument("--sc-model", default=None,
@@ -1653,7 +1742,8 @@ def main():
 
     global INCLUDE_FUNDAMENTAL, OUT, PANELS_DIR, NAME_DIR, EXCLUDE_FEATURES
     global USE_TRADABLE_LABELS, SC_MODEL, MARKET_FEATURES_ON, FORCE_FEATURES
-    global LABEL_MODE, LABEL_WINDOW, LABEL_METHOD
+    global LABEL_MODE, LABEL_WINDOW, LABEL_METHOD, MACRO_FEATURES_ON
+    global NEWS_FEATURES_ON
     if args.sc_model:
         SC_MODEL = args.sc_model
         log.info("+++ smallcap 信号模型 -> %s（产物加 __%s 后缀）",
@@ -1668,6 +1758,21 @@ def main():
         log.info("+++ 市场状态特征臂（国金19）：指数 %s -> %d 面板广播特征旁路"
                  "并入", MARKET_FEATURE_INDICES,
                  len(MARKET_FEATURE_INDICES) * len(FEATURES_PER_INDEX))
+    if args.macro_features:
+        if not args.out_tag:
+            ap.error("--macro-features 须配 --out-tag：否则 pred 产物与主实验"
+                     "同目录同名（静默混口径；指纹 sidecar 只保护后续运行）")
+        MACRO_FEATURES_ON = True
+        from model.macro_features import MACRO_STATE_PANELS
+        log.info("+++ 宏观市场状态特征臂（altf P1）：%d 面板 -> expanding z "
+                 "广播旁路并入", len(MACRO_STATE_PANELS))
+    if args.news_features:
+        if not args.out_tag:
+            ap.error("--news-features 须配 --out-tag：否则 pred 产物与主实验"
+                     "同目录同名（静默混口径；指纹 sidecar 只保护后续运行）")
+        NEWS_FEATURES_ON = True
+        log.info("+++ 快讯情绪特征臂（altf P1）：%d 面板原值旁路并入",
+                 len(NEWS_FEATURE_PANELS))
     if args.tradable_labels:
         if not args.out_tag:
             ap.error("--tradable-labels 须配 --out-tag："
