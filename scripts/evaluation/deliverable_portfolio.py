@@ -116,6 +116,10 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--sector-ms", default="2,3,4,5,6,8",
                     help="行业约束臂的 max_per_sector 网格（逗号分隔）")
     ap.add_argument("--freq", default="M", choices=["M", "W"], help="调仓频率")
+    ap.add_argument("--slippage-bp", type=float, default=None,
+                    help="覆盖滑点（bp）；不给则用 config 真源。成本敏感性扫描用"
+                         "（集中化把换手推到 90%%+，小盘滑点更大）。"
+                         "单边成本 = 2·佣金 + 印花税 + 2·滑点")
     ap.add_argument("--exclude-baseline", action="store_true",
                     help="跳过基线 TopFrac 臂（省时间）")
     args = ap.parse_args(argv)
@@ -144,6 +148,17 @@ def main(argv: list[str] | None = None) -> None:
     mask_oos = mask.reindex(index=oos, columns=close.columns).fillna(True)
     b_eqw = bench_eqw.reindex(oos).fillna(0.0)
     costs = default_costs()
+    if args.slippage_bp is not None:
+        # 成本敏感性扫描：单边成本率 = 2·佣金 + 印花税 + 2·滑点
+        # （slippage_bp 是**基点数值**，须 /1e4 换算，与 costs.calc 同口径）
+        def _onesided_bp(c) -> float:
+            return (2 * c.commission_rate + c.stamp_duty
+                    + 2 * c.slippage_bp / 1e4) * 1e4
+
+        prev_bp = _onesided_bp(costs)
+        costs.slippage_bp = float(args.slippage_bp)
+        log.info("滑点覆盖 → %.0fbp：单边成本 %.1f → %.1f bp",
+                 args.slippage_bp, prev_bp, _onesided_bp(costs))
 
     arms = build_arms(args, sectors)
     if args.exclude_baseline:
