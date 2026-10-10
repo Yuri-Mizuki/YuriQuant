@@ -494,6 +494,54 @@ def _latest_trading_day() -> int | None:
         return None
 
 
+def _norm_path(s: str | None) -> str:
+    """路径归一化：斜杠统一 + 去首尾空白/尾分隔符 + 大小写折叠（Windows 不区分）。"""
+    t = (s or "").strip().replace("/", "\\").casefold()
+    return t.rstrip("\\") if t else ""
+
+
+def _hhmm(boundary: str | None) -> str:
+    """从 ``2026-10-10T17:30:00`` 取 ``17:30``（取不到给空串）。"""
+    if boundary and "T" in boundary:
+        return boundary.split("T", 1)[1][:5]
+    return ""
+
+
+def registry_drift(task: dict, info: dict) -> list[str]:
+    """比对**登记表**与**系统里实际注册的**命令/参数/时间/工作目录，返回差异描述。
+
+    🚨 为什么必须有：``config/schedule.yaml`` 是注册唯一真源，但任务里的**绝对路径与
+    参数是注册时烧进 XML 的**。只改表不重注册 = 表与系统脱钩（历史事故同型：改了
+    登记表、系统仍跑旧口径）⇒ 体检必须能抓出来。``query_task_xml`` 已回读这些字段，
+    本函数只做比对（纯函数，便于单测）。
+
+    只比较路径与参数，不比较大小写差异（Windows 路径不区分）；``arguments`` 若仅大小写
+    不同不算漂移（避免路径大小写造成假报警）。
+    """
+    out: list[str] = []
+    if not info:
+        return out
+    if _norm_path(info.get("command")) != _norm_path(task.get("command")):
+        out.append(f"命令不一致（XML={info.get('command')!r} vs 表={task.get('command')!r}）")
+    reg_args = (task.get("arguments") or "").strip()
+    xml_args = (info.get("arguments") or "").strip()
+    if xml_args != reg_args and xml_args.casefold() != reg_args.casefold():
+        out.append(f"参数不一致（XML={xml_args!r} vs 表={reg_args!r}）")
+    reg_time = str(task.get("time", "")).strip()
+    xml_time = _hhmm(info.get("start_boundary"))
+    if reg_time and xml_time and reg_time != xml_time:
+        out.append(f"计划时间不一致（XML={xml_time} vs 表={reg_time}）")
+    wd = _norm_path(info.get("working_directory"))
+    if wd and wd != _norm_path(task.get("working_dir")):
+        out.append(f"工作目录不一致（XML={info.get('working_directory')!r} "
+                   f"vs 表={task.get('working_dir')!r}）")
+    reg_limit = str(task.get("execution_limit", "")).strip()
+    xml_limit = (info.get("execution_time_limit") or "").strip()
+    if reg_limit and xml_limit and reg_limit != xml_limit:
+        out.append(f"执行时长上限不一致（XML={xml_limit} vs 表={reg_limit}）")
+    return out
+
+
 def doctor(*, path: Path | str | None = None, verbose: bool = True) -> int:
     """调度体检。返回 0 = 无异常；1 = 有需要处理的项目。"""
     tasks = load_schedule(path)
@@ -559,6 +607,15 @@ def doctor(*, path: Path | str | None = None, verbose: bool = True) -> int:
         )
         if cond_bad:
             problems.append(f"{key}: 任务条件仍带电池限制（裸建遗留）")
+            warn = True
+
+        # 漂移核对：登记表 vs 系统里实际注册的命令/参数/时间/工作目录
+        # （只改 config/schedule.yaml 不重注册 ⇒ 系统仍跑旧口径，必须抓出来）
+        drift = registry_drift(t, info)
+        if drift:
+            for d in drift:
+                problems.append(f"{key}: 与登记表脱钩 —— {d}；"
+                                f"跑 `task_scheduler install {key}` 重注册")
             warn = True
 
         prod_txt = "-"
