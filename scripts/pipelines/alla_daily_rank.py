@@ -31,7 +31,9 @@
   4. 每个 horizon 各自重训 gbdt（500 日窗）并预测最新截面，再逐股取截面百分位
      秩平均（`_rank_average_single_day`，与实验 `_rank_average` 同口径）；
   5. 幽灵股守卫（existence_mask，逐 horizon）+ 信号日可交易性标注（停牌/ST/封板）；
-  6. 输出全A排名 CSV + Top10% 持仓候选 + history 追加（reports/alla_daily/）。
+  6. 输出全A排名 CSV + Top10% 持仓候选 + history 追加（reports/alla_daily/，
+     2026-10-09 起精简为每期 6 个文件）；可选 `--deliverable-k N` 额外产
+     `portfolio_<ds>.csv`（可交易 TopN 等权可交付组合，实测甜点 35~45 只）。
 
 口径披露（与实验的差异，均为如实可知的边界）：
 - **尾部重算而非全历史拼接**：后复权因子随分红除权漂移，全历史拼接会产生复权
@@ -67,6 +69,7 @@
     python scripts/pipelines/alla_daily_rank.py --preproc ortho --out-tag _ortho  # 正交化口径
     python scripts/pipelines/alla_daily_rank.py --tradable-labels --out-tag _tl    # 标签掩码口径
     python scripts/pipelines/alla_daily_rank.py --window 750        # gbdt_w750 变体
+    python scripts/pipelines/alla_daily_rank.py --deliverable-k 45  # 额外产可交付组合
     python scripts/pipelines/alla_daily_rank.py --install-task 17:30   # 注册每日计划任务
     python scripts/pipelines/alla_daily_rank.py --remove-task
 """
@@ -697,6 +700,33 @@ def build_ranking(scores: pd.Series, tradable: pd.Series, frac: float,
     if len(picks):
         picks["weight"] = 1.0 / len(picks)
     return ranking, picks
+
+
+def build_deliverable(ranking: pd.DataFrame, k: int) -> pd.DataFrame:
+    """从排名表取「可交易 + 分数最高的 k 只」作为可交付组合（等权）。
+
+    2026-10-10 新增（P0 落地）。``picks`` 是 band 上限（全A Top10% ≈ 550 只），
+    供筛选/浏览，**不是能下单的组合**；实盘按 35~45 只执行。本函数把
+    「集中化」的结论落成独立产物：直接取 ``ranking``（已按 score 降序）中
+    ``tradable`` 的前 k 只等权。
+
+    与 ``picks`` 的关系：``deliverable ⊆ picks ∩ (分数最高 k 只)``。
+
+    **刻意不加行业约束**：实测「每申万一级 ≤2 只」相对无约束是 −2.64pp 净代价，
+    且随 max_per_sector 单调回收、m≥8 才基本无损 —— 模型选股有显著行业 alpha。
+    证据 ``reports/deliverable_portfolio/README.md``。
+
+    Args:
+        ranking: :func:`build_ranking` 产出的排名表（需含 ``tradable`` 列）。
+        k: 组合目标只数；``k <= 0`` 返回空表（= 不生成该产物）。
+    """
+    if not k or k <= 0:
+        return pd.DataFrame()
+    elig = ranking[ranking["tradable"]] if "tradable" in ranking.columns else ranking
+    top = elig.head(int(k)).copy()
+    if len(top):
+        top["weight"] = 1.0 / len(top)
+    return top
 
 
 def load_prev_holdings(out_dir: Path, before: pd.Timestamp) -> set:
@@ -1544,6 +1574,7 @@ def write_outputs(ranking: pd.DataFrame, picks: pd.DataFrame,
                   industry_table: pd.DataFrame | None = None,
                   feature_importance: pd.DataFrame | None = None,
                   explain_top: pd.DataFrame | None = None,
+                  deliverable: pd.DataFrame | None = None,
                   out_dir: Path | None = None):
     """排名/持仓/行业排名（单文件含 L1+L2）/解释 CSV。
 
@@ -1554,8 +1585,12 @@ def write_outputs(ranking: pd.DataFrame, picks: pd.DataFrame,
       - 龙头视图由 ``ranking_<ds>.csv`` 的 ``cap_rank``/``mktcap`` 列派生，
         不再单列 ``leaders_<ds>.csv``。
 
+    2026-10-10 新增可选第 7 个产物 ``portfolio_<ds>.csv``（可交付组合，
+    P0 落地）：仅当 ``deliverable`` 非空时落盘，默认 ``--deliverable-k 0``
+    不传 ⇒ 仍 6 个文件、零回归。
+
     返回文件路径 dict（键：ranking/picks/industry/feature_importance/
-    explain_top，仅含实际落盘的项）。
+    explain_top/deliverable，仅含实际落盘的项）。
     """
     d = out_dir or OUT_DIR
     d.mkdir(parents=True, exist_ok=True)
@@ -1592,6 +1627,14 @@ def write_outputs(ranking: pd.DataFrame, picks: pd.DataFrame,
             raise PermissionError(
                 f"个股归因写入失败：{exp_path.name} 被其他进程占用，请关闭后重跑")
 
+    dlv_path = None
+    if deliverable is not None and len(deliverable):
+        dlv_path = d / f"portfolio_{ds}.csv"
+        deliverable.index.name = "code"
+        if not _write_table(dlv_path, deliverable):
+            raise PermissionError(
+                f"可交付组合写入失败：{dlv_path.name} 被其他进程占用，请关闭后重跑")
+
     append_history({"predict_date": ds, **meta}, out_dir=d)
     paths = {"ranking": str(rank_path), "picks": str(picks_path)}
     if ind_path is not None:
@@ -1600,6 +1643,8 @@ def write_outputs(ranking: pd.DataFrame, picks: pd.DataFrame,
         paths["feature_importance"] = str(imp_path)
     if exp_path is not None:
         paths["explain_top"] = str(exp_path)
+    if dlv_path is not None:
+        paths["deliverable"] = str(dlv_path)
     return paths
 
 
@@ -1854,6 +1899,16 @@ def run(args) -> dict:
     log.info("市值标注: 已并入 ranking（mktcap/cap_rank；前 200 = 龙头视图口径，"
              "市值 = TOT_SHARE×收盘）")
 
+    # 可交付组合（P0 落地，`--deliverable-k`；默认 0 = 不生成，零回归）。
+    # 从 ranking（已含 mktcap/cap_rank）取可交易 TopN 等权 —— 与 picks 同源，
+    # 只是把"band 上限（~550 只）"收敛成"可下单只数"（实测甜点 35~45 只）。
+    # 刻意不加行业约束（见 build_deliverable docstring 的实测依据）。
+    _dlv_k = int(getattr(args, "deliverable_k", 0) or 0)
+    deliverable = build_deliverable(ranking, _dlv_k)
+    if _dlv_k:
+        log.info("可交付组合: Top%d 可交易等权 | %d 只（行业约束=不加）",
+                 _dlv_k, len(deliverable))
+
     meta = {"model": "gbdt", **train_meta, "frac": args.frac, "preproc": preproc,
             "preset": getattr(args, "preset", None) or "legacy",
             "slow_blend": float(getattr(args, "slow_blend", 0.0) or 0.0),
@@ -1869,10 +1924,13 @@ def run(args) -> dict:
             else int((ind_table["level"] == "L2").sum()),
             "top5": "|".join(ranking.index[:5].astype(str)),
             "runtime_sec": round(time.time() - t0, 1)}
+    if _dlv_k:
+        meta["n_deliverable"] = len(deliverable)
     paths = write_outputs(ranking, picks, predict_date, meta,
                           industry_table=ind_table,
                           feature_importance=imp_table,
                           explain_top=explain_top,
+                          deliverable=deliverable,
                           out_dir=out_dir)
 
     log.info("=" * 70)
@@ -1916,6 +1974,8 @@ def run(args) -> dict:
         out_msg += f" | 特征重要性: {paths['feature_importance']}"
     if "explain_top" in paths:
         out_msg += f" | 个股归因: {paths['explain_top']}"
+    if "deliverable" in paths:
+        out_msg += f" | 可交付组合: {paths['deliverable']}"
     log.info(out_msg)
     log.info("=" * 70)
     return {"predict_date": str(predict_date.date()), "meta": meta, "paths": paths}
@@ -1961,6 +2021,11 @@ def main() -> None:
                     help="缓冲带建仓分位（定版 0.15）；给值即启用缓冲带持仓")
     ap.add_argument("--buffer-exit", type=float, default=None, metavar="F",
                     help="缓冲带保留分位（定版 0.40）")
+    ap.add_argument("--deliverable-k", type=int, default=0, metavar="N",
+                    help="额外产出 portfolio_<ds>.csv：可交易 TopN 等权可交付"
+                         "组合（P0 落地；实测甜点 35~45 只）。0=不生成（默认，"
+                         "保持 6 文件零回归）。**不加行业约束**："
+                         "每申万一级≤2 只是 −2.64pp 净代价")
     ap.add_argument("--tradable-labels", action="store_true",
                     default=DEFAULT_TRADABLE_LABELS,
                     help="训练标签掩掉买不进的样本（T+1 成交口径可交易掩码，"

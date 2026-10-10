@@ -192,6 +192,30 @@ def test_build_ranking():
     assert "c9" not in ranking2.index and len(ranking2) == 9
 
 
+def test_build_deliverable():
+    """可交付组合：可交易 TopN 等权；k<=0 不产；不足 k 时全取。"""
+    from scripts.pipelines.alla_daily_rank import build_deliverable
+    codes = [f"c{i}" for i in range(10)]
+    scores = pd.Series(np.arange(10.0, 0, -1), index=codes)   # c0 最高
+    ranking = pd.DataFrame({
+        "score": scores,
+        # c1 / c9 不可交易
+        "tradable": [True, False, True, True, True, True, True, True, True, False],
+    }, index=codes)
+
+    out = build_deliverable(ranking, 3)
+    # 不可交易的 c1 被跳过且不占名额 → c0, c2, c3
+    assert list(out.index) == ["c0", "c2", "c3"]
+    assert np.allclose(out["weight"], 1.0 / 3)
+    # k<=0 → 空表（= 不生成该产物），且负数不越界
+    assert build_deliverable(ranking, 0).empty
+    assert build_deliverable(ranking, -1).empty
+    # k 超过可交易只数 → 全取（8 只）
+    assert len(build_deliverable(ranking, 100)) == 8
+    # 无 tradable 列 → 退化为按分数取前 k
+    assert list(build_deliverable(ranking[["score"]], 2).index) == ["c0", "c1"]
+
+
 def test_build_ranking_annotations():
     """两级行业标注（industry_series 产物）+ 旧 Series 口径兼容。"""
     from scripts.pipelines.alla_daily_rank import build_ranking
@@ -510,6 +534,30 @@ def test_write_outputs(tmp_path):
     # 无行业表 → 不产出 industry 键
     paths2 = write_outputs(ranking, picks, d, {}, out_dir=tmp_path)
     assert "industry" not in paths2
+
+
+def test_write_outputs_deliverable(tmp_path):
+    """--deliverable-k 启用时额外产 portfolio_<ds>.csv；默认不产（零回归）。"""
+    from scripts.pipelines.alla_daily_rank import write_outputs
+    d = pd.Timestamp("2026-09-04")
+    ranking = pd.DataFrame({
+        "rank": [1, 2], "name": ["贵州茅台", "宁德时代"], "score": [3.0, 1.0],
+        "pct_rank": [1.0, 0.9], "top_frac": [True, True], "tradable": [True, False],
+    }, index=["c0", "c1"])
+    picks = ranking[ranking["top_frac"] & ranking["tradable"]].copy()
+    dlv = ranking[ranking["tradable"]].head(1).copy()
+    dlv["weight"] = 1.0
+
+    paths = write_outputs(ranking, picks, d, {}, deliverable=dlv, out_dir=tmp_path)
+    assert "deliverable" in paths
+    fp = tmp_path / "portfolio_20260904.csv"
+    assert fp.exists()
+    got = pd.read_csv(fp, index_col=0)
+    assert list(got.index) == ["c0"]
+
+    # 默认（deliverable=None）→ 不产该键（保持 6 文件零回归）
+    paths2 = write_outputs(ranking, picks, d, {}, out_dir=tmp_path)
+    assert "deliverable" not in paths2
 
 
 def test_write_main_locked_raises(tmp_path, monkeypatch):
