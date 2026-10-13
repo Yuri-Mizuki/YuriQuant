@@ -165,14 +165,16 @@ def main(argv: list[str] | None = None) -> None:
     wide = agg.pivot_table(index=["arm", "w"], columns="kind",
                            values=["delta", "sharpe_sd"], aggfunc="first")
     wide.columns = [f"{a}_{b}" for a, b in wide.columns]
-    wide = wide.reset_index()
-    wide["delta_excess_over_placebo"] = (wide.get("delta_real", np.nan)
-                                         - wide.get("delta_placebo", np.nan))
+    wide = wide.reset_index().rename(columns={"delta_real": "delta_real"})
+    wide["delta_excess_over_placebo"] = (wide["delta_real"]
+                                         - wide["delta_placebo"])
     wide["sigma_excess"] = (wide["delta_excess_over_placebo"]
-                            / wide.get("sharpe_sd_placebo", np.nan))
-    base_row = pd.DataFrame([dict(arm="主模型 only", w=np.nan,
-                                  delta=0.0, delta_real=0.0)])
-    summ = pd.concat([base_row, wide], ignore_index=True)
+                            / wide["sharpe_sd_placebo"])
+    wide = wide[["arm", "w", "delta_real", "delta_placebo", "sharpe_sd_placebo",
+                 "delta_excess_over_placebo", "sigma_excess"]]
+    summ = pd.concat([pd.DataFrame([dict(arm="主模型 only", w=np.nan,
+                                         delta_real=0.0)]), wide],
+                     ignore_index=True)
     summ.to_csv(dest / "placebo_summary.csv", index=False, encoding="utf-8-sig")
     log.info("完成 -> %s", dest)
 
