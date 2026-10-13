@@ -1,4 +1,13 @@
-"""配置加载：读取 settings.yaml，支持环境变量占位符替换。"""
+"""配置加载：读取 settings.yaml，支持环境变量占位符替换 + 本机覆盖。
+
+两层结构（解决「同一仓库、多台机器数据盘符不同」）：
+
+1. ``config/settings.yaml``（**tracked，仓库默认值**）——只放**跨机通用**的缺省路径，
+   绝对盘符写成 ``${YQ_DATA_ROOT:D:/data}`` 形式，便于整根切换。
+2. ``config/settings_local.yaml``（**本机私有，已 gitignore**）——按**深合并**覆盖默认值，
+   用于「本机某类数据在别的盘」这种逐键差异（例如 E 盘放 factor_library、
+   D 盘放 parquet 缓存）。存在即生效，不存在则完全走默认值（零回归）。
+"""
 
 from __future__ import annotations
 
@@ -12,6 +21,7 @@ from dotenv import load_dotenv
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _CONFIG_PATH = _PROJECT_ROOT / "config" / "settings.yaml"
+_LOCAL_CONFIG_PATH = _PROJECT_ROOT / "config" / "settings_local.yaml"
 
 # Real-data credentials are kept in the repository-local .env file.  Loading
 # it here keeps command-line runs and IDE runs consistent; existing process
@@ -37,11 +47,50 @@ def _expand_env(value: Any) -> Any:
     return value
 
 
+def expand_env(value: Any) -> Any:
+    """公开的占位符展开（供 settings.yaml 以外的 yaml 复用，如 config/schedule.yaml）。
+
+    规则同 ``load_config``：把 ``${VAR:default}`` 换成环境变量值，未设置则用 default。
+    这样「某台机器特有的绝对路径」只需登记一次默认值，换机器时用环境变量覆盖即可。
+    """
+    return _expand_env(value)
+
+
+def _deep_merge(base: dict, override: dict) -> dict:
+    """递归深合并：dict 逐键递归，其余类型由 override 整体替换。
+
+    不做 list 合并（列表语义上「整段替换」比逐项拼接更可预期）。
+    """
+    out = dict(base)
+    for k, v in override.items():
+        cur = out.get(k)
+        if isinstance(v, dict) and isinstance(cur, dict):
+            out[k] = _deep_merge(cur, v)
+        else:
+            out[k] = v
+    return out
+
+
 def load_config(path: Path | str | None = None) -> dict:
-    """加载 yaml 配置并展开环境变量占位符。"""
+    """加载 yaml 配置并展开环境变量占位符。
+
+    Args:
+        path: 显式配置路径。传 None（默认）时读取 ``config/settings.yaml``，
+            并叠加同目录下的 ``settings_local.yaml``（若存在）；**显式传 path
+            时只读该文件、不叠加本机覆盖**（便于测试与「只想要纯默认值」的场景，
+            传默认路径本身也算显式）。
+
+    Returns:
+        展开 ``${VAR:default}`` 后的配置字典。
+    """
     p = Path(path) if path else _CONFIG_PATH
     with open(p, "r", encoding="utf-8") as f:
         raw = yaml.safe_load(f)
+    if path is None and _LOCAL_CONFIG_PATH.exists():
+        with open(_LOCAL_CONFIG_PATH, "r", encoding="utf-8") as f:
+            local = yaml.safe_load(f) or {}
+        if isinstance(local, dict) and local:
+            raw = _deep_merge(raw or {}, local)
     return _expand_env(raw)
 
 
@@ -68,6 +117,37 @@ class Config:
     @classmethod
     def cache(cls) -> dict:
         return cls.get()["cache"]
+
+    @classmethod
+    def paths(cls) -> dict:
+        """数据路径**单一真源**（多机适配，2026-10-13）：取数据盘路径一律走这里。
+
+        背景：两台机器的数据盘符不同（一台 D:/data、一台 E:/data），且迁移只搬了
+        一部分（本机 parquet 在 D:、factor_library 在 E:）。脚本里硬编码
+        ``E:/data/...`` / ``D:/data/...`` 会让另一台机器直接 FileNotFoundError，
+        而这类失败**不会在改配置时暴露**（只有真正跑到那行才炸）。
+
+        路径来源（见 ``config/settings.yaml`` 文件头「路径约定」）：
+        ``${YQ_DATA_ROOT:<默认根>}`` 占位符 → 环境变量或默认值 →
+        再被 ``config/settings_local.yaml``（本机私有）逐键覆盖。
+
+        Returns:
+            {"cache_root": 行情/另类 parquet 缓存根（parquet 表直接拼文件名）,
+             "factor_library_root": 因子库根（下面挂 <dataset>/ 数据集目录）,
+             "textmining_model_dir": 本地 FinBERT 模型目录,
+             "sdk_local_path": AmazingData SDK 本地缓存目录}
+
+        新增消费方请走这里，不要在脚本里硬编码盘符——否则另一台机器上必断。
+        """
+        c = cls.get()
+        ds = c.get("datasource") or {}
+        amazing = (ds.get("amazing_data") or {}) if isinstance(ds, dict) else {}
+        return {
+            "cache_root": str(cls.cache().get("root") or ""),
+            "factor_library_root": str((c.get("factor_library") or {}).get("root") or ""),
+            "textmining_model_dir": str((c.get("textmining") or {}).get("bert_model_dir") or ""),
+            "sdk_local_path": str(amazing.get("sdk_local_path") or ""),
+        }
 
     @classmethod
     def universe(cls) -> dict:
@@ -102,7 +182,8 @@ class Config:
 
         Returns:
             {commission_rate, commission_min, stamp_duty, slippage_bp,
-             short_borrow_rate, short_margin_ratio}
+             short_borrow_rate, short_margin_ratio,
+             impact_model, impact_eta, impact_buy_multiplier, impact_max}
 
         新增消费方请走这里，不要在别处硬编码费率字面量——否则 config 改动后会漂移。
         """
@@ -114,6 +195,11 @@ class Config:
             "slippage_bp": float(c.get("slippage_bp", 10.0)),
             "short_borrow_rate": float(c.get("short_borrow_rate", 0.08)),
             "short_margin_ratio": float(c.get("short_margin_ratio", 1.0)),
+            # 逐股冲击成本模型（P0-1，2026-10-13）：默认 none（用固定 slippage_bp）
+            "impact_model": str(c.get("impact_model", "none")),
+            "impact_eta": float(c.get("impact_eta", 0.4)),
+            "impact_buy_multiplier": float(c.get("impact_buy_multiplier", 1.5)),
+            "impact_max": float(c.get("impact_max", 0.10)),
         }
 
     @classmethod
@@ -148,6 +234,20 @@ class Config:
             "report_a_share_label": str(
                 b.get("report_a_share_label") or "国证A指(399317)≈中证全指"),
         }
+
+    @classmethod
+    def bert_model_dir(cls) -> str:
+        """本地 FinBERT 模型目录（把 ``//`` 归一化为 ``/``，供 transformers 直接消费）。
+
+        6 处 textmining 脚本此前各自 ``try: Config... except: 回落硬编码盘符`` ——
+        在另一台机器上会**静默指向不存在的目录**。统一走这里；未配置时直接报错，
+        而不是猜一个盘符。
+        """
+        d = str(cls.paths().get("textmining_model_dir") or "").replace("//", "/")
+        if not d:
+            raise RuntimeError(
+                "textmining.bert_model_dir 未配置：请检查 config/settings.yaml")
+        return d
 
     @classmethod
     def monitoring(cls) -> dict:

@@ -1,6 +1,16 @@
 # ============================================================
 # YuriQuant 个人量化研究系统 - 全局配置
 # ============================================================
+#
+# --- 路径约定（多机适配，2026-10-13）-----------------------------------
+# 本文件是 **tracked 的仓库默认值**，禁止写入只对某一台机器成立的绝对路径。
+# 绝对路径一律写成 ${YQ_DATA_ROOT:<默认根>} 占位符，按优先级解析：
+#   ① 环境变量 YQ_DATA_ROOT（可写进本机 `.env`，该文件已 gitignore）
+#   ② 占位符里的默认值（本文件的仓库默认）
+#   ③ 逐键差异 → `config/settings_local.yaml`（本机私有、已 gitignore、深合并覆盖）
+# 例：本机 parquet 在 D:、factor_library 在 E: ⇒ 后者写进 settings_local.yaml，
+#     不必改本文件、也不会污染另一台机器。见 `config/__init__.py: load_config`。
+# ========================================================================
 
 # --- 数据源配置 ---
 datasource:
@@ -16,20 +26,28 @@ datasource:
     host: ${AMAZINGDATA_HOST:}
     port: ${AMAZINGDATA_PORT:0}
     # SDK 本地缓存目录（AmazingData 自带的 is_local 方案，SDK 内部用 pickle 格式）
-    # 2026-09-20 迁移：原为 e://data//，但本机 E 盘仅 0.9GB 容量，改为 D 盘
-    sdk_local_path: d://data//sdk_cache//
+    # 2026-09-20 迁移：原为 e://data//，迁移机 E 盘仅 0.9GB 容量，改为 D 盘
+    sdk_local_path: ${YQ_DATA_ROOT:D:/data}//sdk_cache//
 
   csv:
     # 备用 CSV 数据源：指向一个目录，里面按 表名/代码.csv 组织
-    root: d://data//csv//
+    root: ${YQ_DATA_ROOT:D:/data}//csv//
 
 # --- 本地缓存（自建 Parquet 层，在数据源之上） ---
 cache:
   # 自建 Parquet 缓存根目录
-  # 2026-09-20 迁移：原为 e://data//，E 盘容量不足
-  root: d://data//parquet//
+  # 2026-09-20 迁移：原为 e://data//，迁移机 E 盘容量不足
+  root: ${YQ_DATA_ROOT:D:/data}//parquet//
   # 压缩方式: snappy | zstd | gzip
   compression: snappy
+
+# --- 运行时 ---
+runtime:
+  # 装了 akshare 等**可选依赖**的解释器绝对路径（多机适配：见文件头「路径约定」）。
+  # 消费方：scripts/pipelines/fetch_altdata_daily.py（2026-10-10 实测 akshare 只装在
+  # 系统 Python，`.venv` 里没有 ⇒ 该链必须能指定解释器）。与 config/schedule.yaml 的
+  # ${YQ_PYTHON:...} 用**同一个环境变量** ⇒ 换机器时只改一处。
+  python: '${YQ_PYTHON:D:\python\Python312\python.exe}'
 
 # --- 股票池配置 ---
 universe:
@@ -106,14 +124,16 @@ discipline:
 # --- 因子库（Factor Library / Factor Zoo）---
 factor_library:
   # 因子持久化根目录：registry.csv + panels/*.parquet + evals/*.parquet
-  # 2026-09-20 迁移：原为 e://data//，E 盘容量不足
-  root: d://data//factor_library//
+  # 2026-09-20 迁移：原为 e://data//，迁移机 E 盘容量不足
+  # ⚠️ 迁移只搬了 parquet/sdk_cache，**factor_library 未搬**；本机实体在 e://data//
+  #    ⇒ 已写进 settings_local.yaml（本机覆盖），别在这里改死。
+  root: ${YQ_DATA_ROOT:D:/data}//factor_library//
 
 # --- 文本挖掘（data/textmining + scripts/textmining）---
 textmining:
   # 本地 FinBERT 模型目录（hf-mirror 下载的 finbert-tone-chinese，非代码仓库内容）
-  # 2026-09-20 迁移：原为 e://data//，E 盘容量不足
-  bert_model_dir: d://data//models//finbert_tone_chinese
+  # 2026-09-20 迁移：原为 e://data//，迁移机 E 盘容量不足；本机实体仍在 e://data//models//
+  bert_model_dir: ${YQ_DATA_ROOT:D:/data}//models//finbert_tone_chinese
 
 # --- 生产化监控（monitoring/ 包；因子与模型预测的性能监控调度）---
 monitoring:
@@ -140,10 +160,18 @@ costs:
   commission_rate: 0.0003    # 双边佣金万3
   commission_min: 5.0        # 单笔最低佣金5元
   stamp_duty: 0.001          # 印花税卖出千1
-  slippage_bp: 10            # 滑点 10bp
+  slippage_bp: 10            # 滑点 10bp（固定假设；impact_model=sqrt 时被逐股冲击替代）
   # 空头腿成本（修正空头腿乐观偏差：多空策略借券费按日计提、保证金占用报告）
   short_borrow_rate: 0.08    # 年化借券费率（A股融券常见 8%~10%；0=关闭）
   short_margin_ratio: 1.0    # 融券保证金比例（监管最低 100% = 1.0）
+  # --- 逐股冲击成本模型（P0-1, 2026-10-13）---
+  # 默认 none = 用上面的固定 slippage_bp（零回归）；sqrt = 平方根律逐股冲击
+  # （η·σ·√(Q/ADV)，买卖非对称），需回测传逐股 adv/vol 面板，否则自动退回固定滑点。
+  # ⚠️ eta/buy_multiplier 为文献/研报经验值，须用本项目数据重新校准（见报告 §9.5）。
+  impact_model: none         # none | sqrt
+  impact_eta: 0.4            # 冲击系数 η（文献 0.3~0.5）
+  impact_buy_multiplier: 1.5 # A股买入冲击 ≈ 卖出 ×1.5
+  impact_max: 0.10           # 单名单边冲击上限（10%）
 
 # --- 回测默认参数（费率不在这里，见上面的 `costs` 段）---
 backtest:

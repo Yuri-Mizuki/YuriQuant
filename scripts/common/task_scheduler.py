@@ -65,6 +65,8 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from config import expand_env  # noqa: E402  （导入即加载仓库内 .env，供 ${VAR} 展开取用）
+
 #: 本项目任务名的统一前缀（doctor 反向漂移检测按它扫系统）
 TASK_PREFIX = "YuriQuant"
 
@@ -445,11 +447,16 @@ def list_project_tasks(prefix: str = TASK_PREFIX) -> list[str]:
 # 登记表 + 体检
 # ---------------------------------------------------------------------------
 def load_schedule(path: Path | str | None = None) -> list[dict]:
-    """读 ``config/schedule.yaml`` 的 ``tasks`` 列表。"""
+    """读 ``config/schedule.yaml`` 的 ``tasks`` 列表。
+
+    返回值中的 ``${VAR:默认值}`` 已展开（解释器 / 仓库根 / 数据根），默认值即
+    本机当前取值 ⇒ 环境变量未设时结果与登记表字面量逐字相同（零漂移、无需重注册）；
+    换机器时设 ``YQ_PYTHON`` / ``YQ_REPO`` / ``YQ_DATA_ROOT`` 即可，见本表头部说明。
+    """
     import yaml
 
     p = Path(path) if path else SCHEDULE_PATH
-    data = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+    data = expand_env(yaml.safe_load(p.read_text(encoding="utf-8")) or {})
     tasks = data.get("tasks") or []
     if not isinstance(tasks, list):
         raise ValueError(f"{p} 的 tasks 必须是列表")

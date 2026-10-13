@@ -35,6 +35,17 @@
 # system 取值：
 #   schtasks  —— Windows 计划任务（doctor 可自动核对）
 #   workbuddy —— WorkBuddy 自动化（脚本无法枚举，需人工核对）
+#
+# --- 多机适配（2026-10-13）------------------------------------------------
+# 本表是 tracked 文件，但里面的**解释器/仓库/数据盘路径**只对某台机器成立。
+# 因此一律写成 ${VAR:默认值} 占位符，由 `scripts.common.task_scheduler` 经
+# `config.expand_env` 展开（config 导入时已加载仓库内 .env）：
+#   ${YQ_PYTHON:...}    解释器绝对路径（另一台机器 python 装别处时改环境变量）
+#   ${YQ_REPO:...}      仓库根（工作区搬到别的盘时改环境变量）
+#   ${YQ_DATA_ROOT:...}  数据根（与 config/settings.yaml 同一约定）
+# ⚠️ 默认值 = 本机当前取值 ⇒ **本机展开结果与改前逐字相同，零漂移、无需重注册**；
+#    换机器时只需设环境变量，再 `install <key>` 重注册一次。
+# --------------------------------------------------------------------------
 
 version: 1
 updated: '2026-10-10'
@@ -46,9 +57,9 @@ tasks:
     status: active
     time: '17:30'
     schedule: daily
-    command: 'D:\python\Python312\python.exe'
-    arguments: '"E:\YuriQuant\scripts\pipelines\alla_daily_rank.py" --preset dingban --log-file logs\alla_daily_rank_task_{date}.log'
-    working_dir: 'E:\YuriQuant'
+    command: '${YQ_PYTHON:D:\python\Python312\python.exe}'
+    arguments: '"${YQ_REPO:E:\YuriQuant}\scripts\pipelines\alla_daily_rank.py" --preset dingban --log-file logs\alla_daily_rank_task_{date}.log'
+    working_dir: '${YQ_REPO:E:\YuriQuant}'
     execution_limit: PT3H
     product_glob: 'reports/alla_daily_defv/ranking_*.csv'
     description: 'YuriQuant 全A每日出榜（定版口径：fundind 快信号 h1020 ⊕ 慢信号 s0.5 + buffer(15/40)，全流程约 15–60 分钟）'
@@ -66,11 +77,14 @@ tasks:
     status: active
     time: '18:00'
     schedule: daily
-    command: 'D:\python\Python312\python.exe'
-    arguments: '"E:\YuriQuant\scripts\pipelines\fetch_altdata_daily.py" --tables all --log-file logs\altdata_daily_task_{date}.log'
-    working_dir: 'E:\YuriQuant'
+    command: '${YQ_PYTHON:D:\python\Python312\python.exe}'
+    arguments: '"${YQ_REPO:E:\YuriQuant}\scripts\pipelines\fetch_altdata_daily.py" --tables all --log-file logs\altdata_daily_task_{date}.log'
+    working_dir: '${YQ_REPO:E:\YuriQuant}'
     execution_limit: PT3H
-    product_glob: 'E:/data/parquet/_alt_meta.json'
+    # 修 2026-10-13：原写 'E:/data/parquet/_alt_meta.json'（09-20 迁移前口径）——
+    # 而任务实际写盘在 Config.cache().root（本机 D:），doctor 的新鲜度核对因此
+    # 一直在读**旧副本**（E 盘那份停在 10-11）。改为与 settings.yaml 同源的占位符。
+    product_glob: '${YQ_DATA_ROOT:D:/data}//parquet//_alt_meta.json'
     description: 'YuriQuant 另类数据日更（akshare：质押/增减持/高管持股/宏观日历/财联社/新闻）'
     notes: >-
       🔧 2026-10-10 解释器订正：**改用系统 Python**（原写 .venv）。实测 akshare
@@ -109,11 +123,11 @@ tasks:
     status: planned
     time: '17:30'
     schedule: daily
-    command: 'D:\python\Python312\python.exe'
+    command: '${YQ_PYTHON:D:\python\Python312\python.exe}'
     arguments: >-
-      "E:\YuriQuant\scripts\pipelines\fetch_altdata_daily.py" --tables cls
+      "${YQ_REPO:E:\YuriQuant}\scripts\pipelines\fetch_altdata_daily.py" --tables cls
       --cls-backfill --cls-max-pages 3000
-    working_dir: 'E:\YuriQuant'
+    working_dir: '${YQ_REPO:E:\YuriQuant}'
     execution_limit: PT3H
     description: '财联社历史回补续跑推进器（断点续传；回补完成后自动空转）'
     notes: '回补期需要；回补完成后可长期挂着，不必删任务。当前未启用'
@@ -126,9 +140,9 @@ tasks:
     schedule: minute
     every_minutes: 10
     end_time: '21:00'
-    command: 'D:\python\Python312\python.exe'
-    arguments: '"E:\YuriQuant\scripts\pipelines\fetch_altdata_daily.py" --tables news'
-    working_dir: 'E:\YuriQuant'
+    command: '${YQ_PYTHON:D:\python\Python312\python.exe}'
+    arguments: '"${YQ_REPO:E:\YuriQuant}\scripts\pipelines\fetch_altdata_daily.py" --tables news'
+    working_dir: '${YQ_REPO:E:\YuriQuant}'
     execution_limit: PT1H
     description: '高频新闻快照（09:00–21:00 每 10 分钟）'
     notes: '引入财联社可回补源后价值大幅下降（同花顺/新浪只有 20 条无历史快照），默认不装'
