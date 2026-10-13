@@ -41,14 +41,9 @@ OUT_DIR = Out("fadt")
 # 本地模型目录（hf-mirror 下载，沙箱无法用 huggingface_hub 缓存管理）；
 # 路径真源在 config/settings.yaml 的 textmining.bert_model_dir
 def _bert_model_dir() -> str:
-    try:
-        from config import Config
-        d = Config.get().get("textmining", {}).get("bert_model_dir")
-        if d:
-            return str(d).replace("//", "/")
-    except Exception:
-        pass
-    return r"D:/data/models/finbert_tone_chinese"
+    # 多机适配：不硬编码盘符（另一台机器模型在别的盘）；未配置直接报错
+    from config import Config
+    return Config.bert_model_dir()
 
 MODEL_DIR = _bert_model_dir()
 log = setup_logging("encode_bert")

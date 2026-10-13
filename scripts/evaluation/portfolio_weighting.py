@@ -37,12 +37,13 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-sys.path.insert(0, r"E:/YuriQuant")
+# 多机适配：仓库根由 __file__ 推出，不硬编码盘符（E:/YuriQuant 会随机器变）
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT))
 
 from strategy.base import Strategy  # noqa: E402
 
 log = logging.getLogger("portfolio_weighting")
-ROOT = Path(r"E:/YuriQuant")
 VOL_WINDOW = 60
 VOL_MIN_PERIODS = 20
 

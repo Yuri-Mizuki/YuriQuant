@@ -36,9 +36,13 @@ import time
 import numpy as np
 import pandas as pd
 
-sys.path.insert(0, r"E:/YuriQuant")
+# 多机适配：repo 根与数据根都不硬编码盘符（E:/YuriQuant、E:\data 会随机器变）
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, ROOT)
 
-LIB = r"E:\data\factor_library\all_a_2018_2026"
+from config import Config  # noqa: E402
+
+LIB = os.path.join(Config.paths()["factor_library_root"], "all_a_2018_2026")
 IC_H1 = os.path.join(LIB, "ic_h1.parquet")
 REG = os.path.join(LIB, "registry.csv")
 
@@ -53,7 +57,7 @@ PURE_PV_GRID = [36, 50, 100, 200, 350, 791]
 def main() -> int:
     ap = argparse.ArgumentParser(description="量价池边际增益（阶段 A：池质量口径）")
     ap.add_argument("--years", default="2019,2020,2021,2022,2023,2024,2025")
-    ap.add_argument("--out-dir", default=r"E:\YuriQuant\reports\pv_marginal")
+    ap.add_argument("--out-dir", default=os.path.join(ROOT, "reports", "pv_marginal"))
     ap.add_argument("--min-coverage", type=float, default=MIN_COVERAGE)
     args = ap.parse_args()
     years = [int(x) for x in args.years.split(",")]

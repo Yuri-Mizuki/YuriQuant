@@ -308,11 +308,13 @@ class FactorLibrary:
 
     def __init__(self, root: str | Path | None = None, dataset: str | None = None):
         if root is None:
-            try:
-                from config import Config
-                root = Config.get().get("factor_library", {}).get("root", "e:/data/factor_library/")
-            except Exception:
-                root = "e:/data/factor_library/"
+            # 多机适配：缺省根走 config 单一真源，**不硬编码盘符**
+            # （两台机器数据盘不同：一台 D:/data、一台 E:/data）
+            from config import Config
+            root = Config.paths().get("factor_library_root") or ""
+            if not str(root).strip():
+                raise RuntimeError(
+                    "factor_library.root 未配置：请检查 config/settings.yaml")
         self.base_root = Path(root)
         self.dataset = dataset
         # 按数据集分库根：dataset 给定时落到 base_root/<dataset>/，否则用 legacy 默认库（向后兼容）
@@ -327,11 +329,12 @@ class FactorLibrary:
     def list_datasets(cls, root: str | Path | None = None) -> list[str]:
         """列出 base_root 下所有含 registry.csv 的数据集名（按数据集分库根）。"""
         if root is None:
-            try:
-                from config import Config
-                root = Config.get().get("factor_library", {}).get("root", "e:/data/factor_library/")
-            except Exception:
-                root = "e:/data/factor_library/"
+            # 同上：缺省根走 config 单一真源，不硬编码盘符
+            from config import Config
+            root = Config.paths().get("factor_library_root") or ""
+            if not str(root).strip():
+                raise RuntimeError(
+                    "factor_library.root 未配置：请检查 config/settings.yaml")
         base = Path(root)
         if not base.exists():
             return []

@@ -50,11 +50,14 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from config import Config  # noqa: E402
+
 log = logging.getLogger("seq_predictor_compare")
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(name)s | %(message)s")
 
-DATA = Path("E:/data/parquet")
+# 多机适配：盘符不硬编码，走 config 单一真源（D:/data 或 E:/data 由本机配置决定）
+DATA = Path(Config.paths()["cache_root"])
 OUT_DIR = ROOT / "reports" / "p1_sequence_predictor"
 FIELDS = ["CLOSE", "OPEN", "HIGH", "LOW", "VWAP", "VOLUME"]
 FIELDS_LOWER = ["open", "high", "low", "close", "volume", "amount"]

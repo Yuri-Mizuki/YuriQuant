@@ -98,7 +98,12 @@ _i = os.environ.get("YQ_ALT_PY")
 if _i:
     ALT_PY = Path(_i)
 elif sys.platform == "win32":
-    ALT_PY = Path(r"D:\python\Python312\python.exe")
+    # 多机适配（2026-10-13）：解释器路径不硬编码盘符，走 settings.runtime.python
+    # （占位符 ${YQ_PYTHON:默认}，与 config/schedule.yaml 同一环境变量）
+    from config import Config
+
+    _p = (Config.get().get("runtime") or {}).get("python")
+    ALT_PY = Path(str(_p)) if _p else Path(sys.executable)
 else:  # 非 Windows（CI）退回当前解释器
     ALT_PY = Path(sys.executable)
 

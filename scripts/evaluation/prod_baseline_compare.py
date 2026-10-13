@@ -30,6 +30,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from config import Config
 from scripts.evaluation.seq_predictor_compare import (
     FIELDS,
     GbdtArm,
@@ -41,7 +42,9 @@ from scripts.evaluation.seq_predictor_compare import (
 )
 
 ROOT = Path(__file__).resolve().parents[2]
-PANEL_ROOT = Path("E:/data/factor_library/all_a_2018_2026/panels_neu")
+# 多机适配：因子库根走 config 单一真源（本机在 E:，另一台可能在 D:）
+PANEL_ROOT = (Path(Config.paths()["factor_library_root"])
+              / "all_a_2018_2026" / "panels_neu")
 SELECTION = ROOT / "reports" / "alla_rolling_ortho920fundind" / "selection"
 OUT_DIR = ROOT / "reports" / "p1b_prod_baseline"
 

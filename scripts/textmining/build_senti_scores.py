@@ -63,12 +63,11 @@ def load_model(max_len: int = 256):
     """加载 FinBERT 三分类模型（含微调分类头，CPU 推理）。"""
     import torch
     from transformers import AutoModelForSequenceClassification, AutoTokenizer
-    try:
-        from config import Config
-        d = Config.get().get("textmining", {}).get("bert_model_dir")
-    except Exception:
-        d = None
-    model_dir = str(d).replace("//", "/") if d else r"D:/data/models/finbert_tone_chinese"
+
+    from config import Config
+
+    # 多机适配：模型目录走 config 单一真源，不硬编码盘符
+    model_dir = Config.bert_model_dir()
     torch.set_num_threads(max(1, args_threads[0]))
     tok = AutoTokenizer.from_pretrained(model_dir)
     model = AutoModelForSequenceClassification.from_pretrained(model_dir)

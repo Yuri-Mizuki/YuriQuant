@@ -34,11 +34,9 @@ log = setup_logging("pooler_enc")
 
 def _pooler_weights() -> tuple[np.ndarray, np.ndarray]:
     from config import Config
-    try:
-        d = Config.get().get("textmining", {}).get("bert_model_dir")
-    except Exception:
-        d = None
-    model_dir = str(d).replace("//", "/") if d else r"D:/data/models/finbert_tone_chinese"
+
+    # 多机适配：模型目录走 config 单一真源，不硬编码盘符
+    model_dir = Config.bert_model_dir()
     from safetensors import safe_open
     with safe_open(str(Path(model_dir) / "model.safetensors"), framework="pt") as fh:
         w = fh.get_tensor("bert.pooler.dense.weight").numpy()
@@ -68,11 +66,9 @@ def run(task: str = "fadt", pool: str = "zz1000", check_live: bool = True):
         from transformers import AutoModel, AutoTokenizer
 
         from config import Config
-        try:
-            d = Config.get().get("textmining", {}).get("bert_model_dir")
-        except Exception:
-            d = None
-        model_dir = str(d).replace("//", "/") if d else r"D:/data/models/finbert_tone_chinese"
+
+        # 多机适配：模型目录走 config 单一真源，不硬编码盘符
+        model_dir = Config.bert_model_dir()
         sp = OUT_DIR / f"{task}_samples_{pool}.parquet"
         samples = pd.read_parquet(sp).reset_index(names="row_idx").head(4)
         texts = (samples["title"].fillna("") + " " + samples["summary"].fillna(""))

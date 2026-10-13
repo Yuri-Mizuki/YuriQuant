@@ -73,12 +73,11 @@ def run(pool: str = "zz1000", batch_size: int = 32, threads: int = 22,
     import torch
     torch.set_num_threads(threads)
     from transformers import AutoModel, AutoTokenizer
-    try:
-        from config import Config
-        d = Config.get().get("textmining", {}).get("bert_model_dir")
-    except Exception:
-        d = None
-    model_dir = str(d).replace("//", "/") if d else r"D:/data/models/finbert_tone_chinese"
+
+    from config import Config
+
+    # 多机适配：模型目录走 config 单一真源，不硬编码盘符
+    model_dir = Config.bert_model_dir()
     tok = AutoTokenizer.from_pretrained(model_dir)
     model = AutoModel.from_pretrained(model_dir).eval()
 

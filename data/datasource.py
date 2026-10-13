@@ -285,7 +285,12 @@ class AmazingDataSource(DataSource):
 
     def __init__(self, cfg: dict):
         self._cfg = cfg
-        self._local_path = cfg.get("sdk_local_path", "d://data//sdk_cache//")
+        if cfg.get("sdk_local_path"):
+            self._local_path = cfg["sdk_local_path"]
+        else:
+            # 多机适配：缺省值也走 config 单一真源，**不硬编码盘符**
+            from config import Config
+            self._local_path = Config.paths()["sdk_local_path"]
         self._ad = None       # 模块句柄
         self._base = None     # BaseData 实例
         self._market = None   # MarketData 实例

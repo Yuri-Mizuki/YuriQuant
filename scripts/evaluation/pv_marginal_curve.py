@@ -44,17 +44,20 @@ import pandas as pd
 import pyarrow.parquet as pq
 
 warnings.filterwarnings("ignore")
-sys.path.insert(0, r"E:/YuriQuant")
+# 多机适配：repo 根与数据根都不硬编码盘符（E:/YuriQuant、E:\data 会随机器变）
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, ROOT)
 
+from config import Config  # noqa: E402
 from research.dpp_selection import corr_matrix, dpp_select  # noqa: E402
 from stats.ic import calc_ic_series  # noqa: E402
 
-LIB = r"E:\data\factor_library\all_a_2018_2026"
+LIB = os.path.join(Config.paths()["factor_library_root"], "all_a_2018_2026")
 P_NEU = os.path.join(LIB, "panels_neu_fundind")
 IC_H1 = os.path.join(LIB, "ic_h1.parquet")
 REG = os.path.join(LIB, "registry.csv")
 CLOSE_ADJ = os.path.join(
-    r"E:\YuriQuant\reports\alla_rolling_ortho920fundind\_base", "close_adj.parquet")
+    ROOT, "reports", "alla_rolling_ortho920fundind", "_base", "close_adj.parquet")
 
 QUALITY_WINDOW = 500
 MIN_COVERAGE = 0.5
@@ -110,7 +113,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="量价因子边际增益曲线（阶段 B：DPP 组合口径）")
     ap.add_argument("--years", default="2019,2020,2021,2022,2023,2024,2025")
     ap.add_argument("--quick", action="store_true")
-    ap.add_argument("--out-dir", default=r"E:\YuriQuant\reports\pv_marginal")
+    ap.add_argument("--out-dir", default=os.path.join(ROOT, "reports", "pv_marginal"))
     ap.add_argument("--tag", default="")
     args = ap.parse_args()
 
@@ -118,9 +121,10 @@ def main() -> int:
     if args.quick:
         years = years[:1]
     os.makedirs(args.out_dir, exist_ok=True)
-    os.makedirs(r"E:\YuriQuant\logs", exist_ok=True)
+    log_dir = os.path.join(ROOT, "logs")
+    os.makedirs(log_dir, exist_ok=True)
     log_path = os.path.join(
-        r"E:\YuriQuant\logs",
+        log_dir,
         f"pv_marginal_dpp{('_' + args.tag) if args.tag else ''}"
         f"{'_quick' if args.quick else ''}_{time.strftime('%Y%m%d_%H%M')}.log")
     log_fh = open(log_path, "a", encoding="utf-8")

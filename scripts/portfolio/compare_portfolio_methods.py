@@ -265,11 +265,11 @@ def main() -> None:
     ap.add_argument("--end", type=int, default=None, help="真实数据结束日 YYYYMMDD")
     ap.add_argument("--index", default="000300.SH", help="指数代码（默认沪深300）")
     ap.add_argument("--sdk-cache", default=None,
-                    help="SDK 本地缓存目录（默认 settings.yaml 的 sdk_local_path；"
-                         "e:\\data\\sdk_cache 被锁定时传新目录，如 ./.sdk_cache_p2）")
+                    help="SDK 本地缓存目录（默认取 settings.yaml 的 sdk_local_path；"
+                         "该目录被锁定时传新目录，如 ./.sdk_cache_p2）")
     ap.add_argument("--cache-root", default=None,
-                    help="parquet 缓存目录（默认 e:/data/parquet；被锁定时传 workspace 内"
-                         "新目录，如 ./.cache_p2，需先复制所需表过去）")
+                    help="parquet 缓存目录（默认取 settings.yaml 的 cache.root；被锁定时"
+                         "传 workspace 内新目录，如 ./.cache_p2，需先复制所需表过去）")
     args = ap.parse_args()
     methods = [m.strip() for m in args.methods.split(",") if m.strip()]
 

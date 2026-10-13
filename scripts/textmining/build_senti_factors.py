@@ -172,12 +172,11 @@ def validate_sentence_agreement(pool: str, n_reports: int = 300) -> str:
     """抽样验证：报告级得分 vs AI 41 逐句均值得分的一致性（Spearman）。"""
     import torch
     from transformers import AutoModelForSequenceClassification, AutoTokenizer
-    try:
-        from config import Config
-        d = Config.get().get("textmining", {}).get("bert_model_dir")
-    except Exception:
-        d = None
-    model_dir = str(d).replace("//", "/") if d else r"D:/data/models/finbert_tone_chinese"
+
+    from config import Config
+
+    # 多机适配：模型目录走 config 单一真源，不硬编码盘符
+    model_dir = Config.bert_model_dir()
     torch.set_num_threads(22)
 
     sp = OUT_DIR / f"senti_scores_{pool}.parquet"

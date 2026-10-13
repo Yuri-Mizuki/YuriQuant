@@ -39,11 +39,14 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from config import Config  # noqa: E402
 from scripts.common.cli_common import setup_logging  # noqa: E402
 
 log = setup_logging("hp_sensitivity")
 
-PANEL_DIR = Path(r"E:/data/factor_library/all_a_2018_2026/panels_neu")
+# 多机适配：因子库根走 config 单一真源（不硬编码盘符）
+PANEL_DIR = (Path(Config.paths()["factor_library_root"])
+             / "all_a_2018_2026" / "panels_neu")
 SEL = Path(r"reports/alla_rolling_ortho/selection/y2022__h1.json")
 TRAIN_WINDOW = 500
 

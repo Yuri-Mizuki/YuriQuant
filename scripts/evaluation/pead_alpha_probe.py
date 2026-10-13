@@ -54,11 +54,13 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from config import Config  # noqa: E402
 from scripts.common.cli_common import setup_logging  # noqa: E402
 
 log = setup_logging("pead_alpha_probe")
 
-SDK_INFO = Path(r"E:/data/sdk_cache/infodata")
+# 多机适配：SDK 缓存根走 config 单一真源（不硬编码盘符）
+SDK_INFO = Path(Config.paths()["sdk_local_path"]) / "infodata"
 DRIFT_W = 60          # PEAD 漂移窗（交易日）
 CHG_CLIP = (-100.0, 500.0)   # 预告变动幅度剪裁区间（%）
 
