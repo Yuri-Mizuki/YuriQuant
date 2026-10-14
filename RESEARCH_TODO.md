@@ -560,6 +560,14 @@ python -m scripts.factors.run_portfolio_phase2 --pool zz1000 \
 **暂缓**：东方 DFQ / 华泰 DQN 择时（**RL 线已整体归档**，重启需机制级新依据）；
 AlphaNet / GNN / GAN 系列（P2）。
 
+**择时线专题（10-14/15 收口 + 业界调研）**：大盘仓位择时不立项（证据链 =
+`reports/timing_probe/`：日自相关 +0.048 · 月度 0/7 显著 · 资金面 0/4 ·
+规则 7/7 负；业界调研见 `reports/docs/research_notes/择时业界方案调研_2026-10-14.md`——
+AQR「sin a little」+ JFE vol-managed 103 策略复核 8 显著全在动量类，与项目实测同向）。
+**唯一候选立项** = 个股 regime 门控（民生 Deep Timing / arXiv drift regime 思想，
+非大盘择时，属截面信号时变调制）：先做半天探针过 IR ≥ 0.3 + 多重检验 + 安慰剂，
+预期大概率死于门控切样本后 IC 被噪声淹没。
+
 ---
 
 ## 附：全库分类速查
