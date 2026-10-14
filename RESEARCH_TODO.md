@@ -564,9 +564,16 @@ AlphaNet / GNN / GAN 系列（P2）。
 `reports/timing_probe/`：日自相关 +0.048 · 月度 0/7 显著 · 资金面 0/4 ·
 规则 7/7 负；业界调研见 `reports/docs/research_notes/择时业界方案调研_2026-10-14.md`——
 AQR「sin a little」+ JFE vol-managed 103 策略复核 8 显著全在动量类，与项目实测同向）。
-**唯一候选立项** = 个股 regime 门控（民生 Deep Timing / arXiv drift regime 思想，
-非大盘择时，属截面信号时变调制）：先做半天探针过 IR ≥ 0.3 + 多重检验 + 安慰剂，
-预期大概率死于门控切样本后 IC 被噪声淹没。
+
+**▶ Regime 条件化 立项推进（10-15 由莉酱拍板；计划 `reports/regime_probe/README.md`）**：
+与大盘择时彻底解耦（**满仓、只动信号、仓位恒 1**）。Phase 0 已出肉：882 ens_h1h5
+日度 IC 在市场 20 日**涨/跌期差异显著 0.127 vs 0.110（t=3.55，Bonferroni p=0.0012）**，
+波动/量能无差异（非机械效应）——这正是「状态当特征喂 GBDT」A/B 测不出的条件结构
+（该 A/B 只覆盖一种注入方式，为审计确认的验证缺口）。推进序：Phase 0 收尾 = 因子族
+分状态 IC 相关结构（判「切换有肉」vs「全体同缩」，半天）→ Phase 1 市场级信号切换
+（1 天，满仓 + production + 四窗口 + 状态打乱安慰剂）→ Phase 2 个股 drift regime
+门控（2 天，先过门内/门外分池 IC 探针）。总预算 3.5 天，每阶段独立止损，
+全程不动出榜链。
 
 ---
 
