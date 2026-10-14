@@ -158,29 +158,74 @@ def beta_structure(p: pd.Series, m: pd.Series, win: int = 252) -> pd.DataFrame:
 
 
 def oracle_bounds(p: pd.Series, m: pd.Series) -> pd.DataFrame:
-    """完美 foresight 上界（🚨 物理不可能，仅用于判断"值不值得跑规则"）。
+    """择时信息价值的三个口径（2026-10-15 修正版；旧版口径搞反了 foresight 方向）。
 
-    - **日频**：明日涨跌已知 → 明日满仓/空仓。
-    - **月频**：当月涨跌已知 → 当月整月满仓/空仓。
-    两者都刻意**不加成本**（再打折只会让上界更低、更无希望）。
+    🚨 **旧版 bug（已在 git 历史 a509b97 引入，本版修正）**：旧「日频」臂写的是
+    ``ω[t] = 1[m[t+1]>0]`` —— 用**明天**的涨跌决定**今天**的仓位。但今天的收益
+    在今天开盘时就已锁定，知道明天涨跌对今天收益**毫无帮助**；它算出的
+    「上界 9.03% < 满仓」是一个方向搞反的废数字，还曾据此错误收口整条线。
+
+    正确的三个口径（前两个刻意**不加成本**，再打折只会更低）：
+
+    - **收盘信息·次日执行**（``ω[t] = 1[m[t-1]>0]``）：
+      今天收盘 100% 知道今天涨跌、明天开盘执行 —— 这是**信息完美且可实现
+      （不用预知未来）**的形态，是「过去信息对大盘的全部预测力」的上界。
+      实测 ≈ 满仓（日收益自相关 ≈ 0），**这一臂才是判定择时生死的那个**。
+    - **日频开盘前知当日**（``ω[t] = 1[m[t]>0]``）：开盘前已知当日收盘涨跌。
+      物理不可能（信息在收盘才产生），仅作理论天花板。
+    - **月频月初知当月**（月初已知当月整月涨跌）：物理不可能，给出
+      「如果有人能预测月度大盘」的空间量级。
     """
     rows = []
-    o_next = pd.Series(np.where(m.shift(-1) > 0, 1.0, 0.0), index=p.index).fillna(1.0)
-    r = p * o_next
-    rows.append({"oracle": "日频次日 foresight（无成本）", "annual": annual_return(r),
-                 "sharpe": geo_sharpe(r), "max_dd": max_drawdown(r),
-                 "avg_pos": float(o_next.mean())})
+    # 臂 1（决定性）：收盘信息次日执行 —— 信息完美、无预知未来
+    o_lag = pd.Series(np.where(m > 0, 1.0, 0.0), index=p.index)
+    r_lag = p * o_lag.shift(1).fillna(1.0)
+    rows.append({"oracle": "收盘信息·次日执行（可实现·无成本）",
+                 "annual": annual_return(r_lag), "sharpe": geo_sharpe(r_lag),
+                 "max_dd": max_drawdown(r_lag),
+                 "avg_pos": float(o_lag.shift(1).fillna(1.0).mean())})
 
+    # 臂 2：日频开盘前知当日（物理不可能）
+    o_day = pd.Series(np.where(m > 0, 1.0, 0.0), index=p.index)
+    r_day = p * o_day
+    rows.append({"oracle": "日频开盘前知当日（物理不可能）",
+                 "annual": annual_return(r_day), "sharpe": geo_sharpe(r_day),
+                 "max_dd": max_drawdown(r_day), "avg_pos": float(o_day.mean())})
+
+    # 臂 3：月频月初知当月（物理不可能）
     mo = m.groupby(m.index.to_period("M")).transform(lambda x: (1 + x).prod() - 1)
     o_mon = pd.Series(np.where(mo > 0, 1.0, 0.0), index=p.index).fillna(1.0)
     r2 = p * o_mon
-    rows.append({"oracle": "月频当月 foresight（无成本）", "annual": annual_return(r2),
-                 "sharpe": geo_sharpe(r2), "max_dd": max_drawdown(r2),
-                 "avg_pos": float(o_mon.mean())})
+    rows.append({"oracle": "月频月初知当月（物理不可能）",
+                 "annual": annual_return(r2), "sharpe": geo_sharpe(r2),
+                 "max_dd": max_drawdown(r2), "avg_pos": float(o_mon.mean())})
 
     rows.append({"oracle": "满仓基线（参照）", "annual": annual_return(p),
                  "sharpe": geo_sharpe(p), "max_dd": max_drawdown(p), "avg_pos": 1.0})
     return pd.DataFrame(rows)
+
+
+def monthly_predictability(m: pd.Series) -> pd.DataFrame:
+    """大盘**月度收益**的时序可预测性（rank IC：上月末可知 → 当月收益）。
+
+    这是择时线的真正靶子：月度样本只有 ~105 个，IC 的 t 值 ≈ IC·√(n-1)，
+    |IC| < 0.2 ⇒ t < 2 ⇒ 不显著。与截面选股（IC 0.10 但按日累计 t>8）**完全
+    不可比**——时序预测每月只有 1 个观测值，没有横截面放大。
+    """
+    mm = m.resample("ME").apply(lambda x: (1 + x).prod() - 1).dropna()
+    pxm = (1 + mm).cumprod()
+    rows = []
+    for lb in (1, 2, 3, 6, 12):
+        ic = float(pxm.pct_change(lb).shift(1).corr(mm, method="spearman"))
+        rows.append({"predictor": f"动量{lb}月", "rank_ic": ic,
+                     "t_stat": ic * np.sqrt(len(mm) - 1)})
+    ic_vol = float(mm.rolling(3).std().shift(1).corr(mm, method="spearman"))
+    rows.append({"predictor": "波动(3月)", "rank_ic": ic_vol,
+                 "t_stat": ic_vol * np.sqrt(len(mm) - 1)})
+    ic_rev = float(mm.shift(1).corr(mm, method="spearman"))
+    rows.append({"predictor": "上月收益(反转)", "rank_ic": ic_rev,
+                 "t_stat": ic_rev * np.sqrt(len(mm) - 1)})
+    return pd.DataFrame(rows).set_index("predictor")
 
 
 def consistency(p: pd.Series, base: pd.Series, r_timed: pd.Series) -> tuple[float, ...]:
@@ -255,18 +300,31 @@ def main() -> None:
     print("  ⚠️ 非登记基线时，任何结论不得写入定版\n")
 
     orc = oracle_bounds(base, mkt_ret)
-    print("=== 一、上界（完美 foresight · 不加成本）===")
+    print("=== 一、择时信息价值（上界口径 2026-10-15 修正）===")
     print(orc.to_string(index=False, float_format=lambda x: f"{x:.4f}"))
     base_ann = float(orc.loc[orc.oracle.str.startswith("满仓"), "annual"].iloc[0])
-    # 🚨 取「日频」那一行，不能用固定 loc —— oracle 表行序变化会静默取错上界
-    d_next = float(orc.loc[orc.oracle.str.startswith("日频"), "annual"].iloc[0]) - base_ann
-    d_mon = float(orc.loc[orc.oracle.str.startswith("月频"), "annual"].iloc[0]) - base_ann
-    print(f"  ⇒ 日频上界 − 满仓 = {d_next:+.2%} → "
-          + ("上界低于满仓 ⇒ **择时在本臂上无解，直接收口**"
-             if d_next < 0 else "日频上界高于满仓，但要看因果规则能否兑现"))
-    print(f"  ⇒ 月频上界 − 满仓 = {d_mon:+.2%}（月频上限很高，但需要预测当月涨跌）\n")
+    # 🚨 臂 1（收盘信息·次日执行）是决定性的：信息完美、无预知未来、可实现。
+    #    它 ≈ 满仓 ⇒ 「过去对大盘的全部预测力」≈ 0 ⇒ 规则族不必再跑。
+    lag_ann = float(orc.loc[orc.oracle.str.startswith("收盘信息"), "annual"].iloc[0])
+    d_lag = lag_ann - base_ann
+    ac1 = float(mkt_ret.autocorr(1))
+    print(f"  ⇒ 收盘信息·次日执行 − 满仓 = {d_lag:+.2%}"
+          + (" ⇒ **即使信息 100% 准确，隔一天就贬值到零**（日收益自相关 "
+             f"{ac1:+.3f} ≈ 随机游走）" if abs(d_lag) < 0.02 else ""))
+    mon_ann = float(orc.loc[orc.oracle.str.startswith("月频"), "annual"].iloc[0])
+    print(f"  ⇒ 月频上界 − 满仓 = {mon_ann - base_ann:+.2%}"
+          "（空间存在，但钥匙 = 预测月度大盘的能力，见 §二）\n")
 
-    print("=== 二、beta 结构 ===")
+    print("=== 二、月度大盘收益可预测性（择时线的真正靶子）===")
+    mp = monthly_predictability(mkt_ret)
+    print(mp.to_string(float_format=lambda x: f"{x:.4f}"))
+    sig = int((mp["t_stat"].abs() >= 2).sum())
+    n_mon = int(mkt_ret.resample("ME").apply(len).iloc[0] and
+                len(mkt_ret.index.to_period("M").unique()))
+    print(f"  ⇒ {sig}/{len(mp)} 个预测因子 |t| ≥ 2；样本仅 {n_mon} 个月，"
+          "IC 无截面放大（选股是每天 5000 只的横截面，择时每月只有 1 个观测）\n")
+
+    print("=== 三、beta 结构 ===")
     bs = beta_structure(base, mkt_ret)
     for _, row in bs.iterrows():
         print(f"  {row['metric']:26s} {row['value']:8.3f}")
@@ -276,7 +334,7 @@ def main() -> None:
           + ("（<0.8 ⇒ 择时有空间）\n" if dncap / upcap < 0.8
              else "（≥0.8 ⇒ **上下行已对称，择时无结构性空间**）\n"))
 
-    print("=== 三、因果规则实测（含 10bp/单位仓位 切换成本）===")
+    print("=== 四、因果规则实测（含 10bp/单位仓位 切换成本）===")
     rows = []
     for name, expo in build_rules(px, mkt_ret).items():
         r = _apply_position_cost(base, expo)
@@ -309,10 +367,12 @@ def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     df.to_csv(OUT / "summary.csv", encoding="utf-8-sig")
     orc.to_csv(OUT / "oracle_vs_causal.csv", index=False, encoding="utf-8-sig")
+    mp.to_csv(OUT / "monthly_predictability.csv", encoding="utf-8-sig")
     panel = base.to_frame("daily_ret").assign(bench=mkt_ret, mkt_px=px)
     panel.to_csv(OUT / "equity.csv", encoding="utf-8-sig")
     bs.to_csv(OUT / "beta_structure.csv", index=False, encoding="utf-8-sig")
-    print(f"\n产物: {OUT}/[summary,oracle_vs_causal,equity,beta_structure].csv")
+    print(f"\n产物: {OUT}/[summary, oracle_vs_causal, monthly_predictability,"
+          " beta_structure, equity].csv")
 
 
 if __name__ == "__main__":

@@ -67,11 +67,15 @@ def test_oracle_lookup_is_label_based(synth):
     """上界表取值必须按标签匹配，不能依赖行序（加行即静默取错）。"""
     p, m = synth
     orc = oracle_bounds(p, m).set_index("oracle")
-    assert "日频" in str(orc.index[0])
-    # 标签匹配能稳定取到日频行，且不与月频行混淆
-    d = orc.loc[[i for i in orc.index if str(i).startswith("日频")], "annual"].iloc[0]
+    # 关键臂必须存在且按标签可寻址：收盘信息次日执行（决定性）/ 满仓参照
+    lag = orc.loc[[i for i in orc.index if str(i).startswith("收盘信息")], "annual"].iloc[0]
+    base_row = orc.loc[[i for i in orc.index if str(i).startswith("满仓")], "annual"].iloc[0]
+    day = orc.loc[[i for i in orc.index if str(i).startswith("日频")], "annual"].iloc[0]
     mo = orc.loc[[i for i in orc.index if str(i).startswith("月频")], "annual"].iloc[0]
-    assert not np.isclose(d, mo)
+    # 各臂互不相同（标签匹配没有串行）
+    assert len({lag, base_row, day, mo}) == 4
+    # 物理不可能的两个上界必须远高于可实现形态
+    assert day > mo > base_row
 
 
 def test_rules_are_shifted_and_causal():
