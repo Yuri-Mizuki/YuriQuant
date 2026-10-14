@@ -168,9 +168,12 @@ def oracle_bounds(p: pd.Series, m: pd.Series) -> pd.DataFrame:
     正确的三个口径（前两个刻意**不加成本**，再打折只会更低）：
 
     - **收盘信息·次日执行**（``ω[t] = 1[m[t-1]>0]``）：
-      今天收盘 100% 知道今天涨跌、明天开盘执行 —— 这是**信息完美且可实现
-      （不用预知未来）**的形态，是「过去信息对大盘的全部预测力」的上界。
-      实测 ≈ 满仓（日收益自相关 ≈ 0），**这一臂才是判定择时生死的那个**。
+      昨日方向在昨日收盘后本就免费可知，故此臂实为「跟随昨日方向」这条规则、
+      即**把「昨日方向」这一个 bit 用到极致**。它是且仅是「信息集=昨日方向」
+      的二值择时策略类的上界，对更丰富历史（均线/量能/资金面……）**无约束力**
+      ——那些信息集由 monthly_predictability 与 build_rules 的实测覆盖
+      （reports/timing_probe/README.md §六 咬合表）。
+      实测 ≈ 满仓（日自相关 ≈ 0）⇒ 这个 bit 完美利用也无线索。
     - **日频开盘前知当日**（``ω[t] = 1[m[t]>0]``）：开盘前已知当日收盘涨跌。
       物理不可能（信息在收盘才产生），仅作理论天花板。
     - **月频月初知当月**（月初已知当月整月涨跌）：物理不可能，给出
@@ -303,13 +306,15 @@ def main() -> None:
     print("=== 一、择时信息价值（上界口径 2026-10-15 修正）===")
     print(orc.to_string(index=False, float_format=lambda x: f"{x:.4f}"))
     base_ann = float(orc.loc[orc.oracle.str.startswith("满仓"), "annual"].iloc[0])
-    # 🚨 臂 1（收盘信息·次日执行）是决定性的：信息完美、无预知未来、可实现。
-    #    它 ≈ 满仓 ⇒ 「过去对大盘的全部预测力」≈ 0 ⇒ 规则族不必再跑。
+    # 臂 1 只约束「昨日方向一个 bit」的二值策略类：它 ≈ 满仓 ⇒ 该 bit 用到极致
+    # 也无线索（自相关 ≈ 0）。更丰富信息集由 monthly_predictability（月度 0/7）、
+    # 资金面补测（§三b，0/4）与 build_rules（规则 7/7 负）覆盖——多信息集零结果
+    # 咬合才是收口依据；勿把本臂当「一切因果择时」的上界引用。
     lag_ann = float(orc.loc[orc.oracle.str.startswith("收盘信息"), "annual"].iloc[0])
     d_lag = lag_ann - base_ann
     ac1 = float(mkt_ret.autocorr(1))
     print(f"  ⇒ 收盘信息·次日执行 − 满仓 = {d_lag:+.2%}"
-          + (" ⇒ **即使信息 100% 准确，隔一天就贬值到零**（日收益自相关 "
+          + (" ⇒ **昨日方向用到极致，隔一天也一文不值**（日收益自相关 "
              f"{ac1:+.3f} ≈ 随机游走）" if abs(d_lag) < 0.02 else ""))
     mon_ann = float(orc.loc[orc.oracle.str.startswith("月频"), "annual"].iloc[0])
     print(f"  ⇒ 月频上界 − 满仓 = {mon_ann - base_ann:+.2%}"
