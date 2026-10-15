@@ -165,6 +165,14 @@ _TASK_TEMPLATE = """<?xml version="1.0" encoding="UTF-16"?>
     <AllowHardTerminate>true</AllowHardTerminate>
     <StartWhenAvailable>true</StartWhenAvailable>
     <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
+    <!-- 2026-10-15 加固：10-12~14 连续三晚任务死于会话撕裂（InteractiveToken +
+         用户 17:30 断连/系统 18:01 入睡，rc=0xC000013A/0xC0000142/0xC0000409 三种死法
+         同源）。失败后 30 分钟 ×3 次任务级重试（脚本内已有数据更新 3 次重试，管不到
+         主进程被杀）+ 唤醒运行（机器已睡时拉起来跑）。 -->
+    <RestartOnFailure>
+      <Interval>PT30M</Interval>
+      <Count>3</Count>
+    </RestartOnFailure>
     <IdleSettings>
       <StopOnIdleEnd>false</StopOnIdleEnd>
       <RestartOnIdle>false</RestartOnIdle>
@@ -173,7 +181,7 @@ _TASK_TEMPLATE = """<?xml version="1.0" encoding="UTF-16"?>
     <Enabled>true</Enabled>
     <Hidden>false</Hidden>
     <RunOnlyIfIdle>false</RunOnlyIfIdle>
-    <WakeToRun>false</WakeToRun>
+    <WakeToRun>true</WakeToRun>
     <ExecutionTimeLimit>{execution_limit}</ExecutionTimeLimit>
     <Priority>7</Priority>
   </Settings>

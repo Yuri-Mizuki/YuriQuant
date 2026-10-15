@@ -23,27 +23,24 @@
 
 ## 一、研究验证欠账（最高优先级——影响结论可信度）
 
-- [ ] **定版口径切换生产出榜链（完整切换清单，2026-10-15 定稿；当前唯一挡在
-  「定版=生产」前面的事）**：定版 = fundind 快信号 h1020⊕慢信号 s0.5 +
-  **buffer(15/40)** 执行层（§⑭⑯；18.07%/0.805/换手 19.1% 为 income 补齐前 v2
-  数据态，当前数据态 ≈ 17.0–17.2%）。`--preset dingban` 已封装主体三处，清单如下：
-  - **前置拍板（由莉酱）**：`tradable_labels=True`（dingban preset 已带，与批次 1/6
-    定版臂命令一致；出榜链默认 False）——定版复现必需，需明确点头。
-  - **主体三处**（`alla_daily_rank.py --preset dingban`）：① 特征 → `panels_neu_fundind`
-    （ortho_fundind：基本面族只剥行业、保市值风格）；② 信号 → h1020⊕s0.5（慢信号 =
-    fundamental 族滚动 ICIR 线性 T=24，读冻结 panels_neu）；③ 策略 →
-    `BufferedTopFracLongOnly(0.15, 0.40)`（**缺省已改生产值**，2026-10-15；显式传参更稳）。
-  - **联动件（同批做，缺一即半切换）**：④ 监控种子切换——`monitor_production_ic`
-    历史种子从 882 `ens_h1h5` 换定版出榜产物（否则监控口径 ≠ 生产口径）；
-    ⑤ 慢信号滞后披露上榜单页面（冻结 panels_neu 覆盖止点 + ffill 说明——脚本
-    docstring 已有，榜单页未见）；⑥ `config/schedule.yaml` 任务参数改
-    `--preset dingban` + 计划任务重注册 + `doctor` 体检核对。
-  - **双链并行验收**：legacy 与 dingban 同跑对照一周，逐日对拍排名差异与净值差异，
-    无异常后退役 legacy；锚点对拍 = 生产口径数字落在当前数据态 17.0–17.2% 区间
-    （勿对 18.07% 补齐前 v2 态），`caliber.py --check` 通过。
-  - **时序纪律**：与批次 11（v1w2-cheap）分开走——先切 dingban（现行定版），
-    批次 11 复验通过后 v1w2-cheap 作为**第二次增量变更**单独登记（buffer 0.08/40 +
-    h1w0.25），不合并切换，保持归因可分离。
+- [x] **定版口径切换生产出榜链**（✅ **10-10 已完成**——schedule.yaml `--preset
+  dingban` + 产物 `reports/alla_daily_defv/`；legacy 产物停于 09-22。10-13 审计曾误判
+  "未切"，真源在 schedule.yaml 而非脚本 argparse 默认）：
+  - ✅ tradable_labels=True 已由莉酱拍板确认（2026-10-15，与批次 1/6 定版臂命令一致）。
+  - 🔴 **遗留故障（10-12 起连续失败）**：17:30 计划任务死于**会话撕裂**——任务以
+    InteractiveToken 注册（仅登录会话内运行），用户傍晚断连/系统 18:01 入睡/10-14
+    17:32 重启都会杀掉任务进程（rc=0xC000013A/0xC0000142/0xC0000409 三种死法同源；
+    10-11 会话活着故整链成功 18:17）。**已加固**（2026-10-15）：task_scheduler 模板
+    加 RestartOnFailure 3×30min + WakeToRun + 重注册；**待拍板**：改 S4U（无论是否
+    登录都运行，需重注册，公开数据 API 不依赖 Windows 凭据应可用）或调电源计划
+    （17:00–19:00 不睡）——二选一由由莉酱定。数据缓存 10-10~14 缺口已手动补更
+    （logs/update_manual_20261015.log）；**10-10~14 五天榜单不回填**（buffer 状态
+    与实时链不符，补出来反而误导；10-15 起任务恢复产出，当日 17:30 运行中验证）。
+  - ⚠️ **联动件仍未做**：④ 监控种子（monitor_production_ic 仍 882 ens_h1h5）；
+    ⑤ 慢信号滞后披露上榜单页面。
+  - 双链并行：legacy 09-22 已停，无并行对照——以 defv 连续产出 + 下游 daily_report
+    正常为验收（10-11 前已连续运行）。
+  - 时序纪律不变：批次 11（v1w2-cheap）复验通过后作为第二次增量变更单独登记。
 - [ ] **重跑 e2e 族报告对齐年化口径**：`perf_stats` 年化 244→252 后，
   `reports/e2e_backtest/`、`reports/investment_report/` 中 e2e 链路历史数字
   与现行口径存在 ~3% 系统性偏移。已挂好机器队列末尾。
