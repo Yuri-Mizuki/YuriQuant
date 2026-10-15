@@ -27,10 +27,12 @@ fundind 快信号采纳 → buffer 参数网格上修 15/40）。
 
 系统同样诚实地告诉你什么不行——日频调仓在交易成本下直接转负；AlphaPool RL
 挖掘被自己的 PBO 检验判负（0.704）后追加 10 倍步长归因确认真实失效才归档；
-zz1000 上的 RL/QP 组合优化 24 臂消融无稳健超额；LLM-MCTS 是唯一产出超门槛
-因子的挖掘引擎（席位 4/14 突破）但组合层增量 +0.16pp 噪声级、不采纳；另类
-数据三族因子席位 0/36；GP/GFlowNet 双双预算饱和。基本面族面板污染事故连更正
-重跑的全程记录都在 `reports/` 里。**没有幸存者偏差的战绩表。**
+zz1000 上的 RL/QP 组合优化 24 臂消融无稳健超额；全A QP 组合优化全家族与集中化方案
+在公平成本口径下全数证伪（成本感知自救 +11.7pp 后仍输简单 buffer 形态）；
+大盘择时 / regime 条件化 / 波动率管理三层证据链（本项目实测 + AQR + JFE 复核）
+同向收口；LLM-MCTS 是唯一产出超门槛因子的挖掘引擎（席位 4/14 突破）但组合层增量
++0.16pp 噪声级、不采纳；另类数据三族因子席位 0/36；GP/GFlowNet 双双预算饱和。
+基本面族面板污染事故连更正重跑的全程记录都在 `reports/` 里。**没有幸存者偏差的战绩表。**
 
 ## ✨ 能力巡礼
 
@@ -94,10 +96,10 @@ strategy/   因子值 → 组合权重
 research/   研究工具：IC/分层、归因、DPP、实验台账、报告渲染
 stats/      稳健统计与反过拟合（PBO / DSR）
 monitoring/ 生产监控：IC 台账、告警规则、账本
-scripts/    150+ 脚本入口（ingest / factors / pipelines / portfolio /
+scripts/    279 个脚本入口（ingest / factors / pipelines / portfolio /
             evaluation / reporting / builders / common …）
-config/     settings.yaml（参数真源）+ schedule.yaml（调度登记表）
-tests/      86 个文件 / 1186 个用例
+config/     settings.yaml（参数真源）+ baselines.yaml（定版登记表）+ schedule.yaml（调度登记表）
+tests/      94 个文件 / 1297 个用例
 reports/    实验产物、监控台账与设计文档
 ```
 
