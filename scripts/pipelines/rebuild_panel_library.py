@@ -1,0 +1,297 @@
+"""因子库面板月度重建（守卫式入口，计划任务用）。
+
+为什么需要它
+------------
+定版口径（`alla_daily_rank --preset dingban`）的**慢信号** ``s0.5`` 直接读离线
+``ds_root/panels_neu`` 的月末截面（`scripts.evaluation.fundamental_blend::build_slow_panel`），
+而该面板是 `build_alla_factor_neutralized` 的**批处理产物、不随新数据自动更新** ——
+`config/schedule.yaml` 里此前没有任何任务负责重建它。后果：慢信号长期停在最后一次
+手工重建的截面（2026-10-10 建于数据止 09-01），定版分数有一半是陈旧信号
+（`scripts/pipelines/alla_daily_rank.py:1814-1820` 的注释已如实披露该覆盖边界）。
+
+重建不是"跑一个脚本"，而是一条**有顺序依赖**的链（依据
+`reports/prod_pipeline_gap/report.md` §4–5.6）：
+
+    ① 原始数据（`update_data`）                    —— 由出榜任务负责，本脚本只**检查**
+    ② `rolling_grid_alla --stage prep`            → `_base/{close_adj,market_cap,cov_industry}`
+    ③ 各因子族 builder（16 个）                    → `ds/panels/`（原始面板，全历史重算）
+    ④ `build_alla_factor_neutralized`             → `ds/panels_neu`
+    ⑤ `build_alla_factor_neutralized_fundind`     → `ds/panels_neu_fundind`
+
+⚠️ **② 必须在 ④⑤ 之前**：`panels_neu` 与 `_base` **版本耦合** —— `_base` 一更新，
+旧 `panels_neu` 就无法由当前数据复现（§5.6 实测：`|Δ|>1e-3` 的天数占 22.91%，
+最大 11.34，每天涉及全市场 3000–5000 只）。故两者必须同批重建。
+
+守卫（默认行为，零写盘）
+------------------------
+`panels_neu` 覆盖末日若已到「上一个自然月的最后一个交易日」，说明慢信号已有
+新鲜信号月可用 → **直接空转退出（exit 0）**。⇒ 天然月频、缺了会自愈。
+（`task_scheduler` 只支持 `daily`/`minute` 触发器，无 monthly，月频只能靠脚本内守卫。）
+
+⚠️ 未纳入本脚本（如实标注边界）：`registry.csv` / `ic_h*.parquet`（因子 IC 表）与
+`reports/alla_rolling_ortho920fundind/selection`（当年特征清单）**不重建** —— 前者影响
+`--stage select`，后者是出榜链读的静态清单，均与"面板覆盖到哪一天"正交。
+
+用法::
+
+    python -m scripts.pipelines.rebuild_panel_library                # 体检 + 守判（默认，只读）
+    python -m scripts.pipelines.rebuild_panel_library --dry-run      # 打印将执行的命令序列
+    python -m scripts.pipelines.rebuild_panel_library --run           # 真正执行（预计数小时）
+    python -m scripts.pipelines.rebuild_panel_library --run --force   # 忽略守卫强制重建
+    python -m scripts.pipelines.rebuild_panel_library --status        # 只看四层覆盖末日
+"""
+from __future__ import annotations
+
+import argparse
+import sys
+import time
+from datetime import datetime
+from pathlib import Path
+
+import pandas as pd
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from scripts.common.cli_common import setup_logging  # noqa: E402
+from scripts.common.power import keep_system_awake  # noqa: E402
+
+log = setup_logging("rebuild_panel_library")
+
+DATASET = "all_a_2018_2026"
+BASE_DIR = ROOT / "reports" / "alla_rolling" / "_base"
+#: 覆盖体检的抽样因子（取三者 max 作该目录的覆盖末日；避免遍历 949 个 parquet）
+_PROBE_NEU = ("bp", "alpha158_MA60", "alpha101_001")
+_PROBE_RAW = ("bp", "alpha158_MA60", "accruals")
+
+#: 出榜链窗口（小时，左闭右开）：17:30 出榜 / 18:00 另类 / 19:00 日报。
+#: 重建期间 `panels_neu` 是"半新半旧"的中间态，此时出榜链的慢信号会读到混合面板
+#: ⇒ 启动时若落在此窗口内，跳过本次（守卫是月频的，推迟一天无成本；
+#: 也顺带挡住 `StartWhenAvailable` 错过补跑恰好撞进窗口的情形）。
+_BUSY_WINDOW = (16, 20)
+
+
+# ---------------------------------------------------------------------------
+# 覆盖探测
+# ---------------------------------------------------------------------------
+def _ds_root() -> Path:
+    from config import Config
+    return Path(str(Config.get()["factor_library"]["root"])) / DATASET
+
+
+def _index_dates(path: Path):
+    """读 parquet 的索引日期（只读索引，不加载数据）。
+
+    注意 ``daily_all_a.parquet`` 等原始表是 ``MultiIndex(date, code)`` ——
+    直接 ``.max()`` 会返回 tuple、被 ``str()`` 成 ``"(Timestamp(...)"`` 这种
+    无法参与日期比较的字符串（会静默把"数据已到位"误判为不足），故统一取 level 0。
+    """
+    idx = pd.read_parquet(path, columns=[]).index
+    if isinstance(idx, pd.MultiIndex):
+        idx = idx.get_level_values(0)
+    return pd.DatetimeIndex(idx)
+
+
+def _parquet_last_date(path: Path) -> str:
+    """单个 parquet 的索引末日（YYYY-MM-DD）。"""
+    try:
+        idx = _index_dates(path)
+        return str(idx.max().date()) if len(idx) else "空表"
+    except Exception as exc:  # noqa: BLE001
+        return f"ERR({type(exc).__name__})"
+
+
+def _panel_coverage(subdir: str, probes: tuple[str, ...]) -> str:
+    """返回某面板目录的覆盖末日 = 抽样因子中的最大值。"""
+    root = _ds_root() / subdir
+    if not root.exists():
+        return "缺失"
+    dates = [_parquet_last_date(root / f"{n}.parquet") for n in probes]
+    ok = [d for d in dates if not d.startswith("ERR")]
+    if not ok:
+        return "全部读取失败"
+    if len(ok) < len(dates):
+        log.warning("%s 抽样中 %d 个读取失败：%s", subdir, len(dates) - len(ok), dates)
+    return max(ok)
+
+
+def coverage_table() -> dict[str, str]:
+    """四层覆盖末日快照。"""
+    return {
+        "base(close_adj)": _parquet_last_date(BASE_DIR / "close_adj.parquet"),
+        "base(market_cap)": _parquet_last_date(BASE_DIR / "market_cap.parquet"),
+        "panels(原始)": _panel_coverage("panels", _PROBE_RAW),
+        "panels_neu": _panel_coverage("panels_neu", _PROBE_NEU),
+        "panels_neu_fundind": _panel_coverage("panels_neu_fundind", _PROBE_NEU),
+    }
+
+
+def _prev_month_end_trading_day() -> str | None:
+    """上一个自然月的最后一个交易日（取 `_base/close_adj` 的交易日历）。
+
+    `_base` 本身陈旧时它同时是"重建链的第 ② 步也过期"的信号 —— 此时
+    ``last`` 会早于真实上月末，守卫仍判定需要重建（正确行为，不掩盖问题）。
+    """
+    p = BASE_DIR / "close_adj.parquet"
+    if not p.exists():
+        return None
+    try:
+        cal = _index_dates(p)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("读取交易日历失败：%s", exc)
+        return None
+    if len(cal) == 0:
+        return None
+    today = pd.Timestamp(datetime.now().date())
+    this_month = today.to_period("M")
+    before = cal[cal.to_period("M") < this_month]
+    return str(before.max().date()) if len(before) else None
+
+
+# ---------------------------------------------------------------------------
+# 执行序列
+# ---------------------------------------------------------------------------
+def _steps(workers: int) -> list[tuple[str, list[str]]]:
+    """重建序列（顺序敏感，勿重排）。`sys.executable` = 调用方解释器。"""
+    py = sys.executable
+    b = "scripts.builders."
+    return [
+        # ② 基础面板 —— 必须早于 ④⑤（panels_neu 与 _base 版本耦合）
+        ("base_prep", [py, "-m", "scripts.pipelines.rolling_grid_alla", "--stage", "prep"]),
+        # ③ 原始面板（全历史重算；不加 --resume，避免跳过旧文件导致不刷新）
+        ("panels_alpha", [py, "-m", b + "build_alla_alpha_panels", "--workers", str(workers)]),
+        ("panels_fundamental", [py, "-m", b + "build_alla_fundamental_factors"]),
+        ("panels_holder", [py, "-m", b + "build_alla_holder_factors"]),
+        ("panels_holder_dyn", [py, "-m", b + "build_alla_holder_dyn_factors"]),
+        ("panels_pledge", [py, "-m", b + "build_alla_pledge_factors"]),
+        ("panels_constructed", [py, "-m", b + "build_alla_constructed_factors"]),
+        ("panels_p5", [py, "-m", b + "build_alla_p5_factors"]),
+        ("panels_style", [py, "-m", b + "build_alla_style_factors"]),
+        ("panels_event", [py, "-m", b + "build_alla_event_factors"]),
+        ("panels_sue_pledge", [py, "-m", b + "build_alla_sue_pledge_factors"]),
+        ("panels_margin", [py, "-m", b + "build_alla_margin_factors"]),
+        ("panels_moneyflow", [py, "-m", b + "build_alla_moneyflow_factors"]),
+        ("panels_disc_holder_dyn", [py, "-m", b + "build_alla_disc_holder_dyn"]),
+        ("panels_status", [py, "-m", b + "build_alla_status_factors"]),
+        ("panels_altfactors", [py, "-m", b + "build_alla_altfactors",
+                              "--families", "insider,macro,news"]),
+        # ④⑤ 中性化（读 ②③ 的产物）
+        ("neu_std", [py, "-m", b + "build_alla_factor_neutralized",
+                     "--workers", str(workers)]),
+        ("neu_fundind", [py, "-m", b + "build_alla_factor_neutralized_fundind",
+                         "--workers", str(workers)]),
+    ]
+
+
+def _run_steps(steps: list[tuple[str, list[str]]], *, dry_run: bool) -> int:
+    import subprocess
+
+    total = len(steps)
+    for i, (name, cmd) in enumerate(steps, 1):
+        line = subprocess.list2cmdline(cmd)
+        if dry_run:
+            log.info("[dry-run %2d/%d] %s :: %s", i, total, name, line)
+            continue
+        log.info("[%2d/%d] %s 开始 :: %s", i, total, name, line)
+        t0 = time.time()
+        proc = subprocess.run(cmd, cwd=str(ROOT), check=False)
+        dt = time.time() - t0
+        if proc.returncode != 0:
+            log.error("[%2d/%d] %s 失败（exit=%d，耗时 %.0fs）—— 中止后续步骤，"
+                      "已完成的步骤产物保留（下次运行会重跑全链）",
+                      i, total, name, proc.returncode, dt)
+            return proc.returncode
+        log.info("[%2d/%d] %s 完成（%.0fs）", i, total, name, dt)
+    return 0
+
+
+# ---------------------------------------------------------------------------
+def main() -> int:
+    ap = argparse.ArgumentParser(description="因子库面板月度重建（守卫式）")
+    ap.add_argument("--status", action="store_true", help="只打印四层覆盖末日")
+    ap.add_argument("--dry-run", action="store_true", help="打印命令序列但不执行")
+    ap.add_argument("--run", action="store_true", help="真正执行重建（数小时）")
+    ap.add_argument("--force", action="store_true", help="忽略守卫，强制重建")
+    ap.add_argument("--ignore-busy-window", action="store_true",
+                    help="忽略出榜链时段保护（16:00–20:00），强制在窗口内执行")
+    ap.add_argument("--workers", type=int, default=6, help="并行进程数（传给 builder）")
+    ap.add_argument("--log-file", default=None,
+                    help="日志落盘模板（计划任务用，{date} → YYYYMMDD）")
+    args = ap.parse_args()
+
+    if args.log_file:
+        from scripts.pipelines.alla_daily_rank import attach_file_log
+        attach_file_log(args.log_file)
+
+    cov = coverage_table()
+    target = _prev_month_end_trading_day()
+    log.info("面板覆盖体检（%s）", datetime.now().strftime("%Y-%m-%d %H:%M"))
+    for k, v in cov.items():
+        log.info("  %-20s %s", k, v)
+    log.info("  目标（上一个自然月最后交易日）= %s", target)
+    if args.status:
+        return 0
+
+    # ---- 守卫 ----
+    neu_max = cov["panels_neu"]
+    need = False
+    if target is None:
+        log.warning("拿不到目标交易日 ⇒ 无法守判，视为需要重建")
+        need = True
+    elif neu_max.startswith("ERR") or neu_max in ("缺失", "全部读取失败"):
+        log.warning("panels_neu 覆盖末日不可读（%s）⇒ 视为需要重建", neu_max)
+        need = True
+    elif neu_max < target:
+        log.info("守判：panels_neu 止 %s < 目标 %s ⇒ 需要重建", neu_max, target)
+        need = True
+    else:
+        log.info("守判：panels_neu 已覆盖 %s ≥ 目标 %s ⇒ 无需重建（空转退出）",
+                 neu_max, target)
+    if args.force:
+        log.warning("--force：忽略守判，强制重建")
+        need = True
+
+    if not args.run and not args.dry_run:
+        if not need:
+            return 0
+        log.info("提示：当前为只读模式。加 --dry-run 看命令序列，加 --run 真正执行。")
+        return 0
+
+    if not need and not args.dry_run:
+        return 0
+
+    # ---- 时段保护：避开出榜链窗口（见 _BUSY_WINDOW 说明）----
+    now_h = datetime.now().hour
+    if (args.run and not args.ignore_busy_window
+            and _BUSY_WINDOW[0] <= now_h < _BUSY_WINDOW[1]):
+        log.info("当前 %02d:xx 落在出榜链窗口 %02d:00–%02d:00 内 ⇒ 本次跳过，"
+                 "明日再触发（重建是月频动作，推迟一天无成本）",
+                 now_h, _BUSY_WINDOW[0], _BUSY_WINDOW[1])
+        return 0
+
+    # ---- 数据前置检查：原始数据是否已推进到目标日 ----
+    from config import Config
+    daily = Path(str(Config.get()["cache"]["root"])) / "daily_all_a.parquet"
+    daily_max = _parquet_last_date(daily)
+    log.info("原始数据 daily_all_a 覆盖 = %s（%s）", daily_max, daily)
+    if not args.dry_run and target and daily_max < target:
+        log.error("原始数据止 %s < 目标 %s ⇒ 先跑 update_data 再重建，本次中止",
+                  daily_max, target)
+        return 2
+
+    steps = _steps(args.workers)
+    t0 = time.time()
+    with keep_system_awake() as _awake:
+        log.info("防待机：keep_system_awake 生效=%s", _awake)
+        rc = _run_steps(steps, dry_run=args.dry_run)
+    log.info("重建%s结束（%.0fs）", "演练" if args.dry_run else "执行", time.time() - t0)
+    if rc == 0 and not args.dry_run:
+        log.info("完成后的覆盖体检：")
+        for k, v in coverage_table().items():
+            log.info("  %-20s %s", k, v)
+    return rc
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
