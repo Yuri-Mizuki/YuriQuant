@@ -159,7 +159,9 @@ PROFILES: dict[str, Profile] = {
     "production": Profile(
         name="production", cost="production", execution="open", capital=1e6,
         note="生产定版口径（buffer_arm_920.py：固定 10bp + T+1 open + 1e6 + 预掩码）。"
-             "与登记表 `status: production` 条目同源，绝对数字可直接比。"),
+             "与登记表 `status: production` 条目同源，绝对数字可直接比。"
+             "掩码口径 = 方案② mask-lag 1（T+1 状态，由莉酱 2026-10-15 拍板："
+             "报数一律本口径；mask-lag 0 + T 收盘仅研究上限，数字不得并列）。"),
     "fair": Profile(
         name="fair", cost="impact", execution="close", capital=1e8,
         note="研究压力口径（逐股冲击 + T 收盘 + 1e8）：成本稳健性 / 容量 / QP 对照用。"
