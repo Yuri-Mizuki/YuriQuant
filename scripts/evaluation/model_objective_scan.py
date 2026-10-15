@@ -46,7 +46,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.evaluation.seq_predictor_compare import _build_px_panels, _cs_z  # noqa: E402
+from scripts.evaluation.seq_predictor_compare import build_px_panels, cs_z  # noqa: E402
 
 log = logging.getLogger("model_objective_scan")
 logging.basicConfig(level=logging.INFO,
@@ -75,7 +75,7 @@ def build_features(index_code: str, warmup: int, end: int, n_factors: int):
     from factor.alpha158 import compute_alpha158
     from factor.alpha_base import AlphaData
 
-    panels, close_adj = _build_px_panels(index_code, warmup, end)
+    panels, close_adj = build_px_panels(index_code, warmup, end)
     d = AlphaData(panels)
     t0 = time.time()
     p158 = compute_alpha158(d)
@@ -85,7 +85,7 @@ def build_features(index_code: str, warmup: int, end: int, n_factors: int):
     dates, codes = close_adj.index, close_adj.columns
     flat = np.full((len(dates), len(codes), len(names)), np.nan, dtype=np.float32)
     for j, name in enumerate(names):
-        v = _cs_z(p158[name]).reindex(index=dates, columns=codes).values
+        v = cs_z(p158[name]).reindex(index=dates, columns=codes).values
         flat[:, :, j] = v.astype(np.float32)
     # 60 日已实现波动（权重用）
     ret = close_adj.pct_change(fill_method=None)
@@ -176,7 +176,7 @@ def run(args):
 
     rows = []
     for name, pred in preds.items():
-        ev = evaluate_model(_cs_z(pred), fwd.loc[pred.index])
+        ev = evaluate_model(cs_z(pred), fwd.loc[pred.index])
         rows.append({"arm": name, "ic_mean": ev["ic_mean"], "ic_ir": ev["ic_ir"],
                      "ic_t_nw": ev["ic_t_nw"]})
     return pd.DataFrame(rows).sort_values("ic_mean", ascending=False), preds, fwd, test_days
@@ -237,7 +237,7 @@ def main():
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     table.to_csv(OUT_DIR / f"arms_{args.out_tag}.csv", index=False)
     for name, pred in preds.items():
-        _cs_z(pred).to_parquet(OUT_DIR / f"pred_{name}_{args.out_tag}.parquet")
+        cs_z(pred).to_parquet(OUT_DIR / f"pred_{name}_{args.out_tag}.parquet")
     meta = dict(vars(args))
     meta["elapsed_s"] = round(time.time() - t0, 1)
     (OUT_DIR / f"meta_{args.out_tag}.json").write_text(

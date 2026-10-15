@@ -135,7 +135,7 @@ def main():
         row = {
             "run_id": name, "oos_ic": oos_ic,
             "annual": m["annual"], "excess_idx": m["excess"],
-            "excess_eqw": m["annual"] - RG._ann(bench_eqw),
+            "excess_eqw": m["annual"] - RG.ann(bench_eqw),
             "sharpe": m["sharpe"], "ir": m["ir"], "max_dd": m["max_dd"],
             "turnover": m["turnover"], "beta": m["beta"],
             "n_days": len(dr.dropna()),

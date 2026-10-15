@@ -319,6 +319,9 @@ _TESTS_ONLY_PRIVATE: set[tuple[str, str]] = {
     ("scripts.factors.mine_factors", "_apply_gtja_preset"),
     # 2026-09-11 把守卫改为**通用规则**后新暴露的测试白盒用例（生产侧已一并清干净）
     ("backtest.engine", "_apply_executable_mask"),
+    # 2026-10-13 P1 整手约束：取整函数是引擎内部实现细节，白盒单测直连验证
+    # （整手向零取整、不足一手归零、空头方向）。
+    ("backtest.engine", "_apply_lot_rounding"),
     ("research.factor_library", "_coerce_date"),
     # 2026-09-12 因子库 schema 统一：列对齐是 registry 序列化的内部实现细节，
     # 生产侧只有 _load_registry/_save_registry 调用；测试需直连它以逐位验证
@@ -333,6 +336,10 @@ _TESTS_ONLY_PRIVATE: set[tuple[str, str]] = {
     ("research.html_report", "_monthly_table"),
     ("optimize.multi_period", "_rebalance_days"),
     ("optimize.solver", "_risk_parity_ccd"),
+    # 2026-10-13 α 尺度标定（修 mvo 目标量级失配）：标准化与自动标定是求解器内部
+    # 实现细节，白盒单测直连验证「零方差保护」与「等权点梯度平衡」两条不变量。
+    ("optimize.solver", "_standardize_score"),
+    ("optimize.solver", "_auto_alpha_scale"),
     ("model.stacking", "_time_fold_masks"),
     ("data.textmining.source_cninfo", "_fmt"),
     ("data.textmining.source_cninfo", "_CATEGORY_MAP"),
@@ -346,8 +353,8 @@ _TESTS_ONLY_PRIVATE: set[tuple[str, str]] = {
     ("data.altdata.fetch", "_ts_cst"),
     ("data.altdata.fetch", "_DEDUP_KEYS"),
     ("data.altdata.cninfo_holder", "_to_int_date"),
-    ("scripts.builders.build_alla_holder_dyn_factors", "_rolling_sum_panel"),
-    ("scripts.builders.build_alla_holder_dyn_factors", "_apply_lag"),
+    # （2026-10-14 清欠：holder_dyn 的 _apply_lag/_rolling_sum_panel 已公开化为
+    #  apply_lag/rolling_sum_panel —— 生产跨模块消费，白名单条目随之移除）
     # e2e_backtest 归档（09-24 三口同裁）后 mock 链路测试改指 archive，钉子随路径
     ("scripts.archive.e2e_backtest", "_enforce_caps"),
     # 2026-09-24 清欠：以下为守卫在 master 上的存量红灯（各会话白盒用例），
@@ -357,6 +364,16 @@ _TESTS_ONLY_PRIVATE: set[tuple[str, str]] = {
     ("scripts.pipelines.rolling_grid_alla", "_fp_match"),
     ("scripts.pipelines.rolling_grid_alla", "_fp_write"),
     ("scripts.pipelines.rolling_grid_alla", "_backtest_fp"),
+    # 2026-10-13 清欠（守卫在 master 上的存量红灯，逐条登记而非放行整文件）：
+    # 以下均为 **tests 白盒**用例（测试直连内部实现做逐位对拍），非生产跨模块消费。
+    ("scripts.pipelines.alla_daily_rank", "_P5_KEYS"),
+    # 2026-10-14 timing 探针白盒：成本算子逐位对拍（锚点 Δ=0 / 成本单调），
+    # 内部实现细节、无生产消费者。
+    ("scripts.evaluation.timing_probe", "_apply_position_cost"),
+    ("data.altdata.source_akshare", "_XQ_INNER_TRADE_MAP"),
+    ("data.altdata.source_akshare", "_fetch_inner_trade_xq_direct"),
+    ("scripts.common.task_scheduler", "_hhmm"),
+    ("scripts.common.task_scheduler", "_norm_path"),
 }
 
 #: 暂豁免的**被引用方**前缀：
@@ -405,7 +422,8 @@ def test_no_private_names_cross_module():
     offenders: list[str] = []
     for f in sorted(ROOT.rglob("*.py")):
         rel = str(f.relative_to(ROOT)).replace("\\", "/")
-        if set(f.parts) & {".git", "__pycache__", ".venv", "venv", "node_modules"}:
+        if set(f.parts) & {".git", "__pycache__", ".venv", "venv", "node_modules",
+                           "_tmp"}:
             continue
         if rel.startswith(("reports/", "scripts/oneoff/")) or f.name.startswith("_"):
             continue
@@ -442,7 +460,8 @@ def test_no_tracked_code_imports_gitignored_dirs():
     offenders: list[str] = []
     for f in sorted(ROOT.rglob("*.py")):
         rel = str(f.relative_to(ROOT)).replace("\\", "/")
-        if set(f.parts) & {".git", "__pycache__", ".venv", "venv", "node_modules"}:
+        if set(f.parts) & {".git", "__pycache__", ".venv", "venv", "node_modules",
+                           "_tmp"}:
             continue
         if rel.startswith(("reports/", "scripts/oneoff/")):
             continue

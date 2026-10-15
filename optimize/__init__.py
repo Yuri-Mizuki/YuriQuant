@@ -21,6 +21,10 @@ optimize —— 03 优化层「组合优化 / 风险 / 监控」。
 - 风险归因：``risk.risk_attribution``（α/β + 基准对照 + Brinson）、
   ``risk.risk_decomposition``（Euler 分解 + 风格/行业方差贡献 + VaR/CVaR）。
 - 执行信号：``signals.build_signal_frame``（目标权重 → 整手可下单信号）。
+- 成本感知优化：``cost_penalty.calibrate_cost_penalty`` / ``cost_aware_weights``
+  （由冲击模型推导 turnover_penalty / quadratic_cost 并扫描定标，P0-2）。
+- α 衰减感知：``aim.aim_weights`` / ``optimize_weights_aim``
+  （Gârleanu-Pedersen 简版：持续性缩放 + 偏调整，P0-3）。
 - 持续监控：``monitor.monitor_report``（转发 :mod:`stats.monitor`）。
 
 进阶能力（均已就绪）：风格中性化（``style_exposures``）、行业偏离
@@ -57,10 +61,16 @@ _LAZY_API: dict[str, str] = {
     "optimize_weights_qp": "optimize.solver",
     "rolling_covariance": "optimize.solver",
     "solve_portfolio": "optimize.solver",
+    "calibrate_cost_penalty": "optimize.cost_penalty",
+    "cost_aware_weights": "optimize.cost_penalty",
+    "scan_cost_aware": "optimize.cost_penalty",
+    "aim_weights": "optimize.aim",
+    "optimize_weights_aim": "optimize.aim",
 }
 
 #: 子模块本身也惰性加载（`optimize.solver` 这类属性访问不报 AttributeError）
-_LAZY_SUBMODULES = ("monitor", "multi_period", "portfolio", "risk", "solver")
+_LAZY_SUBMODULES = ("monitor", "multi_period", "portfolio", "risk", "solver",
+                    "cost_penalty", "aim")
 
 __all__ = [
     "optimize_weights",
@@ -76,6 +86,11 @@ __all__ = [
     "rolling_ic",
     "monitor_report",
     "PrecomputedWeightsStrategy",
+    "calibrate_cost_penalty",
+    "cost_aware_weights",
+    "scan_cost_aware",
+    "aim_weights",
+    "optimize_weights_aim",
 ]
 
 

@@ -11,7 +11,7 @@
     **GRU 相对 gbdt 的 +57%，换成生产输入后还在吗？**
 
 口径对齐（逐项复用 `seq_predictor_compare`，不做任何重实现）：
-- 池与价格：`_build_px_panels`（与 P1 完全同一函数）
+- 池与价格：`build_px_panels`（与 P1 完全同一函数）
 - 标签：`build_labels(h, mode="rank")` / `forward_returns`
 - 折：`forward_roll_folds`
 - 评估：`evaluate_model`（rank IC）
@@ -35,10 +35,10 @@ from scripts.evaluation.seq_predictor_compare import (
     FIELDS,
     GbdtArm,
     SeqArm,
-    _build_px_panels,
-    _cs_z,
-    _panel_from_vec,
-    _row_idx,
+    build_px_panels,
+    cs_z,
+    panel_from_vec,
+    row_idx,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -87,7 +87,7 @@ def load_alpha360(panels: dict, dates: pd.DatetimeIndex, codes: pd.Index, n_lags
     arr = np.full((len(dates), len(codes), n_lags, len(FIELDS)), np.nan, dtype=np.float32)
     for fi, f in enumerate(FIELDS):
         for t in range(n_lags):
-            v = _cs_z(p360.pop(f"alpha360_{f}{t}")).reindex(
+            v = cs_z(p360.pop(f"alpha360_{f}{t}")).reindex(
                 index=dates, columns=codes).values
             arr[:, :, n_lags - 1 - t, fi] = v.astype(np.float32)
     del p360, d
@@ -134,7 +134,7 @@ def run(args):
     from model.evaluation import evaluate_model
     from model.labels import build_labels, forward_returns
 
-    panels, close_adj = _build_px_panels(args.index, args.warmup, args.end)
+    panels, close_adj = build_px_panels(args.index, args.warmup, args.end)
     dates, codes = close_adj.index, close_adj.columns
 
     b0, e0 = pd.Timestamp(str(args.begin)), pd.Timestamp(str(args.end))
@@ -177,8 +177,8 @@ def run(args):
         tei = np.array([pos[d] for d in te_days])
         y_tr = labels.loc[tr_days].values.ravel().astype(np.float32)
         ok = valid_2d[tri].ravel() & ~np.isnan(y_tr)
-        rows_tr = _row_idx(tri, n_codes)[ok]
-        rows_te = _row_idx(tei, n_codes)
+        rows_tr = row_idx(tri, n_codes)[ok]
+        rows_te = row_idx(tei, n_codes)
         log.info("[fold %d/%d] train %s~%s (%d 日, 有效 %d/%d) -> test %s~%s",
                  fi, len(folds), tr_days[0].date(), tr_days[-1].date(), len(tr_days),
                  len(rows_tr), len(valid_2d[tri].ravel()),
@@ -199,12 +199,12 @@ def run(args):
                 p = m.predict(Xte)
             else:
                 raise ValueError(kind)
-            preds[name].loc[te_days] = _panel_from_vec(p, te_days, codes)
+            preds[name].loc[te_days] = panel_from_vec(p, te_days, codes)
             del Xtr, Xte
 
     rows = []
     for name, pred in preds.items():
-        pz = _cs_z(pred)
+        pz = cs_z(pred)
         ev = evaluate_model(pz, fwd.loc[pred.index])
         rows.append({"arm": name, "ic_mean": ev["ic_mean"], "ic_ir": ev["ic_ir"],
                      "ic_t_nw": ev["ic_t_nw"],
@@ -276,7 +276,7 @@ def main():
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     table.to_csv(OUT_DIR / f"arms_{args.out_tag}.csv", index=False)
     for name, pred in preds.items():
-        _cs_z(pred).to_parquet(OUT_DIR / f"pred_{name}_{args.out_tag}.parquet")
+        cs_z(pred).to_parquet(OUT_DIR / f"pred_{name}_{args.out_tag}.parquet")
     (OUT_DIR / f"meta_{args.out_tag}.json").write_text(json.dumps({
         "index": args.index, "horizon": args.horizon, "factor_set": args.factor_set,
         "n_factors": len(prod_factor_names(args)), "test_days": len(test_days),

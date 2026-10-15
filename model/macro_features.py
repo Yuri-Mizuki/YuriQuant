@@ -25,7 +25,7 @@ import logging
 import numpy as np
 import pandas as pd
 
-from model.market_features import Z_MIN_PERIODS, _expanding_z
+from model.market_features import Z_MIN_PERIODS, expanding_z
 
 log = logging.getLogger("model.macro_features")
 
@@ -87,7 +87,7 @@ def build_macro_state_features(
         if s.notna().sum() == 0:
             log.warning("macro 面板 %s 全 NaN，跳过", name)
             continue
-        z = _expanding_z(s)  # expanding z（min_periods=Z_MIN_PERIODS；std=0 → NaN）
+        z = expanding_z(s)  # expanding z（min_periods=Z_MIN_PERIODS；std=0 → NaN）
         v = z.to_numpy(dtype="float64")
         feat = f"mac_{name.removeprefix('alt_macro_')}"
         out[feat] = pd.DataFrame(

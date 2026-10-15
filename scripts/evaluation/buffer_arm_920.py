@@ -107,7 +107,7 @@ def main(argv: list[str] | None = None) -> None:
         m = RG.res_metrics(res.daily_returns, bench_idx, res.turnover_series)
         rows.append({"variant": name, "annual": m["annual"],
                      "excess_idx": m["excess"],
-                     "excess_eqw": m["annual"] - RG._ann(bench_eqw),
+                     "excess_eqw": m["annual"] - RG.ann(bench_eqw),
                      "sharpe": m["sharpe"], "ir": m["ir"], "max_dd": m["max_dd"],
                      "turnover": m["turnover"], "n_days": len(res.daily_returns.dropna())})
         log.info("%s | 年化=%.2f%% 超额(指)=%+.2fpp 换手=%.1f%%",

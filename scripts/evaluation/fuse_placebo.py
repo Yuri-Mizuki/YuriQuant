@@ -44,7 +44,7 @@ if str(ROOT) not in sys.path:
 from scripts.common.cli_common import setup_logging  # noqa: E402
 from scripts.evaluation.news_alpha_probe import fuse_rank  # noqa: E402
 from scripts.evaluation.text_factor_probe import (  # noqa: E402
-    _run_arms,
+    run_arms,
     neutralize_panel,
     resolve_ds_root,
 )
@@ -114,7 +114,7 @@ def main(argv: list[str] | None = None) -> None:
     rng = np.random.default_rng(args.seed)
 
     rows: list[dict] = []
-    base = _run_arms([("主模型 only", main_all)], fwd_engine, mask, bench_eqw,
+    base = run_arms([("主模型 only", main_all)], fwd_engine, mask, bench_eqw,
                      bench_index, oos_days, [args.hold])
     base_sh = float(base[0]["sharpe"])
     for r in base:
@@ -132,7 +132,7 @@ def main(argv: list[str] | None = None) -> None:
 
         for w in weights:  # 真实融合
             fused = fuse_rank(main_sub, neu, w, cov)
-            for r in _run_arms([("x", fused)], fwd_engine, mask, bench_eqw,
+            for r in run_arms([("x", fused)], fwd_engine, mask, bench_eqw,
                                bench_index, oos_days, [args.hold]):
                 rows.append({"tag": f"{n}|真实|w={w:.1f}", "rep": -1,
                              "kind": "real", "w": w, **r})
@@ -142,7 +142,7 @@ def main(argv: list[str] | None = None) -> None:
             placebo = row_shuffle_among_covered(neu, cov, rng)
             for w in weights:
                 fused = fuse_rank(main_sub, placebo, w, cov)
-                for r in _run_arms([("x", fused)], fwd_engine, mask, bench_eqw,
+                for r in run_arms([("x", fused)], fwd_engine, mask, bench_eqw,
                                    bench_index, oos_days, [args.hold]):
                     rows.append({"tag": f"{n}|安慰剂|w={w:.1f}", "rep": rep,
                                  "kind": "placebo", "w": w, **r})

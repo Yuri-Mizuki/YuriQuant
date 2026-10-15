@@ -15,7 +15,9 @@ import pandas as pd
 import pytest
 
 from optimize.solver import (
+    _auto_alpha_scale,
     _risk_parity_ccd,
+    _standardize_score,
     bl_posterior,
     bl_views_from_factor,
     estimate_covariance,
@@ -796,3 +798,98 @@ def test_qp_wrapper_cvar_passthrough():
         assert _hist_cvar(row.values, scen) <= 0.025 + 1e-4, t
         n_checked += 1
     assert n_checked > 0
+
+
+# ===========================================================================
+# α 尺度标定（2026-10-13：修 mvo 目标量级失配导致的顶点解 bang-bang）
+# ===========================================================================
+def test_standardize_score_properties():
+    """z 标准化：均值 0 / std 1；零方差 → 全 0（不造虚假 alpha）。"""
+    z = _standardize_score(np.array([1.0, 2.0, 3.0, 4.0, 5.0]))
+    assert abs(z.mean()) < 1e-12
+    assert z.std() == pytest.approx(1.0)
+    assert np.array_equal(_standardize_score(np.full(5, 0.5)), np.zeros(5))
+    assert _standardize_score(np.array([])).size == 0
+
+
+def test_auto_alpha_scale_balances_equal_weight_gradient():
+    """s 的定义：等权点处风险项梯度与 alpha 项（λ=1）梯度 L2 范数相等。"""
+    f, rets = _mock_panel(n_days=150, n_codes=25, seed=31)
+    Sigma = estimate_covariance(rets)
+    z = _standardize_score(f.iloc[100].rank(pct=True).fillna(0.0).values)
+    s = _auto_alpha_scale(z, Sigma, budget=1.0)
+    w_eq = np.full(len(z), 1.0 / len(z))
+    g_risk = float(np.linalg.norm(2.0 * Sigma @ w_eq))
+    g_alpha = float(np.linalg.norm(1.0 * s * z))
+    assert g_risk == pytest.approx(g_alpha, rel=1e-9)
+    assert s > 0
+
+
+def test_auto_alpha_scale_degenerate_returns_one():
+    """z 全 0（无信息截面）→ s=1.0（不缩放），不抛错。"""
+    assert _auto_alpha_scale(np.zeros(5), np.eye(5) * 1e-4) == 1.0
+
+
+def test_mvo_default_is_vertex_solution():
+    """默认（rank pct 直用）：量级失配 → 顶点解（贴 max_weight 上限的少数几只）。
+
+    回归 2026-10-13 发现的缺陷：α 项比 w'Σw 大 ~3 个数量级 ⇒ 解退化。
+    """
+    f, rets = _mock_panel(n_days=180, n_codes=60, seed=21)
+    Sigma = estimate_covariance(rets.iloc[:120])
+    w = solve_portfolio(f.iloc[119], Sigma, method="mvo", max_weight=0.1)
+    n_active = int((w > 1e-9).sum())
+    n_at_cap = int((w > 0.1 - 1e-6).sum())
+    assert n_active <= 12           # 预算 1 / 上限 0.1 ⇒ 顶点解必然 ~10 只
+    assert n_at_cap >= n_active - 1  # 且几乎全部顶在上限
+    assert abs(w.sum() - 1.0) < 1e-4
+
+
+def test_mvo_auto_alpha_scale_avoids_vertex_solution():
+    """alpha_scale='auto'：解分散、贴上限的股票显著减少，预算仍满足。"""
+    f, rets = _mock_panel(n_days=180, n_codes=60, seed=21)
+    Sigma = estimate_covariance(rets.iloc[:120])
+    alpha = f.iloc[119]
+    w_v = solve_portfolio(alpha, Sigma, method="mvo", max_weight=0.1)
+    w_a = solve_portfolio(alpha, Sigma, method="mvo", max_weight=0.1, alpha_scale="auto")
+    n_v = int((w_v > 1e-9).sum())
+    n_a = int((w_a > 1e-9).sum())
+    n_cap_a = int((w_a > 0.1 - 1e-6).sum())
+    assert n_a > n_v                     # 分散度提升
+    assert n_cap_a < n_v                 # 贴上限的股票数下降
+    assert abs(w_a.sum() - 1.0) < 1e-4
+    assert (w_a >= -1e-9).all()
+
+
+def test_alpha_scale_none_matches_default():
+    """零回归：显式 alpha_scale=None 与不传逐位一致（同一条代码路径）。"""
+    f, rets = _mock_panel(n_days=150, n_codes=25, seed=41)
+    Sigma = estimate_covariance(rets.iloc[:120])
+    a = f.iloc[119]
+    w0 = solve_portfolio(a, Sigma, method="mvo", risk_aversion=1.0)
+    w1 = solve_portfolio(a, Sigma, method="mvo", risk_aversion=1.0, alpha_scale=None)
+    np.testing.assert_allclose(w0.values, w1.values, rtol=0, atol=1e-12)
+
+
+def test_alpha_scale_numeric_and_invalid():
+    """数值尺度被接受；未知字符串报错。"""
+    f, rets = _mock_panel(n_days=150, n_codes=25, seed=51)
+    Sigma = estimate_covariance(rets.iloc[:120])
+    a = f.iloc[119]
+    w = solve_portfolio(a, Sigma, method="mvo", alpha_scale=1e-3)
+    assert abs(w.sum() - 1.0) < 1e-4
+    with pytest.raises(ValueError, match="alpha_scale"):
+        solve_portfolio(a, Sigma, method="mvo", alpha_scale="nope")
+
+
+def test_optimize_weights_qp_alpha_scale_passthrough():
+    """面板级透传 alpha_scale：auto 臂的持仓分散度高于默认臂（证明生效）。"""
+    f, rets = _mock_panel(n_days=180, n_codes=40, seed=61)
+    kw = dict(method="mvo", window=60, min_periods=40, max_weight=0.1)
+    w_def = optimize_weights_qp(f, rets, **kw)
+    w_auto = optimize_weights_qp(f, rets, alpha_scale="auto", **kw)
+    n_def = (w_def > 1e-9).sum(axis=1)
+    n_auto = (w_auto > 1e-9).sum(axis=1)
+    valid = n_def > 0
+    assert valid.any()
+    assert n_auto[valid].mean() > n_def[valid].mean()

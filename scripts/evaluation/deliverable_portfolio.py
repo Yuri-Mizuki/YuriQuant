@@ -126,7 +126,7 @@ def main(argv: list[str] | None = None) -> None:
 
     from backtest.costs import default_costs
     from backtest.engine import VectorBacktest
-    from scripts.pipelines.rolling_grid_alla import _ann, load_base, res_metrics
+    from scripts.pipelines.rolling_grid_alla import ann, load_base, res_metrics
 
     pred_dir = Path(args.pred_dir)
     dest = Path(args.out)
@@ -177,7 +177,7 @@ def main(argv: list[str] | None = None) -> None:
         nhold = (wh > 0).sum(axis=1)
         nhold = nhold[nhold > 0]
         row = dict(arm=tag, annual=m["annual"],
-                   excess_eqw=m["annual"] - _ann(b_eqw),
+                   excess_eqw=m["annual"] - ann(b_eqw),
                    sharpe=m["sharpe"], max_dd=m["max_dd"],
                    turnover=m["turnover"],
                    n_hold_mean=float(nhold.mean()) if len(nhold) else 0.0,

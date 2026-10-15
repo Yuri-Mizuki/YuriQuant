@@ -1,0 +1,278 @@
+# =============================================================================
+# 定版主模型登记表 —— 全项目**唯一真源**（2026-10-13 建立，2026-10-14 加口径组合）
+# =============================================================================
+#
+# 规则（改本文件前必读）
+# --------------------
+# 1. **每次定版追加一条**，`id` 单调递增（v1 / v2 / ...）；旧条目不删，`status`
+#    改 `superseded` 并注明被谁取代。历史结论靠这个表追溯「当时对比的是谁」。
+# 2. **metrics 必须由 `scripts/evaluation/caliber.py` 产出**，且**必须标口径组合**
+#    （`profiles.production` / `profiles.fair`）。手工填的数字一律标
+#    `verified_local: false` 并注明来源。
+# 3. **任何"改进 vs 基线"的对照，基线必须取本表 `status: production` 那条**
+#    （或 `working` 那条作本机代理），不得临时自造基线 —— 2026-10-13 一天内
+#    三次结论反转全部源于此。
+# 4. **口径组合不可混**（2026-10-14 新增，见 `caliber.PROFILES`）：
+#      production = 固定 10bp + T+1 open + 1e6   ← 与 v1 定版同源，**绝对数字可比**
+#      fair       = 逐股冲击  + T 收盘  + 1e8   ← 成本/容量研究用，**不可与 production 并列**
+#    同一 signal + 同一 arm 在两者间差 ~0.77pp（其中 0.70pp 来自 close vs T+1 open）。
+# 5. **数据态必须标注**：v1 的 18.07% 属 income 4383 补齐**前**的 v2 数据态；
+#    同配置当前数据态 ≈ 17.0–17.2%（README:24-26）。**不回退数据换数字。**
+#
+# 每个 baseline 的字段
+# --------------------
+#   id                 唯一标识
+#   status             production（当前生产）/ working（本机迭代代理）/ superseded
+#   signal_key         对应 caliber.SIGNALS 的键（决定读哪份 predict 面板）
+#   window             对应 caliber.WINDOWS 的键
+#   signal / execution 口径描述（供人读，也是重建参数的记录）
+#   caliber            该条数字对应的**口径组合**（profile/cost/execution/capital/脚本）
+#   data_state         数据态（income 补齐前后）与当前态等效值
+#   metrics            该口径下的实测/记载指标（按 profile 分组）
+#   fingerprint        信号面板指纹（caliber.fingerprint_panel；仅本机可复现时有）
+#   reproducible_local 本机是否已具备可复现实体
+#   regen_cmd          本机重建命令（reproducible_local=false 时必填）
+#   source             数字出处（报告路径 / 命令）
+# =============================================================================
+
+version: 2
+updated: "2026-10-14"
+
+# 评估口径的规范值（caliber.py 的硬编码副本，供快速查阅；改 caliber 时同步）
+conventions:
+  windows:
+    prod: "20180101"      # 生产定版窗口（含 2018 纯 β 年）
+    iso2019: "20190101"   # 仅做敏感性；数字不可与生产并列
+  sharpe: "geometric"     # backtest.metrics.sharpe_ratio（几何年化/年化波动）
+  rebalance: "monthly_first_trading_day"
+  covariance_warmup: "untruncated_history"   # Σ 面板不得截断到回测窗口
+  # --- 口径组合（2026-10-14；对应 caliber.PROFILES）---
+  profiles:
+    production:
+      cost: "production"        # = backtest.costs.default_costs()（当前=固定 10bp）
+      execution: "open"         # T+1 开盘（build_execution_split + 信号 shift(1) 预掩码）
+      capital: 1.0e6
+      comparable_to: "登记表 status:production 条目"
+    fair:
+      cost: "impact"            # 逐股平方根律 η·σ·√(Q/ADV)，买卖非对称
+      execution: "close"        # T 收盘成交（乐观上限）
+      capital: 1.0e8
+      comparable_to: "仅同 profile 内部；**不可**与 production 并列"
+
+baselines:
+
+  # ---------------------------------------------------------------------------
+  # v1 —— 当前生产定版（出榜链 `alla_daily_rank.py --preset dingban`）
+  # ---------------------------------------------------------------------------
+  - id: v1-dingban
+    created: "2026-10-02"
+    updated: "2026-10-14"
+    status: production
+    label: "定版主模型 v1（920 fundind 快信号 h1020 ⊕ 慢信号 s0.5 + buffer(15/40)）"
+    signal_key: dingban_fundind
+    window: prod
+    signal:
+      preproc: ortho_fundind            # 因子层正交化 + 基本面保留席位
+      panel_source: all_a_2018_2026/panels_neu_fundind
+      ensemble: h1020                   # h1/h5/h10/h20 截面秩平均
+      horizons: [1, 5, 10, 20]
+      slow_blend: 0.5                   # 慢信号权重（读 panels_neu，冻结面板 ffill）
+      slow_panels_subdir: panels_neu
+      selection_dir: reports/alla_rolling_ortho920fundind/selection
+      tradable_labels: true             # 训练标签掩掉买不进样本
+      n_factors: 920
+    execution:
+      strategy: BufferedTopFracLongOnly
+      buffer_entry: 0.15
+      buffer_exit: 0.40
+      rebalance_freq: M
+      benchmark: "000300.SH"
+    # 🚨 该条数字对应的**口径组合**（2026-10-14 从产出脚本反查确认）
+    caliber:
+      profile: production
+      cost: "固定 10bp（Config.costs()，impact_model=none）"
+      execution: "open（T+1 开盘）"
+      capital: 1.0e6
+      mask: "信号预掩码 sig.shift(1).where(mask)"
+      source_script: "scripts/evaluation/buffer_arm_920.py"
+    data_state:
+      registered: "income 财报数据补齐（4383 只）**之前**的 v2 数据态"
+      current_equivalent: "同配置在当前数据态重跑 ≈ 17.0–17.2%（v3/v4 双证）"
+      source: "README.md:24-26 / GOOD_MACHINE_TASKS.md:34-36"
+      caveat: >
+        🚨 18.07% 属**旧数据态**，**不可**当作当前数据态的对照目标；引用须注明
+        「income 4383 前后」。当前数据态请用 ≈17.0–17.2%（本机由 `v1w-ortho882` 代理）。
+      verification_status: >
+        ⚠️ 2026-10-14 复核：17.0–17.2% 目前**只是文档记载**（v3/v4 双证），本机**未用
+        caliber 实测** —— 920 线的回测面板从未落到本机
+        （`reports/alla_rolling_ortho920fundind/pred/` 与 `buffer_arm_920.py` 默认的
+        `reports/alla_rolling_ortho920tl/` **均不存在**，只有 y2026 的 selection）。
+        🔴 原料侧：本轮发现 `Config.cache().root`（当时 = D:）上
+        **balance_sheet / cash_flow / dividend 三表缺失、income 仅 1,600 只**
+        ⇒ 即便愿意重跑也没有可用原料。
+        ✅ 2026-10-14 已修复：仓库 `.env` 写入 `YQ_DATA_ROOT=E:/data`（root 指向齐全副本，
+        七个必需表齐全，`test_no_hardcoded_drive_paths` / `test_caliber` 14 passed）。
+        ⇒ 要在本机拿到该信号的实测值，须先重建 920 的 pred（见 `regen_cmd`，估数小时）。
+    metrics:
+      window_label: "2018-2026 OOS（v2 旧数据态）"
+      annual: 0.1807
+      sharpe: 0.805
+      turnover: 0.191
+      max_drawdown: 0.342
+      note: >
+        记载值（fundind 18.68%/0.813 §⑭ → buffer(15/40) 18.07%/0.805/换手 19.1% §⑯）。
+        ⚠️ **本机无该信号面板副本 ⇒ 未用 caliber 复算**；且属旧数据态。
+    fingerprint: null
+    reproducible_local: false
+    regen_cmd: >
+      ① D:/python/Python312/python.exe scripts/pipelines/rolling_grid_alla.py
+         --preproc ortho_fundind --out-tag ortho920tl --stage select   # 再 --stage predict
+      ② D:/python/Python312/python.exe -m scripts.evaluation.buffer_arm_920
+         --pred-dir reports/alla_rolling_ortho920tl --variant defv --entry 0.15 --exit 0.40
+      ⚠️ 2026-10-14 更正：信号由 ② **现场构造**（_rank_average([gbdt__h1,h5,h10,h20])
+         ⊕ 0.5·rank(slow)）。它 **不是** rolling_grid_alla --stage ensemble 的产物
+         （该阶段只写 ens_rgr / ens_h1h5 / ens_all，源码 rolling_grid_alla.py:1588-1596）。
+         故不要按 `pred/ens_h1020__h1.parquet` 去找 —— 该文件永远不会生成。
+    source: "reports/batch1_920_收尾对照表.md §⑭⑯（好机器产物，本机无副本）"
+    verified_local: false
+
+  # ---------------------------------------------------------------------------
+  # v1w —— 本机工作基线（882 ortho 的定版执行层形态）
+  #   生产定版的**本机代理**：执行层/窗口/费率同源，只差「信号口径」
+  #   （882 ortho ens_h1h5 vs 920 fundind h1020 ⊕ 慢信号）。所有本机优化迭代用这条。
+  # ---------------------------------------------------------------------------
+  - id: v1w-ortho882
+    created: "2026-10-13"
+    updated: "2026-10-14"
+    status: working
+    label: "本机工作基线：882 ortho ens_h1h5 + buffer(15/40)（生产执行层形态）"
+    signal_key: ens_h1h5
+    window: prod
+    signal:
+      preproc: ortho
+      panel_source: all_a_2018_2026/panels_neu
+      ensemble: h1h5                    # gbdt h1+h5 截面秩平均
+      horizons: [1, 5]
+      slow_blend: 0.0
+      selection_dir: reports/alla_rolling_ortho/selection
+      tradable_labels: false
+      n_factors: 882
+    execution:
+      strategy: BufferedTopFracLongOnly
+      buffer_entry: 0.15
+      buffer_exit: 0.40
+      rebalance_freq: M
+    caliber:
+      profile: "见 metrics.profiles（两个口径组合都登记）"
+      profiles_available: [production, fair]
+    metrics:
+      window_label: "2018-01-02..2026-09-07（2107 日）"
+      fingerprint: b7d7e9342986
+      # ---- 按口径组合分组（caliber.py 实测）----
+      profiles:
+        production:                     # = v1-dingban 同源口径（固定10bp/T+1open/1e6）
+          eqw_top10pct:
+            ann: 0.1466
+            sharpe: 0.593
+            turnover: 0.730
+            cost_bp: 4199
+            n_active: 406
+          eqw_buf0.15_0.4:
+            ann: 0.1646
+            sharpe: 0.685
+            turnover: 0.371
+            cost_bp: 2202
+            n_active: 608
+        fair:                           # = 研究压力口径（impact/close/1e8）
+          eqw_top10pct:
+            ann: 0.1519
+            sharpe: 0.618
+            turnover: 0.729
+            cost_bp: 4819
+            n_active: 411
+          eqw_buf0.15_0.4:
+            ann: 0.1723
+            sharpe: 0.717
+            turnover: 0.366
+            cost_bp: 2240
+            n_active: 618
+      # ---- 两条等价性验证：caliber 的 close / open 路径各自复现生产发布产物 ----
+      equivalence:
+        close:
+          ref: "reports/alla_rolling_ortho/metrics_ensemble.csv ens_h1h5__h1__M__raw__f0.10__equal（2026-09-10，旧命名 = close 口径）"
+          ref_ann: 0.1554
+          ref_sharpe: 0.632
+          ref_turnover: 0.729
+          caliber_ann: 0.1552
+          caliber_sharpe: 0.631
+        open:
+          ref: "reports/alla_rolling_ortho/metrics_overall_open.csv ens_h1h5__h1__M__raw__f0.10"
+          ref_ann: 0.1466
+          ref_sharpe: 0.593
+          ref_turnover: 0.730
+          caliber_ann: 0.1466
+          caliber_sharpe: 0.593
+        note: >
+          两条执行路径**逐项吻合**（Δ ≤ 0.02pp / 0.001）⇒ 加载、调仓日、掩码、
+          成本、**以及 close/open 两种执行价结算**均无实现错误。
+          与 v1-dingban 的差额 = ①信号口径（882 ortho vs 920 fundind⊕慢信号，
+          ≈ +0.5~0.7pp）+ ②数据态（旧 vs 当前）。
+    fingerprint: b7d7e9342986
+    reproducible_local: true
+    regen_cmd: >
+      D:/python/Python312/python.exe scripts/evaluation/caliber.py
+      --signal ens_h1h5 --window prod --profile production --buffer 0.15:0.40
+    source: "reports/caliber/baseline_prod.json / baseline_fair.json（caliber.py 产出）"
+    verified_local: true
+    notes: >
+      与 v1 的差额 = 信号口径（fundind 特征集 + 慢信号）≈ +0.5~0.7pp（当前数据态估）。
+      本机优化的**唯一合法基线**。**两个口径组合都必须登记**：production 用于
+      「比生产强不强」，fair 用于成本稳健性/容量/QP 对照。
+
+  # ---------------------------------------------------------------------------
+  # v1w2 —— 候选微调（cheap_lever_scan 产出；**等拍板后才可升 production**）
+  #   = v1w 执行层形态改两参数：buffer entry 0.15→0.08 + h1:h5 权重 0.5→0.25。
+  #   证据：全窗 17.31/0.707（+0.85pp），四窗口（2019+/21+/23+/25+）复验 5/5 一致，
+  #   换手 31.8%（现行 37.1%）同向改善。
+  # ---------------------------------------------------------------------------
+  - id: v1w2-cheap
+    created: "2026-10-14"
+    status: working
+    label: "候选微调：882 ortho h1:h5=0.25 + buffer(8/40)（叠加臂，四窗口复验一致）"
+    signal_key: ens_h1h5
+    window: prod
+    signal:
+      preproc: ortho
+      panel_source: all_a_2018_2026/panels_neu
+      ensemble: h1h5_weighted              # 0.25·rank(h1) + 0.75·rank(h5)
+      h1_weight: 0.25
+      n_factors: 882
+    execution:
+      strategy: BufferedTopFracLongOnly
+      buffer_entry: 0.08
+      buffer_exit: 0.40
+      rebalance_freq: M
+    caliber:
+      profile: production
+      cost: "固定 10bp"
+      execution: "open（T+1 开盘）"
+      capital: 1.0e6
+    metrics:
+      window_label: "2018-01-02..2026-09-07（2107 日）"
+      annual: 0.1731
+      sharpe: 0.707
+      turnover: 0.318
+      max_drawdown: 0.361
+      vs_v1w: "+0.85pp / +0.022 Sharpe / 换手 −5.3pp"
+      revalidate:
+        windows: [2019, 2021, 2023, 2025]
+        delta_ann_vs_anchor: [+0.97, +1.17, +0.44, +1.10]   # 全部为正
+    reproducible_local: true
+    regen_cmd: >
+      D:/python/Python312/python.exe -m scripts.evaluation.cheap_lever_revalidate
+    source: "reports/cheap_lever_scan/{README.md,results.csv,revalidate.csv}"
+    verified_local: true
+    caveats: >
+      ① 参数在 882 信号上网格扫出（16 臂 selection bias，靠四窗口一致性抵消）；
+      ② 920 定版信号上未复验（本机无 pred）；③ 等拍板：改生产 preset 须同步
+      alla_daily_rank.py 并重注册任务。

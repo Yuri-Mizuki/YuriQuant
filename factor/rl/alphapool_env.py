@@ -235,7 +235,7 @@ def legal_mask_for_tokens(tokens: list[int]) -> np.ndarray:
 # 单因子 / 组合 IC 评估（MSE Pool 用 IC，MeanStd Pool 用 ICIR）
 # ---------------------------------------------------------------------------
 
-def _ic_np(f: np.ndarray, r: np.ndarray, min_cnt: int = 5) -> np.ndarray:
+def ic_np(f: np.ndarray, r: np.ndarray, min_cnt: int = 5) -> np.ndarray:
     """纯 numpy 逐日截面 Pearson IC（全向量化，无 Python 循环、无 np.nan*）。
 
     f/r: (T, N) float64 数组（含 NaN）。
@@ -266,7 +266,7 @@ def panel_ic_series(factor: pd.DataFrame, rets: pd.DataFrame) -> pd.Series:
     """逐日截面 Pearson IC（因子 t 对齐收益面板同日起始；纯 numpy 安全实现）。"""
     f = factor.to_numpy(dtype=np.float64)
     r = rets.reindex_like(factor).to_numpy(dtype=np.float64)
-    ic = _ic_np(f, r)
+    ic = ic_np(f, r)
     return pd.Series(ic, index=factor.index)
 
 
@@ -294,7 +294,7 @@ def eval_formula(panel: dict[str, pd.DataFrame], rets: pd.DataFrame,
     return fp, float(ic.abs().mean())
 
 
-def _panels_to_np(factors: list[pd.DataFrame]) -> np.ndarray:
+def panels_to_np(factors: list[pd.DataFrame]) -> np.ndarray:
     """因子面板列表 -> (T, N, K) numpy 数组（含 NaN）。
 
     显式对齐 index/columns（formula_builder 各算子可能返回不同列序），
@@ -311,7 +311,7 @@ def _panels_to_np(factors: list[pd.DataFrame]) -> np.ndarray:
     return np.stack(arrs, axis=2)
 
 
-def _standardize_panel(a: np.ndarray) -> np.ndarray:
+def standardize_panel(a: np.ndarray) -> np.ndarray:
     """逐行截面标准化（NaN 保留；单值行置 0）。"""
     m = ~np.isnan(a)
     cnt = m.sum(axis=1, keepdims=True)
@@ -332,8 +332,8 @@ def portfolio_ic_np(panels_arr: np.ndarray, weights: np.ndarray,
     T, N, K = panels_arr.shape
     f0 = np.zeros((T, N), dtype=np.float64)
     for k in range(K):
-        f0 += w[k] * _standardize_panel(panels_arr[:, :, k])
-    ic = _ic_np(f0, rets_arr)
+        f0 += w[k] * standardize_panel(panels_arr[:, :, k])
+    ic = ic_np(f0, rets_arr)
     valid = ic[np.isfinite(ic)]
     m = float(valid.mean()) if len(valid) else 0.0
     return m if np.isfinite(m) else 0.0
@@ -347,8 +347,8 @@ def portfolio_icir_np(panels_arr: np.ndarray, weights: np.ndarray,
     T, N, K = panels_arr.shape
     f0 = np.zeros((T, N), dtype=np.float64)
     for k in range(K):
-        f0 += w[k] * _standardize_panel(panels_arr[:, :, k])
-    ic = _ic_np(f0, rets_arr)
+        f0 += w[k] * standardize_panel(panels_arr[:, :, k])
+    ic = ic_np(f0, rets_arr)
     ic = ic[np.isfinite(ic)]
     if len(ic) < 2:
         return 0.0
@@ -360,7 +360,7 @@ def portfolio_ic(factors: list[pd.DataFrame], weights: np.ndarray,
     """组合 IC：加权因子面板（逐日截面标准化后线性组合）与收益的 IC 均值。"""
     if not factors:
         return 0.0
-    arr = _panels_to_np(factors)
+    arr = panels_to_np(factors)
     r = rets.reindex_like(factors[0]).to_numpy(dtype=np.float64)
     return portfolio_ic_np(arr, weights, r)
 
@@ -370,7 +370,7 @@ def portfolio_icir(factors: list[pd.DataFrame], weights: np.ndarray,
     """组合 ICIR：IC 均值 / IC 标准差（MeanStd Pool 的目标函数）。"""
     if not factors:
         return 0.0
-    arr = _panels_to_np(factors)
+    arr = panels_to_np(factors)
     r = rets.reindex_like(factors[0]).to_numpy(dtype=np.float64)
     return portfolio_icir_np(arr, weights, r)
 
@@ -430,7 +430,7 @@ class AlphaPool:
     # ------------------------------------------------------------------
     def _panels_arr(self) -> np.ndarray:
         """池内因子面板 -> (T, N, K) numpy 数组。"""
-        return _panels_to_np(self.factor_panels)
+        return panels_to_np(self.factor_panels)
 
     def _objective_np(self, panels_arr: np.ndarray, w: np.ndarray) -> float:
         r = self.rets.reindex_like(self.factor_panels[0]).to_numpy(dtype=np.float64)
@@ -463,7 +463,7 @@ class AlphaPool:
         r = self.rets.reindex_like(panels[0]).to_numpy(dtype=np.float64)
         ics = []
         for p in panels:
-            ic = _ic_np(p.to_numpy(dtype=np.float64), r)
+            ic = ic_np(p.to_numpy(dtype=np.float64), r)
             ics.append(ic)
         ic_mat = np.stack(ics, axis=1)              # (T, K)
         # 只保留所有因子都有有效 IC 的行

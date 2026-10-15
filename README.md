@@ -61,13 +61,16 @@ zz1000 上的 RL/QP 组合优化 24 臂消融无稳健超额；LLM-MCTS 是唯�
 
 ### ⚖️ 优化层：从预测到持仓
 
-- **组合优化**：QP 五法（min_var / tev / mvo / risk_parity / Black-Litterman）+ HRP；约束覆盖预算 / 上下限 / 行业中性 / 基准行业偏离 / 逐股权重变动上限 / λ 网格
+- **组合优化**：QP 五法（min_var / tev / mvo / risk_parity / Black-Litterman）+ HRP；约束覆盖预算 / 上下限 / 行业中性 / 基准行业偏离 / 逐股权重变动上限 / λ 网格；`mvo` 量级失配修复（`alpha_scale` 自动标定，顶点解 → 风险-收益权衡解）
+- **成本感知优化**：Almgren-Chriss 二次近似把交易成本内生化进 QP 目标（`optimize/cost_penalty.py`：形状校准 + k₁/k₂ 扫描，1e8 资金定标值 2.3e-4 / 7.0e-2）；α 衰减感知 aim portfolio（GP 2013 机制代理，`optimize/aim.py`，已关闭但工具保留）
 - **风险归因**：α/β 分解（Newey-West t）、Brinson（Carino 链接）、Euler 风险分解 + VaR/CVaR 成分
 - **多期执行**：日 / 周 / 月调仓频率，调仓日重解优化，每日可执行信号导出
 
 ### 🎯 回测与反过拟合：数字必须经得起拷问
 
-- **向量化回测引擎**：交易成本、涨跌停 / 停牌过滤、**T+1 开盘可执行口径为全链默认**（收盘价成交的乐观数字只作上限对照）
+- **向量化回测引擎**：交易成本、涨跌停 / 停牌过滤、**T+1 开盘可执行口径为全链默认**（收盘价成交的乐观数字只作上限对照）；逐股冲击成本模型 `η·σ·√(Q/ADV)`（`ImpactCostModel`，AUM 敏感）与整手约束可启用
+- **统一评估口径（唯一真源）**：`scripts/evaluation/caliber.py` + `config/baselines.yaml`——production / fair 双 profile 把一次评估的全部口径要素（基线形态 / 窗口 / Sharpe / 成本 / 成交价 / 资金）收敛到一处，锚点臂必须逐位复现登记基线（Δ≠0 作废），杜绝跨口径并列
+- **执行层容量与摩擦**：集中度 × AUM 二维容量表（`capacity_table.py`，buffer 形态容量 >1e9）；成本感知对照（`cost_penalty_probe.py`）；实测 1e8 资金下冲击 ≈ 固定 10bp、成本是 AUM 的强函数——固定滑点口径回答不了容量问题
 - **仓位层 overlay 先过「信息上界测试」**：任何总仓位乘数类改造（波动率目标化 / 趋势 / 择时 / 回撤状态机）先算「信息完美且可实现」口径的收益上界（收盘知当日、次日执行），再实测靶子可预测性，最后才跑规则 —— `scripts/evaluation/timing_probe.py`。本项目实测：大盘日收益自相关仅 +0.048（昨日信息对明日≈零预测力）、月度方向因子 0/7 显著 ⇒ 可实现择时上界 ≈ 满仓，择时线收口（见 `reports/timing_probe/`）
 - **稳健统计**：Newey-West t、OLS+HAC、自动滞后阶、FDR 多重检验校正
 - **反过拟合三件套**：CSCV PBO 过拟合概率（12870 个组合秒级算完）、Deflated Sharpe Ratio、三段式训练纪律（train / valid / test 分段 + embargo，配置冻结）

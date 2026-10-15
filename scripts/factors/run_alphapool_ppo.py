@@ -336,15 +336,15 @@ def evaluate_pool(pool: AlphaPool, panel: dict[str, pd.DataFrame],
             # 逐日复合 IC 序列（PBO/DSR 的 T×N 输入；与 portfolio_ic 同口径：
             # 逐日截面标准化后加权）
             import numpy as np
-            from factor.rl.alphapool_env import _panels_to_np, _standardize_panel, _ic_np
-            arr = _panels_to_np(valid)
+            from factor.rl.alphapool_env import panels_to_np, standardize_panel, ic_np
+            arr = panels_to_np(valid)
             w = np.asarray(pool.weights, dtype=float)
             w = w / (np.abs(w).sum() + 1e-12)
             r = rets.reindex_like(valid[0]).to_numpy(dtype=np.float64)
             f0 = np.zeros(arr.shape[:2], dtype=np.float64)
             for k in range(arr.shape[2]):
-                f0 += w[k] * _standardize_panel(arr[:, :, k])
-            ic_daily = _ic_np(f0, r)
+                f0 += w[k] * standardize_panel(arr[:, :, k])
+            ic_daily = ic_np(f0, r)
             ic_daily = [float(x) for x in ic_daily if np.isfinite(x)]
             out["composite_daily_ic"] = ic_daily
         except Exception as exc:                       # noqa: BLE001 —— 序列缺省不致命

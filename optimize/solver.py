@@ -154,6 +154,61 @@ def _alpha_score(alpha: pd.Series) -> pd.Series:
     return alpha.rank(pct=True)
 
 
+def _standardize_score(score: np.ndarray) -> np.ndarray:
+    """把 rank 分数截面标准化为 z（均值 0、标准差 1）；零方差 → 全 0。
+
+    与 ``score`` 相比只差仿射变换，在 ``Σw = budget`` 约束下 ``score'w`` 与
+    ``z'w`` 的**最优解相同**——但 z 让 alpha 项的量纲可被显式尺度 ``alpha_scale``
+    定义（见 :func:`_auto_alpha_scale`）。Zero-variance 保护：全同值的截面
+    （如无信息）→ 全 0（不引入虚假 alpha）。
+    """
+    s = np.asarray(score, dtype=float)
+    if s.size == 0:
+        return s
+    mu = float(np.mean(s))
+    sd = float(np.std(s))
+    if not np.isfinite(sd) or sd <= 1e-12:
+        return np.zeros_like(s)
+    return (s - mu) / sd
+
+
+def _auto_alpha_scale(z: np.ndarray, Sigma: np.ndarray, *, budget: float = 1.0) -> float:
+    """自动标定 alpha 尺度 s，使 λ=1 时 alpha 项与风险项在等权点量级可比。
+
+    🚨 **mvo 目标量级陷阱**（2026-10-13 实测）：``_alpha_score`` 是 rank pct
+    （无量纲、跨度 ~1），而日频 ``Σ`` 元素 ~1e-4 ⇒ ``λ·score'w`` 比 ``w'Σw``
+    大**约 3 个数量级**，``risk_aversion=1``（默认）时风险项形同虚设，解退化为
+    「在约束集上最大化 score'w」的**顶点解**：买满 ``max_weight`` 的最优若干只、
+    其余权重 0。症状 = ``n_active`` 在 11↔300 间摆动（单日解非确定），
+    ``risk_aversion=1e4`` 直接 ``user_limit``。对比 ``min_var``（无 alpha 项）
+    完全良态。
+
+    修法：把 score 标准化为 ``z``（std=1），乘尺度 ``s`` 使等权点处两项**梯度
+    的 L2 范数相等**（λ=1）：``s = ‖2Σ·w_eq‖₂ / ‖z‖₂``。此时 ``s`` 的单位 =
+    「z 每标准差对应的单期收益」，与 Σ 量纲一致；``risk_aversion`` 仍保持
+    「越大越激进」的语义（λ>1 偏 alpha、λ<1 偏风险）。
+
+    Args:
+        z: 已标准化的 score（见 :func:`_standardize_score`，std ≈ 1）。
+        Sigma: (n, n) 协方差。
+        budget: 净多头预算（等权参考点的权重和）。
+    Returns:
+        尺度标量 s；``z`` 全 0 或退化时返回 1.0（等价不缩放）。
+    """
+    z = np.asarray(z, dtype=float)
+    n = z.size
+    denom = float(np.linalg.norm(z))
+    if n == 0 or denom <= 1e-12:
+        return 1.0
+    b = float(budget) if budget is not None else 1.0
+    w_eq = np.full(n, b / n)
+    grad_risk = 2.0 * np.asarray(Sigma, dtype=float) @ w_eq
+    g = float(np.linalg.norm(grad_risk))
+    if not np.isfinite(g) or g <= 0:
+        return 1.0
+    return g / denom
+
+
 def _filter_min_weight(w: pd.Series, min_weight: float) -> pd.Series:
     """min_weight 近似后处理：微仓清零后按多空组独立重新归一（非凸约束无法精确进 QP）。
 
@@ -233,6 +288,7 @@ def solve_portfolio(
     Sigma: np.ndarray,
     method: str = "min_var",
     risk_aversion: float = 1.0,
+    alpha_scale: float | str | None = None,
     benchmark: pd.Series | None = None,
     max_weight: float | None = None,
     min_weight: float | None = None,
@@ -266,12 +322,23 @@ def solve_portfolio(
         Sigma: (N, N) 半正定协方差（estimate_covariance / rolling_covariance 产出）。
         method: "min_var" | "tev"（需 benchmark）| "mvo" | "risk_parity"
                 | "bl"（Black-Litterman：均衡先验 + 观点 → 后验 μ_BL 进目标）。
-        risk_aversion: λ。mvo/tev/bl 的目标为 ``min w'Σw − λ·score'w``——λ 越大
+        risk_aversion: λ。mvo/tev/bl 的目标为 ``min w'Σw − λ·α'w``——λ 越大
             **越激进**（放大 alpha 项、容忍更多方差）。注意与华泰 AI39
             「max r'x − λ·x'Σx」的**风险厌恶** λ 恰为倒数关系
             （λ_本项目 ≈ 1/λ_AI39），且 _alpha_score 是 rank pct（无量纲），
             λ 有效量级与研报完全不同——研报 λ 网格数值不可照抄
             （另见 solve_lambda_grid 与口径核对报告 1.3）。
+            🚨 **量级陷阱**：默认（``alpha_scale=None``）下 α 项 = ``λ·rank_pct'w``，
+            其量级（~λ）比日频 ``w'Σw``（~1e-4）**大 3 个数量级** ⇒ λ≈1 时风险项
+            形同虚设，解退化为**顶点解**（买满 ``max_weight`` 的前几名、其余 0），
+            ``n_active`` 随求解器噪声在 11↔300 间摆动、``λ=1e4`` 直接 ``user_limit``。
+            要得到良态的「风险-收益权衡解」，**必须**配 ``alpha_scale="auto"``
+            （或手工给一个与 Σ 同量纲的尺度）；``min_var``（无 α 项）不受影响。
+        alpha_scale: α 项尺度。``None``（默认）= **零回归**，直接用 rank pct；
+            ``"auto"`` = 把 score 标准化为 z 后自动标定尺度，使 λ=1 时 α 项与
+            风险项在等权点梯度同量级（见 :func:`_auto_alpha_scale`）；
+            数值 = 显式尺度 s（``α_vec = z``、``α_weight = λ·s``）。只对 mvo/tev
+            的线性 α 项生效（min_var 无 α、bl 用 BL 后验收益）。
         benchmark: tev 的基准权重 w_b。
         max_weight / min_weight: 个股上限 / 微仓过滤（非凸 → 近似后处理）。
         industry_map / industry_target / industry_deviation: 行业约束（等式或相对偏离区间）。
@@ -412,15 +479,29 @@ def solve_portfolio(
 
     # ---- 目标函数 ----
     score = _alpha_score(alpha).fillna(0.0).values
+    # α 项尺度（见 alpha_scale docstring）：None=现行行为（rank pct 直用，零回归）；
+    # "auto"=自动标定（消除 mvo 量级失配导致的顶点解）；数值=显式尺度。
+    # 只影响 mvo/tev 的 alpha 线性项；min_var 无 α 项、bl 用 BL 后验收益（自身有量纲）。
+    alpha_vec = score
+    alpha_weight = risk_aversion
+    if alpha_scale is not None:
+        if isinstance(alpha_scale, str):
+            if alpha_scale != "auto":
+                raise ValueError(f"alpha_scale 只支持 'auto' 或数值，收到 {alpha_scale!r}")
+            s = _auto_alpha_scale(_standardize_score(score), Sigma, budget=budget)
+        else:
+            s = float(alpha_scale)
+        alpha_vec = _standardize_score(score)
+        alpha_weight = risk_aversion * s
     if method == "min_var":
         obj_parts.append(cp.quad_form(w, Sigma))
     elif method == "tev":
         wb = benchmark.reindex(codes).fillna(0.0).values
         obj_parts.append(cp.quad_form(w - wb, Sigma))
-        obj_parts.append(-risk_aversion * score @ w)
+        obj_parts.append(-alpha_weight * (alpha_vec @ w))
     elif method == "mvo":
         obj_parts.append(cp.quad_form(w, Sigma))
-        obj_parts.append(-risk_aversion * score @ w)
+        obj_parts.append(-alpha_weight * (alpha_vec @ w))
     elif method == "bl":
         # Black-Litterman：均衡先验 + 观点 → 后验 μ_BL / Σ_BL，直接作线性项
         mw = (
@@ -582,6 +663,7 @@ def optimize_weights_qp(
     cov_method: str = "ledoit_wolf",
     shrinkage: float = 0.5,
     risk_aversion: float = 1.0,
+    alpha_scale: float | str | None = None,
     benchmark_weights: pd.Series | None = None,
     max_weight: float | None = None,
     min_weight: float | None = None,
@@ -616,6 +698,9 @@ def optimize_weights_qp(
         returns_panel: date×code 日收益（估计 Σ 用；为 None 时无法估计风险 → 报错，
             因为本模块必须有风险模型才有意义）。
         method / window / min_periods / cov_method / shrinkage: 见 solve_portfolio。
+        alpha_scale: α 项尺度（None=零回归 / "auto"=自动标定 / 数值），见
+            :func:`solve_portfolio`。做 mvo「风险-收益权衡」时应给 "auto"，
+            否则默认 rank pct 尺度会退化为顶点解。
         industry_deviation: 行业权重相对目标的允许偏离（None=精确等式）。
         style_exposures: dict{风格名 → date×code 暴露面板（列已 zscore）}，
             逐日拼成 code×style 传给 solve_portfolio 做风格中性化。
@@ -688,6 +773,7 @@ def optimize_weights_qp(
         try:
             w = solve_portfolio(
                 alpha, Sigma, method=method, risk_aversion=risk_aversion,
+                alpha_scale=alpha_scale,
                 benchmark=benchmark_weights, max_weight=max_weight, min_weight=min_weight,
                 industry_map=ind_map_t, industry_target=industry_target,
                 industry_deviation=industry_deviation,

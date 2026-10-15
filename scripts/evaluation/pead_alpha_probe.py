@@ -270,7 +270,7 @@ def main(argv: list[str] | None = None) -> None:
     # ---------------- 4) 组合层融合 ----------------
     from backtest.costs import default_costs
     from backtest.engine import VectorBacktest
-    from scripts.pipelines.rolling_grid_alla import _ann, res_metrics
+    from scripts.pipelines.rolling_grid_alla import ann, res_metrics
     from strategy.examples import TopFracLongOnly, TopKLongOnly
 
     fwd_engine = close.pct_change(fill_method=None).loc[oos_days]
@@ -296,7 +296,7 @@ def main(argv: list[str] | None = None) -> None:
                             bench_idx.reindex(res.daily_returns.index).fillna(0.0),
                             res.turnover_series)
             rows2.append(dict(hold=hold_tag, arm=tag, annual=m["annual"],
-                              excess_eqw=m["annual"] - _ann(b_eqw),
+                              excess_eqw=m["annual"] - ann(b_eqw),
                               sharpe=m["sharpe"], max_dd=m["max_dd"],
                               turnover=m["turnover"]))
             log.info("[%s] %-22s 年化=%+6.2f%% Sharpe=%.3f 回撤=%5.1f%% 换手=%5.1f%%",

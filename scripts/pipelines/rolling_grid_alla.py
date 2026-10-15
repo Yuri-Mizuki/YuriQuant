@@ -365,8 +365,17 @@ def _warn_duplicate_base(base: Path) -> None:
         )
 
 
-def stage_prep():
-    """构建回测所需基础面板：复权价、风格协变量、可执行掩码、基准。"""
+def stage_prep(mask_lag: int = 1):
+    """构建回测所需基础面板：复权价、风格协变量、可执行掩码、基准。
+
+    Args:
+        mask_lag: 可交易掩码的**状态取样日**相对信号日的偏移（2026-10-13，P1 口径）。
+            ``1``（默认）：T+1 状态——现行口径，零回归；
+            ``0``：T 日状态——与「T 日收盘成交」自洽的研究口径（方案 A）。
+            口径不自洽的代价与实测量级见
+            ``reports/docs/consistency_checks/口径核对_掩码取样日错配.md``（月频噪声级、
+            周频 +3.76pp；**不可只改一半**）。
+    """
     from config import Config
     from data.cache import DataCache
     from data.cache_helpers import load_index_returns
@@ -434,9 +443,12 @@ def stage_prep():
     log.info("风格协变量: %s", list(cov))
 
     # 可执行性掩码（涨跌停封板/停牌/ST；状态表 2019 起，2018 视为可交易）
-    mask = build_tradable_mask(c, bwd=f, cache_root=str(cache_root))
+    # mask_lag=1（默认）= T+1 状态（现行口径）；0 = T 日状态（研究自洽口径，方案 A）。
+    mask = build_tradable_mask(c, bwd=f, cache_root=str(cache_root),
+                               execution_lag=int(mask_lag))
     mask.to_parquet(base / "tradable_mask.parquet")
-    log.info("可执行掩码: 不可交易占比 %.4f", float((~mask).mean().mean()))
+    log.info("可执行掩码: 不可交易占比 %.4f（状态取样日 = 信号日 +%d）",
+             float((~mask).mean().mean()), int(mask_lag))
 
     # 基准：上证指数 + 全A等权
     idx_ret = load_index_returns(BENCH_INDEX, begin=int(str(PANEL_BEGIN)[:8]),
@@ -1001,7 +1013,7 @@ def _rebalance_days_validated(dates: pd.DatetimeIndex, horizon: int,
     return set(out)
 
 
-def _ann(dr: pd.Series) -> float:
+def ann(dr: pd.Series) -> float:
     dr = dr.dropna()
     if len(dr) < 20:
         return 0.0
@@ -1017,12 +1029,12 @@ def _yearly_metrics(dr: pd.Series, bench: pd.Series) -> dict[int, dict]:
         if len(sub) < 20:
             continue
         b = bench.reindex(sub.index).fillna(0.0)
-        ann = _ann(sub)
-        b_ann = _ann(b)
+        ann_ret = ann(sub)
+        b_ann = ann(b)
         sd = sub.std()
         eq = (1 + sub).cumprod()
         out[int(year)] = {
-            "annual": ann, "excess": ann - b_ann, "bench_annual": b_ann,
+            "annual": ann_ret, "excess": ann_ret - b_ann, "bench_annual": b_ann,
             "sharpe": float(sub.mean() / sd * np.sqrt(PERIODS_PER_YEAR)) if sd > 0 else 0.0,
             "max_dd": float(abs((eq / eq.cummax() - 1).min())),  # 正幅度（同 metrics 约定）
         }
@@ -1332,7 +1344,7 @@ def stage_backtest(quick: bool = False, execution: str = "open"):
                         "run_id": run_id, "model": mname, "horizon": h,
                         "freq": freq, "neut": sname == "neut", "frac": frac,
                         "annual": m["annual"], "excess_idx": m["excess"],
-                        "excess_eqw": m["annual"] - _ann(bench_eqw),
+                        "excess_eqw": m["annual"] - ann(bench_eqw),
                         "sharpe": m["sharpe"],
                         "sharpe_t_stat": m["sharpe_t_stat"],
                         "years_to_prove": m["years_to_prove"],
@@ -1478,7 +1490,7 @@ def stage_smallcap(quick: bool = False):
                     "run_id": run_id, "model": mname, "horizon": h,
                     "freq": freq, "neut": sname, "frac": frac, "weight": wmode,
                     "annual": m["annual"], "excess_idx": m["excess"],
-                    "excess_eqw": m["annual"] - _ann(bench_eqw),
+                    "excess_eqw": m["annual"] - ann(bench_eqw),
                     "sharpe": m["sharpe"], "ir": m["ir"],
                     "max_dd": m["max_dd"], "turnover": m["turnover"],
                     "beta": m["beta"], "n_days": len(dr.dropna()),
@@ -1654,7 +1666,7 @@ def stage_ensemble(quick: bool = False, execution: str = "open"):
                     "run_id": run_id, "ensemble": hname, "horizon": h,
                     "freq": freq, "neut": sname, "frac": frac, "weight": wmode,
                     "annual": m["annual"], "excess_idx": m["excess"],
-                    "excess_eqw": m["annual"] - _ann(bench_eqw),
+                    "excess_eqw": m["annual"] - ann(bench_eqw),
                     "sharpe": m["sharpe"], "ir": m["ir"],
                     "max_dd": m["max_dd"], "turnover": m["turnover"],
                     "beta": m["beta"], "n_days": len(dr.dropna()),
@@ -1735,6 +1747,11 @@ def main():
                          "对照等权合成稀释）。须配 --out-tag")
     ap.add_argument("--out-tag", default=None,
                     help="消融臂输出目录后缀 -> reports/alla_rolling_<tag>")
+    ap.add_argument("--mask-lag", type=int, default=1, choices=[0, 1],
+                    help="可交易掩码状态取样日（2026-10-13，P1 口径）："
+                         "1(T+1 状态，现行口径，零回归) / "
+                         "0(T 日状态，与 T 日收盘成交自洽的研究口径；须配 --out-tag)。"
+                         "实测影响见 docs/consistency_checks/口径核对_掩码取样日错配.md")
     ap.add_argument("--sc-model", default=None,
                     help="smallcap 子网格信号模型（默认 gbdt）；覆盖时指标产物加"
                          " __<model> 后缀，避免覆盖出厂子网格对照表")
@@ -1748,6 +1765,10 @@ def main():
         SC_MODEL = args.sc_model
         log.info("+++ smallcap 信号模型 -> %s（产物加 __%s 后缀）",
                  SC_MODEL, SC_MODEL)
+    if args.mask_lag != 1 and not args.out_tag:
+        ap.error("--mask-lag 0（T 日状态口径）须配 --out-tag：否则 _base/ 掩码被替换，"
+                 "所有历史回测数字口径变更且与原产物不同目录混淆"
+                 "（详见 docs/consistency_checks/口径核对_掩码取样日错配.md）")
     if args.market_features:
         if not args.out_tag:
             ap.error("--market-features 须配 --out-tag：否则 pred 产物与主实验"
@@ -1875,7 +1896,7 @@ def main():
     for st in stages:
         log.info("===== 阶段: %s =====", st)
         if st == "prep":
-            stage_prep()
+            stage_prep(args.mask_lag)
         elif st == "select":
             stage_select(args.quick)
         elif st == "predict":

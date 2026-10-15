@@ -66,7 +66,7 @@ MIN_ROW_VALID = 5            # 统计行形态时要求的最小有效样本
 EXPAND_MIN_PERIODS = 60      # 时序 z 的最小窗口（防前视）
 
 
-def _classify(panel: pd.DataFrame) -> tuple[str, dict]:
+def classify(panel: pd.DataFrame) -> tuple[str, dict]:
     """按面板形态判定处理口径，返回 (mode, 诊断 dict)。"""
     nn = panel.notna()
     row_valid = nn.sum(axis=1)
@@ -143,7 +143,7 @@ def main() -> None:
             print(f"{n:34s} !! 无原始面板，跳过", flush=True)
             continue
         panel = pd.read_parquet(src)
-        mode, diag = _classify(panel)
+        mode, diag = classify(panel)
         x = _transform(panel, mode, mc, ind, name=n, fundind=False)
         cov = float(x.notna().mean().mean())
         if not args.diagnose:

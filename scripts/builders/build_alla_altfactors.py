@@ -97,7 +97,7 @@ from scripts.builders.common import HORIZONS, IC_CODE_STRIDE  # noqa: E402
 # PIT 辅助件复用 holder_dyn builder 的唯一实现（ann_date 三 dtype 归一 /
 # 交易日滞后 / 滚动窗口事件→面板），不另抄一份——见该模块 docstring 的实测事故记录。
 from scripts.builders.build_alla_holder_dyn_factors import (  # noqa: E402
-    _apply_lag, _rolling_sum_panel, ann_to_datetime)
+    apply_lag, rolling_sum_panel, ann_to_datetime)
 
 DATASET = "all_a_2018_2026"
 FAMILY = "altf"
@@ -179,7 +179,7 @@ def pub_time_to_eff(ts: pd.Series, cal_idx: pd.DatetimeIndex,
     d = d + pd.to_timedelta(adv.astype(int), unit="D")
     pos = cal_idx.searchsorted(pd.DatetimeIndex(d), side="left")
     # 日历末之后的事件必须丢弃，不能钳到最后一天——否则最后一天的面板值
-    # 混入「盘后才发布」的未来信息（与 _apply_lag 的越界丢弃同一条红线）。
+    # 混入「盘后才发布」的未来信息（与 apply_lag 的越界丢弃同一条红线）。
     ok = ((pd.DatetimeIndex(d) >= cal_idx[0]) & (np.asarray(pos) < len(cal_idx)))
     pos = np.clip(pos, 0, len(cal_idx) - 1)
     eff = cal_idx[np.asarray(pos, dtype=int)]
@@ -224,7 +224,7 @@ def build_insider(cal_idx, codes, shares: pd.DataFrame,
         evt_sign=sign,
         person=mh["person"].astype(str),
     )
-    ev = _apply_lag(mh, LAG["cninfo_holder"], cal_idx)   # 公告日 → 生效交易日
+    ev = apply_lag(mh, LAG["cninfo_holder"], cal_idx)   # 公告日 → 生效交易日
     ev_codes = ev["code"].isin(codes)
     ev = ev[ev_codes]
     if ev.empty:
@@ -233,15 +233,15 @@ def build_insider(cal_idx, codes, shares: pd.DataFrame,
             f"~{ann_to_datetime(ev['ann_date']).max().date()}")
 
     float_mv = (shares * close_raw.ffill()).where(shares > 0)
-    # ⚠️ _rolling_sum_panel 内部用 ``mask.notna()`` 收边 ⇒ 必须传**浮点股本面板**
+    # ⚠️ rolling_sum_panel 内部用 ``mask.notna()`` 收边 ⇒ 必须传**浮点股本面板**
     # （模板口径）——传布尔面板时 notna() 恒真，未上市/退市区会被 0 填满。
     mask = shares
     mask_bool = shares.notna()
     out: dict[str, pd.DataFrame] = {}
 
-    # 金额口径（amount 覆盖 66% 事件；NaN 行自动被 _rolling_sum_panel 丢弃）
-    amt20 = _rolling_sum_panel(ev, "signed_amt", 20, cal_idx, codes, mask)
-    amt60 = _rolling_sum_panel(ev, "signed_amt", 60, cal_idx, codes, mask)
+    # 金额口径（amount 覆盖 66% 事件；NaN 行自动被 rolling_sum_panel 丢弃）
+    amt20 = rolling_sum_panel(ev, "signed_amt", 20, cal_idx, codes, mask)
+    amt60 = rolling_sum_panel(ev, "signed_amt", 60, cal_idx, codes, mask)
     out["alt_insider_netamt_floatmv_20d"] = (amt20 / float_mv).astype(np.float32)
     out["alt_insider_netamt_floatmv_60d"] = (amt60 / float_mv).astype(np.float32)
     out["alt_insider_netbuy_mom_20_60"] = (out["alt_insider_netamt_floatmv_20d"]
@@ -249,14 +249,14 @@ def build_insider(cal_idx, codes, shares: pd.DataFrame,
                                            ).astype(np.float32)
     # 股数口径（signed_qty 100% 覆盖，金额缺失的补位视角）
     out["alt_insider_netqty_shares_60d"] = (
-        _rolling_sum_panel(ev, "signed_qty", 60, cal_idx, codes, mask)
+        rolling_sum_panel(ev, "signed_qty", 60, cal_idx, codes, mask)
         / shares).astype(np.float32)
     # 计数类（0 是真值）
     buy = ev[ev["direction"].astype(str) == "增持"]
     sell = ev[ev["direction"].astype(str) == "减持"]
-    out["alt_insider_buy_cnt_60d"] = _rolling_sum_panel(
+    out["alt_insider_buy_cnt_60d"] = rolling_sum_panel(
         buy.assign(one=1.0), "one", 60, cal_idx, codes, mask)
-    out["alt_insider_sell_cnt_60d"] = _rolling_sum_panel(
+    out["alt_insider_sell_cnt_60d"] = rolling_sum_panel(
         sell.assign(one=1.0), "one", 60, cal_idx, codes, mask)
     # 行为人广度：每日 (eff, code) 独立行为人数 → 20 日滚动求和（人·日口径）
     g = (ev.groupby(["eff", "code"], sort=False)["person"].nunique().unstack()

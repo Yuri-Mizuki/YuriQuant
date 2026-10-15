@@ -64,7 +64,7 @@ _HL_WINDOW = 252
 _HL_MIN_PERIODS = 252   # 52 周高低点要求完整窗口（不足置 NaN，不缩窗）
 
 
-def _expanding_z(s: pd.Series) -> pd.Series:
+def expanding_z(s: pd.Series) -> pd.Series:
     """逐时点 expanding z（min_periods 前置 NaN；std=0 置 NaN）。"""
     mu = s.expanding(min_periods=Z_MIN_PERIODS).mean()
     sd = s.expanding(min_periods=Z_MIN_PERIODS).std()
@@ -95,7 +95,7 @@ def index_state_series(close: pd.Series) -> dict[str, pd.Series]:
     raw["hi252"] = close / hh - 1.0
     raw["lo252"] = close / ll - 1.0
     assert set(raw) == set(FEATURES_PER_INDEX), "特征清单与实现脱节"
-    return {k: _expanding_z(v) for k, v in raw.items()}
+    return {k: expanding_z(v) for k, v in raw.items()}
 
 
 def build_market_state_features(

@@ -250,7 +250,7 @@ def main():
         dr = res.daily_returns
         m = RG.res_metrics(dr, bench_idx, res.turnover_series)
         row = {"run_id": name, "annual": m["annual"], "excess_idx": m["excess"],
-               "excess_eqw": m["annual"] - RG._ann(bench_eqw),
+               "excess_eqw": m["annual"] - RG.ann(bench_eqw),
                "sharpe": m["sharpe"], "max_dd": m["max_dd"],
                "turnover": m["turnover"], "n_days": len(dr.dropna())}
         rows_overall.append(row)

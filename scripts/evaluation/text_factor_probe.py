@@ -103,9 +103,9 @@ def neutralize_panel(panel: pd.DataFrame, mc: pd.DataFrame, ind: pd.DataFrame,
     - 其余 ⇒ MAD → 行业+市值中性化 → zscore。
     """
     from factor.preprocessing import preprocess_factor
-    from scripts.builders.build_alla_altfactor_neu import _classify
+    from scripts.builders.build_alla_altfactor_neu import classify
 
-    mode, diag = _classify(panel)
+    mode, diag = classify(panel)
     if mode == "broadcast":
         log.warning("%s 判为市场级广播（行 nunique≤1），跳过中性化", name)
         return panel.astype(np.float32), {"mode": mode, **diag}
@@ -173,13 +173,13 @@ def _ic_row(sig: pd.DataFrame, fwd: pd.DataFrame, mask: pd.DataFrame,
 # ---------------------------------------------------------------------------
 # 组合层
 # ---------------------------------------------------------------------------
-def _run_arms(arms: list[tuple[str, pd.DataFrame]], fwd_engine: pd.DataFrame,
+def run_arms(arms: list[tuple[str, pd.DataFrame]], fwd_engine: pd.DataFrame,
               mask: pd.DataFrame, bench_eqw: pd.Series, bench_index: pd.Series,
               oos_days: pd.DatetimeIndex, holdings: list[str]) -> list[dict]:
     """逐臂回测；信号**按自身列宽**对齐（不回填到全 A 宽度，省内存）。"""
     from backtest.costs import default_costs
     from backtest.engine import VectorBacktest
-    from scripts.pipelines.rolling_grid_alla import _ann, res_metrics
+    from scripts.pipelines.rolling_grid_alla import ann, res_metrics
     from strategy.examples import TopFracLongOnly, TopKLongOnly
 
     factory = {
@@ -202,7 +202,7 @@ def _run_arms(arms: list[tuple[str, pd.DataFrame]], fwd_engine: pd.DataFrame,
                             b_idx.reindex(res.daily_returns.index).fillna(0.0),
                             res.turnover_series)
             rows.append(dict(hold=hold_tag, arm=tag, annual=m["annual"],
-                             excess_eqw=m["annual"] - _ann(b_eqw),
+                             excess_eqw=m["annual"] - ann(b_eqw),
                              sharpe=m["sharpe"], ir=m["ir"],
                              excess_t=m["excess_t_stat"], max_dd=m["max_dd"],
                              turnover=m["turnover"]))
@@ -273,10 +273,10 @@ def main(argv: list[str] | None = None) -> None:
     rows2: list[dict] = []
     rows3: list[dict] = []
     if not args.skip_portfolio:
-        rows2 = _run_arms([("主模型 only", main_all)], fwd_engine, mask, bench_eqw,
+        rows2 = run_arms([("主模型 only", main_all)], fwd_engine, mask, bench_eqw,
                           bench_index, oos_days, holdings)
         if any(n.startswith("txt_") for n in names):
-            rows3 = _run_arms([("主模型 only", main_all)], fwd_engine, mask,
+            rows3 = run_arms([("主模型 only", main_all)], fwd_engine, mask,
                               bench_eqw, bench_index, oos_days, ["TopFrac0.10"])
 
     for i, n in enumerate(names, 1):
@@ -316,7 +316,7 @@ def main(argv: list[str] | None = None) -> None:
         gc.collect()
 
         if not args.skip_portfolio:
-            rows2.extend(_run_arms([(f"{n}·raw", sig), (f"{n}·neu", neu)],
+            rows2.extend(run_arms([(f"{n}·raw", sig), (f"{n}·neu", neu)],
                                    fwd_engine, mask, bench_eqw, bench_index,
                                    oos_days, holdings))
             if n.startswith("txt_"):
@@ -324,7 +324,7 @@ def main(argv: list[str] | None = None) -> None:
                 main_sub = main_all[cn]
                 for w in [float(x) for x in args.fuse_weights.split(",") if x.strip()]:
                     fused = fuse_rank(main_sub, neu, w, neu.notna())
-                    rows3.extend(_run_arms([(f"主⊕{n} w={w:.1f}", fused)],
+                    rows3.extend(run_arms([(f"主⊕{n} w={w:.1f}", fused)],
                                            fwd_engine, mask, bench_eqw,
                                            bench_index, oos_days, ["TopFrac0.10"]))
                     del fused

@@ -171,7 +171,7 @@ def main(argv: list[str] | None = None) -> None:
 
     from backtest.costs import default_costs
     from backtest.engine import VectorBacktest
-    from scripts.pipelines.rolling_grid_alla import _ann, load_base, res_metrics
+    from scripts.pipelines.rolling_grid_alla import ann, load_base, res_metrics
     from stats.ic import calc_ic_series
     from strategy.examples import TopFracLongOnly, TopKLongOnly
 
@@ -248,7 +248,7 @@ def main(argv: list[str] | None = None) -> None:
                             bench_idx.reindex(res.daily_returns.index).fillna(0.0),
                             res.turnover_series)
             rows.append(dict(hold=hold_tag, arm=tag, annual=m["annual"],
-                             excess_eqw=m["annual"] - _ann(b_eqw),
+                             excess_eqw=m["annual"] - ann(b_eqw),
                              sharpe=m["sharpe"], max_dd=m["max_dd"],
                              turnover=m["turnover"]))
             log.info("[%s] %-24s 年化=%+6.2f%% Sharpe=%.3f 回撤=%5.1f%% 换手=%5.1f%%",

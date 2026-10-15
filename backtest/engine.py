@@ -26,10 +26,16 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
-from backtest.costs import ShortCostModel, TransactionCosts
+from backtest.costs import ShortCostModel, TransactionCosts, impact_from_config
 from backtest.metrics import calc_all_metrics, calc_short_metrics, format_metrics
 from config import Config
 from strategy.base import Strategy
+
+#: 真实空头腿的判定阈值（相对多头 gross 的比例）。低于它视为求解器数值尘埃。
+#: 取值依据（2026-10-13 实测 180 个调仓日 × min_var/mvo）：尘埃的
+#: ``short_gross/long_gross`` 上界 **2.1e-4**（p99 1.2e-4、中位 4.2e-8），而任何
+#: 有经济意义的空头腿 ≥1e-2 ⇒ 取 1e-3（约 5× 余量）。
+_SHORT_LEG_TOL = 1e-3
 
 
 def _apply_executable_mask(
@@ -40,18 +46,70 @@ def _apply_executable_mask(
 
     多头（weights > 0）和空头（weights < 0）各自独立归一化，
     保持原有资金在多空两端的分配比例。
+
+    🚨 **空头腿判定阈值（2026-10-13 回归修复）**：QP 求解器（OSQP）对
+    long-only 问题会吐出**数值尘埃负值**（实测 ``min`` 达 −4.6e-6、上百个负分量，
+    见 ``reports/cost_penalty_probe/``）。旧实现在「有任何负值」时就对空头腿做
+    ``/= abs(sum)`` 归一化 ⇒ **把 −1e-9 的尘埃放大成全仓空头**，组合 gross 被强制
+    撑成 2.0、换手突破 long-only 的 1.0 上界、回测净值失真。等权/多头策略权重
+    无负值故从不触发，该 bug 只在 QP 组合上暴露。
+
+    修法：仅当**空头 gross 相对多头 gross 有意义**（> ``_SHORT_LEG_TOL``）时才
+    认为是真空头腿；否则把尘埃清零、只归一多头。对**真实多空组合**
+    （空头 gross 与多头同量级）行为**逐位不变**（判据 ``max|Δ| = 0``）。
     """
     weights = weights.copy()
     weights[~executable] = 0.0
 
     long_mask = weights > 0
-    if long_mask.any():
-        weights[long_mask] /= weights[long_mask].sum()
-
     short_mask = weights < 0
-    if short_mask.any():
-        weights[short_mask] /= abs(weights[short_mask].sum())
+    long_gross = float(weights[long_mask].sum()) if long_mask.any() else 0.0
+    short_gross = float(-weights[short_mask].sum()) if short_mask.any() else 0.0
 
+    # 数值尘埃：空头腿规模相对多头可忽略 ⇒ 清零，不参与归一化
+    if short_mask.any() and short_gross <= _SHORT_LEG_TOL * max(long_gross, 1e-12):
+        weights[short_mask] = 0.0
+        short_mask = np.zeros_like(short_mask)
+        short_gross = 0.0
+
+    if long_mask.any() and long_gross > 0:
+        weights[long_mask] /= long_gross
+
+    if short_mask.any() and short_gross > 0:
+        weights[short_mask] /= short_gross
+
+    return weights
+
+
+def _apply_lot_rounding(
+    weights: np.ndarray,
+    prices: np.ndarray,
+    capital: float,
+    lot_size: int,
+) -> np.ndarray:
+    """整手约束（P1，2026-10-13）：把目标权重按「整手股数」取整后回写为可达权重。
+
+    ``shares_i = trunc(w_i·capital/price_i / lot)·lot``（向零取整，不超买/不超卖），
+    再 ``w'_i = shares_i·price_i/capital``。取整丢掉的零头留作现金（空仓），因此
+    组合可能**欠配**（Σ|w'| < Σ|w|）——这正是整手约束在集中组合上的真实摩擦。
+
+    Args:
+        weights: 目标权重（含正负）。
+        prices: 逐股未复权价格；缺失/非正 → 该股视作无法建仓，权重归零。
+        capital: 组合总资金（元）。
+        lot_size: 最小交易单位（100）。
+    """
+    weights = weights.copy()
+    prices = np.asarray(prices, dtype=float).reshape(-1)
+    valid = np.isfinite(prices) & (prices > 0)
+    # 价格缺失但有权重的个股 → 无法建仓，归零
+    weights[(~valid) & (weights != 0)] = 0.0
+    held = valid & (weights != 0)
+    if not held.any() or lot_size <= 0:
+        return weights
+    shares = weights[held] * float(capital) / prices[held]
+    lots = np.trunc(shares / lot_size) * lot_size
+    weights[held] = lots * prices[held] / float(capital)
     return weights
 
 
@@ -75,6 +133,10 @@ class BacktestResult:
     )
     short_exposure_series: pd.Series = field(
         default_factory=lambda: pd.Series(dtype=float, name="short_exposure")
+    )
+    # 逐股冲击成本（P0-1）：启用 impact_model 时按调仓日记录，便于与固定滑点对照。
+    impact_cost_series: pd.Series = field(
+        default_factory=lambda: pd.Series(dtype=float, name="impact_cost")
     )
 
     def metrics(self, benchmark_returns: pd.Series | None = None) -> dict:
@@ -129,12 +191,14 @@ class VectorBacktest:
         if costs is None:
             # 费率唯一真源：Config.costs()（config/settings.yaml 顶层 `costs` 段）。
             # 2026-09-10 由原先的 `backtest` 段收敛而来，勿再读回旧位置。
+            # 2026-10-13：附带挂上逐股冲击模型（impact_model=sqrt 时；默认 none 不启用）。
             cfg = Config.costs()
             costs = TransactionCosts(
                 commission_rate=cfg["commission_rate"],
                 commission_min=cfg["commission_min"],
                 stamp_duty=cfg["stamp_duty"],
                 slippage_bp=cfg["slippage_bp"],
+                impact=impact_from_config(cfg),
             )
         self.costs = costs
         # 空头腿成本：默认从配置读取并【启用】（修正空头腿乐观偏差）。
@@ -158,6 +222,10 @@ class VectorBacktest:
         rebalance_days: set | None = None,
         check_convention: bool = True,
         execution_split: tuple[pd.DataFrame, pd.DataFrame] | None = None,
+        adv_panel: pd.DataFrame | None = None,
+        vol_panel: pd.DataFrame | None = None,
+        price_panel: pd.DataFrame | None = None,
+        lot_size: int | None = None,
     ) -> BacktestResult:
         """执行回测。
 
@@ -196,6 +264,17 @@ class VectorBacktest:
                          收益；非执行日 = 0）
                      执行日的结算顺序变为：旧权重结算隔夜段 → 换仓（成本按
                      执行价计）→ 新权重结算日内段。None 时为默认 T 收盘口径。
+            adv_panel: 可选，date×code 逐股**日均成交额（元）**。与 ``vol_panel``
+                     一起、且 ``costs.impact`` 已挂（``impact_model=sqrt``）时，
+                     滑点项改为逐股冲击成本（P0-1）；否则忽略。缺失/非正的个股
+                     不计冲击（不制造假成本）。
+            vol_panel: 可选，date×code 逐股**日波动率（小数）**。为 None 且启用了
+                     冲击模型时，自动用 ``returns_panel`` 的 60 日滚动标准差估计
+                     （无前视：只用 ≤ 当日行）。
+            price_panel: 可选，date×code **未复权收盘价**，与 ``lot_size`` 一起启用
+                     **整手约束**（P1）：目标权重按整手股数取整后回写为可达权重，
+                     不足一手的持仓归零、剩余现金留空仓（组合可能欠配）。
+            lot_size: 可选，最小交易单位（A 股 100 股/手）。为 None 时不启用整手。
         Returns:
             BacktestResult
 
@@ -235,6 +314,21 @@ class VectorBacktest:
                 index=common_dates, columns=common_codes
             ).fillna(True)
 
+        # ---- 逐股冲击成本面板（P0-1）：adv 成交额 + vol 波动率，对齐同索引同列 ----
+        adv_values = None
+        vol_values = None
+        if self.costs.impact is not None and adv_panel is not None:
+            adv_values = adv_panel.reindex(index=dates, columns=codes).to_numpy(dtype=float)
+            if vol_panel is None:
+                # 无 vol 面板 → 用收益面板的 60 日滚动标准差（无前视：只用 ≤ 当日行）
+                vol_panel = rp.rolling(60, min_periods=20).std()
+            vol_values = vol_panel.reindex(index=dates, columns=codes).to_numpy(dtype=float)
+
+        # ---- 整手约束价格面板（P1）：与 lot_size 一起启用 ----
+        price_values = None
+        if lot_size is not None and price_panel is not None:
+            price_values = price_panel.reindex(index=dates, columns=codes).to_numpy(dtype=float)
+
         # 调仓日：可用自定义调仓日覆盖固定频率（自适应/事件驱动调仓）
         rebalance_days = rebalance_days if rebalance_days is not None \
             else self._get_rebalance_days(dates)
@@ -247,6 +341,7 @@ class VectorBacktest:
         # 不会被非调仓日的零稀释，也不会漏掉换手为 0 的调仓事件
         turnover_arr = np.full(n_days, np.nan, dtype=np.float64)
         cost_arr = np.zeros(n_days, dtype=np.float64)
+        impact_arr = np.zeros(n_days, dtype=np.float64)
         borrow_fee_arr = np.zeros(n_days, dtype=np.float64)
         margin_arr = np.zeros(n_days, dtype=np.float64)
         long_arr = np.zeros(n_days, dtype=np.float64)
@@ -330,13 +425,28 @@ class VectorBacktest:
                         mu = self.short_costs.margin_usage(long_exp, short_exp)
                         if mu > 1.0:
                             new_arr = new_arr / mu
+                    # 整手约束（P1）：在掩码/降杠杆之后、算换手之前取整，
+                    # 使换手与成本反映真正可下单的权重。
+                    if price_values is not None:
+                        new_arr = _apply_lot_rounding(
+                            new_arr, price_values[i], capital, int(lot_size)
+                        )
                 else:
                     new_arr = np.zeros(n_codes, dtype=np.float64)
 
                 turnover = np.abs(new_arr - current_weights).sum() / 2
                 turnover_arr[i] = turnover
 
-                cost = self.costs.calc(current_weights, new_arr, turnover, capital)
+                # 逐股冲击成本（P0-1）：滑点项改走 ImpactCostModel（须把 adv/vol
+                # 一并传进 calc，否则退回固定 slippage_bp——2026-10-13 修）。
+                if adv_values is not None:
+                    impact_arr[i] = self.costs.impact.calc(
+                        current_weights, new_arr, capital, adv_values[i], vol_values[i]
+                    )
+                    cost = self.costs.calc(current_weights, new_arr, turnover, capital,
+                                           adv=adv_values[i], vol=vol_values[i])
+                else:
+                    cost = self.costs.calc(current_weights, new_arr, turnover, capital)
                 cost_arr[i] = cost
                 capital -= cost
 
@@ -383,6 +493,7 @@ class VectorBacktest:
         equity_curve = pd.Series(equity_arr / self.initial_capital, index=dates, name="equity")
         turnover_s = pd.Series(turnover_arr, index=dates, name="turnover")
         cost_s = pd.Series(cost_arr, index=dates, name="cost")
+        impact_s = pd.Series(impact_arr, index=dates, name="impact_cost")
         borrow_fee_s = pd.Series(borrow_fee_arr, index=dates, name="borrow_fee")
         margin_s = pd.Series(margin_arr, index=dates, name="margin_usage")
         long_s = pd.Series(long_arr, index=dates, name="long_exposure")
@@ -395,6 +506,7 @@ class VectorBacktest:
             equity_curve=equity_curve,
             turnover_series=turnover_s,
             cost_series=cost_s,
+            impact_cost_series=impact_s,
             borrow_fee_series=borrow_fee_s,
             margin_usage_series=margin_s,
             long_exposure_series=long_s,
@@ -406,6 +518,10 @@ class VectorBacktest:
                 "short_borrow_rate": self.short_costs.borrow_rate,
                 "short_margin_ratio": self.short_costs.margin_ratio,
                 "deleverage": self.deleverage,
+                "impact_model": (
+                    "sqrt" if self.costs.impact is not None else "none"
+                ),
+                "lot_size": lot_size,
             },
         )
 

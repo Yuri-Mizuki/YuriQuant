@@ -145,7 +145,7 @@ def ann_to_datetime(s: pd.Series) -> pd.Series:
                           format="%Y%m%d", errors="coerce")
 
 
-def _apply_lag(events: pd.DataFrame, lag_days: int, cal_idx) -> pd.DataFrame:
+def apply_lag(events: pd.DataFrame, lag_days: int, cal_idx) -> pd.DataFrame:
     """把可得日 ``ann_date`` 推迟 ``lag_days`` 个**交易日**作为生效日 ``eff``。
 
     lag_days=0 时 eff = ann_date 当日起的第一个交易日（``side="left"``）。
@@ -165,7 +165,7 @@ def _apply_lag(events: pd.DataFrame, lag_days: int, cal_idx) -> pd.DataFrame:
     ok = (d >= cal_idx[0]).to_numpy() & (pos < len(cal_idx))
     n_drop = int((~ok).sum())
     if n_drop:
-        log.info("  _apply_lag: 丢弃 %d 条（早于日历起点 %s 或滞后越界）",
+        log.info("  apply_lag: 丢弃 %d 条（早于日历起点 %s 或滞后越界）",
                  n_drop, cal_idx[0].date())
     ev = ev[ok].copy()
     if ev.empty:
@@ -174,7 +174,7 @@ def _apply_lag(events: pd.DataFrame, lag_days: int, cal_idx) -> pd.DataFrame:
     return ev
 
 
-def _rolling_sum_panel(events: pd.DataFrame, value_col: str, window: int,
+def rolling_sum_panel(events: pd.DataFrame, value_col: str, window: int,
                        cal_idx, codes, mask: pd.DataFrame) -> pd.DataFrame:
     """事件长表 → 日频滚动窗口累计面板（date×code）。
 
@@ -193,7 +193,7 @@ def _rolling_sum_panel(events: pd.DataFrame, value_col: str, window: int,
     if ev.empty:
         return out
     g = ev.groupby(["eff", "code"], sort=False)[value_col].sum().unstack()
-    g = g.reindex(index=cal_idx)          # 事件日→交易日历（非交易日已由 _apply_lag 归位）
+    g = g.reindex(index=cal_idx)          # 事件日→交易日历（非交易日已由 apply_lag 归位）
     g = g.reindex(columns=codes)
     g = g.fillna(0.0).astype(np.float32)
     r = g.rolling(window=window, min_periods=1).sum()
@@ -236,7 +236,7 @@ def build_panels(cal_idx, codes, shares: pd.DataFrame,
     # --- ① 高管/董监高增减持（有公告日 ⇒ lag 0）---
     mh = tables.get("mgmt")
     if mh is not None and not mh.empty:
-        ev = _apply_lag(mh, LAG["mgmt_hold"], cal_idx)
+        ev = apply_lag(mh, LAG["mgmt_hold"], cal_idx)
         # 带符号股数（增持正/减持负）与事件方向
         ev = ev.assign(
             signed_qty=pd.to_numeric(mh.loc[ev.index, "signed_qty"], errors="coerce").values,
@@ -244,13 +244,13 @@ def build_panels(cal_idx, codes, shares: pd.DataFrame,
             direction=mh.loc[ev.index, "direction"].values)
         ev["evt_sign"] = np.where(ev["direction"].astype(str) == "增持", 1.0, -1.0)
         for w in (20, 60):
-            net = _rolling_sum_panel(ev, "signed_qty", w, cal_idx, codes, mask)
+            net = rolling_sum_panel(ev, "signed_qty", w, cal_idx, codes, mask)
             out[f"mgmt_netbuy_{w}d"] = (net / shares).astype(np.float32)
-        out["mgmt_netbuy_cnt_20d"] = _rolling_sum_panel(
+        out["mgmt_netbuy_cnt_20d"] = rolling_sum_panel(
             ev, "evt_sign", 20, cal_idx, codes, mask)
         # 减持强度单列（增持与减持的信息含义不对称，不合并成净额）
         sell = ev[ev["direction"].astype(str) == "减持"].copy()
-        sell_qty = _rolling_sum_panel(sell, "chg_qty", 60, cal_idx, codes, mask)
+        sell_qty = rolling_sum_panel(sell, "chg_qty", 60, cal_idx, codes, mask)
         out["mgmt_sell_ratio_60d"] = (sell_qty / shares).astype(np.float32)
         span = (f"{ann_to_datetime(ev['ann_date']).min().date()}"
                 f"~{ann_to_datetime(ev['ann_date']).max().date()}")
@@ -261,13 +261,13 @@ def build_panels(cal_idx, codes, shares: pd.DataFrame,
     # --- ② 内部人交易（无公告日 ⇒ lag 2 交易日）---
     it = tables.get("inner_trade")
     if it is not None and not it.empty:
-        ev = _apply_lag(it, LAG["inner_trade"], cal_idx)
+        ev = apply_lag(it, LAG["inner_trade"], cal_idx)
         ev = ev.assign(chg_qty=pd.to_numeric(it.loc[ev.index, "chg_qty"], errors="coerce").values)
         ev["evt_sign"] = np.sign(ev["chg_qty"].fillna(0.0))
         for w in (20, 60):
-            net = _rolling_sum_panel(ev, "chg_qty", w, cal_idx, codes, mask)
+            net = rolling_sum_panel(ev, "chg_qty", w, cal_idx, codes, mask)
             out[f"inner_netbuy_{w}d"] = (net / shares).astype(np.float32)
-        out["inner_netbuy_cnt_60d"] = _rolling_sum_panel(
+        out["inner_netbuy_cnt_60d"] = rolling_sum_panel(
             ev, "evt_sign", 60, cal_idx, codes, mask)
         log.info("  inner_trade: %d 事件 → 3 因子", len(ev))
     else:
@@ -276,12 +276,12 @@ def build_panels(cal_idx, codes, shares: pd.DataFrame,
     # --- ③ 实际控制人变动（无公告日 ⇒ lag 60 交易日）---
     hc = tables.get("control")
     if hc is not None and not hc.empty:
-        ev = _apply_lag(hc, LAG["holder_control"], cal_idx)
+        ev = apply_lag(hc, LAG["holder_control"], cal_idx)
         ev = ev.assign(
             hold_ratio=pd.to_numeric(hc.loc[ev.index, "hold_ratio"], errors="coerce").values,
             one=1.0)
         out["ctrl_hold_ratio"] = _level_panel(ev, "hold_ratio", cal_idx, codes, mask)
-        out["ctrl_change_cnt_60d"] = _rolling_sum_panel(
+        out["ctrl_change_cnt_60d"] = rolling_sum_panel(
             ev, "one", 60, cal_idx, codes, mask)
         log.info("  holder_control: %d 事件 → 2 因子", len(ev))
     else:

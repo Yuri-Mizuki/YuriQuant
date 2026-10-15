@@ -60,6 +60,25 @@ def test_apply_executable_mask_long_short_preserves_sign_groups():
     assert out[3] == pytest.approx(-0.5)
 
 
+def test_apply_executable_mask_ignores_solver_dust():
+    """QP 求解器的数值尘埃负值不得被放大成空头腿（回归 2026-10-13）。
+
+    旧实现：只要有负值就对空头腿做 ``/= abs(sum)`` 归一化 ⇒ 单个 −1e-9 的尘埃
+    被放大成全仓 −1.0，long-only 组合 gross 被撑成 2.0、换手突破 1.0 上界。
+    """
+    # 单个 −1e-9 尘埃（long-only 组合）
+    weights = np.array([0.5, 0.5, -1e-9])
+    out = _apply_executable_mask(weights, np.ones(3, dtype=bool))
+    assert out[2] == 0.0
+    assert np.abs(out).sum() == pytest.approx(1.0)
+
+    # 上百个 −4.6e-6 量级尘埃（实测上界；不得触发空头归一化）
+    w = np.concatenate([np.full(200, 0.005), np.full(100, -4.6e-6)])
+    out2 = _apply_executable_mask(w, np.ones(len(w), dtype=bool))
+    assert np.abs(out2).sum() == pytest.approx(1.0)
+    assert (out2 >= 0).all()
+
+
 def test_run_without_mask_matches_baseline(small_panels):
     dates, codes, factor_panel, returns_panel = small_panels
     bt = VectorBacktest(strategy=EqualWeightTop2(), rebalance_freq="D", initial_capital=1.0)

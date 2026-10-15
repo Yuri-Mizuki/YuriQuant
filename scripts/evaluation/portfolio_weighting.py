@@ -21,10 +21,26 @@ pred = 882 ortho（`reports/alla_rolling_ortho/pred`）。**920 定版 pred 本�
 （`reports/alla_rolling_ortho920fundind/` 只有 selection + _base）⇒ 本实验的
 **相对结论可迁移、绝对数字属 882 口径**，920 复验须在好机器跑。
 
+评测口径（2026-10-14 接入统一口径）
+-----------------------------------
+``--profile`` 三选一，**缺省 = production**（用户 2026-10-13 指令：判定「改进 vs 基线」
+只用生产口径）：
+
+- ``production``：``caliber`` 生产口径（固定 10bp + **T+1 开盘成交** + 100 万）；
+- ``fair``     ：``caliber`` 研究压力口径（逐股冲击 + T 收盘 + 1e8）；
+- ``legacy``    ：2026-10-10 的**旧路径**（直接 ``bt.run``，T 收盘成交、掩码口径不同），
+  仅用于复现历史 ``results.csv``，**不可与新路径并列**。
+
+🚨 **PIT 修正**：``inv_vol``/``erc`` 在 T+1 开盘执行下，策略是在**次一交易日**被调用
+（``rebalance_days`` = 每月首个交易日 + 1），此刻只能用到 **T 日收盘为止**的波动率 ⇒
+非 close 成交价下 ``vol`` 必须 ``shift(1)``。旧路径（T 收盘成交）用当期值，两者不可混用。
+
 用法
 ----
-    python -m scripts.evaluation.portfolio_weighting
-    python -m scripts.evaluation.portfolio_weighting --ks 45,100 --modes equal,inv_vol
+    python -m scripts.evaluation.portfolio_weighting                       # 生产口径
+    python -m scripts.evaluation.portfolio_weighting --ks 35,45,55,70,100 \
+        --modes equal,inv_vol --buffer-mults 1.5,2.0
+    python -m scripts.evaluation.portfolio_weighting --profile legacy      # 复现旧产物
 """
 from __future__ import annotations
 
@@ -42,6 +58,10 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 from strategy.base import Strategy  # noqa: E402
+from strategy.examples import (  # noqa: E402
+    BufferedTopFracLongOnly,
+    TopFracLongOnly,
+)
 
 log = logging.getLogger("portfolio_weighting")
 VOL_WINDOW = 60
@@ -171,15 +191,23 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--modes", default="equal,inv_vol,erc")
     ap.add_argument("--buffer-mults", default="2.0",
                     help="固定 K 缓冲带臂的 exit 倍数（逗号分隔；空串=不加）")
-    ap.add_argument("--freq", default="M", choices=["M", "W"])
+    ap.add_argument("--profile", default="production",
+                    choices=["production", "fair", "legacy"],
+                    help="评测口径：production(默认，统一口径真源) / fair / "
+                         "legacy(旧路径，仅复现历史产物)")
+    ap.add_argument("--window", default="prod", choices=["prod", "iso2019"],
+                    help="回测窗口（caliber WINDOWS；legacy 路径忽略）")
+    ap.add_argument("--freq", default="M", choices=["M", "W"],
+                    help="调仓频率（caliber 路径固定 M，仅 legacy 生效）")
     args = ap.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s",
                         datefmt="%H:%M:%S")
     from backtest.costs import default_costs
     from backtest.engine import VectorBacktest
+    from backtest.metrics import annual_return
     from scripts.evaluation.deliverable_portfolio import load_signal
-    from scripts.pipelines.rolling_grid_alla import _ann, load_base, res_metrics
+    from scripts.pipelines.rolling_grid_alla import load_base, res_metrics
 
     dest = ROOT / args.out
     dest.mkdir(parents=True, exist_ok=True)
@@ -195,59 +223,107 @@ def main(argv: list[str] | None = None) -> None:
     vol = close.pct_change(fill_method=None).rolling(
         VOL_WINDOW, min_periods=VOL_MIN_PERIODS).std()
 
+    # 🚨 PIT：非 close 成交价（T+1 开盘/次日执行）下，策略在**次一交易日**被调用，
+    # 只能用到 T 日收盘为止的波动率 ⇒ vol 必须 shift(1)（见模块 docstring）。
+    vol_strat = vol
+    prof = None
+    if args.profile != "legacy":
+        from scripts.evaluation import caliber
+        prof = caliber.get_profile(args.profile)
+        if prof.execution != "close":
+            vol_strat = vol.shift(1)
+
     ks = [int(x) for x in args.ks.split(",") if x.strip()]
     modes = [m.strip() for m in args.modes.split(",") if m.strip()]
     bms = [float(x) for x in args.buffer_mults.split(",") if x.strip()]
     arms: list[tuple[str, object]] = []
+    if args.profile != "legacy":
+        # 锚点臂：对拍 caliber 登记基线（v1w-ortho882 production profile）
+        # Top10% 等权 = 14.66%/0.593；buffer(0.15/0.40) = 16.46%/0.685。
+        # Δ≠0 ⇒ 本脚本与口径真源不同源，先修脚本再谈结论。
+        arms.append(("ANCHOR_TopFrac10_equal", TopFracLongOnly(frac=0.10)))
+        arms.append(("ANCHOR_buf15_40",
+                     BufferedTopFracLongOnly(frac_entry=0.15, frac_exit=0.40)))
     for k in ks:
         for mode in modes:
             arms.append((f"TopK{k}_{mode}",
-                         VolWeightedTopKLongOnly(vol, k=k, mode=mode)))
+                         VolWeightedTopKLongOnly(vol_strat, k=k, mode=mode)))
         for bm in bms:
             arms.append((f"TopK{k}_buf{bm:g}",
                          BufferedTopKLongOnly(k=k, exit_mult=bm)))
         if bms:
             bm = bms[0]
             arms.append((f"TopK{k}_inv_vol_buf{bm:g}",
-                         VolWeightedTopKLongOnly(vol, k=k, mode="inv_vol",
+                         VolWeightedTopKLongOnly(vol_strat, k=k, mode="inv_vol",
                                                  exit_mult=bm)))
 
-    oos = pred.index
-    fwd = close.pct_change(fill_method=None).loc[oos]
-    mask_oos = mask.reindex(index=oos, columns=close.columns).fillna(True)
-    b_eqw = bench_eqw.reindex(oos).fillna(0.0)
-    costs = default_costs()
-    log.info("信号 %s %s | 波动率窗 %d 日 | 对照组 %d 臂",
-             args.signal, pred.shape, VOL_WINDOW, len(ks) * len(modes))
+    log.info("信号 %s %s | 波动率窗 %d 日 | 口径 %s | %d 臂",
+             args.signal, pred.shape, VOL_WINDOW, args.profile, len(arms))
 
-    rows = []
-    for tag, strat in arms:
-        bt = VectorBacktest(strategy=strat, rebalance_freq=args.freq,
-                            initial_capital=1_000_000.0, costs=costs)
-        res = bt.run(pred, fwd, executable_mask=mask_oos, horizon=1,
-                     rebalance_days=None)
-        dr = res.daily_returns
-        m = res_metrics(dr, bench_idx.reindex(dr.index).fillna(0.0),
-                        res.turnover_series)
-        wh = res.weights_history
-        nh = (wh > 0).sum(axis=1)
-        nh = nh[nh > 0]
-        hhi = float(((wh ** 2).sum(axis=1).replace(0, np.nan)).mean())
-        rows.append(dict(
-            arm=tag, k=getattr(strat, "k", None),
-            mode=tag.split("_", 1)[-1],
-            annual=m["annual"], excess_eqw=m["annual"] - _ann(b_eqw),
-            sharpe=m["sharpe"], max_dd=m["max_dd"], turnover=m["turnover"],
-            n_hold_mean=float(nh.mean()) if len(nh) else 0.0,
-            hhi=hhi))
-        log.info("%-16s 年化=%+6.2f%% 超额=%+6.2f%% Sharpe=%.3f 回撤=%5.1f%% "
-                 "换手=%5.1f%% 持仓=%4.0f HHI=%.5f",
-                 rows[-1]["arm"], m["annual"] * 100, rows[-1]["excess_eqw"] * 100,
-                 m["sharpe"], m["max_dd"] * 100, m["turnover"] * 100,
-                 rows[-1]["n_hold_mean"], hhi)
+    if args.profile == "legacy":
+        # ---- 旧路径（2026-10-10）：直接 bt.run，T 收盘成交 —— 仅复现历史产物 ----
+        oos = pred.index
+        fwd = close.pct_change(fill_method=None).loc[oos]
+        mask_oos = mask.reindex(index=oos, columns=close.columns).fillna(True)
+        b_eqw = bench_eqw.reindex(oos).fillna(0.0)
+        b_ann = annual_return(b_eqw)
+        costs = default_costs()
+        rows = []
+        for tag, strat in arms:
+            bt = VectorBacktest(strategy=strat, rebalance_freq=args.freq,
+                                initial_capital=1_000_000.0, costs=costs)
+            res = bt.run(pred, fwd, executable_mask=mask_oos, horizon=1,
+                         rebalance_days=None)
+            dr = res.daily_returns
+            m = res_metrics(dr, bench_idx.reindex(dr.index).fillna(0.0),
+                            res.turnover_series)
+            wh = res.weights_history
+            nh = (wh > 0).sum(axis=1)
+            nh = nh[nh > 0]
+            hhi = float(((wh ** 2).sum(axis=1).replace(0, np.nan)).mean())
+            rows.append(dict(
+                arm=tag, k=getattr(strat, "k", None),
+                mode=tag.split("_", 1)[-1],
+                annual=m["annual"], excess_eqw=m["annual"] - b_ann,
+                sharpe=m["sharpe"], max_dd=m["max_dd"], turnover=m["turnover"],
+                n_hold_mean=float(nh.mean()) if len(nh) else 0.0,
+                hhi=hhi))
+            log.info("%-20s 年化=%+6.2f%% 超额=%+6.2f%% Sharpe=%.3f 回撤=%5.1f%% "
+                     "换手=%5.1f%% 持仓=%4.0f HHI=%.5f",
+                     rows[-1]["arm"], m["annual"] * 100, rows[-1]["excess_eqw"] * 100,
+                     m["sharpe"], m["max_dd"] * 100, m["turnover"] * 100,
+                     rows[-1]["n_hold_mean"], hhi)
+        csv = dest / "results.csv"
+    else:
+        # ---- 统一口径路径（caliber）：production / fair ----
+        from scripts.evaluation import caliber
+        pred_path = ROOT / args.pred_dir / f"{args.signal}__h1.parquet"
+        ctx = caliber.load_context(signal=args.signal, window=args.window,
+                                   pred_path=pred_path, execution=prof.execution)
+        cost = caliber.cost_profile(prof.cost)
+        log.info("%s", caliber.describe(ctx, prof.cost, prof.capital, prof.name))
+        b_eqw = bench_eqw.reindex(ctx.pred.index).fillna(0.0)
+        b_ann = annual_return(b_eqw)
+        rows = []
+        for tag, strat in arms:
+            m = caliber.evaluate_strategy(strat, ctx, cost, prof.capital,
+                                          execution=prof.execution)
+            rows.append(dict(
+                arm=tag, k=getattr(strat, "k", None),
+                mode=tag.split("_", 1)[-1],
+                annual=m["ann"], excess_eqw=m["ann"] - b_ann,
+                sharpe=m["sharpe"], sharpe_arith=m["sharpe_arith"],
+                max_dd=m["max_dd"], turnover=m["turnover"],
+                cost_bp=m["cost_bp"], n_hold_mean=m["n_active"],
+                hhi=float("nan")))
+            log.info("%-20s 年化=%+6.2f%% 超额=%+6.2f%% Sharpe=%.3f 回撤=%5.1f%% "
+                     "换手=%5.1f%% 持仓=%4.0f 成本=%4.0fbp",
+                     rows[-1]["arm"], m["ann"] * 100, rows[-1]["excess_eqw"] * 100,
+                     m["sharpe"], m["max_dd"] * 100, m["turnover"] * 100,
+                     rows[-1]["n_hold_mean"], m["cost_bp"])
+        csv = dest / f"results_{args.profile}.csv"
 
     df = pd.DataFrame(rows)
-    csv = dest / "results.csv"
     df.to_csv(csv, index=False, encoding="utf-8-sig")
     log.info("完成 %.0fs -> %s", time.time() - t0, csv)
 

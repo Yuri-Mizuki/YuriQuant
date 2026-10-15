@@ -243,7 +243,7 @@ def test_every_pit_table_declares_lag():
 # ⑥ 因子构建的 PIT 滞后（builder 侧）
 # ---------------------------------------------------------------------------
 def test_apply_lag_shifts_by_trading_days():
-    from scripts.builders.build_alla_holder_dyn_factors import _apply_lag
+    from scripts.builders.build_alla_holder_dyn_factors import apply_lag
 
     cal = pd.date_range("2025-01-01", periods=30, freq="B")
     ev = pd.DataFrame({"code": ["600000.SH"], "ann_date": pd.to_datetime(["2025-01-06"]),
@@ -251,7 +251,7 @@ def test_apply_lag_shifts_by_trading_days():
     pos0 = int(cal.searchsorted(pd.Timestamp("2025-01-06"), side="left"))
 
     for lag in (0, 2, 60):
-        out = _apply_lag(ev, lag, cal)
+        out = apply_lag(ev, lag, cal)
         if lag >= 28:                       # 60 交易日超出 30 日日历 ⇒ 应被丢弃
             assert out.empty, "滞后后超出日历的事件应被丢弃，而不是留在最后一天"
         else:
@@ -281,12 +281,12 @@ def test_ann_to_datetime_handles_all_three_dtypes():
 
 def test_apply_lag_accepts_int_ann_date():
     """int ``ann_date`` 必须与 datetime64 等价 —— 这是 dtype 事故的回归锁。"""
-    from scripts.builders.build_alla_holder_dyn_factors import _apply_lag
+    from scripts.builders.build_alla_holder_dyn_factors import apply_lag
 
     cal = pd.date_range("2024-01-01", periods=60, freq="B")
     base = {"code": ["600000.SH"], "signed_qty": [1000.0]}
-    as_dt = _apply_lag(pd.DataFrame({**base, "ann_date": pd.to_datetime(["2024-03-15"])}), 0, cal)
-    as_int = _apply_lag(pd.DataFrame({**base, "ann_date": [20240315]}), 0, cal)
+    as_dt = apply_lag(pd.DataFrame({**base, "ann_date": pd.to_datetime(["2024-03-15"])}), 0, cal)
+    as_int = apply_lag(pd.DataFrame({**base, "ann_date": [20240315]}), 0, cal)
     assert len(as_int) == 1 and len(as_dt) == 1
     assert as_int["eff"].iloc[0] == as_dt["eff"].iloc[0] == pd.Timestamp("2024-03-15")
     assert as_int["eff"].iloc[0] != cal[0], "int 被当成纳秒解析 ⇒ 落到日历第一天"
@@ -299,12 +299,12 @@ def test_apply_lag_drops_events_before_calendar_start():
     老写法只判 ``pos < len`` 就会把样本外事件全部堆到首日，
     制造跨截面假信号（实测 5 万条堆在 2016-07-01，面板 max 47.8）。
     """
-    from scripts.builders.build_alla_holder_dyn_factors import _apply_lag
+    from scripts.builders.build_alla_holder_dyn_factors import apply_lag
 
     cal = pd.date_range("2024-01-01", periods=60, freq="B")
     ev = pd.DataFrame({"code": ["600000.SH"] * 3, "signed_qty": [1.0] * 3,
                        "ann_date": [20150101, 20240315, 20180601]})   # 两条样本外
-    out = _apply_lag(ev, 0, cal)
+    out = apply_lag(ev, 0, cal)
     assert len(out) == 1, f"样本外事件未被丢弃：{len(out)} 条"
     assert out["eff"].iloc[0] == pd.Timestamp("2024-03-15")
     assert (out["eff"] == cal[0]).sum() == 0, "有事件被钳到日历第一天"
@@ -313,8 +313,8 @@ def test_apply_lag_drops_events_before_calendar_start():
 def test_rolling_panel_is_not_a_single_day_spike():
     """面板必须**跨日有效**，而不是只有第一天有值（钳位事故的外观特征）。"""
     from scripts.builders.build_alla_holder_dyn_factors import (
-        _apply_lag,
-        _rolling_sum_panel,
+        apply_lag,
+        rolling_sum_panel,
     )
 
     cal = pd.date_range("2024-01-01", periods=40, freq="B")
@@ -322,8 +322,8 @@ def test_rolling_panel_is_not_a_single_day_spike():
     mask = pd.DataFrame(1.0, index=cal, columns=codes)
     ev = pd.DataFrame({"code": ["600000.SH"] * 4, "signed_qty": [100.0] * 4,
                        "ann_date": [20240105, 20240118, 20240201, 20240215]})
-    ev = _apply_lag(ev, 0, cal)
-    panel = _rolling_sum_panel(ev, "signed_qty", 20, cal, codes, mask)
+    ev = apply_lag(ev, 0, cal)
+    panel = rolling_sum_panel(ev, "signed_qty", 20, cal, codes, mask)
 
     nz_rows = (panel.notna() & (panel != 0)).any(axis=1)
     assert nz_rows.sum() > 20, f"只有 {nz_rows.sum()} 个交易日有效，疑似被钳到首日"

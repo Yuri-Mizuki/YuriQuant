@@ -66,7 +66,7 @@ FIELDS_LOWER = ["open", "high", "low", "close", "volume", "amount"]
 # ---------------------------------------------------------------------------
 # 1. 数据：直连 parquet 自建后复权 PIT 面板
 # ---------------------------------------------------------------------------
-def _build_px_panels(index_code: str, warmup: int, end: int):
+def build_px_panels(index_code: str, warmup: int, end: int):
     """从本地 parquet 直建后复权 OHLCV/PIT 面板（对齐 load_alpha_panels 口径）。"""
     cons = pd.read_parquet(DATA / f"index_constituent_{index_code.replace('.', '_')}.parquet")
     codes = sorted(cons["con_code"].unique().tolist())
@@ -107,7 +107,7 @@ def _build_px_panels(index_code: str, warmup: int, end: int):
     return panels, panels["close"]
 
 
-def _cs_z(p: pd.DataFrame) -> pd.DataFrame:
+def cs_z(p: pd.DataFrame) -> pd.DataFrame:
     """逐日截面 z-score（显式实现，口径 = 项目 standardize_zscore）。"""
     m = p.mean(axis=1)
     s = p.std(axis=1)
@@ -120,7 +120,7 @@ def build_arrays(index_code: str, warmup: int, end: int, n_lags: int):
     from factor.alpha158 import compute_alpha158, compute_alpha360
     from factor.alpha_base import AlphaData
 
-    panels, close_adj = _build_px_panels(index_code, warmup, end)
+    panels, close_adj = build_px_panels(index_code, warmup, end)
     d = AlphaData(panels)          # d 持有 panels 引用，末尾一并释放
     t0 = time.time()
     p360 = compute_alpha360(d)
@@ -138,14 +138,14 @@ def build_arrays(index_code: str, warmup: int, end: int, n_lags: int):
             name = f"alpha360_{f}{t}"
             if name not in p360:
                 raise KeyError(f"缺少面板 {name}")
-            v = _cs_z(p360.pop(name)).reindex(index=dates, columns=codes).values
+            v = cs_z(p360.pop(name)).reindex(index=dates, columns=codes).values
             arr[:, :, n_lags - 1 - t, fi] = v.astype(np.float32)   # 0=最早，T-1=最新
     del p360
 
     names158 = sorted(p158)
     flat158 = np.full((n_d, n_c, len(names158)), np.nan, dtype=np.float32)
     for j, name in enumerate(names158):
-        v = _cs_z(p158.pop(name)).reindex(index=dates, columns=codes).values
+        v = cs_z(p158.pop(name)).reindex(index=dates, columns=codes).values
         flat158[:, :, j] = v.astype(np.float32)
     del p158, d, panels
     log.info("[tensor] arr=%s (%.1f GB) flat158=%s", arr.shape,
@@ -293,12 +293,12 @@ class GbdtArm:
 # ---------------------------------------------------------------------------
 # 3. 滚动评估
 # ---------------------------------------------------------------------------
-def _row_idx(day_positions: np.ndarray, n_codes: int) -> np.ndarray:
+def row_idx(day_positions: np.ndarray, n_codes: int) -> np.ndarray:
     """(date, code) 在 reshape(-1, ...) 后的行号 = date_pos * n_codes + code_pos。"""
     return (day_positions[:, None] * n_codes + np.arange(n_codes)[None, :]).ravel()
 
 
-def _panel_from_vec(vec: np.ndarray, days: pd.DatetimeIndex, codes: pd.Index) -> pd.DataFrame:
+def panel_from_vec(vec: np.ndarray, days: pd.DatetimeIndex, codes: pd.Index) -> pd.DataFrame:
     return pd.DataFrame(vec.reshape(len(days), len(codes)), index=days, columns=codes)
 
 
@@ -345,8 +345,8 @@ def run(args):
         tei = np.array([pos[d] for d in te_days])
         y_tr = labels.loc[tr_days].values.ravel().astype(np.float32)
         ok = valid_2d[tri].ravel() & ~np.isnan(y_tr)
-        rows_tr = _row_idx(tri, n_codes)[ok]
-        rows_te = _row_idx(tei, n_codes)
+        rows_tr = row_idx(tri, n_codes)[ok]
+        rows_te = row_idx(tei, n_codes)
         log.info("[fold %d/%d] train %s~%s (%d 日, 有效样本 %d/%d) -> test %s~%s",
                  fi, len(folds), tr_days[0].date(), tr_days[-1].date(), len(tr_days),
                  len(rows_tr), len(valid_2d[tri].ravel()), te_days[0].date(), te_days[-1].date())
@@ -371,12 +371,12 @@ def run(args):
                 p = np.where(np.isfinite(p), p, np.nan)
             else:
                 raise ValueError(kind)
-            preds[name].loc[te_days] = _panel_from_vec(p, te_days, codes)
+            preds[name].loc[te_days] = panel_from_vec(p, te_days, codes)
         del Xseq_tr, Xseq_te, X158_tr, X158_te
 
     rows = []
     for name, pred in preds.items():
-        pz = _cs_z(pred)
+        pz = cs_z(pred)
         ev = evaluate_model(pz, fwd.loc[pred.index])
         rows.append({"arm": name, "ic_mean": ev["ic_mean"], "ic_ir": ev["ic_ir"],
                      "ic_t_nw": ev["ic_t_nw"], "n_days": int(ev["ic_series"].notna().sum())})
@@ -449,7 +449,7 @@ def main():
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     table.to_csv(OUT_DIR / f"arms_{args.out_tag}.csv", index=False)
     for name, pred in preds.items():
-        _cs_z(pred).to_parquet(OUT_DIR / f"pred_{name}_{args.out_tag}.parquet")
+        cs_z(pred).to_parquet(OUT_DIR / f"pred_{name}_{args.out_tag}.parquet")
     meta = {k: v for k, v in vars(args).items()}
     meta["elapsed_s"] = round(time.time() - t0, 1)
     (OUT_DIR / f"meta_{args.out_tag}.json").write_text(
