@@ -84,7 +84,7 @@ tasks:
     name: 'YuriQuant AllaDailyRank'
     system: schtasks
     status: active
-    time: '17:30'
+    time: '18:30'
     schedule: daily
     command: '${YQ_PYTHON:D:\python\Python312\python.exe}'
     arguments: '"${YQ_REPO:E:\YuriQuant}\scripts\pipelines\alla_daily_rank.py" --preset dingban --log-file logs\alla_daily_rank_task_{date}.log'
@@ -98,7 +98,11 @@ tasks:
       `reports/alla_daily_defv/`（旧 legacy 口径产物在 `reports/alla_daily/`，停于 09-22）。
       `--log-file` = 失败留痕（此前任务无 stdout 重定向、失败零痕迹）；脚本内
       keep_system_awake 防傍晚 S0 现代待机中断（2026-10-10 事故根因）。
-      下游 = daily_report（19:00 读 reports/alla_daily_defv/），缓冲 30 分钟。
+      **2026-10-15 时点 17:30→18:30（由莉酱拍板）**：10-12~15 连续四晚任务死于
+      安全软件 ~17:30-45 维护窗口（SCM 7045 服务安装 + sgepfsfilter 过滤驱动加载，
+      python 进程 0xC0000142 DLL_INIT_FAILED；10-14 同窗口整机重启）——避开该窗口；
+      另配 RestartOnFailure 3×30min + WakeToRun 兜底。下游 = daily_report
+      （20:00 读 reports/alla_daily_defv/），缓冲 30 分钟。
 
   - key: altdata_daily
     name: 'YuriQuant AltDataDaily'
@@ -127,7 +131,7 @@ tasks:
     name: 'WorkBuddy 自动化：全A出榜日报邮件推送'
     system: workbuddy
     status: active
-    time: '19:00'
+    time: '20:00'
     schedule: '工作日（周一至周五）'
     automation_id: 3b31c720-1e3b-4eab-bd0b-db35c7213311
     product_glob: 'reports/alla_daily_defv/email_body_*.html'
@@ -137,6 +141,8 @@ tasks:
       口径，读盘目录同步改 `reports/alla_daily_defv/`（build_daily_email_body.py /
       monitor_production_ic.py 默认值已改）；旧 legacy 产物停在 `reports/alla_daily/`。
       ⚠️ 该自动化当前 status=PAUSED（待用户决定是否开启——开则需先补 09-22 以来的缺口数据）。
+      **2026-10-15 随出榜链 17:30→18:30 同步把目标时点记为 20:00（保持 30 分钟缓冲）——
+      本表只是登记，WorkBuddy 端的实际触发时间需用户解封时自行同步修改。**
 
   - key: monitor
     name: 'YuriQuant Monitor'
