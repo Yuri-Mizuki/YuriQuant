@@ -29,6 +29,8 @@ shape_crossing_cnt；longest_strike_above_mean → shape_longest_pos_run（变�
 以 0 为界）；absolute_sum_of_changes → ret_abs_sum；root_mean_square →
 ret_rms。量价类（ret_vol_corr 等）为 Alpha掘金 22 的量价维度，tsfresh 无
 直接对应。
+2026-10-14 增：时段切片矩阵族（20 分钟窗 × 动量/波动/量，`*_segNN_*` 36 个，
+见 ``_segment_slices``）——「分钟频挖掘第三层扩原料」第一项（TODO §二）。
 """
 from __future__ import annotations
 
@@ -136,6 +138,37 @@ def _longest_run(mask: np.ndarray) -> np.ndarray:
         np.where(~mask, idx, -1), axis=1)
     run = np.where(mask, idx - last_false, 0)
     return run.max(axis=1).astype(np.float64)
+
+
+def _segment_slices(bar_times: Sequence[str], period: int) -> list[np.ndarray] | None:
+    """把日内 bar 分成 12 个 20 分钟窗（上午/下午各 6 窗），返回每窗的 bar 掩码。
+
+    按**位置**分组：bar_times 是全日共用的时刻表（meta.json 48 档），bar 的
+    位置即时段归属——bar 开始时刻源（0930..1125）与结束时刻源（0935..1130）
+    都成立，与源语义无关。缺失 bar 在面板里是 NaN 占位，位置不塌缩。
+
+    - 20 分钟不可被 period 整除（如 30/15 分钟 bar）→ 返回 None，调用方
+      跳过时段特征（无意义的半窗切片）。
+    - 假定标准 A 股两 session 各恰好 6 窗（4 小时 / 20 分钟）；bar 数不足
+      一个 session（异常源）时同样返回 None，保证产出键与 FEATURE_DOCS 的
+      12 窗命名一致。
+    """
+    if period <= 0 or 20 % period != 0:
+        return None
+    bars_per_seg = 20 // period
+    am = np.array([bt <= "1130" for bt in bar_times])
+    slices: list[np.ndarray] = []
+    for session_mask in (am, ~am):
+        idx = np.where(session_mask)[0]
+        if len(idx) < bars_per_seg or len(idx) % bars_per_seg != 0:
+            return None
+        for k in range(len(idx) // bars_per_seg):
+            m = np.zeros(len(bar_times), dtype=bool)
+            m[idx[k * bars_per_seg:(k + 1) * bars_per_seg]] = True
+            slices.append(m)
+    if len(slices) != 12:
+        return None
+    return slices
 
 
 def _bar_returns(close: np.ndarray, open_: np.ndarray) -> np.ndarray:
@@ -296,6 +329,33 @@ def _extract_inner(close, open_, high, low, volume, amount,
         out["candle_lower_shadow"] = panel(guard(_mean((body_lo - low) / rng_safe)))
         out["candle_close_pos"] = panel(guard(_mean((close - low) / rng_safe)))
 
+    # ---- 时段切片矩阵类（20 分钟窗 × 动量/波动/量，TODO「第三层扩原料」）----
+    # 12 窗命名 mom_seg01..12 / vol_seg01..12 / pv_seg01..12：
+    # seg01=09:30-09:50 … seg06=11:10-11:30，seg07=13:00-13:20 … seg12=14:40-15:00。
+    # 窗内无有效 bar → NaN（nansum 会把停牌段静默记 0，须按有效 bar 数门控）；
+    # 窗内部分 bar 缺失时为部分和（半拉天语义，整体仍受 guard 门控）。
+    seg_masks = _segment_slices(bar_times, period)
+    if seg_masks is not None:
+        r2 = np.where(np.isfinite(r), r * r, 0.0)
+        rv_day = np.nansum(r2, axis=1)
+        for k, m in enumerate(seg_masks, start=1):
+            rk = r[:, m, :]
+            nv = np.isfinite(rk).sum(axis=1)
+            tag = f"{k:02d}"
+            with np.errstate(invalid="ignore", divide="ignore"):
+                out[f"mom_seg{tag}_ret"] = panel(guard(
+                    np.where(nv > 0, np.nansum(rk, axis=1), np.nan)))
+                rv_k = np.nansum(r2[:, m, :], axis=1)
+                out[f"vol_seg{tag}_rvshare"] = panel(guard(np.where(
+                    (nv > 0) & (rv_day > 0), rv_k / np.where(rv_day > 0, rv_day, np.nan),
+                    np.nan)))
+                if volume is not None:
+                    v_k = np.nansum(volume[:, m, :], axis=1)
+                    v_day = np.nansum(volume, axis=1)
+                    out[f"pv_seg{tag}_volshare"] = panel(guard(np.where(
+                        (nv > 0) & (v_day > 0),
+                        v_k / np.where(v_day > 0, v_day, np.nan), np.nan)))
+
     return out
 
 
@@ -367,3 +427,10 @@ FEATURE_DOCS: dict[str, str] = {
     "candle_lower_shadow": "bar级下影线占比均值",
     "candle_close_pos": "收盘在bar区间内的位置均值",
 }
+
+# 时段切片矩阵（20 分钟窗 × 动量/波动/量）：12 窗命名固定，由
+# _segment_slices 保证「两 session 各恰好 6 窗」时才产出，键集与 docs 一致。
+for _k in range(1, 13):
+    FEATURE_DOCS[f"mom_seg{_k:02d}_ret"] = f"第{_k}/12个20分钟窗累计bar收益"
+    FEATURE_DOCS[f"vol_seg{_k:02d}_rvshare"] = f"第{_k}/12个20分钟窗RV占全天RV份额"
+    FEATURE_DOCS[f"pv_seg{_k:02d}_volshare"] = f"第{_k}/12个20分钟窗成交量占全天份额"

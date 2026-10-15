@@ -307,10 +307,17 @@
   −52~−191×10⁻⁴、回撤中位 +1.27pp 恶化（AI29 自述代价 + Label Alchemy vol_scaled
   预警双应验）；calmar 同族分母更病态不再跑。三臂总结论（gauss_rank 零增量 /
   co 隔夜判负 / ir 判负）见 RESEARCH_TODO §一 标签臂记录。
-- [ ] **分钟频挖掘第三层扩原料**：时段切片矩阵化（20 分钟窗 × 动量/波动/量）、
-  量价 lead-lag、tsfresh 计算器移植、事件日条件化（与文本 PEAD 线交叉）；
-  扩完重跑 mine_im_combos 看组合上限是否抬升（二层结论：增益≈0，信号在
-  时段动量，原料不够）。
+- [ ] **分钟频挖掘第三层扩原料**：时段切片矩阵化 ✅ **已完成（10-14）**：36 个
+  `*_segNN_*`（20 分钟窗 × 动量/RV份额/量份额）入 `factor/intraday_features.py` +
+  hs300_2022_2025 库（测试 15 passed；checkup `reports/intraday_stat_checkup.csv` 78 行
+  合并版）。首轮：20/36 显著、**时段量/波动份额是真新维度**（与库内最高相关 ≤0.66、
+  `pv_seg10/11_volshare` 残差 t 3.5/4.0 存活；动量维只是把已有信号切细，`mom_seg01` 与
+  `open30` 相关 0.896）。**但 GP 组合层未抬升**：`mine_im_combos` pop300gen15×31 终端
+  （同 seed 同预算复跑），HOF 6→2 条且两条仍是 `im_mom_last_bar` 同构、最好 OOS IC
+  0.0523 < 基线 0.060 ⇒ **份额族独立 IC（t 4~5）进不了组合层头部**——「公式重组合
+  无法把弱原料变强」的又一次确认。剩余子项（量价 lead-lag / tsfresh 移植 / 事件日
+  条件化）与「时段份额族进模型层（gbdt 前融合）」待裁决；全 A 扩容仍押后（吞吐探针
+  未跑）。证据 `reports/mine_im_combos.csv` + `logs/mine_im_seg_full.log`。
 - [ ] **分钟频扩容（资源墙）**：all_a 池物化（~5500 码 × 48 bar，MemMap 分块性能待验）、
   1 分钟档位（存储 ×5）；先跑吞吐探针（`scripts/oneoff/_probe_minute_throughput.py`）估成本。
 - [x] **另类数据因子轮次（altf 首轮，10-07 完成）**：`scripts/builders/build_alla_altfactors.py`

@@ -18,13 +18,25 @@ from factor.intraday_features import extract_from_block
 
 BARS_30MIN = ["10:00", "10:30", "11:00", "11:30", "13:30", "14:00", "14:30", "15:00"]
 
+# 标准 A 股 5 分钟 bar 时刻表（bar 开始时刻语义，与真实 min5 面板一致）
+_b5 = ([pd.Timestamp(f"2025-01-01 09:{m:02d}") for m in range(30, 60, 5)]
+       + [pd.Timestamp(f"2025-01-01 10:{m:02d}") for m in range(0, 60, 5)]
+       + [pd.Timestamp(f"2025-01-01 11:{m:02d}") for m in range(0, 30, 5)]
+       + [pd.Timestamp(f"2025-01-01 13:{m:02d}") for m in range(0, 60, 5)]
+       + [pd.Timestamp(f"2025-01-01 14:{m:02d}") for m in range(0, 60, 5)])
+BARS_5MIN = [t.strftime("%H:%M") for t in _b5]
+assert len(BARS_5MIN) == 48
+
 
 def make_long(n_days: int = 8, n_codes: int = 3, seed: int = 3,
-              drop: list[tuple[str, str]] | None = None) -> pd.DataFrame:
-    """合成 30 分钟长表；drop 指定剔除的 (date 'YYYYMMDD', code) 的 bar 序号。
+              drop: list[tuple[str, str]] | None = None,
+              bars: list[str] | None = None) -> pd.DataFrame:
+    """合成分钟长表；drop 指定剔除的 (date 'YYYYMMDD', code) 的 bar 序号。
 
     默认 8 个工作日从 2025-12-24 起 → 跨年（25 年 6 天 + 26 年 2 天）。
+    bars 缺省 30 分钟表；传 BARS_5MIN 可构造 5 分钟面板（时段切片测试用）。
     """
+    bars = BARS_30MIN if bars is None else bars
     rng = np.random.default_rng(seed)
     dates = pd.bdate_range("2025-12-24", periods=n_days)  # 跨年：25 年 + 26 年
     codes = [f"{600000 + i:06d}.SH" for i in range(n_codes)]
@@ -32,7 +44,7 @@ def make_long(n_days: int = 8, n_codes: int = 3, seed: int = 3,
     for c in codes:
         closes = []
         for d in dates:
-            walk = 10.0 * np.exp(np.cumsum(rng.normal(0, 0.004, len(BARS_30MIN))))
+            walk = 10.0 * np.exp(np.cumsum(rng.normal(0, 0.004, len(bars))))
             closes.append(walk)
         for di, d in enumerate(dates):
             walk = closes[di]
@@ -42,7 +54,7 @@ def make_long(n_days: int = 8, n_codes: int = 3, seed: int = 3,
             low = np.minimum(open_, walk) * (1 - np.abs(rng.normal(0, 0.001, len(walk))))
             vol = rng.lognormal(9, 0.3, len(walk))
             rows = {
-                "kline_time": [d.replace(hour=int(t[:2]), minute=int(t[3:])) for t in BARS_30MIN],
+                "kline_time": [d.replace(hour=int(t[:2]), minute=int(t[3:])) for t in bars],
                 "code": c, "open": open_, "high": high, "low": low,
                 "close": walk, "volume": vol, "amount": vol * walk,
             }
@@ -208,7 +220,12 @@ class TestIntradayFeatures:
             assert col.iloc[0:2].isna().all(), f"{name} 半拉天应 NaN"
 
     def test_feature_docs_cover_keys(self):
-        """FEATURE_DOCS 与产出的特征 key 一致（入库元数据不漂移）。"""
+        """FEATURE_DOCS 与产出的特征 key 一致（入库元数据不漂移）。
+
+        时段切片族（*_segNN_*）依赖 period（20 分钟窗须整除 bar 周期），
+        在 30 分钟 mock 下不产出——故对非条件特征做全等、对 seg 特征做
+        「产出 ⊆ docs」+ 独立的 5 分钟全产出测试（见 TestIntradaySegments）。
+        """
         from factor.intraday_features import FEATURE_DOCS
         produced = {
             "mom_intraday_ret", "mom_open30_ret", "mom_close30_ret", "mom_am_ret",
@@ -225,7 +242,80 @@ class TestIntradayFeatures:
             "candle_high_in_am", "candle_upper_shadow", "candle_lower_shadow",
             "candle_close_pos",
         }
-        assert set(FEATURE_DOCS) == produced
+        assert produced <= set(FEATURE_DOCS)
+        non_seg = {k for k in FEATURE_DOCS if "_seg" not in k}
+        assert produced == non_seg
+
+
+SEG_KEYS = {f"{p}_seg{k:02d}_{s}" for k in range(1, 13)
+            for p, s in (("mom", "ret"), ("vol", "rvshare"), ("pv", "volshare"))}
+
+
+class TestIntradaySegments:
+    """时段切片矩阵族（20 分钟窗 × 动量/波动/量，36 个）。"""
+
+    @pytest.fixture()
+    def seg_feats(self, tmp_path):
+        long_df = make_long(n_days=6, n_codes=3, seed=17, bars=BARS_5MIN)
+        store = MinutePanelStore.build(long_df, 5, "seg", cache_root=tmp_path,
+                                       float_dtype=np.float64)
+        fields = store.load(("open", "high", "low", "close", "volume", "amount"))
+        feats = extract_from_block(fields, store.all_days(), store.codes,
+                                   store.bar_times, store.period)
+        return store, fields, feats
+
+    def test_all_seg_features_produced(self, seg_feats):
+        _, _, feats = seg_feats
+        assert SEG_KEYS <= set(feats)
+
+    def test_window_boundaries(self, seg_feats):
+        """窗边界对拍：seg02 = 位置 4..7 的 bar 收益和（抓 off-by-one 错位）。"""
+        store, fields, feats = seg_feats
+        r = fields["close"][:, 1:, :] / fields["close"][:, :-1, :] - 1.0
+        first = fields["close"][:, 0:1, :] / fields["open"][:, 0:1, :] - 1.0
+        r = np.concatenate([first, r], axis=1)
+        manual = np.nansum(r[:, 4:8, :], axis=1)
+        got = feats["mom_seg02_ret"].to_numpy()
+        mask = np.isfinite(got)
+        assert mask.sum() > 0
+        np.testing.assert_allclose(got[mask], manual[mask], rtol=1e-10, atol=1e-12)
+
+    def test_momentum_conservation(self, seg_feats):
+        """12 窗动量之和 = 全日 48 根 bar 收益之和（切片无遗漏、无重复）。
+
+        注意：窗动量是加法量（nansum），与 mom_intraday_ret（close末/首根
+        close-1，含开盘缺口锚）之间没有精确恒等式——乘积守恒只对逐 bar
+        收益链成立，对「窗内求和」带二阶交叉项。
+        """
+        store, fields, feats = seg_feats
+        r = fields["close"][:, 1:, :] / fields["close"][:, :-1, :] - 1.0
+        first = fields["close"][:, 0:1, :] / fields["open"][:, 0:1, :] - 1.0
+        r = np.concatenate([first, r], axis=1)
+        want = np.nansum(r, axis=1)
+        total = sum(feats[f"mom_seg{k:02d}_ret"].to_numpy() for k in range(1, 13))
+        mask = np.isfinite(total) & np.isfinite(want)
+        assert mask.sum() > 0
+        np.testing.assert_allclose(total[mask], want[mask],
+                                   rtol=1e-9, atol=1e-12)
+
+    def test_shares_sum_to_one(self, seg_feats):
+        """RV 份额与量份额各自沿 12 窗求和 = 1（完整日）。"""
+        _, _, feats = seg_feats
+        for prefix in ("vol_seg", "pv_seg"):
+            total = sum(feats[f"{prefix}{k:02d}_{'rvshare' if prefix == 'vol_seg' else 'volshare'}"]
+                        .to_numpy() for k in range(1, 13))
+            mask = np.isfinite(total)
+            assert mask.sum() > 0
+            np.testing.assert_allclose(total[mask], 1.0, rtol=1e-8, atol=1e-10)
+
+    def test_skipped_for_30min(self, tmp_path):
+        """20 分钟窗与 30 分钟 bar 不对齐 → 不产出时段特征（不硬凑半窗）。"""
+        long_df = make_long(n_days=3, n_codes=2, seed=7)
+        store = MinutePanelStore.build(long_df, 30, "segskip", cache_root=tmp_path)
+        fields = store.load(("open", "high", "low", "close", "volume", "amount"))
+        feats = extract_from_block(fields, store.all_days(), store.codes,
+                                   store.bar_times, store.period)
+        assert not (SEG_KEYS & set(feats))
 
 
 class TestBatchDupReport:
