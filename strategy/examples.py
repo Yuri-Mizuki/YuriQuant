@@ -228,9 +228,12 @@ class BufferedTopFracLongOnly(Strategy):
     **有状态**：引擎按调仓日时序逐次调用 get_weights，实例内部维护上一期持仓。
     每个 VectorBacktest 必须使用全新实例——跨回测复用同一实例会把上一次回测的
     期末持仓泄漏为本次期初持仓（前视）。
+
+    缺省 (0.15, 0.40) = 生产定版形态（2026-10-15 起与 dingban preset / caliber
+    对齐；此前缺省 (0.20, 0.30) 是历史实验值，曾靠"勿用缺省"的口头纪律防错）。
     """
 
-    def __init__(self, frac_entry: float = 0.20, frac_exit: float = 0.30):
+    def __init__(self, frac_entry: float = 0.15, frac_exit: float = 0.40):
         if not 0 < frac_entry <= 1:
             raise ValueError(f"frac_entry 必须在 (0,1]: {frac_entry}")
         if not frac_entry <= frac_exit <= 1:

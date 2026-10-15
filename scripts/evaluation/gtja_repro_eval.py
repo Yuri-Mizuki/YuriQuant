@@ -110,6 +110,7 @@ def ls_metrics(fp: pd.DataFrame, rets: pd.DataFrame,
     if len(valid0) == 0 or valid0.notna().sum().sum() == 0:
         return {k: float("nan") for k in
                 ("ls_ann", "ls_dd", "ls_sharpe", "long_excess_ann", "long_excess_sharpe",
+                 "long_excess_sharpe_arith",
                  "rankic", "ic_win", "turnover", "n_days", "coverage")}
     n_col = valid0.sum(axis=1)
     # 与适应度同口径：覆盖 < 面板全宽 50% 的退化日剔除
@@ -133,7 +134,13 @@ def ls_metrics(fp: pd.DataFrame, rets: pd.DataFrame,
     base = rv.sum(axis=1) / valid.sum(axis=1).clip(lower=1)
     ex = (rv * long_m).sum(axis=1) / nL - base
     ex = ex.dropna()
-    ex_sharpe = float(ex.mean() / ex.std() * np.sqrt(PERIODS_PER_YEAR)) if len(ex) > 2 and ex.std() > 0 else float("nan")
+    # Sharpe 口径（2026-10-15 统一）：主口径 = 生产几何（backtest.metrics.sharpe_ratio），
+    # 算术 mean/std·√252 保留为 *_arith 备查列（与研报原文方法论对照用；
+    # 2026-10-15 之前产出的 CSV 里 long_excess_sharpe 是算术值，引用须换算，几何恒低）。
+    from backtest.metrics import sharpe_ratio
+    ex_sharpe = float(sharpe_ratio(ex)) if len(ex) > 2 else float("nan")
+    ex_sharpe_arith = (float(ex.mean() / ex.std() * np.sqrt(PERIODS_PER_YEAR))
+                       if len(ex) > 2 and ex.std() > 0 else float("nan"))
     # 年化双边换手：每日两腿换手比例之和 × 252
     churn = (~(long_m.shift(fill_value=False)) & long_m).sum(axis=1) / nL
     fr_s = fp.where(valid).rank(axis=1, pct=True)
@@ -145,6 +152,7 @@ def ls_metrics(fp: pd.DataFrame, rets: pd.DataFrame,
         "ls_ann": st["ann_ret"], "ls_dd": -st["max_dd"], "ls_sharpe": st["sharpe"],
         "long_excess_ann": float(ex.mean() * PERIODS_PER_YEAR) if len(ex) else float("nan"),
         "long_excess_sharpe": ex_sharpe,
+        "long_excess_sharpe_arith": ex_sharpe_arith,
         "rankic": float(ic.mean()) if len(ic) else float("nan"),
         "ic_win": float((ic > 0).mean()) if len(ic) else float("nan"),
         "turnover": turn_ann, "n_days": st["n"], "coverage": coverage,
