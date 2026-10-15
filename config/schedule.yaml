@@ -48,9 +48,38 @@
 # --------------------------------------------------------------------------
 
 version: 1
-updated: '2026-10-10'
+updated: '2026-10-15'
 
 tasks:
+  - key: rebuild_panels
+    name: 'YuriQuant RebuildPanels'
+    system: schtasks
+    status: active
+    time: '06:00'
+    schedule: daily
+    command: '${YQ_PYTHON:D:\python\Python312\python.exe}'
+    arguments: >-
+      "${YQ_REPO:E:\YuriQuant}\scripts\pipelines\rebuild_panel_library.py" --run
+      --log-file logs\rebuild_panels_task_{date}.log
+    working_dir: '${YQ_REPO:E:\YuriQuant}'
+    execution_limit: PT6H
+    description: '因子库面板月度重建（守卫式：panels_neu 已覆盖上月即空转 ⇒ 实跑约每月一次、数小时）'
+    notes: >-
+      2026-10-15 新增。为什么：定版口径的**慢信号** s0.5 直接读离线 `panels_neu` 的
+      月末截面（`fundamental_blend::build_slow_panel`），而该面板是批处理产物、
+      不随新数据更新 —— 此前 schedule.yaml 无任何任务负责它，导致慢信号长期停在
+      最后一次手工重建的数据态（2026-10-10 建于止 09-01，滞后一个月余）。
+      链路 = `rolling_grid_alla --stage prep`（_base）→ 16 个族 builder（panels）
+      → `build_alla_factor_neutralized(_fundind)`（两套面板）。**顺序敏感**：
+      `_base` 更新后必须同批重跑中性化（否则面板与数据不同版本，
+      `reports/prod_pipeline_gap/report.md` §5.6 实测 |Δ|>1e-3 占 22.91%）。
+      守卫（脚本内，task_scheduler 无 monthly 触发器）：`panels_neu` 覆盖末日
+      ≥ 上一个自然月最后交易日 ⇒ 空转退出；另设 **16:00–20:00 出榜链窗口保护**
+      （重建期间面板半新半旧，若撞上 17:30 出榜，慢信号会读到混合面板）。
+      `product_glob` 故意留空：月频产物 mtime 必然早于最近交易日，填了 doctor 会长期
+      报"未覆盖"而稀释真告警；覆盖率核对改用
+      `python -m scripts.pipelines.rebuild_panel_library --status`。
+
   - key: alla_daily_rank
     name: 'YuriQuant AllaDailyRank'
     system: schtasks
