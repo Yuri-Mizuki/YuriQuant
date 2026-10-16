@@ -54,7 +54,7 @@ from scripts.common.cli_common import setup_logging  # noqa: E402
 from scripts.evaluation.retrain_freq_ic import (  # noqa: E402
     SEL_DIR,
     TRADABLE_LABELS,
-    _rolling_pred,
+    rolling_pred,
 )
 
 log = setup_logging("hp_search_ic")
@@ -197,9 +197,9 @@ def main(argv: list[str] | None = None) -> None:
     for name, override in grid:
         t1 = time.time()
         params = {**DEFAULT_HP, **override}
-        raw, n_fit = _rolling_pred(feats, labels, oos_days, all_days,
-                                   args.window, embargo_days, 250,
-                                   refit, params, {})
+        raw, n_fit = rolling_pred(feats, labels, oos_days, all_days,
+                                  args.window, embargo_days, 250,
+                                  refit, params, {})
         pred = raw.where(valid.reindex(index=oos_days))
         ic = masked_ic(pred, fwd, mask)
         st = ic_stats(ic)

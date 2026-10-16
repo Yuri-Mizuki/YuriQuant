@@ -66,14 +66,17 @@ SEL_DIR = ROOT / "reports" / "alla_rolling_ortho920fundind" / "selection"
 TRADABLE_LABELS = True
 
 
-def _rolling_pred(feats: dict[str, pd.DataFrame], labels: pd.DataFrame,
-                  oos_days: pd.DatetimeIndex, all_days: pd.DatetimeIndex,
-                  window: int, embargo: int, min_train: int,
-                  refit: int, params: dict,
-                  cache: dict) -> tuple[pd.DataFrame, int]:
+def rolling_pred(feats: dict[str, pd.DataFrame], labels: pd.DataFrame,
+                 oos_days: pd.DatetimeIndex, all_days: pd.DatetimeIndex,
+                 window: int, embargo: int, min_train: int,
+                 refit: int, params: dict,
+                 cache: dict) -> tuple[pd.DataFrame, int]:
     """每 ``refit`` 个交易日重训一次；折起点相同的模型跨档位复用（见模块 docstring）。
 
     返回 (OOS 预测面板, 本次新增训练次数)。
+
+    公开名（2026-10-16）：``hp_search_ic`` 跨模块消费同一实现，原 ``_rolling_pred``
+    触发 ``test_layering`` 私有名守卫；重训频率/超参双探针共用此滚动预测核心。
     """
     from model.predictor import LGBMPredictor
 
@@ -194,9 +197,9 @@ def main(argv: list[str] | None = None) -> None:
     rows = []
     for refit in sorted(refits, reverse=True):
         t1 = time.time()
-        raw, n_fit = _rolling_pred(feats, labels, oos_days, all_days,
-                                   args.window, embargo_days, 250,
-                                   refit, params, cache)
+        raw, n_fit = rolling_pred(feats, labels, oos_days, all_days,
+                                  args.window, embargo_days, 250,
+                                  refit, params, cache)
         pred = raw.where(valid.reindex(index=oos_days))
         ic = masked_ic(pred, fwd, mask)
         st = ic_stats(ic)
