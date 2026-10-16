@@ -61,7 +61,8 @@ log = setup_logging("rebuild_panel_library")
 
 DATASET = "all_a_2018_2026"
 BASE_DIR = ROOT / "reports" / "alla_rolling" / "_base"
-#: 覆盖体检的抽样因子（取三者 max 作该目录的覆盖末日；避免遍历 949 个 parquet）
+#: 覆盖体检的**快速**抽样（取 min：任一样本因子落后即报落后；避免遍历 950 个 parquet）。
+#: ⚠️ 仅作快速体检用；守判另有**全量深检** `_stale_panels`，抽样不可单独当判据。
 _PROBE_NEU = ("bp", "alpha158_MA60", "alpha101_001")
 _PROBE_RAW = ("bp", "alpha158_MA60", "accruals")
 
@@ -103,7 +104,13 @@ def _parquet_last_date(path: Path) -> str:
 
 
 def _panel_coverage(subdir: str, probes: tuple[str, ...]) -> str:
-    """返回某面板目录的覆盖末日 = 抽样因子中的最大值。"""
+    """返回某面板目录的覆盖末日 = 抽样因子中的**最小值**。
+
+    ⚠️ 必须取 min 而非 max：一个目录"已覆盖到最新"等价于**所有**因子都最新，
+    取 max 会让任一新写入的因子掩盖其余全部陈旧因子（2026-10-16 实测：`--only`
+    手工刷新 3 个探测因子后，`max` 立刻报 10-15、守判"无需重建"，而 950 个里
+    944 个仍停在 09-01）。
+    """
     root = _ds_root() / subdir
     if not root.exists():
         return "缺失"
@@ -113,7 +120,52 @@ def _panel_coverage(subdir: str, probes: tuple[str, ...]) -> str:
         return "全部读取失败"
     if len(ok) < len(dates):
         log.warning("%s 抽样中 %d 个读取失败：%s", subdir, len(dates) - len(ok), dates)
-    return max(ok)
+    return min(ok)
+
+
+def _footer_max(path: Path) -> str | None:
+    """读 parquet **页脚**的索引列统计取末日（不回读数据）；无统计时退回读索引列。"""
+    try:
+        import pyarrow.parquet as pq
+        st = pq.ParquetFile(path).metadata.row_group(0).column(0).statistics
+        if st is not None and st.max is not None:
+            return str(st.max)[:10]
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        idx = _index_dates(path)
+        return str(idx.max().date()) if len(idx) else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _stale_panels(subdir: str, *, limit: int = 6) -> tuple[int, int, list[str]]:
+    """全量对比 `panels/` 与 `subdir/`，返回 (落后因子数, 总数, 样例)。
+
+    判据 = 中性化面板的索引末日 < 同因子原始面板的索引末日。
+
+    🔑 为什么必须全量、且要跟**同因子的原始面板**比：
+      ① 抽样+max 会静默漏判（见 `_panel_coverage` docstring）；
+      ② 不能简单跟"上月最后交易日"比 —— 库里有天然收得早的因子（数据墙），
+         会让守判**每天**都判定需要重建。跟自己的原始面板比则自动免疫：
+         全量重建后 neu 末日 == min(raw 末日, _base 末日)，数据墙因子两边一致。
+    成本：只读页脚统计，~950 文件 / 约 70s，对 06:00 的日频守卫可接受
+    （`--status` 走快速抽样，不带这道深检）。
+    """
+    root = _ds_root()
+    raw_dir, neu_dir = root / "panels", root / subdir
+    if not neu_dir.exists():
+        return 0, 0, [f"{subdir} 目录缺失"]
+    files = sorted(neu_dir.glob("*.parquet"))
+    stale: list[str] = []
+    for f in files:
+        raw_p = raw_dir / f.name
+        if not raw_p.exists():
+            continue
+        neu_d, raw_d = _footer_max(f), _footer_max(raw_p)
+        if neu_d is not None and raw_d is not None and neu_d < raw_d:
+            stale.append(f"{f.stem}(neu={neu_d} raw={raw_d})")
+    return len(stale), len(files), stale[:limit]
 
 
 def coverage_table() -> dict[str, str]:
@@ -186,10 +238,18 @@ def _steps(workers: int) -> list[tuple[str, list[str]]]:
         ("panels_altfactors", [py, "-m", b + "build_alla_altfactors",
                               "--families", "insider,macro,news"]),
         # ④⑤ 中性化（读 ②③ 的产物）
+        # ⚠️ 必须 --force：两个 builder 的跳过判据是「输出文件已存在」，**不看数据是否
+        # 已过期**。②③ 全历史重算后旧产物仍在盘上 ⇒ 不加 --force 会 950 个全跳过、
+        # panels_neu 覆盖日原地不动（2026-10-16 续跑实测：EXIT=0 但面板毫无变化）。
         ("neu_std", [py, "-m", b + "build_alla_factor_neutralized",
-                     "--workers", str(workers)]),
+                     "--workers", str(workers), "--force"]),
         ("neu_fundind", [py, "-m", b + "build_alla_factor_neutralized_fundind",
-                         "--workers", str(workers)]),
+                         "--workers", str(workers), "--force"]),
+        # ⑥ alt 族 family-aware 收尾 —— **必须排在 neu_std/neu_fundind 之后**：
+        # 标准三步对 alt 族会产出坏面板（零膨胀 ⇒ MAD=0 ⇒ 整截面常数 ⇒ zscore 全 NaN；
+        # 市场级广播 ⇒ 截面中性化恒 0 ⇒ 浮点残差被放大成假面板），故由本 builder
+        # 按面板形态分派覆盖写回。顺序颠倒 = 把 2026-10-10 修好的 alt 中性化打回原形。
+        ("neu_altf", [py, "-m", b + "build_alla_altfactor_neu"]),
     ]
 
 
@@ -274,8 +334,19 @@ def main() -> int:
         log.info("守判：panels_neu 止 %s < 目标 %s ⇒ 需要重建", neu_max, target)
         need = True
     else:
-        log.info("守判：panels_neu 已覆盖 %s ≥ 目标 %s ⇒ 无需重建（空转退出）",
-                 neu_max, target)
+        log.info("守判：panels_neu 已覆盖 %s ≥ 目标 %s（抽样 min）", neu_max, target)
+    # ---- 深检（全量，逐因子 vs 自己的原始面板）----
+    # 抽样只管 3 个因子；这里是"整库有没有落后"的真判据。见 `_stale_panels`。
+    # 两套 neutral 都查：fundind 不在出榜链上（快信号是实时重算的），
+    # 没有任何下游会因它陈旧而报错 ⇒ 只能靠这里兜住，否则会静默腐烂。
+    for sub in ("panels_neu", "panels_neu_fundind"):
+        n_stale, n_total, examples = _stale_panels(sub)
+        if n_stale:
+            log.warning("深检：%s 有 %d/%d 个因子落后于原始面板（例：%s）⇒ 需要重建",
+                        sub, n_stale, n_total, "; ".join(examples))
+            need = True
+        else:
+            log.info("深检：%s 全部 %d 个因子均不落后于原始面板", sub, n_total)
     if args.force:
         log.warning("--force：忽略守判，强制重建")
         need = True
