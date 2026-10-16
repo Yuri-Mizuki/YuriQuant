@@ -368,24 +368,42 @@ ic_max 0.0215→0.0147）；但 NW t ≤1.4 不显著、绝对量级弱——该
   **① 主动权重空间结构性口径**（x=w−w_b，工程量中等）：改口径不改结论逻辑，
   与组合层已收口（QP 全家族关闭）耦合——先回答「重开何线需要它」再动工。
   低成本 3 件套已落地（09-18）。
-  **② Barra 风险模型自建（10-16 定版 = **CNE6 简化版**；立项候选，待开工拍板）**
+  **② Barra 风险模型自建（10-16 定版 = **CNE6 简化版**；**第一期 10-16 已完成**，
+  第二期 Σ 应用侧待启动）**
   **目标 = CNE6 9 一级骨架简化版**（10-16 由莉酱拍板：按 CNE6 来、CNE7 新增自建
   困难的不追——国有持股仅十大股东近似口径、拥挤度细节未公开，不值得为两个近似
   臂拉长战线；CNE7 增量降级为「了解即可」备注，不作工程目标）：
-  - **因子清单（第一期 ~16 风格）**：Size / Volatility(β+残差波动) / Liquidity /
-    Value(合并 BM+盈利率，CNE7 口径) / Quality / Momentum / Growth / Dividend Yield /
-    Leverage（+Sentiment 可选弱项可砍）；行业 = **申万**；三级描述变量只取
-    「日频可自建 + 对齐天风 16 因子验收口径」。
+  - **✅ 第一期已完成（10-16，实际落地为 13 描述变量 → 11 一级风格）**：
+    ① builder `scripts/builders/build_alla_barra_styles.py` → `panels_barra/`
+    （lncap/beta/resid_vol/momentum/nl_size/liquidity/ep_ttm/btop/growth/mlev/
+    dtoa/blev/dtop，全 13 变量 2026-10-15 落盘，coverage 0.566~0.903）；
+    ② WLS 回归链路 `research/barra.py`（MAD 5× 去极值 → 市值加权均值/等权 sd
+    标准化 → 逐日 WLS sqrt(市值) 权重 + 申万一级哑变量；pandas 3.0 兼容——
+    `ndarray @ DataFrame` 混乘返回错索引 DataFrame 会静默炸 NaN，全程 .values）；
+    ③ 验收台 `run_checkup` 落 `reports/barra_cne6/`（factor_returns / meta /
+    factor_t / summary）：**全窗 2244 日、加权 R² 均值 0.217（与回归目标权重
+    sqrt(市值) 同尺度；等权口径约 0.3）、日均样本 3318 只**；风格因子收益 t 值
+    符合 A 股已知形态（liquidity −8.98 强负 / beta +4.57 / momentum +3.39 /
+    dtop −3.11 / btop +2.08 / nl_size +2.79）。测试 `tests/test_barra.py`
+    21 用例全绿（合成数据精确答案：WLS 恢复已知因子收益 / CAP_NATIVE 等权例外 /
+    NW 半正定 / Σ=XFX'+D 手工答案 / shift 对齐脉冲）。
+  - **第二期（待启动）**：Σ = XFX'+D（NW 期限调整 + 特征值裁剪已在
+    `factor_covariance`/`specific_risk`/`assemble_sigma` 实现雏形，缺贝叶斯压缩
+    与组合层接入）→ 接组合层风格约束（0.3σ）与归因报告。
+  - **因子清单（第一期实际 13 变量）**：Size(lncap/nl_size) / Volatility(beta/
+    resid_vol) / Momentum / Liquidity / EarningsYld(ep_ttm) / Value(btop) /
+    Growth / Leverage(mlev/dtoa/blev) / DivYld(dtop)；行业 = **申万一级**。
+    Quality 与 Sentiment 未建（基本面盈利质量变量缺面板、可后补）。
   - **CNE7 新增因子（10-16 拍板：不追，了解即可）**：国有持股——数据源虽可行
     （`share_holder.parquet` 十大股东 holder_name 关键词识别 22.9 万条，1990→2026-10），
     但口径 = 十大股东 ≠ 全部股本、与 MSCI 原版有系统差；拥挤度公开细节不全。
     两项均为近似臂，不值得拉长战线，若日后想挖「国有属性/拥挤」再单独立项。
-  - **第一期工程三步**（纯本机 CPU）：① 风格因子 builder（日频量价类新写 + C 族
-    财务类挑补，~1-2 天）；② 逐日截面 WLS 因子收益回归链路（现无此链路，~2-3 天；
-    市值加权标准化——参照江海证券 2025-12《Barra CNE6 纯因子风险模型搭建与应用》，
-    待购入研报库研读归档）；③ ΔR²/VIF/风险型 IC 验收台（对齐天风六维）。
-  - **第二期**：Σ = XFX'+D（NW 期限调整 + 特征值调整 + 贝叶斯压缩）→ 接组合层
-    风格约束（0.3σ）与归因报告。
+  - **原三步工程对照（全部落地）**：① 风格因子 builder（✅ 半天，量价类全自建 +
+    财务类 `build_pit_panel` PIT 展开）；② 逐日截面 WLS 因子收益回归链路（✅，
+    参照 DolphinDB CNE6 教程窗口参数：HBETA 252d / DASTD 252d / CMRA 365d /
+    HSIGMA 252d / RSTR 252d+lag11+halfLife 126 / STOM/STOQ/STOA 21/63/252d /
+    MLEV·DTOA·BLEV 365d / DTOP 365d）；③ 验收台（✅ 因子收益 t + R² 时序，
+    VIF 与 ΔR² 增量验收挂天风0830 六维框架待接）。
   - **有什么用**：① 风险坐标系——组合优化器加风格偏离约束（≤0.3σ）防风格逆转
     亏损（天风实证 MDD −1.1~−2.7pp）；② 归因——把组合日收益分解到风格/行业/个股
     （区分「风格顺风盈利」与「真 alpha」——现无此能力，gbdt 非线性可能重新长出
