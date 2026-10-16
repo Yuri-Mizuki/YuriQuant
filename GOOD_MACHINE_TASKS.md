@@ -22,7 +22,7 @@
 | 8 | 表格基础模型对照 | ✅ 三级收官：hs300（tabicl_w3m 头部内加权 11.97%/0.739 组件冠军）/ zz1000（tabicl 跨池最优 + gbdt+tabicl 对集成 20.03%/1.25 新发现）/ 全A（**ICL 优势不跨大截面，gbdt IC 4.4 倍反超，主模型基座维持 gbdt**） | 🎮 GPU（已执行） |
 | 9 | 东吴 LLM-MCTS Phase 0 | ✅ all-A 正式跑（750 候选收编 14、PBO=0.039、OOS≥IS）→ 入库 llm_* → 席位 4/14 **唯一超门槛引擎** → 组合层 +0.16pp 噪声级**不采纳**——席位突破、组合无增量，归档（hs300 29 Seed 四臂协议未按原样执行，跨引擎对照由既有线结论替代，如实记录） | 🖥️ CPU + LLM API |
 | 10 | 920 后收尾对照包 | ✅ horizon_mix/stack/fundamental_blend/buffer/T 窗/income 复核/alt 终审全出（§⑫–⑯）；member_blend12 12 成员复验因 h1020 已裁决采纳不再必要 | 🖥️ CPU |
-| 11 | **cheap_lever 胜者 920 定版复验**（10-14 立项） | ⬜ 882 扫出的两个微调胜者在 920 fundind 定版信号上复验四窗口：**buf(0.08/0.40)**（+0.78pp）+ **h1:h5=0.25:0.75**（+0.31pp）+ 叠加臂（+0.85pp，5/5 窗口一致）；锚点 = `buffer(15/40)+h1w0.5` 逐位复现 16.46/0.685（882 口径）/定版登记数（920 口径）。**参数迁移未验证是唯一 caveat——882 扫出的参数不能直接进生产**。产物回 `reports/cheap_lever_scan/`（新 tag）；若四窗口仍 ≥4/5 一致且量级 ≥+0.5pp → 按 `v1w2-cheap` 入 `config/baselines.yaml`（不动 `v1-dingban`），同步 `alla_daily_rank.py` preset 并重注册任务 | 🖥️ CPU（复用 920 pred，纯回测，预计 <1h） |
+| 11 | **cheap_lever 胜者 920 定版复验**（10-14 立项） | ⬜ 882 扫出的两个微调胜者在 920 fundind 定版信号上复验四窗口：**buf(0.08/0.40)**（+0.78pp）+ **h1:h5=0.25:0.75**（+0.31pp）+ 叠加臂（+0.85pp，5/5 窗口一致）；锚点 = `buffer(15/40)+h1w0.5` 逐位复现 16.46/0.685（882 口径）/定版登记数（920 口径）。**参数迁移未验证是唯一 caveat——882 扫出的参数不能直接进生产**。产物回 `reports/cheap_lever_scan/`（新 tag）；若四窗口仍 ≥4/5 一致且量级 ≥+0.5pp → 按 `v1w2-cheap` 入 `config/baselines.yaml`（不动 `v1-dingban`），同步 `alla_daily_rank.py` preset 并重注册任务。**附带项（10-16 补）**：把批次 1 fundind 快信号臂的回测 OOS pred 面板拷回本机 → `monitoring/production_ic.py` 历史段从 882 ortho 换 fundind 种子，口径断点收口（`PRED_STEM`/`hist_dir` 改指向即成） | 🖥️ CPU（复用 920 pred，纯回测，预计 <1h） |
 
 ---
 
