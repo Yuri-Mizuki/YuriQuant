@@ -23,6 +23,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import time
 from pathlib import Path
 
@@ -36,8 +37,13 @@ BACKOFF = 0.4
 def write_parquet_atomic(df: pd.DataFrame, path: Path | str, **kwargs) -> None:
     """把 ``df`` 写到 ``path``：先写同目录 pid 专属 tmp，再原子改名。
 
-    ``kwargs`` 透传给 ``DataFrame.to_parquet``。改名重试耗尽时抛最后一次
-    ``PermissionError``（并清掉自己的 tmp）。
+    ``kwargs`` 透传给 ``DataFrame.to_parquet``。
+
+    🚨 **降级路径**：若重试耗尽仍被拒（本环境实测：文件守护拦删除，单次 ~6.7s、
+    并发下 10s 超时，累计十余秒仍不放行），则退回**就地覆写**（``to_parquet`` 直接
+    写目标，不产生任何删除操作）。代价 = 丢掉"进程被杀不留截断文件"的保证，换来
+    "整批不因单点而中断"。仓库既有同款模式：`alla_daily_rank._atomic_or_direct`
+    （`MEMORY-engineering.md` §B4：「写盘须原子优先 + 占用降级」）。
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -55,8 +61,9 @@ def write_parquet_atomic(df: pd.DataFrame, path: Path | str, **kwargs) -> None:
         tmp.unlink(missing_ok=True)
     except OSError:
         pass
-    assert last_exc is not None
-    raise last_exc
+    print(f"[atomic_io] 原子改名重试 {RETRIES} 次仍被拒（{last_exc}）⇒ 降级就地覆写 "
+          f"{path.name}", file=sys.stderr, flush=True)
+    df.to_parquet(path, **kwargs)
 
 
 def sweep_stale_tmp(directory: Path | str, *, min_age_seconds: float = 600.0) -> int:
