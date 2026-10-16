@@ -98,13 +98,17 @@ def _index_dates(path: Path):
     return pd.DatetimeIndex(idx)
 
 
-def _parquet_last_date(path: Path) -> str:
-    """单个 parquet 的索引末日（YYYY-MM-DD）。"""
+def parquet_last_date(path: Path) -> str:
+    """单个 parquet 的索引末日（YYYY-MM-DD）。（公开名；跨模块引用走这里）"""
     try:
         idx = _index_dates(path)
         return str(idx.max().date()) if len(idx) else "空表"
     except Exception as exc:  # noqa: BLE001
         return f"ERR({type(exc).__name__})"
+
+
+#: 兼容别名（模块内历史调用点沿用；勿在新代码用下划线名跨模块 import）
+_parquet_last_date = parquet_last_date
 
 
 def _panel_coverage(subdir: str, probes: tuple[str, ...]) -> str:
