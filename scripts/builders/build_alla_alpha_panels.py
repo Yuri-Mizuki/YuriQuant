@@ -222,14 +222,24 @@ def _worker(wid: int, n_workers: int, warmup: int, keep_from: int,
     log.info("[w%d] 完成 %d 因子, 耗时 %.0fs", wid, n_done, time.time() - t0)
 
 
-def _merge_outputs(dataset: str):
-    """合并各 worker 的统计与 IC 分片 → registry.csv + ic_h{h}.parquet。"""
+def _merge_outputs(dataset: str, n_workers: int = 1):
+    """合并各 worker 的统计与 IC 分片 → registry.csv + ic_h{h}.parquet。
+
+    🚨 只合并**本次 run 的 worker 分片**（`range(n_workers)`），不用通配
+    `w*_h{h}.parquet`。若用通配，上一次以不同 `--workers` 运行留下的残留分片会被
+    一并合并 ⇒ 同一因子出现两列 ⇒ `to_parquet` 抛
+    `ValueError: Duplicate column names found`（2026-10-16 实测：06:00 的
+    `--workers 6` 留下 w1..w5，13:54 改成 `--workers 1` 只覆写 w0 却含全部 798
+    因子 ⇒ 合并 798 + 5 份残片 = 重复列、全链在最后一步中止、2.3h 白算）。
+    """
     from config import Config
     lib_root = Path(str(Config.get()["factor_library"]["root"]))
     ds_dir = lib_root / dataset
 
+    stat_files = [p for p in (ds_dir / f"factor_stats_w{i}.jsonl"
+                              for i in range(n_workers)) if p.exists()]
     rows = []
-    for p in sorted(ds_dir.glob("factor_stats_w*.jsonl")):
+    for p in stat_files:
         for line in p.read_text(encoding="utf-8").splitlines():
             if line.strip():
                 rows.append(json.loads(line))
@@ -239,10 +249,19 @@ def _merge_outputs(dataset: str):
     reg = pd.DataFrame(rows).drop_duplicates(subset="name", keep="last")
     reg.to_csv(ds_dir / "registry.csv", index=False, encoding="utf-8-sig")
     for h in HORIZONS:
-        parts = sorted(ds_dir.glob(f"ic_parts/w*_h{h}.parquet"))
+        parts = [p for p in (ds_dir / f"ic_parts/w{i}_h{h}.parquet"
+                             for i in range(n_workers)) if p.exists()]
         if not parts:
             continue
+        if len(parts) != n_workers:
+            log.warning("ic_h%d 仅找到 %d/%d 个 worker 分片——缺失 worker 的因子"
+                        "不会进 IC 表", h, len(parts), n_workers)
         merged = pd.concat([pd.read_parquet(p) for p in parts], axis=1)
+        dup = merged.columns[merged.columns.duplicated()].unique().tolist()
+        if dup:
+            raise RuntimeError(
+                f"ic_h{h} 合并出现 {len(dup)} 个重复列（如 {dup[:3]}）——"
+                f"ic_parts/ 下有非本次 run 的残留分片，清理后重跑")
         merged.index.name = "date"
         merged.astype(np.float32).to_parquet(ds_dir / f"ic_h{h}.parquet")
         log.info("ic_h%d: %d 因子 × %d 日", h, merged.shape[1], len(merged))
@@ -277,7 +296,7 @@ def main():
         failed = [p.name for p in procs if p.exitcode not in (0, None)]
         if failed:
             raise RuntimeError(f"worker 异常退出: {failed}")
-    _merge_outputs(args.dataset)
+    _merge_outputs(args.dataset, args.workers)
     log.info("全部完成, 耗时 %.0fs", time.time() - t0)
 
 
