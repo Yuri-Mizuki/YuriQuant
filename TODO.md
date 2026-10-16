@@ -283,7 +283,7 @@
   −52~−191×10⁻⁴、回撤中位 +1.27pp 恶化（AI29 自述代价 + Label Alchemy vol_scaled
   预警双应验）；calmar 同族分母更病态不再跑。三臂总结论（gauss_rank 零增量 /
   co 隔夜判负 / ir 判负）见 RESEARCH_TODO §一 标签臂记录。
-- [ ] **分钟频挖掘第三层扩原料**：时段切片矩阵化 ✅ **已完成（10-14）**：36 个
+- [x] **分钟频挖掘第三层扩原料（时段切片矩阵化）**（10-14~15 全链收口）：36 个
   `*_segNN_*`（20 分钟窗 × 动量/RV份额/量份额）入 `factor/intraday_features.py` +
   hs300_2022_2025 库（测试 15 passed；checkup `reports/intraday_stat_checkup.csv` 78 行
   合并版）。首轮：20/36 显著、**时段量/波动份额是真新维度**（与库内最高相关 ≤0.66、
