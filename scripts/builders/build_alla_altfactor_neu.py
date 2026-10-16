@@ -53,6 +53,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from scripts.common.atomic_io import write_parquet_atomic
+
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -158,11 +160,9 @@ def main() -> None:
                 out.mkdir(parents=True, exist_ok=True)
                 arr = x if not fin else _transform(panel, mode, mc, ind,
                                                    name=n, fundind=True)
-                # 原子替换：进程被杀不会把既有面板留成截断的 parquet
-                dst = out / f"{n}.parquet"
-                tmp = dst.with_suffix(".parquet.tmp")
-                arr.to_parquet(tmp)
-                tmp.replace(dst)
+                # 原子替换 + 抗瞬时占用：进程被杀不会留截断 parquet；WinError 5 会重试
+                # （杀软/索引器扫描刚写完的面板，见 scripts/common/atomic_io.py）
+                write_parquet_atomic(arr, out / f"{n}.parquet")
         tag = "已写盘" if not args.diagnose else "(dry)"
         print(f"{n:34s} {mode:14s} {diag['row_nuniq_med']:7.1f} "
               f"{diag['zero_frac_med']:6.2f} {cov:7.4f} {tag}", flush=True)
