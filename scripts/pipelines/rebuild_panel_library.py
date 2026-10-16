@@ -124,12 +124,30 @@ def _panel_coverage(subdir: str, probes: tuple[str, ...]) -> str:
 
 
 def _footer_max(path: Path) -> str | None:
-    """读 parquet **页脚**的索引列统计取末日（不回读数据）；无统计时退回读索引列。"""
+    """读 parquet **页脚**的索引列统计取末日（不回读数据）。
+
+    🚨 索引列是**最后一列**（pandas 写盘时 `__index_level_0__` 排在全部数据列之后），
+    **不是第 0 列** —— 第 0 列是**第一只股票的因子值**（float）。2026-10-16 实测：
+    误取 `column(0)` 会让 `str(st.max)[:10]` 变成 `"0.82766371"` 这种因子值字符串，
+    与原始面板比大小毫无意义 ⇒ 深检把 **946/950** 个因子全判成"落后"（真值仅 ~340），
+    守卫于是**每天**都判定"需要重建"、触发数小时全量重建。
+    """
     try:
         import pyarrow.parquet as pq
-        st = pq.ParquetFile(path).metadata.row_group(0).column(0).statistics
-        if st is not None and st.max is not None:
-            return str(st.max)[:10]
+        from pyarrow import types as pa_types
+        pf = pq.ParquetFile(path)
+        schema = pf.schema_arrow
+        names = schema.names
+        idx_col = names.index("__index_level_0__") if "__index_level_0__" in names else None
+        if idx_col is None:  # 索引有名字时列名 = 索引名（如 "date"）⇒ 按类型找
+            for i, t in enumerate(schema.types):
+                if pa_types.is_timestamp(t) or pa_types.is_date(t):
+                    idx_col = i
+                    break
+        if idx_col is not None:
+            st = pf.metadata.row_group(0).column(idx_col).statistics
+            if st is not None and st.max is not None:
+                return str(st.max)[:10]
     except Exception:  # noqa: BLE001
         pass
     try:
