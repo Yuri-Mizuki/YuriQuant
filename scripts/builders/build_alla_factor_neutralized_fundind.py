@@ -57,7 +57,9 @@ def _process_one(name: str) -> tuple[str, float]:
     x = x.replace([np.inf, -np.inf], np.nan).astype(np.float32)
     x = x.clip(-10.0, 10.0)
     cov = float(x.notna().mean().mean())
-    x.to_parquet(ds / OUT_SUBDIR / f"{name}.parquet")
+    tmp = (ds / OUT_SUBDIR / f"{name}.parquet").with_suffix(".parquet.tmp")
+    x.to_parquet(tmp)
+    tmp.replace(ds / OUT_SUBDIR / f"{name}.parquet")   # 原子替换，防截断
     return name, cov
 
 
@@ -65,6 +67,8 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--workers", type=int, default=6)
     ap.add_argument("--only", nargs="+", default=None)
+    ap.add_argument("--force", action="store_true",
+                    help="忽略已存在产物、全部重算（上游 panels/ 重建后必须加）")
     args = ap.parse_args()
 
     from config import Config
@@ -79,7 +83,7 @@ def main() -> None:
         names = [n for n in names if cov_ok.get(n, 0) >= MIN_COVERAGE]
     out_dir = ds / OUT_SUBDIR
     out_dir.mkdir(parents=True, exist_ok=True)
-    done = {f.stem for f in out_dir.glob("*.parquet")}
+    done = set() if args.force else {f.stem for f in out_dir.glob("*.parquet")}
     todo = [n for n in names if n not in done]
     # registry 行存在但 panels/ 文件缺失的因子跳过（与主变体同款容错，09-27）
     _no_panel = [n for n in todo if not (ds / "panels" / f"{n}.parquet").exists()]

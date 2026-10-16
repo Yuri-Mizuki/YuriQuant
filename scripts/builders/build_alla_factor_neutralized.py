@@ -50,7 +50,9 @@ def _process_one(name: str) -> tuple[str, float]:
     x = x.replace([np.inf, -np.inf], np.nan).astype(np.float32)
     x = x.clip(-10.0, 10.0)
     cov = float(x.notna().mean().mean())
-    x.to_parquet(ds / "panels_neu" / f"{name}.parquet")
+    tmp = (ds / "panels_neu" / f"{name}.parquet").with_suffix(".parquet.tmp")
+    x.to_parquet(tmp)
+    tmp.replace(ds / "panels_neu" / f"{name}.parquet")   # 原子替换，防截断
     return name, cov
 
 
@@ -59,6 +61,9 @@ def main() -> None:
     ap.add_argument("--workers", type=int, default=6)
     ap.add_argument("--only", nargs="+", default=None,
                     help="只处理指定因子名（调试用）")
+    ap.add_argument("--force", action="store_true",
+                    help="忽略已存在产物、全部重算。**上游 panels/ 重建后必须加**——"
+                         "跳过判据只看文件是否存在，不看数据是否已过期（2026-10-16 踩到）")
     args = ap.parse_args()
 
     from config import Config
@@ -73,7 +78,7 @@ def main() -> None:
         names = [n for n in names if float(cov_ok.get(n, 0)) >= MIN_COVERAGE]
     out_dir = ds / "panels_neu"
     out_dir.mkdir(parents=True, exist_ok=True)
-    done = {f.stem for f in out_dir.glob("*.parquet")}
+    done = set() if args.force else {f.stem for f in out_dir.glob("*.parquet")}
     todo = [n for n in names if n not in done]
     # registry 行存在但 panels/ 文件缺失的因子跳过（builder 重跑失败/数据墙所致），
     # 不让单点缺失崩掉整批（09-27 ctrl_change_cnt_60d 实测）

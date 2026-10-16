@@ -64,6 +64,8 @@ ZERO_INFLATED_THRESH = 0.5   # 行内零占比中位 > 此值 ⇒ 判零膨胀�
 BROADCAST_NUNIQ = 1          # 行 nunique 中位 <= 此值 ⇒ 判市场级广播
 MIN_ROW_VALID = 5            # 统计行形态时要求的最小有效样本
 EXPAND_MIN_PERIODS = 60      # 时序 z 的最小窗口（防前视）
+#: 标准 builder（MIN_COVERAGE=0.3）够不到、但生产确实需要中性化面板的因子
+DEFAULT_ORPHANS = ("bonus_freq_3y",)
 
 
 def classify(panel: pd.DataFrame) -> tuple[str, dict]:
@@ -127,8 +129,12 @@ def main() -> None:
     ind = pd.read_parquet(base / "cov_industry.parquet")
 
     reg = pd.read_csv(ds / "registry.csv").set_index("name")
+    # 默认 = altf 全族 + 生产漏网者。bonus_freq_3y（基本面族，原始覆盖 0.211）
+    # 被标准 builder 的 MIN_COVERAGE=0.3 整体跳过，故**永远轮不到它重建**，
+    # 只能由本 builder 兜底（docstring 已记）；纳入默认以免每次都要手传 --only。
     names = (args.only if args.only else
-             sorted(n for n in reg.index if reg["set"].get(n) == "altf"))
+             sorted(n for n in reg.index if reg["set"].get(n) == "altf")
+             + [n for n in DEFAULT_ORPHANS if n in reg.index])
     print(f"alt 因子 {len(names)} 个；base market_cap {mc.shape}", flush=True)
 
     hdr = f"{'factor':34s} {'mode':14s} {'行nuniq':>7s} {'零占比':>6s} {'cov':>7s} 输出"
@@ -152,7 +158,11 @@ def main() -> None:
                 out.mkdir(parents=True, exist_ok=True)
                 arr = x if not fin else _transform(panel, mode, mc, ind,
                                                    name=n, fundind=True)
-                arr.to_parquet(out / f"{n}.parquet")
+                # 原子替换：进程被杀不会把既有面板留成截断的 parquet
+                dst = out / f"{n}.parquet"
+                tmp = dst.with_suffix(".parquet.tmp")
+                arr.to_parquet(tmp)
+                tmp.replace(dst)
         tag = "已写盘" if not args.diagnose else "(dry)"
         print(f"{n:34s} {mode:14s} {diag['row_nuniq_med']:7.1f} "
               f"{diag['zero_frac_med']:6.2f} {cov:7.4f} {tag}", flush=True)
