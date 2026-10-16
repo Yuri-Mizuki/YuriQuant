@@ -153,14 +153,23 @@ def _prev_month_end_trading_day() -> str | None:
 # 执行序列
 # ---------------------------------------------------------------------------
 def _steps(workers: int) -> list[tuple[str, list[str]]]:
-    """重建序列（顺序敏感，勿重排）。`sys.executable` = 调用方解释器。"""
+    """重建序列（顺序敏感，勿重排）。`sys.executable` = 调用方解释器。
+
+    ⚠️ `build_alla_alpha_panels` **不吃 ``--workers``**：其多进程实现里**每个 worker
+    各自 ``load_alla_panels(warmup)`` 重新加载一遍全量日线**（2861 日 × 5807 股 ≈ 1150
+    万行）⇒ 内存 ∝ workers。本机（31GB）`--workers 6` 实测 `_ArrayMemoryError`——连
+    11 MiB 都分不到、6 个 worker 全崩（2026-10-16 首次计划任务触发即踩到）。这正是
+    `MEMORY-engineering.md` §B4 已记的坑「多进程 worker 读原始日线会 MemoryError」。
+    ⇒ 此处**固定单进程**（`--workers 1`，走 builder 的单进程分支、只加载一份数据）。
+    """
     py = sys.executable
     b = "scripts.builders."
     return [
         # ② 基础面板 —— 必须早于 ④⑤（panels_neu 与 _base 版本耦合）
         ("base_prep", [py, "-m", "scripts.pipelines.rolling_grid_alla", "--stage", "prep"]),
         # ③ 原始面板（全历史重算；不加 --resume，避免跳过旧文件导致不刷新）
-        ("panels_alpha", [py, "-m", b + "build_alla_alpha_panels", "--workers", str(workers)]),
+        # ⚠️ 固定 --workers 1：每个 worker 各自加载全量日线 ⇒ 6 实测 OOM（见 docstring）
+        ("panels_alpha", [py, "-m", b + "build_alla_alpha_panels", "--workers", "1"]),
         ("panels_fundamental", [py, "-m", b + "build_alla_fundamental_factors"]),
         ("panels_holder", [py, "-m", b + "build_alla_holder_factors"]),
         ("panels_holder_dyn", [py, "-m", b + "build_alla_holder_dyn_factors"]),
@@ -184,7 +193,8 @@ def _steps(workers: int) -> list[tuple[str, list[str]]]:
     ]
 
 
-def _run_steps(steps: list[tuple[str, list[str]]], *, dry_run: bool) -> int:
+def _run_steps(steps: list[tuple[str, list[str]]], *, dry_run: bool,
+               log_path: Path | None = None) -> int:
     import subprocess
 
     total = len(steps)
@@ -195,7 +205,14 @@ def _run_steps(steps: list[tuple[str, list[str]]], *, dry_run: bool) -> int:
             continue
         log.info("[%2d/%d] %s 开始 :: %s", i, total, name, line)
         t0 = time.time()
-        proc = subprocess.run(cmd, cwd=str(ROOT), check=False)
+        # 子进程 stdout/stderr 并入同一日志文件 —— 否则计划任务无 stdout 重定向，
+        # 子进程的失败（如 builder 的 traceback）会零痕迹（2026-10-16 踩到的正是这个）。
+        if log_path is not None:
+            with open(log_path, "a", encoding="utf-8") as fh:
+                proc = subprocess.run(cmd, cwd=str(ROOT), check=False,
+                                      stdout=fh, stderr=subprocess.STDOUT)
+        else:
+            proc = subprocess.run(cmd, cwd=str(ROOT), check=False)
         dt = time.time() - t0
         if proc.returncode != 0:
             log.error("[%2d/%d] %s 失败（exit=%d，耗时 %.0fs）—— 中止后续步骤，"
@@ -220,9 +237,17 @@ def main() -> int:
                     help="日志落盘模板（计划任务用，{date} → YYYYMMDD）")
     args = ap.parse_args()
 
+    log_path: Path | None = None
     if args.log_file:
-        from scripts.pipelines.alla_daily_rank import attach_file_log
-        attach_file_log(args.log_file)
+        # 🚨 不能复用 alla_daily_rank.attach_file_log —— 它把 file handler **硬编码挂到
+        # "alla_daily_rank" logger**，而本脚本的 log 是 "rebuild_panel_library"
+        # ⇒ 句柄挂空、日志全丢（2026-10-16 首次计划任务触发：exit=1 而日志仅 1 行）。
+        log_path = Path(str(args.log_file).format(date=datetime.now().strftime("%Y%m%d")))
+        if not log_path.is_absolute():
+            log_path = ROOT / log_path
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        setup_logging("rebuild_panel_library", file=log_path)
+        log.info("日志落盘 → %s", log_path)
 
     cov = coverage_table()
     target = _prev_month_end_trading_day()
@@ -284,7 +309,7 @@ def main() -> int:
     t0 = time.time()
     with keep_system_awake() as _awake:
         log.info("防待机：keep_system_awake 生效=%s", _awake)
-        rc = _run_steps(steps, dry_run=args.dry_run)
+        rc = _run_steps(steps, dry_run=args.dry_run, log_path=log_path)
     log.info("重建%s结束（%.0fs）", "演练" if args.dry_run else "执行", time.time() - t0)
     if rc == 0 and not args.dry_run:
         log.info("完成后的覆盖体检：")
