@@ -11,10 +11,13 @@
 产物：
     reports/monitoring/production_ic_daily.csv   逐日 IC / 中性化 IC / 风格暴露
 
-⚠️ 口径断点（2026-10-10）：生产出榜切定版（``--preset dingban``，产物目录
-``reports/alla_daily_defv/``）后，本台账的**实时段**改用 defv 榜（dingban 口径），
-而**历史段仍来自 ``reports/alla_rolling_ortho`` 的 ortho 回测基线**（本机无 fundind
-回测 pred）⇒ 切换日处存在一处**口径断点**，跨该日比较 IC 需注明。
+⚠️ 口径断点（2026-10-10 起，2026-10-16 披露）：生产出榜切定版（``--preset dingban``，
+产物目录 ``reports/alla_daily_defv/``）后，本台账的**实时段**改用 defv 榜（dingban
+口径，h1+h5+h10+h20 秩平均 ⊕ s0.5），而**历史段仍来自 ``reports/alla_rolling_ortho``
+的 882 ortho 回测基线**（``ens_h1h5``，本机无 fundind 回测 pred、regen 需数小时，
+等面板重建腾出内存后补）⇒ 切换处存在**口径断点**：``source`` 列 ``backtest`` 段
+（hist pred 面板止 2026-09-07）与 ``live`` 段（defv 首榜 2026-10-08 起）IC 不可比
+绝对水平，只比段内趋势。跨断点解读摘要（全期均值等）时须注明。
 
 设计动机见 ``monitoring/production_ic.py`` 模块 docstring。
 """
@@ -46,7 +49,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--rank-dir", default="reports/alla_daily_defv",
                    help="每日出榜产物目录（ranking_<ds>.csv）")
     p.add_argument("--hist-dir", default="reports/alla_rolling_ortho",
-                   help="回测基线目录（pred/ + _base/）")
+                   help="回测基线目录（pred/ + _base/；882 ortho 口径，与实时段 "
+                        "dingban 存在口径断点，source 列分界 = hist pred 末日）")
     p.add_argument("--cache-root", default=None, help="行情缓存根（默认 config）")
     p.add_argument("--out", default=DEFAULT_OUT, help="输出 CSV 路径")
     p.add_argument("--live-begin", default="20260601", help="实时区间面板起点")

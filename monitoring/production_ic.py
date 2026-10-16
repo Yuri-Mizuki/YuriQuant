@@ -1,4 +1,4 @@
-"""生产口径每日 IC / 风格暴露监控（全A · ens_h1h5 · ortho 预处理）。
+"""生产口径每日 IC / 风格暴露监控（全A · 历史段 ens_h1h5/ortho · 实时段 defv/dingban）。
 
 问题
 ----
@@ -11,13 +11,18 @@
 指标代码**，可直接拼成一条序列：
 
 - 历史种子：``reports/alla_rolling_ortho/pred/ens_h1h5__h1.parquet``（回测 OOS
-  预测面板）与 ``_base/{close_adj,cov_*}.parquet``（**与历史消融网格完全同一套
-  风格协变量**，保证口径可比）。
-- 每日增量：``reports/alla_daily/ranking_<ds>.csv``（当日出榜打分）+ 本地行情缓存。
+  预测面板，**882 ortho 口径**，止于 2026-09-07）与
+  ``_base/{close_adj,cov_*}.parquet``（**与历史消融网格完全同一套风格协变量**，
+  保证口径可比）。本机无 fundind 回测 pred（真源 ``alla_rolling_ortho920tl``
+  不在本机、regen 需数小时），故历史段**保留 ortho 口径**——见下方「注意」。
+- 每日增量：``reports/alla_daily_defv/ranking_<ds>.csv``（2026-10-10 起定版
+  dingban 口径出榜）+ 本地行情缓存。
 
 产物
 ----
 ``reports/monitoring/production_ic_daily.csv``（按 ``predict_date`` 幂等覆盖）。
+``source`` 列动态划分：``predict_date <= hist pred 面板末日`` → ``backtest``，
+否则 → ``live``（不再硬编码日期，口径切换日变动会自动跟随）。
 
 口径
 ----
@@ -37,9 +42,15 @@
 
 注意
 ----
-历史段是回测 OOS 面板、当前段是每日链实时打分，**模型配置相同但特征来源路径
-不同**（历史段走回测面板，当前段走 ``load_tail``），两者的 IC 水平可能有系统差；
-序列首尾衔接处应看趋势而非绝对水平。
+🚨 **口径断点（2026-10-16 披露，联动件④）**：历史段 = 882 ortho 口径回测 OOS
+（``ens_h1h5``），实时段 = 定版 dingban（defv 榜，``h1-h20 秩平均 ⊕ s0.5``）。
+两段**信号口径不同**，切换日（≈2026-09-07 后首个 defv 榜单日）两侧 IC 不可直接
+比绝对水平，只比段内趋势。原因：本机无 fundind 回测 pred（``config/baselines.yaml``
+``v1-dingban`` 条目 ``reproducible_local: false``），regen 需数小时，等面板重建
+链路空出内存后再补——届时只需重跑本模块（历史种子换成 fundind pred 即可）。
+此外历史段是回测面板、实时段是每日链实时打分，**模型配置相同但特征来源路径
+不同**（历史段走回测面板，实时段走 ``load_tail``），本身也有系统差。
+``source`` 列已把两段分开，跨段汇总（如 ``summarize`` 全期均值）解读时须注明。
 """
 
 from __future__ import annotations
@@ -53,7 +64,9 @@ import pandas as pd
 
 log = logging.getLogger("monitoring.production_ic")
 
-#: 生产配置：集成 h1+h5 秩平均、horizon=1 的 OOS 预测面板
+#: 历史种子文件名：882 ortho 口径回测 OOS 预测面板（h1+h5 秩平均、horizon=1）。
+#: 注意：实时段（defv dingban）信号是 h1+h5+h10+h20 秩平均 ⊕ s0.5 慢信号，
+#: 与历史种子**不同口径**——详见模块 docstring「注意」。
 PRED_STEM = "ens_h1h5__h1"
 #: 组合名义分位（与出榜链 frac 一致：Top 10%）
 TOP_FRAC = 0.10
@@ -275,8 +288,9 @@ def run_production_ic(
         rank_dir: 每日出榜产物目录（``ranking_<ds>.csv``）。**2026-10-10 起默认
             ``reports/alla_daily_defv``**（定版 dingban 口径）；旧 legacy 口径产物
             在 ``reports/alla_daily``（停于 2026-09-22）。
-        hist_dir: 回测基线目录（``pred/`` + ``_base/``）。历史段仍是 ortho 口径
-            （本机无 fundind 回测 pred）⇒ 与实时段（dingban）之间存在口径断点。
+        hist_dir: 回测基线目录（``pred/`` + ``_base/``）。历史段仍是 882 ortho
+            口径（本机无 fundind 回测 pred）⇒ 与实时段（dingban）之间存在口径
+            断点，见模块 docstring「注意」；``source`` 列分界 = hist pred 末日。
         cache_root: 行情缓存根（默认 ``Config.cache()["root"]``）。
         out_path: 输出 CSV（默认 ``reports/monitoring/production_ic_daily.csv``）。
         live_begin: 实时区间的面板起点（需留出风格协变量滚动窗口的预热期）。
@@ -306,7 +320,10 @@ def run_production_ic(
     log.info("打分面板 %d 日 × %d 股（%s ~ %s）", len(score), score.shape[1],
              score.index[0].date(), score.index[-1].date())
 
-    return compute_metrics(score, close, cov, out_path=out_path)
+    # source 分界 = 历史种子（回测 OOS pred）面板末日：其后出现的任何打分截面
+    # （无论来自 legacy 榜还是 defv 榜）都算 live。口径断点见模块 docstring。
+    hist_end = hist["pred"].index.max()
+    return compute_metrics(score, close, cov, out_path=out_path, hist_end=hist_end)
 
 
 def report_overlap(hist_cov: dict[str, pd.DataFrame],
@@ -330,8 +347,16 @@ def report_overlap(hist_cov: dict[str, pd.DataFrame],
 
 def compute_metrics(score: pd.DataFrame, close: pd.DataFrame,
                     cov: dict[str, pd.DataFrame],
-                    out_path: str | Path | None = None) -> pd.DataFrame:
-    """由打分面板 / 复权价 / 风格协变量算逐日 IC 与暴露，落盘并返回。"""
+                    out_path: str | Path | None = None,
+                    hist_end: str | pd.Timestamp | None = None) -> pd.DataFrame:
+    """由打分面板 / 复权价 / 风格协变量算逐日 IC 与暴露，落盘并返回。
+
+    Args:
+        hist_end: 历史段（backtest）与实时段（live）的分界日——
+            ``predict_date <= hist_end`` 标 ``backtest``，否则 ``live``。
+            调用方（:func:`run_production_ic`）传 hist pred 面板末日；
+            传 ``None`` 时全部标 ``live``（无历史段概念的场景，如测试）。
+    """
     # 停牌/退市边缘可能让 pct_change 产出 ±inf；不清洗会污染组合均值
     # （实测 2026-09-16 截面 top_excess 曾出现 -inf）。
     fwd = close.pct_change(fill_method=None).shift(-1)
@@ -393,8 +418,13 @@ def compute_metrics(score: pd.DataFrame, close: pd.DataFrame,
         log.warning("无可用截面，未产出")
         return out
     out = out.sort_values("predict_date").reset_index(drop=True)
-    out["source"] = np.where(out["predict_date"] <= pd.Timestamp("2026-09-12"),
-                             "backtest", "live")
+    # source 动态划分（联动件④）：分界 = hist pred 面板末日，不再硬编码日期。
+    # 硬编码 "2026-09-12" 是 legacy 榜切换残留，与 defv 首榜（2026-10-08）不符。
+    if hist_end is not None:
+        he = pd.Timestamp(hist_end)
+        out["source"] = np.where(out["predict_date"] <= he, "backtest", "live")
+    else:
+        out["source"] = "live"
     if out_path:
         p = Path(out_path)
         p.parent.mkdir(parents=True, exist_ok=True)
