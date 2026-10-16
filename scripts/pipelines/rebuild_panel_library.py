@@ -447,5 +447,20 @@ def main() -> int:
     return rc
 
 
+def _main_guarded() -> int:
+    """入口包装：把未捕获异常的 traceback 写进日志文件。
+
+    🚨 为什么必须：计划任务（`YuriQuant RebuildPanels`）**没有重定向 stdout/stderr**
+    （schedule.yaml 靠 `--log-file` 留痕）。若 `main()` 直接抛，traceback 只进 stderr
+    ⇒ 日志停在 setup 那一行、任务返回 rc=1 —— 2026-10-16 06:00 首跑的真实症状
+    （日志 85 字节 = 仅"日志落盘"一行，重启后无从查因）。包一层后任何崩溃都留痕。
+    """
+    try:
+        return main()
+    except Exception:  # noqa: BLE001 —— 顶层兜底，任何异常都要落日志
+        log.exception("重建入口异常退出（rc=1）；完整 traceback 见下")
+        return 1
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(_main_guarded())
