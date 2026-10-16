@@ -1847,6 +1847,11 @@ def run(args) -> dict:
     train_meta = {"horizons": list(horizons), "excluded_features": list(exclude),
                   "ensemble": ens_tag, "explain_horizon": expl_h,
                   "per_horizon": per_h_meta}
+    # 慢信号滞后披露（联动件⑤）：把「实际用的信号月」写进 meta → history.csv，
+    # 邮件 Caveat（build_daily_email_body.py）读该列动态披露滞后，不再硬编码日期。
+    if slow_lam > 0:
+        train_meta["slow_signal_month"] = (
+            _msrc[-1].strftime("%Y-%m-%d") if len(_msrc) else "")
     n_raw = int(scores.notna().sum())
 
     tradable = signal_day_tradable(tail["close_raw"], predict_date)

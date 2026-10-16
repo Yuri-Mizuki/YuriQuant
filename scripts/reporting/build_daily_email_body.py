@@ -236,7 +236,8 @@ def main() -> int:
     if {"mktcap", "cap_rank"} <= set(rank.columns):
         _lg = rank[rank["cap_rank"].notna() & (rank["cap_rank"] <= 200)] \
             .sort_values("score", ascending=False).head(20).reset_index(drop=True)
-        _lg.insert(0, "rank", range(1, len(_lg) + 1))  # 市值层内模型名次
+        if "rank" not in _lg.columns:  # 2026-10-09 起出榜链已直接落 rank 列
+            _lg.insert(0, "rank", range(1, len(_lg) + 1))  # 市值层内模型名次
         lead = _lg
     hist = pd.read_csv(d / "history.csv")
     h = hist[hist["predict_date"].astype(str) == ds]
@@ -538,6 +539,34 @@ def main() -> int:
     cav.append("**分数含义**：新口径 score 为 h1/h5 两个 horizon 的"
                "截面百分位秩均值（0~1，越大越靠前），"
                "与旧口径的原始回归分不可直接跨期比较。")
+    # 慢信号滞后披露（联动件⑤）：slow_blend>0 时最终分 = (1-λ)·rank(快) + λ·rank(慢)，
+    # 慢信号读冻结因子库 panels_neu，实际信号月由出榜链写入 history.csv
+    # （slow_signal_month 列，2026-10-16 起）。缺失（旧产物）时降级为静态说明。
+    _ssm = str(h.get("slow_signal_month", "") or "") \
+        if "slow_signal_month" in h.index else ""
+    _slow_lam = float(h.get("slow_blend", 0.0) or 0.0) \
+        if "slow_blend" in h.index else 0.0
+    if _slow_lam > 0:
+        if _ssm:
+            _lag_m = None
+            try:
+                _lag_m = (pd.Timestamp(ds).to_period("M")
+                          - pd.Timestamp(_ssm).to_period("M")).n
+            except Exception:
+                _lag_m = None
+            _ssm_day = _ssm[:7].replace("-", "") + "01" if len(_ssm) >= 7 else _ssm
+            _lag_txt = f"，滞后预测日约 {_lag_m} 个月" if _lag_m and _lag_m > 0 else ""
+            cav.append(f"**慢信号滞后**：本榜分数含 {_slow_lam:.0%} 权重的慢信号"
+                       f"（基本面/股东族月度合成），其数据来自**冻结因子库**"
+                       f"`panels_neu`，实际信号月为 **{fmt_day(_ssm_day)}**"
+                       f"{_lag_txt}（月度信号按 hold 语义前推到预测日）。"
+                       f"该面板由 `YuriQuant RebuildPanels` 计划任务月频重建，"
+                       f"平时滞后 1~2 个月属正常设计，不是数据故障。")
+        else:
+            cav.append("**慢信号滞后**：本榜分数含慢信号权重（slow_blend>0），"
+                       "其数据来自冻结因子库 `panels_neu`（由 `YuriQuant RebuildPanels` "
+                       "月频重建），月度信号按 hold 语义前推，平时滞后 1~2 个月属正常设计。"
+                       "本行产物早于 slow_signal_month 字段（2026-10-16），故无精确信号月。")
     cav.append("**无整手约束**：weight 列为等权占位，实际下单需按 `floor(w·V/(P·100))·100` 取整，"
                "每只目标金额建议 ≥2 万元。")
     for i, c in enumerate(cav, 1):
