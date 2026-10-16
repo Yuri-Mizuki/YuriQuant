@@ -37,8 +37,21 @@
     （WorkBuddy 端解封时需用户自行同步）。数据缓存 10-10~14 缺口已手动补更
     （logs/update_manual_20261015.log）；**10-10~14 五天榜单不回填**（buffer 状态
     与实时链不符，补出来反而误导）；10-15 榜单已手动产出（18:27 落盘，链 23 分钟全绿）。
-  - ⚠️ **联动件仍未做**：④ 监控种子（monitor_production_ic 仍 882 ens_h1h5）；
-    ⑤ 慢信号滞后披露上榜单页面。
+  - ✅ **联动件④⑤ 已落地（10-16）**：④ 监控种子——实时段 10-10 起已读 defv dingban
+    榜（CLI 默认值同步），历史段因本机无 fundind 回测 pred 保留 882 ortho ens_h1h5
+    （regen 需数小时，待面板重建腾出内存后补），口径断点已在
+    `monitoring/production_ic.py` 模块 docstring + CLI 头部如实披露，`source` 列
+    分界改为**动态取 hist pred 末日**（原硬编码 2026-09-12 是 legacy 榜残留，与
+    defv 首榜 2026-10-08 不符）；⑤ 慢信号滞后披露——出榜链把实际信号月写入
+    history.csv 新列 `slow_signal_month`，邮件 Caveat 读该列动态披露
+    （滞后月数自动计算；旧产物无该列时降级为静态说明），不再硬编码日期。
+- [x] **方案 B 缺面板对齐（10-16 完成）**：实测缺口与 TODO 原记录不符——4 个 horizon
+  各只有 **1 列缺失（goodwill_ratio）**（alpha191_138 等原 4 列已在后续面板重建中
+  补齐，unlock_ratio_20d 已不在 ic 缓存）；raw 面板存在、coverage 0.57 但 panels_neu
+  历史批次漏跑，`build_alla_factor_neutralized --only goodwill_ratio` 17 秒补齐
+  （cov=0.508），ic 缓存 4 个 horizon 全部 0 缺失，`YURIQUANT_PANEL_CHECK=warn`
+  长期容忍可消除。**已知副作用**：该 builder 是 jsonl 全量覆写设计，单因子运行后
+  `factor_stats_neutralized.jsonl` 只剩 1 行（既有行为，待后续批次重建时自然恢复）。
   - 双链并行：legacy 09-22 已停，无并行对照——以 defv 连续产出 + 下游 daily_report
     正常为验收（10-11 前已连续运行）。
   - 时序纪律不变：批次 11（v1w2-cheap）复验通过后作为第二次增量变更单独登记。
@@ -48,10 +61,9 @@
 - [ ] **all_a_2018_2026 数据集纳入正式因子库监控**（目前为轻量 registry）。
   关联：`monitor_performance` 旧链复活的前提之一（另一前提 = runner 行情源参数化），
   现役生产监控已由 `monitor_production_ic` 承担，本条非阻塞。
-- [ ] **方案 B 缺面板对齐**（小工程，自 §五并入）：ic_h 缓存 824 列中 4 列无对应
-  panels_neu 文件（coverage 过滤与 ic 融合的口径差：alpha191_138 / alpha101_096 /
-  alpha101_097 / unlock_ratio_20d），当前靠 `YURIQUANT_PANEL_CHECK=warn` 容忍；
-  补齐面板或 ic 融合按 coverage 同步过滤，消除长期 warn。
+- [x] **方案 B 缺面板对齐**（小工程，自 §五并入；**10-16 完成，见 §一 dingban 条目**）：
+  原记录「ic 缓存 824 列中 4 列缺失」已过期——实测 4 个 horizon 各只缺
+  goodwill_ratio 1 列，面板补齐后 `YURIQUANT_PANEL_CHECK=warn` 容忍可消除。
 - [x] **链路优化线：执行层摩擦 + 全A 组合优化器（10-13 立，10-15 全线收口）**：
   真源 = `reports/docs/design/链路优化调查_预测组合执行_2026-10-13.md`（四部 17 节，
   含两次结论自我推翻的完整记录）+ RESEARCH_TODO §一 条目。终判五条：
@@ -410,15 +422,14 @@
   （此类走 --out-tag）。
 - [ ] **邮件链路 Skills 化**（可选，速读批借鉴）：build_daily_email_body 的口径约束固化 +
   渐进式披露；技能总量控制在上限 20–30 内。
-- [ ] **私有名跨模块 import 存量红灯（`test_layering` 在 HEAD 即红，19 处）**：原记录「仅剩
-  `scripts/textmining/*`」已过期。实测 offender 聚成 6 族：`rolling_grid_alla._ann`（被 5 个
-  `scripts/evaluation/*` 引用）、`seq_predictor_compare.{_cs_z,_build_px_panels,_panel_from_vec,_row_idx}`、
-  `build_alla_holder_dyn_factors.{_apply_lag,_rolling_sum_panel}`、`build_alla_altfactor_neu._classify`、
-  `factor.rl.alphapool_env.{_ic_np,_panels_to_np,_standardize_panel}`、`model.market_features._expanding_z`。
-  修法 = **定义模块**公开化（或给公开别名）+ 改引用方；建议一次 `mass-path-refactor` 收口
-  （`factor/rl/` 涉 AI97 复现，须跑求值回归）。2026-10-13 已把 6 处**测试白盒**登记进
-  `_TESTS_ONLY_PRIVATE`（先前遗漏，属既有欠债、与本轮无关）。
-  → 详见 `reports/docs/design/定版主模型与统一口径.md` §六.4。
+- [x] **私有名跨模块 import 存量红灯（`test_layering`，原 19 处；10-16 清零）**：
+  实测 6 族中 5 族已被此前会话清掉（holder_dyn `_apply_lag`/`_rolling_sum_panel`
+  已公开化、altfactor `_classify`→`classify`、alphapool_env 三件、market_features
+  `_expanding_z`→`expanding_z`、rolling_grid/seq_predictor_compare 的引用均已转
+  测试白盒或公开名）；**生产侧最后 1 处 = `hp_search_ic.py` 引
+  `retrain_freq_ic._rolling_pred`**——已公开化为 `rolling_pred`（定义模块改签名+
+  docstring 注明公开化缘由，引用方同步），`test_layering` 15 用例全绿。
+  tests 白盒存量按 `_TESTS_ONLY_PRIVATE` 白名单管理，维持不动。
 
 ### 已完成归档
 
