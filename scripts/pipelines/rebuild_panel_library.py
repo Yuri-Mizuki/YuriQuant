@@ -66,6 +66,10 @@ BASE_DIR = ROOT / "reports" / "alla_rolling" / "_base"
 _PROBE_NEU = ("bp", "alpha158_MA60", "alpha101_001")
 _PROBE_RAW = ("bp", "alpha158_MA60", "accruals")
 
+#: 中性化 builder 的覆盖率门槛（`build_alla_factor_neutralized::MIN_COVERAGE`）。
+#: 深检必须与它对齐，否则低覆盖因子会被永久误判为"落后"。见 `_in_scope_names`。
+MIN_COVERAGE = 0.3
+
 #: 出榜链窗口（小时，左闭右开）：17:30 出榜 / 18:00 另类 / 19:00 日报。
 #: 重建期间 `panels_neu` 是"半新半旧"的中间态，此时出榜链的慢信号会读到混合面板
 #: ⇒ 启动时若落在此窗口内，跳过本次（守卫是月频的，推迟一天无成本；
@@ -157,33 +161,58 @@ def _footer_max(path: Path) -> str | None:
         return None
 
 
+def _in_scope_names() -> set[str]:
+    """中性化 builder 的处理范围 = `registry.csv` 里 coverage ≥ `MIN_COVERAGE` 的因子（去重）。
+
+    `_stale_panels` **必须**用同一口径，否则会把 builder **按设计跳过**的低覆盖因子
+    永久判成"落后" ⇒ 守卫每天触发数小时全量重建。2026-10-16 实测：`panels_neu` 全量
+    重建后仍有 18 个"落后"，全部是 coverage < 0.3 的（`alpha101_096` cov≈0.0001、
+    `alpha191_138` cov=0.008、`alt_news_mean_len_20d` cov=0.216 …）—— builder 的
+    `MIN_COVERAGE = 0.3` 明确写着"低于此覆盖率的因子不进入模型候选，跳过中性化省算力"。
+    """
+    try:
+        reg = pd.read_csv(_ds_root() / "registry.csv")
+        cov = reg.drop_duplicates(subset="name", keep="last").set_index("name")["coverage"]
+        return {n for n in dict.fromkeys(reg["name"].astype(str))
+                if float(cov.get(n, 0)) >= MIN_COVERAGE}
+    except Exception as exc:  # noqa: BLE001
+        log.warning("读取 registry 失败（%s）⇒ 深检退回全量对比（可能误报低覆盖因子）", exc)
+        return set()
+
+
 def _stale_panels(subdir: str, *, limit: int = 6) -> tuple[int, int, list[str]]:
     """全量对比 `panels/` 与 `subdir/`，返回 (落后因子数, 总数, 样例)。
 
-    判据 = 中性化面板的索引末日 < 同因子原始面板的索引末日。
+    判据 = 中性化面板的索引末日 < 同因子原始面板的索引末日，**且该因子在 builder 的
+    处理范围内**（见 `_in_scope_names` —— 否则 18 个低覆盖因子会让守卫天天误判）。
 
     🔑 为什么必须全量、且要跟**同因子的原始面板**比：
       ① 抽样+max 会静默漏判（见 `_panel_coverage` docstring）；
       ② 不能简单跟"上月最后交易日"比 —— 库里有天然收得早的因子（数据墙），
          会让守判**每天**都判定需要重建。跟自己的原始面板比则自动免疫：
          全量重建后 neu 末日 == min(raw 末日, _base 末日)，数据墙因子两边一致。
-    成本：只读页脚统计，~950 文件 / 约 70s，对 06:00 的日频守卫可接受
+    成本：只读页脚统计，~950 文件 / 约 3.5 分钟，对 06:00 的日频守卫可接受
     （`--status` 走快速抽样，不带这道深检）。
     """
     root = _ds_root()
     raw_dir, neu_dir = root / "panels", root / subdir
     if not neu_dir.exists():
         return 0, 0, [f"{subdir} 目录缺失"]
+    scope = _in_scope_names()
     files = sorted(neu_dir.glob("*.parquet"))
     stale: list[str] = []
+    checked = 0
     for f in files:
+        if scope and f.stem not in scope:   # builder 按设计跳过的低覆盖因子，不算落后
+            continue
         raw_p = raw_dir / f.name
         if not raw_p.exists():
             continue
+        checked += 1
         neu_d, raw_d = _footer_max(f), _footer_max(raw_p)
         if neu_d is not None and raw_d is not None and neu_d < raw_d:
             stale.append(f"{f.stem}(neu={neu_d} raw={raw_d})")
-    return len(stale), len(files), stale[:limit]
+    return len(stale), checked, stale[:limit]
 
 
 def coverage_table() -> dict[str, str]:
