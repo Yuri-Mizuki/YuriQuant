@@ -194,11 +194,11 @@ def _steps(workers: int) -> list[tuple[str, list[str]]]:
 
 
 def _run_steps(steps: list[tuple[str, list[str]]], *, dry_run: bool,
-               log_path: Path | None = None) -> int:
+               log_path: Path | None = None, start: int = 1) -> int:
     import subprocess
 
-    total = len(steps)
-    for i, (name, cmd) in enumerate(steps, 1):
+    total = start + len(steps) - 1
+    for i, (name, cmd) in enumerate(steps, start):
         line = subprocess.list2cmdline(cmd)
         if dry_run:
             log.info("[dry-run %2d/%d] %s :: %s", i, total, name, line)
@@ -233,6 +233,9 @@ def main() -> int:
     ap.add_argument("--ignore-busy-window", action="store_true",
                     help="忽略出榜链时段保护（16:00–20:00），强制在窗口内执行")
     ap.add_argument("--workers", type=int, default=6, help="并行进程数（传给 builder）")
+    ap.add_argument("--from-step", type=int, default=1,
+                    help="从第 N 步开始（跳过前 N-1 步）——链路较长，中途失败后可续跑，"
+                         "不必重算已成功的步骤")
     ap.add_argument("--log-file", default=None,
                     help="日志落盘模板（计划任务用，{date} → YYYYMMDD）")
     args = ap.parse_args()
@@ -306,10 +309,18 @@ def main() -> int:
         return 2
 
     steps = _steps(args.workers)
+    if args.from_step > 1:
+        if not 1 <= args.from_step <= len(steps):
+            log.error("--from-step %d 越界（链路共 %d 步）", args.from_step, len(steps))
+            return 2
+        log.info("续跑模式：跳过前 %d 步，从第 %d 步「%s」开始（前置步骤产物须已在盘上）",
+                 args.from_step - 1, args.from_step, steps[args.from_step - 1][0])
+        steps = steps[args.from_step - 1:]
     t0 = time.time()
     with keep_system_awake() as _awake:
         log.info("防待机：keep_system_awake 生效=%s", _awake)
-        rc = _run_steps(steps, dry_run=args.dry_run, log_path=log_path)
+        rc = _run_steps(steps, dry_run=args.dry_run, log_path=log_path,
+                        start=args.from_step)
     log.info("重建%s结束（%.0fs）", "演练" if args.dry_run else "执行", time.time() - t0)
     if rc == 0 and not args.dry_run:
         log.info("完成后的覆盖体检：")
