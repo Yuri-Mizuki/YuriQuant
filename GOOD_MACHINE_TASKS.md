@@ -1,11 +1,12 @@
-# GOOD_MACHINE_TASKS — 好机器大任务队列（2026-09-22 定稿；批次 1–11 全部收官）
+# GOOD_MACHINE_TASKS — 好机器大任务队列（2026-09-22 定稿；批次 1–11 终结，批次 12 = 新队列）
 
 > 汇总全部需要好机器执行的大任务：批次顺序、完整命令、耗时估计、依赖与验收。
 > 本机半天级穿插项不在本清单（见 TODO §一 🥉）。**约定：批次内任务可并行，
 > 批次间按序；每批产物 CSV/报告拷回本机入库归档（reports/ 不进 git）；
 > 全链成交口径已定版 open=T+1 可执行（正名产物），close=乐观上限对照（_close）。**
-> **收官状态（10-09，10-17 更新）**：批次 1–6、8–10 全部终判（下表）；批次 7
-> e2e 年化口径重跑 + 批次 11 cheap_lever 920 复验 **10-17 于本工作机收官**；
+> **收官状态（10-17）**：批次 1–10 终判；批次 7 e2e 口径重跑收官；批次 11
+> cheap_lever 920 复验**环境分歧后切换搁置**（最终裁决移交批次 12 首项）；
+> **批次 12（10-17 立）= 新队列：v1w2 终裁 + 五项「挂 920 后」实验**。
 > 结果速览真源 `reports/batch2385_结果速览.md` + `reports/batch1_920_收尾对照表.md`
 > + `reports/cheap_lever_scan/README.md`。命令与验收口径全文保留作复现存档。
 > **资源标注**：每批标 🖥️CPU / 🎮GPU / 💾大内存。
@@ -22,7 +23,8 @@
 | 8 | 表格基础模型对照 | ✅ 三级收官：hs300（tabicl_w3m 头部内加权 11.97%/0.739 组件冠军）/ zz1000（tabicl 跨池最优 + gbdt+tabicl 对集成 20.03%/1.25 新发现）/ 全A（**ICL 优势不跨大截面，gbdt IC 4.4 倍反超，主模型基座维持 gbdt**） | 🎮 GPU（已执行） |
 | 9 | 东吴 LLM-MCTS Phase 0 | ✅ all-A 正式跑（750 候选收编 14、PBO=0.039、OOS≥IS）→ 入库 llm_* → 席位 4/14 **唯一超门槛引擎** → 组合层 +0.16pp 噪声级**不采纳**——席位突破、组合无增量，归档（hs300 29 Seed 四臂协议未按原样执行，跨引擎对照由既有线结论替代，如实记录） | 🖥️ CPU + LLM API |
 | 10 | 920 后收尾对照包 | ✅ horizon_mix/stack/fundamental_blend/buffer/T 窗/income 复核/alt 终审全出（§⑫–⑯）；member_blend12 12 成员复验因 h1020 已裁决采纳不再必要 | 🖥️ CPU |
-| 11 | **cheap_lever 胜者 920 定版复验**（10-14 立项） | ✅ **10-17 收官，门槛通过**：叠加臂（buf0.08/40 + h1 份额 0.125）**5/5 窗一致、全窗 +1.47pp**（≥4/5 且 ≥+0.5pp）；buf 单臂 +0.51pp、h1 减半 +0.30pp 均 5/5；剂量-反应单调；字面迁移（两面板 0.25/0.75）−0.71pp 被否。caveat：本机慢信号 62 因子（缺 10 面板）→ 锚点 16.72/0.755 ≠ 登记 18.07/0.805（Δ 为裁决变量不受影响）。**v1w2-cheap 已登记（baselines）+ `--preset v1w2-cheap` 已入库，生产切换待由莉酱拍板**（schedule.yaml 改 preset + 生产机 install）。产物 `reports/cheap_lever_scan/` | 🖥️ CPU |
+| 11 | **cheap_lever 胜者 920 定版复验**（10-14 立项） | ⚠️ **10-17 复验环境分歧，切换搁置**：62 因子慢信号环境叠加臂 5/5 窗 +1.47pp 通过；本机补齐 P5 后（72 因子）仅 3/5 窗（2023+/2025+ 转负，全窗 +0.88pp）——近窗稳健性不成立，**维持 dingban**。字面迁移两环境均否、h1 减半操作成立。登记锚点 18.07 本机两态均不可复现（数据态年份差主导）。**最终裁决挂批次 12 = 好机器自家口径重跑**。产物 `reports/cheap_lever_scan/` | 🖥️ CPU |
+| 12 | **新队列（10-17 立）**：① v1w2-cheap 终裁 + ② 市场状态特征 + ③ 隔夜标签臂 + ④ 观点注入三臂 + ⑤ CVaR 组合臂 + ⑥ RD-Agent P2（WSL2）+ ⑦ AI97 消融 5 组 | ⬜ 见批次 12 节 | 🖥️💾 ①纯回测 <1h；②③④需全A 重训（💾≥64GB）；⑤⑦ CPU；⑥ WSL2+LLM |
 
 ---
 
@@ -242,6 +244,70 @@ hs300 全臂冒烟通过（`reports/portfolio_phase2_mask_smoke`）。跑完接
   与记录历史数的差距远超口径换算（环境漂移主导——09-07 幸存者偏差修复
   −2pp + 数据端点 08-25→09-15 + 特征池演进），旧产物已删无法单放口径变更；
   口径对齐以换算注记完成，归档链数字不再作现行证据（现行 = 全A 主实验）。
+
+## 批次 12：新队列（10-17 立——v1w2 终裁 + 五项「挂 920 后」实验 + AI97 消融）
+
+> 来源：批次 11 复验环境分歧的最终裁决移交（①）+ RESEARCH_TODO §一 🥉 的
+> 五项"挂 920 后"待跑实验（920 fundind pred 已随产物同步就位）+ AI97 研报
+> 消融补齐。**优先级：① 先行（纯回测 <1h，裁决生产切换）；②–⑦ 并行铺开。**
+
+### ① v1w2-cheap 终裁（首项，好机器/生产机自家口径）
+
+```bash
+# 1) 自家环境锚点参照（先出再复验）
+python -m scripts.evaluation.buffer_arm_920 --pred-dir reports/alla_rolling_ortho920fundind \
+    --out reports/cheap_lever_scan/_anchor_check_gm --variant defv --entry 0.15 --exit 0.40
+# 2) 七臂 × 五窗复验（--anchor-ref 指上一步产物）
+python -m scripts.evaluation.cheap_lever_revalidate_920 \
+    --anchor-ref reports/cheap_lever_scan/_anchor_check_gm/buffer_arm.csv \
+    --out reports/cheap_lever_scan/revalidate_920_gm.csv
+```
+
+**验收**：叠加臂 ≥4/5 窗一致且全窗 ≥+0.5pp ⇒ 由莉酱拍板切生产
+（三处联动：schedule.yaml preset + 两个 product_glob + 两个下游脚本默认目录，
+然后生产机 `install alla_daily_rank` 重注册）；不达 ⇒ v1w2-cheap 转
+superseded，链路优化线终判关闭。本机两环境证据见 `reports/cheap_lever_scan/`
+（62 因子 5/5 通过 vs 72 因子 3/5 撤回——慢信号构成敏感）。
+
+### ② 市场状态特征实验（代码 09-23 已入库只欠跑）
+
+```bash
+python scripts/pipelines/rolling_grid_alla.py --preproc ortho --out-tag ortho920mf \
+    --exclude-features limit_pos --tradable-labels --execution open --market-features
+```
+
+对照 = 既有 ortho920tl/fundind 同配置（不加 --market-features）；验收 =
+主口径年化/Sharpe 变化 >±1pp 才值得并入（基线数字见 baselines）。
+
+### ③ 隔夜标签臂（需小工程接线，~半天）
+
+训练标签改 close→next open 收益、预测目标/执行不变（与 `--execution open`
+天然对齐；Label Alchemy Scenario 1 证据）。工程 = rolling_grid_alla 加
+`--label-source overnight` 之类的标签推导分支（现只有 rank/gauss_rank mode
+变换，收益源固定 close）。单臂对照 fundind 基线。
+
+### ④ 观点注入三臂对照（`model/views.py` 已入库）
+
+同一观点因子下：BL 优化层注入（`bl_views_from_factor`）vs 预测层注入
+（`inject_by_feature_duplication` / `TwoStagePredictor`）vs 不注入；
+**须披露观点因子单因子 IC**（观点可能是错的）。基座 = fundind pred。
+
+### ⑤ CVaR 约束组合臂（`optimize/solver.py` 已入库带 6 测试）
+
+`optimize_weights_qp` 的 CVaR_α 约束（RU 线性化，max_iter=200k + eps 1e-8）
+vs Top10% 等权 vs buffer 形态，production 口径对拍；基座 = fundind pred。
+
+### ⑥ RD-Agent `fin_factor_report` P2（挂 920 + 好机器 WSL2）
+
+自动 vs 手工转译对照列；产出须过纸面三判据 + 920 IC（设计真源：
+`reports/docs/research_notes/微软RD-Agent_研读_*.md`）。
+
+### ⑦ AI97 研报消融补齐（5 组）
+
+因子复杂度约束（研报示 [3,8] 最高 18.71%、[3,7] 崩 −1.56%，极敏感）/
+LSTM vs Transformer / IC vs ICIR Pool / 奖励 6 版 / 因子数量扫描。
+注意：批次 2 已判 AI97 负结果（PBO 0.704），本项是**研报对照完整性**，
+非翻案——产出仅归档，不改负结论。
 
 ## 批次 8：表格基础模型对照 🎮（TabPFN-3.5 / TabICL 2.2 vs LightGBM；09-22 立项，09-23 版本口径升级）
 

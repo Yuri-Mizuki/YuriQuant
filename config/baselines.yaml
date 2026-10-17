@@ -234,21 +234,20 @@ baselines:
       「比生产强不强」，fair 用于成本稳健性/容量/QP 对照。
 
   # ---------------------------------------------------------------------------
-  # v1w2 —— 候选微调（cheap_lever_scan 产出；**等拍板后才可升 production**）
+  # v1w2 —— 候选微调（cheap_lever_scan 产出；🔴 生产切换 2026-10-17 搁置）
   #   = v1 执行/信号层改两参数：buffer entry 0.15→0.08 + 快信号 h1 份额 0.25→0.125。
-  #   882 证据（10-14）：全窗 17.31/0.707（+0.85pp），四窗口 5/5 一致，换手
-  #   31.8%（现行 37.1%）同向改善。
-  #   ✅ 920 定版信号复验通过（批次 11，10-17，本机）：叠加臂 5/5 窗一致、
-  #   全窗 +1.47pp；buf 单臂 +0.51pp、h1 减半 +0.30pp 均为 5/5 一致；剂量-
-  #   反应单调（h1 份额 0.375→无增益、0→+0.47pp）；字面迁移（0.25·h1+0.75·h5
-  #   两面板、弃 h10/h20）全窗 −0.71pp **被否** —— 迁移的是「h1 减半」操作而非
-  #   字面参数。证据 `reports/cheap_lever_scan/{revalidate_920.csv,README.md}`。
+  #   882 证据（10-14）：全窗 17.31/0.707（+0.85pp），四窗口 5/5 一致。
+  #   920 复验（批次 11，10-17）：62 因子慢信号环境叠加臂 5/5 窗 +1.47pp 通过；
+  #   **但本机补齐 P5 面板后（72/72 因子）复验仅 3/5 窗一致**（2023+/2025+ 转负
+  #   −0.46/−0.36，全窗仍 +0.88pp）——近窗稳健性不成立，切换搁置，维持 v1-dingban。
+  #   证据 `reports/cheap_lever_scan/{revalidate_920.csv,revalidate_920_72f.csv,
+  #   README.md}`。裁决权移交好机器/生产机口径（其 panels_neu 数据态不同）重跑。
   # ---------------------------------------------------------------------------
   - id: v1w2-cheap
     created: "2026-10-14"
     updated: "2026-10-17"
     status: working
-    label: "候选微调：定版信号 buffer(8/40) + h1 份额 0.125（叠加臂，920 复验 5/5 窗通过）"
+    label: "候选微调（切换搁置）：定版信号 buffer(8/40) + h1 份额 0.125（920 复验环境分歧）"
     signal_key: dingban_fundind          # 920 复验后生产形态 = 定版信号 + 两处微调
     window: prod
     signal:
@@ -281,6 +280,10 @@ baselines:
       revalidate_920:
         windows: [全窗2018+, 2019, 2021, 2023, 2025]
         delta_ann_vs_anchor_pp: [+1.47, +1.78, +1.27, +0.05, +0.06]   # 5/5 为正
+        note: >-
+          62 因子慢信号环境（10-17 首验，通过）；补齐 P5 后 72/72 因子环境
+          复验 3/5 为正（+0.88/+1.33/+0.45/−0.46/−0.36，近两窗转负）——
+          见 revalidate_920_72f.csv，切换据此搁置
         # ---- 882 工作基线证据（10-14，origin；产物不在本机，见 caveats ④）----
       origin_882:
         annual: 0.1731
@@ -296,14 +299,13 @@ baselines:
     source: "reports/cheap_lever_scan/{README.md,revalidate_920.csv,_anchor_check/}"
     verified_local: true
     caveats: >
-      ① 参数在 882 信号上网格扫出（16 臂 selection bias，靠多窗口一致性抵消），
-      920 定版信号上已复验（5/5 窗、+1.47pp，门槛 ≥4/5 且 ≥+0.5pp 通过）；
-      ② 本机 920 复验环境 ≠ 好机器登记环境：panels_neu 缺 10 张基本面面板
-      （sue_q/asset_growth_yoy/inv_rev_gap/piotroski_f/capex_intensity/ccc/
-      bonus_freq_3y/report_delay/spsr/div_yield_ttm）⇒ 慢信号 62 因子 vs 好机器
-      81，锚点 16.72/0.755 ≠ 登记数 18.07/0.805（−1.35pp，全部臂共享同一慢信号，
-      Δ 不受影响；绝对数字引用须注明「62 因子慢信号环境」）；
-      ③ 等拍板：升 production = config/schedule.yaml 出榜任务 --preset 改
-      v1w2-cheap + 生产机 `install alla_daily_rank` 重注册（v1-dingban 条目不动）；
+      ① 参数在 882 信号上网格扫出（16 臂 selection bias，靠多窗口一致性抵消）；
+      ② 🔴 **920 复验对慢信号因子构成敏感**（本机两环境分歧：62 因子 5/5 窗
+      +1.47pp vs 72 因子 3/5 窗 +0.88pp，近两窗转负——revalidate_920_72f.csv）
+      ⇒ **2026-10-17 切换搁置，维持 v1-dingban**；最终裁决须在好机器/生产机
+      的 panels_neu 数据态上重跑（其记录为 81 因子族 + v2 年份财务数据）；
+      ③ 登记数锚点复现受限：本机 62 因子环境锚点 16.72/0.755、补齐后
+      16.31/0.739，均 ≠ 18.07/0.805（数据态年份差主导，非面板数单因——
+      本机重建 P5 用补齐后 income 4383，好机器 §⑯ 用 v2 年份数据）；
       ④ 882 侧产物（results.csv/revalidate.csv/baseline_prod.json）10-14 产于
       另一台机，本机无副本——数字以本表与 TODO 记载为准。
