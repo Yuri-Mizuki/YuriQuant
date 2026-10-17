@@ -61,7 +61,7 @@ BEGINS: tuple[int | None, ...] = (None, 2019, 2021, 2023, 2025)  # None = 全窗
 ANCHOR_REF = ROOT / "reports" / "cheap_lever_scan" / "_anchor_check" / "buffer_arm.csv"
 
 
-def _wrank_avg(ranked: dict[str, pd.DataFrame], weights: dict[str, float],
+def wrank_avg(ranked: dict[str, pd.DataFrame], weights: dict[str, float],
                min_panels: int = 2) -> pd.DataFrame:
     """逐日截面**加权**秩平均（严格交集口径，等权时与 ``_rank_average`` 逐位相同）。
 
@@ -93,6 +93,9 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--pred-dir", default="reports/alla_rolling_ortho920fundind",
                     help="920 定版 pred 目录（v2 数据态冻结面板）")
     ap.add_argument("--out", default="reports/cheap_lever_scan/revalidate_920.csv")
+    ap.add_argument("--anchor-ref", default=str(ANCHOR_REF),
+                    help="锚点交叉核对参照（buffer_arm_920 同环境输出）；"
+                         "环境变更（如补面板）后须先重跑 _anchor_check 再指新文件")
     args = ap.parse_args(argv)
 
     from backtest.costs import default_costs
@@ -119,15 +122,15 @@ def main(argv: list[str] | None = None) -> None:
     # ---- 2) 构造各臂信号：defv(w) = 0.5·rank(fast(w)) + 0.5·rank(slow)
     def make_defv(w: float | None) -> pd.DataFrame:
         if w is None:  # 字面 h1:h5 两面板诊断臂
-            fast = _wrank_avg({1: ranked[1], 5: ranked[5]}, {1: 0.25, 5: 0.75})
+            fast = wrank_avg({1: ranked[1], 5: ranked[5]}, {1: 0.25, 5: 0.75})
         else:          # h1 份额 w，其余 (1−w) 均摊给 h5/h10/h20
             rest = (1.0 - w) / 3.0
-            fast = _wrank_avg(ranked, {1: w, 5: rest, 10: rest, 20: rest})
+            fast = wrank_avg(ranked, {1: w, 5: rest, 10: rest, 20: rest})
         return 0.5 * fast.rank(axis=1, pct=True) + 0.5 * slow_rank
 
     # 构造自检①：w=0.25 的 fast 与 _rank_average 逐位相同（NaN 掩码一致 +
     # 实值差 < 1e-6——float64 求和顺序 ULP 差容忍，回测影响为零）
-    fast_w025 = _wrank_avg(ranked, {1: 0.25, 5: 0.25, 10: 0.25, 20: 0.25})
+    fast_w025 = wrank_avg(ranked, {1: 0.25, 5: 0.25, 10: 0.25, 20: 0.25})
     if not fast_w025.isna().equals(fast_eq.isna()):
         n_diff = int((fast_w025.isna() != fast_eq.isna()).sum().sum())
         raise AssertionError(f"w=0.25 加权重构与 _rank_average NaN 掩码不同（{n_diff} 格）")
@@ -195,8 +198,9 @@ def main(argv: list[str] | None = None) -> None:
         r["delta_ann"] = round(r["ann"] - anchors[begin] * 100, 2)
 
     # ---- 4) 锚点交叉核对：全窗锚点臂 == buffer_arm_920 同环境输出（逐位）
-    if ANCHOR_REF.exists():
-        ref = pd.read_csv(ANCHOR_REF)
+    anchor_ref = Path(args.anchor_ref)
+    if anchor_ref.exists():
+        ref = pd.read_csv(anchor_ref)
         ref_row = ref.loc[ref["variant"] == "buffer_15_40"].iloc[0]
         got = anchors[None]
         if abs(got * 100 - ref_row["annual"] * 100) > 0.02 or \
@@ -205,12 +209,14 @@ def main(argv: list[str] | None = None) -> None:
                     - ref_row["sharpe"]) > 0.005:
             raise AssertionError(
                 f"锚点臂与 buffer_arm_920 同环境输出不符：{got * 100:.2f}/"
-                f"{ref_row['annual'] * 100:.2f} —— 先修口径再谈结论")
+                f"{ref_row['annual'] * 100:.2f} —— 先修口径再谈结论（环境变更后"
+                f"重跑 _anchor_check 并 --anchor-ref 指新文件）")
         log.info("构造自检②通过：锚点臂逐位复现 buffer_arm_920 同环境输出 "
-                 "%.2f%%/%.3f（登记数 18.07/0.805 的差额 = 慢信号缺 10 面板环境漂移）",
-                 got * 100, ref_row["sharpe"])
+                 "%.2f%%/%.3f（参照 %s；与登记数 18.07/0.805 的差额 = "
+                 "环境数据态漂移，见 README）",
+                 got * 100, ref_row["sharpe"], anchor_ref.name)
     else:
-        log.warning("锚点参照 %s 不存在，跳过交叉核对", ANCHOR_REF)
+        log.warning("锚点参照 %s 不存在，跳过交叉核对", anchor_ref)
 
     df = pd.DataFrame(rows)
     out = ROOT / args.out

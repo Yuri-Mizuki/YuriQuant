@@ -1,7 +1,8 @@
 """从出榜产物生成每日邮件正文（markdown + 配套 HTML）。
 
 用法（须在项目根目录执行，因为脚本用相对路径读产物）：
-    # 常规（2026-10-10 起生产 = 定版口径 dingban，产物在 reports/alla_daily_defv）
+    # 常规（2026-10-10 起生产 = 定版口径 dingban，产物在 reports/alla_daily_defv；
+    #       v1w2-cheap 切换 2026-10-17 搁置——复验环境分歧待好机器口径裁决）
     python scripts/reporting/build_daily_email_body.py --ds 20261008 \
         --dir reports/alla_daily_defv
 
@@ -287,6 +288,19 @@ def main() -> int:
         if excl and str(excl) not in ("[]", "nan", ""):
             bits.append(f"剔除特征 {excl}")
         lines.append("**特征/集成**：" + " · ".join(bits))
+    # 慢信号滞后披露（TODO §一 联动件⑤）：慢信号月度成分来自冻结因子库离线面板，
+    # 不随每日数据更新——滞后过长（>45 天）说明 RebuildPanels 月度补齐欠账。
+    slow_m = str(h.get("slow_signal_month", "") or "")
+    if slow_m and slow_m not in ("nan", ""):
+        try:
+            lag = (datetime.strptime(ds, "%Y%m%d")
+                   - datetime.strptime(slow_m[:10], "%Y-%m-%d")).days
+        except ValueError:
+            lag = -1
+        warn = (" ⚠️ **滞后超 45 天——离线面板欠账，RebuildPanels 月度补齐待跑**"
+                if lag > 45 else "")
+        lines.append(f"**慢信号披露**：慢信号成分取自 **{slow_m[:10]}** 的离线面板"
+                     f"（滞后 {lag} 天{warn}）——该成分月度更新，不随每日数据变化")
     lines.append("")
     lines.append("---")
     lines.append("")

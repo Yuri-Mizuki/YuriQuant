@@ -1,4 +1,4 @@
-"""生产口径每日 IC / 风格暴露监控（全A · ens_h1h5 · ortho 预处理）。
+"""生产口径每日 IC / 风格暴露监控（全A · dingban 定版口径 · fundind 预处理）。
 
 问题
 ----
@@ -10,10 +10,17 @@
 本模块把生产口径接到一条按日推进的时间序列上，且历史段与每日段**共用同一段
 指标代码**，可直接拼成一条序列：
 
-- 历史种子：``reports/alla_rolling_ortho/pred/ens_h1h5__h1.parquet``（回测 OOS
-  预测面板）与 ``_base/{close_adj,cov_*}.parquet``（**与历史消融网格完全同一套
-  风格协变量**，保证口径可比）。
-- 每日增量：``reports/alla_daily/ranking_<ds>.csv``（当日出榜打分）+ 本地行情缓存。
+- 历史种子（**2026-10-17 起**）：``reports/monitoring/
+  seed_dingban_h1020slow.parquet`` —— 生产口径复合信号（fundind 快 h1020
+  等权 ⊕ 慢信号 s0.5）由 ``scripts/reporting/build_monitor_seed.py`` **现场
+  构造**（快信号 = ``wrank_avg`` 加权重构、慢信号 = ``build_slow_panel``
+  trailing 24 月 ICIR，与 ``cheap_lever_revalidate_920`` 同口径；日后切
+  v1w2-cheap 时以 ``--h1-weight 0.125`` 重建），配
+  ``reports/alla_rolling_ortho920fundind/_base/`` 的复权价与风格协变量。
+  历史口径沿革：882 ens_h1h5（10-10 前）→ dingban defv 榜（10-10~，
+  存在 882→dingban 断点）→ dingban 种子（10-17 起，全序列同口径重算）。
+- 每日增量：``reports/alla_daily_defv/ranking_<ds>.csv``（当日出榜打分）
+  + 本地行情缓存。
 
 产物
 ----
@@ -215,14 +222,24 @@ def _shares_panel(eq: pd.DataFrame, index: pd.Index,
     return build_shares_panel(eq, index, columns, share_field="tot_share")
 
 
-def load_hist_base(hist_dir: str | Path) -> dict:
-    """读回测 OOS 预测面板与 ``_base`` 复权价 / 风格协变量。"""
+def load_hist_base(hist_dir: str | Path,
+                   pred_stem: str = PRED_STEM,
+                   pred_path: str | Path | None = None) -> dict:
+    """读回测 OOS 预测面板与 ``_base`` 复权价 / 风格协变量。
+
+    ``pred_path``（显式面板文件）优先于 ``hist_dir/pred/{pred_stem}.parquet``
+    ——v1w2-cheap 口径的监控种子是**现场构造**的复合信号
+    （快信号加权重构 ⊕ 慢信号，``scripts/reporting/build_monitor_seed.py``
+    产出），不是任何 rolling_grid 产出的落盘文件（caliber 教训：
+    ``ens_h1020__h1.parquet`` 是永远不会生成的文件名）。
+    """
     d = Path(hist_dir)
-    pred_p = d / "pred" / f"{PRED_STEM}.parquet"
+    pred_p = Path(pred_path) if pred_path else d / "pred" / f"{pred_stem}.parquet"
     close_p = d / "_base" / "close_adj.parquet"
     if not pred_p.exists() or not close_p.exists():
         raise FileNotFoundError(
-            f"回测基线缺失：{pred_p} 或 {close_p}（先跑 rolling_grid_alla --stage prep）")
+            f"回测基线缺失：{pred_p} 或 {close_p}（先跑 rolling_grid_alla --stage prep"
+            f" 或 build_monitor_seed_v1w2）")
     pred = pd.read_parquet(pred_p)
     close = pd.read_parquet(close_p)
     cov: dict[str, pd.DataFrame] = {}
@@ -263,29 +280,37 @@ def collect_daily_scores(rank_dir: str | Path,
 # ---------------------------------------------------------------------------
 def run_production_ic(
     rank_dir: str | Path = "reports/alla_daily_defv",
-    hist_dir: str | Path = "reports/alla_rolling_ortho",
+    hist_dir: str | Path = "reports/alla_rolling_ortho920fundind",
     cache_root: str | Path | None = None,
     out_path: str | Path | None = None,
     live_begin: str = "20260601",
     check_overlap: bool = True,
+    pred_stem: str = PRED_STEM,
+    pred_path: str | Path | None = "reports/monitoring/seed_dingban_h1020slow.parquet",
 ) -> pd.DataFrame:
     """跑一轮生产口径 IC/暴露监控，返回并落盘逐日指标表。
 
     Args:
-        rank_dir: 每日出榜产物目录（``ranking_<ds>.csv``）。**2026-10-10 起默认
-            ``reports/alla_daily_defv``**（定版 dingban 口径）；旧 legacy 口径产物
-            在 ``reports/alla_daily``（停于 2026-09-22）。
-        hist_dir: 回测基线目录（``pred/`` + ``_base/``）。历史段仍是 ortho 口径
-            （本机无 fundind 回测 pred）⇒ 与实时段（dingban）之间存在口径断点。
+        rank_dir: 每日出榜产物目录（``ranking_<ds>.csv``）。默认
+            ``reports/alla_daily_defv``（定版 dingban；v1w2-cheap 切换 2026-10-17
+            搁置——复验环境分歧，见 ``reports/cheap_lever_scan/README.md``）。
+        hist_dir: 回测基线目录（``_base/`` 复权价 + 风格协变量）。读 fundind 运行目录。
         cache_root: 行情缓存根（默认 ``Config.cache()["root"]``）。
         out_path: 输出 CSV（默认 ``reports/monitoring/production_ic_daily.csv``）。
         live_begin: 实时区间的面板起点（需留出风格协变量滚动窗口的预热期）。
         check_overlap: 重叠区间校验实时重建的协变量与 ``_base`` 是否一致。
+        pred_stem: 历史段打分面板文件名后缀（``pred_path`` 缺省时使用）。
+        pred_path: 历史段打分面板**显式路径**。默认 = dingban 复合信号种子
+            （``build_monitor_seed.py --h1-weight 0.25`` 现场构造，h1020⊕s0.5）
+            ⇒ 换种子后整条历史 IC 序列按生产口径重算，与实时段（defv 榜）
+            同口径，**2026-10-10 的 882→dingban 断点不再存在于新序列**
+            （旧断点序列以 ``--hist-dir reports/alla_rolling_ortho --pred-path ""
+            `` 指回 882 面板可复现）。
     """
     from config import Config
 
     cache_root = Path(cache_root or str(Config.cache()["root"]))
-    hist = load_hist_base(hist_dir)
+    hist = load_hist_base(hist_dir, pred_stem=pred_stem, pred_path=pred_path)
     live = load_live_base(cache_root, begin=live_begin)
 
     # 行情面板：历史段 + 实时段（实时覆盖重叠）

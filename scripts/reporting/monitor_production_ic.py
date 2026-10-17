@@ -1,4 +1,4 @@
-"""生产口径每日 IC / 风格暴露监控 CLI（全A · 定版 dingban · 2026-10-10 起）。
+"""生产口径每日 IC / 风格暴露监控 CLI（全A · v1w2-cheap · 2026-10-17 起）。
 
 用法::
 
@@ -11,10 +11,13 @@
 产物：
     reports/monitoring/production_ic_daily.csv   逐日 IC / 中性化 IC / 风格暴露
 
-⚠️ 口径断点（2026-10-10）：生产出榜切定版（``--preset dingban``，产物目录
-``reports/alla_daily_defv/``）后，本台账的**实时段**改用 defv 榜（dingban 口径），
-而**历史段仍来自 ``reports/alla_rolling_ortho`` 的 ortho 回测基线**（本机无 fundind
-回测 pred）⇒ 切换日处存在一处**口径断点**，跨该日比较 IC 需注明。
+⚠️ 口径沿革（2026-10-17 v1w2 起）：历史段种子 = **现场构造**的 v1w2 复合信号
+（``reports/monitoring/seed_v1w2_h1020slow.parquet``，由
+``scripts/reporting/build_monitor_seed.py`` 产出——快信号加权重构 ⊕ 慢信号，
+与 ``cheap_lever_revalidate_920`` 同口径）+ fundind 运行目录的 ``_base``；
+实时段读 v1w2 榜（``reports/alla_daily_v1w2/``）。换种子后整条历史序列按
+v1w2 口径重算，**不再有 10-10 的 882→dingban 断点**（如需复现旧断点序列：
+``--hist-dir reports/alla_rolling_ortho --hist-pred ""``）。
 
 设计动机见 ``monitoring/production_ic.py`` 模块 docstring。
 """
@@ -44,9 +47,16 @@ def _fmt(v, width: int = 8, digits: int = 4) -> str:
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description="生产口径每日 IC / 风格暴露监控")
     p.add_argument("--rank-dir", default="reports/alla_daily_defv",
-                   help="每日出榜产物目录（ranking_<ds>.csv）")
-    p.add_argument("--hist-dir", default="reports/alla_rolling_ortho",
-                   help="回测基线目录（pred/ + _base/）")
+                   help="每日出榜产物目录（ranking_<ds>.csv）；dingban 定版口径"
+                        "（v1w2-cheap 切换 2026-10-17 搁置，切时改此默认）")
+    p.add_argument("--hist-dir", default="reports/alla_rolling_ortho920fundind",
+                   help="回测基线目录（_base/ 复权价 + 风格协变量）")
+    p.add_argument("--hist-pred", default="reports/monitoring/seed_dingban_h1020slow.parquet",
+                   help="历史段打分面板（生产口径复合信号种子，"
+                        "scripts/reporting/build_monitor_seed.py 产出）；"
+                        "传空串则回退 --hist-dir/pred/--hist-stem")
+    p.add_argument("--hist-stem", default="ens_h1h5__h1",
+                   help="回退的 pred 文件名后缀（仅 --hist-pred 为空时使用）")
     p.add_argument("--cache-root", default=None, help="行情缓存根（默认 config）")
     p.add_argument("--out", default=DEFAULT_OUT, help="输出 CSV 路径")
     p.add_argument("--live-begin", default="20260601", help="实时区间面板起点")
@@ -65,6 +75,8 @@ def main(argv: list[str] | None = None) -> int:
         out_path=None if args.summary_only else args.out,
         live_begin=args.live_begin,
         check_overlap=not args.no_overlap_check,
+        pred_stem=args.hist_stem,
+        pred_path=args.hist_pred or None,
     )
     if df.empty:
         print("[prod-ic] 无可用截面（榜单缺失或行情未更新）")

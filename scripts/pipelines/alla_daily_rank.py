@@ -1863,6 +1863,7 @@ def run(args) -> dict:
     #   ② 由 build_slow_panel 末尾的 ffill 把「最近可得信号月」带到预测日
     #      （月度信号 hold 语义）。
     slow_lam = float(getattr(args, "slow_blend", 0.0) or 0.0)
+    slow_meta: dict = {}
     if slow_lam > 0:
         from scripts.evaluation.fundamental_blend import build_slow_panel, month_firsts
         from scripts.pipelines import rolling_grid_alla as _RG
@@ -1881,16 +1882,20 @@ def run(args) -> dict:
         ens_tag = f"{ens_tag}+s{slow_lam:.1f}"
         # 真实信号月 = 日历上 ≤ 预测日的最后一个月初（其行由 ffill 前推到预测日）
         _msrc = _bmf[_bmf <= predict_date]
+        # 滞后披露进 history.csv（联动件⑤：日报正文读该字段提示离线面板欠账）
+        slow_meta = {"slow_blend": slow_lam,
+                     "slow_signal_month": str(_msrc[-1].date()) if len(_msrc) else "",
+                     "slow_n_valid": int(slow_row.notna().sum())}
         log.info("定版慢信号融合: λ=%.2f | 慢信号有效 %d 只 | 合成后有效 %d 只"
                  "（信号月取自 %s）",
-                 slow_lam, int(slow_row.notna().sum()), int(scores.notna().sum()),
+                 slow_lam, slow_meta["slow_n_valid"], int(scores.notna().sum()),
                  _msrc[-1].date() if len(_msrc) else "无")
     # 解释口径固定 h1（不在集成里时取首个 horizon）：SHAP/重要性只对单模型有意义
     expl_h = 1 if 1 in predictors else horizons[0]
     predictor, feats = predictors[expl_h]
     train_meta = {"horizons": list(horizons), "excluded_features": list(exclude),
                   "ensemble": ens_tag, "explain_horizon": expl_h,
-                  "per_horizon": per_h_meta}
+                  "per_horizon": per_h_meta, **slow_meta}
     n_raw = int(scores.notna().sum())
 
     tradable = signal_day_tradable(tail["close_raw"], predict_date)
