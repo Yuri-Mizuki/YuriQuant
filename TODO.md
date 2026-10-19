@@ -23,6 +23,12 @@
 
 ## 一、研究验证欠账（最高优先级——影响结论可信度）
 
+- [x] **2026-10-19 架构清理（审计 §6.6）**：① `scripts/common/alla_common.py`
+  下沉，解除 `rolling_grid_alla` 被 25 个脚本反向 import；② neutralized/fundind
+  builder 与 7 个 `load_panels` 样板合并；③ 归档 26 个零引用入口 + 新增
+  `scripts/README.md` 索引（CI 校验）；④ `e2e_common` 迁出 common 到 archive。
+  详见 `reports/docs/consistency_checks/全项目代码与口径审计_2026-10-19.md` §6.6。
+
 - [x] **定版口径切换生产出榜链**（✅ **10-10 已完成**——schedule.yaml `--preset
   dingban` + 产物 `reports/alla_daily_defv/`；legacy 产物停于 09-22。10-13 审计曾误判
   "未切"，真源在 schedule.yaml 而非脚本 argparse 默认）：
