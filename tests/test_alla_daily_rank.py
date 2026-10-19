@@ -108,6 +108,43 @@ def test_rank_average_matches_experiment():
     assert len(only) == 120
 
 
+def test_rank_average_weighted():
+    """加权秩平均（--h1-weight，v1w2-cheap）：等权时与均值路径一致、权重语义正确。
+
+    语义（与实验侧 ``cheap_lever_revalidate_920::_wrank_avg`` 同口径）：交集内
+    ``Σw_k·r_k / Σw_k``。三断言：① 等权 weights=[0.5,0.5] 与缺省均值逐位相同；
+    ② w=[1,0] 退化为面板 a 的秩；③ 手工算的加权值逐位吻合（含 NaN 掩码）。
+    """
+    from scripts.pipelines.alla_daily_rank import _rank_average_single_day
+
+    rng = np.random.default_rng(1)
+    d = pd.Timestamp("2026-09-04")
+    codes = [f"c{i:03d}" for i in range(60)]
+    a = pd.DataFrame(rng.normal(size=(1, 60)), index=[d], columns=codes)
+    b = pd.DataFrame(rng.normal(size=(1, 60)), index=[d], columns=codes)
+    a.iloc[0, :2] = np.nan          # 交集 = 除前 2 只外
+    b.iloc[0, 5:7] = np.nan
+
+    # ① 等权路径逐位 == 缺省均值
+    pd.testing.assert_series_equal(
+        _rank_average_single_day([a, b], weights=[0.5, 0.5]),
+        _rank_average_single_day([a, b]), check_names=False)
+
+    # ② w=[1,0]：纯 a 的截面秩
+    got = _rank_average_single_day([a, b], weights=[1.0, 0.0])
+    exp = a.iloc[0].rank(pct=True)
+    inter = a.iloc[0].notna() & b.iloc[0].notna()
+    pd.testing.assert_series_equal(
+        got, exp.where(inter).astype(np.float32), check_names=False)
+
+    # ③ 手工加权（0.25/0.75）逐位吻合
+    w = (0.25, 0.75)
+    ra, rb = a.iloc[0].rank(pct=True), b.iloc[0].rank(pct=True)
+    exp = (w[0] * ra + w[1] * rb).astype(np.float32)
+    got = _rank_average_single_day([a, b], weights=list(w))
+    pd.testing.assert_series_equal(got, exp, check_names=False)
+
+
 def _make_status(parquet_path: Path, predict_date: pd.Timestamp):
     codes = ["c0", "c1", "c2", "c3", "c4", "c5"]
     raw_close = pd.Series([10.0, 11.0, 12.0, 13.0, 14.0, 15.0], index=codes)

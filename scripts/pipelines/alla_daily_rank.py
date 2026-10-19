@@ -171,6 +171,14 @@ OUT_DIR = ROOT / "reports" / "alla_daily"
 #   dingban —— README 定版（真源 reports/batch1_920_收尾对照表.md §⑭⑯ 与
 #              scripts/evaluation/buffer_arm_920.py --variant defv）：
 #              fundind 快信号 h1020 ⊕ 慢信号 s0.5 + buffer(15/40) 执行层。
+#   v1w2-cheap —— dingban 的 cheap_lever 微调版（baselines.yaml::v1w2-cheap）：
+#              buffer entry 0.15→0.08 + 快信号 h1 份额减半 0.25→0.125（其余均摊
+#              h5/h10/h20，与实验侧 _wrank_avg 同口径）。
+#              ⚠️ 批次 11 920 复验出现**环境分歧**（62 因子慢信号环境 5/5 窗
+#              +1.47pp 通过；本机补齐 P5 后 72 因子环境仅 3/5 窗，近两窗转负）
+#              ⇒ **2026-10-17 生产切换搁置，维持 dingban**，最终裁决挂好机器
+#              批次 12。切换须由莉酱拍板后在 config/schedule.yaml 改 --preset
+#              并 `install alla_daily_rank` 重注册（本表真源）。
 PRESETS: dict[str, dict] = {
     "legacy": {},
     "dingban": {
@@ -186,6 +194,18 @@ PRESETS: dict[str, dict] = {
         # （GOOD_MACHINE_TASKS.md §1.1 实测命令 + build_alla_factor_neutralized_fundind
         # 的 docstring 配套命令），故定版复现必须同开关；出榜链自身默认 False。
         # ✅ 已由莉酱拍板确认（2026-10-15）：定版口径采用 True。
+        "tradable_labels": True,
+    },
+    "v1w2-cheap": {
+        "preproc": "ortho_fundind",
+        "horizons": (1, 5, 10, 20),
+        "slow_blend": 0.5,
+        "slow_panels_subdir": "panels_neu",
+        "selection_dir": FUNDIND_SELECTION_DIR,
+        "out_tag": "_v1w2",
+        "buffer_entry": 0.08,
+        "buffer_exit": 0.40,
+        "h1_weight": 0.125,
         "tradable_labels": True,
     },
 }
@@ -1482,33 +1502,50 @@ def compute_features(names: list[str], tail: dict,
 # 训练与预测
 # ---------------------------------------------------------------------------
 def _rank_average_single_day(panels: list[pd.DataFrame],
-                             min_panels: int = 2) -> pd.DataFrame:
-    """单日截面秩平均（集成臂 h1+h5 合成）。
+                             min_panels: int = 2,
+                             weights: list[float] | None = None,
+                             ) -> pd.Series:
+    """单日截面（加权）秩平均（集成臂 h1+h5 合成）。
 
     与实验侧 ``rolling_grid_alla::_rank_average`` 的**单日**情形同口径：对每只
     股票取其在各模型预测中的截面百分位秩，仅在**有效模型数 >= min_panels** 且
     该股在所有入选模型里都有预测（取交集）时求均值，否则不输出。
 
+    ``weights``（与 ``panels`` 对齐，缺失面板自动剔除对应权重）：给定时改为
+    ``Σw_k·r_k / Σw_k``（交集内全面板有效 ⇒ 分母恒为 Σw）——与实验侧
+    ``cheap_lever_revalidate_920::_wrank_avg`` 同口径；等权（或缺省）时**逐字
+    走原均值路径**（w=0.25×4 与 mean 仅差 float64 求和顺序 ULP）。
+
     生产链只需要预测日一个截面，故不复用实验侧逐日实现（那会 import 跨模块
     私有名，被 ``tests/test_layering`` 拦截）；一致性由
     ``tests/test_alla_daily_rank.py::test_rank_average_matches_experiment`` 锁死。
     """
-    valid_codes = None
-    ranks = []
-    for p in panels:
+    pairs = []
+    for p, w in zip(panels, weights if weights is not None
+                    else [None] * len(panels)):
         row = p.iloc[0] if len(p) else None
         if row is None:
             continue
         r = row.rank(pct=True)
         r = r[~row.isna()]
+        pairs.append((r, w))
+    valid_codes = None
+    ranks = []
+    for r, _w in pairs:
         ranks.append(r)
         valid_codes = r.index if valid_codes is None else valid_codes.intersection(r.index)
     # 返回全列（未入选者 NaN），与实验侧面板同形 —— 下游 build_ranking 会 dropna
     out = pd.Series(np.nan, index=panels[0].columns, dtype="float32")
     if len(ranks) < min_panels or valid_codes is None or not len(valid_codes):
         return out
+    ws = ([w for _r, w in pairs] if weights is not None else None)
     sub = pd.concat([r.reindex(valid_codes) for r in ranks], axis=1).dropna(axis=0)
-    out.loc[sub.index] = sub.mean(axis=1).astype(np.float32)
+    if ws is None or len(set(ws)) == 1:
+        out.loc[sub.index] = sub.mean(axis=1).astype(np.float32)
+    else:
+        w = np.asarray(ws, dtype=float)
+        out.loc[sub.index] = ((sub.to_numpy() * w).sum(axis=1) / w.sum()
+                              ).astype(np.float32)
     return out
 
 
@@ -1801,10 +1838,19 @@ def run(args) -> dict:
         scores = preds[0].iloc[0]
         ens_tag = "none"
     else:
-        scores = _rank_average_single_day(preds)
+        # h1 份额加权（--h1-weight；缺省等权 = 定版口径，逐字走原均值路径）
+        _hw = getattr(args, "h1_weight", None)
+        _wts = None
+        if _hw is not None:
+            _rest = (1.0 - _hw) / (len(horizons) - 1)
+            _wts = [_hw if h == 1 else _rest for h in horizons]
+        scores = _rank_average_single_day(preds, weights=_wts)
         ens_tag = "+".join(f"h{h}" for h in horizons) + "_rank_avg"
-        log.info("集成 %s → 单日截面秩平均，有效股票 %d（各臂交集口径）",
-                 ens_tag, int(scores.notna().sum()))
+        if _wts is not None:
+            ens_tag += f"_h1w{_hw:g}"
+        log.info("集成 %s → 单日截面%s秩平均，有效股票 %d（各臂交集口径）",
+                 ens_tag, "加权" if _wts is not None else "",
+                 int(scores.notna().sum()))
 
     # 定版慢信号融合（`--slow-blend`，README 定版 = 0.5）：
     #   scores = (1-λ)·rank(快信号) + λ·rank(慢信号)
@@ -1821,6 +1867,7 @@ def run(args) -> dict:
     #   ② 由 build_slow_panel 末尾的 ffill 把「最近可得信号月」带到预测日
     #      （月度信号 hold 语义）。
     slow_lam = float(getattr(args, "slow_blend", 0.0) or 0.0)
+    slow_meta: dict = {}
     if slow_lam > 0:
         from scripts.evaluation.fundamental_blend import build_slow_panel, month_firsts
         from scripts.pipelines import rolling_grid_alla as _RG
@@ -1839,21 +1886,20 @@ def run(args) -> dict:
         ens_tag = f"{ens_tag}+s{slow_lam:.1f}"
         # 真实信号月 = 日历上 ≤ 预测日的最后一个月初（其行由 ffill 前推到预测日）
         _msrc = _bmf[_bmf <= predict_date]
+        # 滞后披露进 history.csv（联动件⑤：日报正文读该字段提示离线面板欠账）
+        slow_meta = {"slow_blend": slow_lam,
+                     "slow_signal_month": str(_msrc[-1].date()) if len(_msrc) else "",
+                     "slow_n_valid": int(slow_row.notna().sum())}
         log.info("定版慢信号融合: λ=%.2f | 慢信号有效 %d 只 | 合成后有效 %d 只"
                  "（信号月取自 %s）",
-                 slow_lam, int(slow_row.notna().sum()), int(scores.notna().sum()),
+                 slow_lam, slow_meta["slow_n_valid"], int(scores.notna().sum()),
                  _msrc[-1].date() if len(_msrc) else "无")
     # 解释口径固定 h1（不在集成里时取首个 horizon）：SHAP/重要性只对单模型有意义
     expl_h = 1 if 1 in predictors else horizons[0]
     predictor, feats = predictors[expl_h]
     train_meta = {"horizons": list(horizons), "excluded_features": list(exclude),
                   "ensemble": ens_tag, "explain_horizon": expl_h,
-                  "per_horizon": per_h_meta}
-    # 慢信号滞后披露（联动件⑤）：把「实际用的信号月」写进 meta → history.csv，
-    # 邮件 Caveat（build_daily_email_body.py）读该列动态披露滞后，不再硬编码日期。
-    if slow_lam > 0:
-        train_meta["slow_signal_month"] = (
-            _msrc[-1].strftime("%Y-%m-%d") if len(_msrc) else "")
+                  "per_horizon": per_h_meta, **slow_meta}
     n_raw = int(scores.notna().sum())
 
     tradable = signal_day_tradable(tail["close_raw"], predict_date)
@@ -2025,8 +2071,14 @@ def main() -> None:
                          "配 fundind 臂特征清单）；zscore（原始面板 + 截面 zscore）")
     ap.add_argument("--preset", choices=tuple(PRESETS), default=None,
                     help="口径预设，一次配齐需协同变动的多个参数（显式传参优先）："
-                         "legacy（默认 = 现行生产口径，零改动）或 dingban（README "
-                         "定版 = fundind 快信号 h1020⊕慢信号 s0.5 + buffer(15/40)）")
+                         "legacy（默认 = 现行生产口径，零改动）、dingban（README "
+                         "定版 = fundind 快信号 h1020⊕慢信号 s0.5 + buffer(15/40)）"
+                         "或 v1w2-cheap（定版微调 = buffer(8/40) + h1 份额 0.125，"
+                         "批次 11 复验环境分歧后切换搁置，待批次 12 终裁）")
+    ap.add_argument("--h1-weight", type=float, default=None, metavar="W",
+                    help="快信号秩平均的 h1 份额（缺省 = 等权）：W·rank(h1) + "
+                         "(1-W)·mean(rank(其余 horizon))，交集口径。定版等权 = "
+                         "0.25；v1w2-cheap 微调 = 0.125（h1 减半，其余均摊）")
     ap.add_argument("--slow-blend", type=float, default=None, metavar="LAMBDA",
                     help="慢信号融合权重 λ（0=关）。定版 λ=0.5："
                          "scores=(1-λ)·rank(快)+λ·rank(慢)，慢信号 = panels_neu "
@@ -2089,6 +2141,15 @@ def main() -> None:
                  f"（现 entry={_be}, exit={_bx}）")
     if preset.get("tradable_labels"):
         args.tradable_labels = True
+    if args.h1_weight is None:
+        args.h1_weight = preset.get("h1_weight")
+    if args.h1_weight is not None:
+        if not 0.0 <= args.h1_weight <= 1.0:
+            ap.error(f"--h1-weight 须在 [0,1]（现 {args.h1_weight}）")
+        if len(args.horizons) < 2:
+            ap.error("--h1-weight 只对多 horizon 集成有意义（现单 horizon）")
+        if 1 not in args.horizons:
+            ap.error(f"--h1-weight 需要 h1 在 --horizons 里（现 {args.horizons}）")
     args.exclude_features = tuple(
         x.strip() for x in str(args.exclude_features).split(",") if x.strip())
     if not args.horizons:

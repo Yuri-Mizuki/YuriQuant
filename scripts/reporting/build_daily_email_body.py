@@ -1,7 +1,8 @@
 """从出榜产物生成每日邮件正文（markdown + 配套 HTML）。
 
 用法（须在项目根目录执行，因为脚本用相对路径读产物）：
-    # 常规（2026-10-10 起生产 = 定版口径 dingban，产物在 reports/alla_daily_defv）
+    # 常规（2026-10-10 起生产 = 定版口径 dingban，产物在 reports/alla_daily_defv；
+    #       v1w2-cheap 切换 2026-10-17 搁置——复验环境分歧待好机器口径裁决）
     python scripts/reporting/build_daily_email_body.py --ds 20261008 \
         --dir reports/alla_daily_defv
 
@@ -556,10 +557,17 @@ def main() -> int:
                 _lag_m = None
             _ssm_day = _ssm[:7].replace("-", "") + "01" if len(_ssm) >= 7 else _ssm
             _lag_txt = f"，滞后预测日约 {_lag_m} 个月" if _lag_m and _lag_m > 0 else ""
+            # 滞后 >45 天 = RebuildPanels 月度补齐欠账（两条分支合并后的统一告警）
+            try:
+                _lag_d = (pd.Timestamp(ds) - pd.Timestamp(_ssm_day)).days
+            except Exception:
+                _lag_d = -1
+            _debt = ("；⚠️ **滞后超 45 天——离线面板欠账，RebuildPanels 月度补齐待跑**"
+                     if _lag_d > 45 else "")
             cav.append(f"**慢信号滞后**：本榜分数含 {_slow_lam:.0%} 权重的慢信号"
                        f"（基本面/股东族月度合成），其数据来自**冻结因子库**"
                        f"`panels_neu`，实际信号月为 **{fmt_day(_ssm_day)}**"
-                       f"{_lag_txt}（月度信号按 hold 语义前推到预测日）。"
+                       f"{_lag_txt}（月度信号按 hold 语义前推到预测日）{_debt}。"
                        f"该面板由 `YuriQuant RebuildPanels` 计划任务月频重建，"
                        f"平时滞后 1~2 个月属正常设计，不是数据故障。")
         else:
