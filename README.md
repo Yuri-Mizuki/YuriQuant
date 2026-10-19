@@ -76,6 +76,7 @@ zz1000 上的 RL/QP 组合优化 24 臂消融无稳健超额；全A QP 组合优
 - **仓位层 overlay 先过「信息上界测试」**：任何总仓位乘数类改造（波动率目标化 / 趋势 / 择时 / 回撤状态机）先算「信息完美且可实现」口径的收益上界（收盘知当日、次日执行），再实测靶子可预测性，最后才跑规则 —— `scripts/evaluation/timing_probe.py`。本项目实测：大盘日收益自相关仅 +0.048（昨日信息对明日≈零预测力）、月度方向因子 0/7 显著 ⇒ 可实现择时上界 ≈ 满仓，择时线收口（见 `reports/timing_probe/`）
 - **稳健统计**：Newey-West t、OLS+HAC、自动滞后阶、FDR 多重检验校正
 - **反过拟合三件套**：CSCV PBO 过拟合概率（12870 个组合秒级算完）、Deflated Sharpe Ratio、三段式训练纪律（train / valid / test 分段 + embargo，配置冻结）
+- **增量方向探针族（frontier，2026-10-19）**：h60 长 horizon 全链（`select_horizon_features.py` 清单 + `retrain_freq_ic --save-pred` 训练 + `horizon_cross_eval.py` 同目标交叉与组合层——h60 第二策略 Sharpe 1.028/换手 17.5%）；残差目标（`residual_ic_probe.py` 四口径 + `residual_overlay_probe.py` 负向低配 overlay + `residual_stack_probe.py` 二阶 GBDT 融合，均带安慰剂臂）。证据 `reports/frontier_audit_2026-10-19/`，920 复验挂批次 13
 
 ### 🏭 生产化：研究系统的最后一公里
 

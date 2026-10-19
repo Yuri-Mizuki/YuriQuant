@@ -458,16 +458,27 @@ def _run_once(bt: VectorBacktest, ctx: CaliberContext, execution: str,
 
 def evaluate_strategy(strategy, ctx: CaliberContext, cost: TransactionCosts,
                       capital: float = DEFAULT_CAPITAL,
-                      execution: str | None = None) -> dict:
+                      execution: str | None = None,
+                      signal: pd.DataFrame | None = None,
+                      yearly: bool = False) -> dict:
     """在统一口径下回测一个 ``Strategy``（真正走引擎的选股路径）。
 
     Args:
         execution: 覆盖 ``ctx.execution``（``close`` / ``open`` / ``vwap``）。
+        signal: 覆盖选股信号面板（date × code，与 ``ctx.pred`` 同 index/columns；
+            overlay / 信号变换实验用。None = ctx.pred）。
+        yearly: 附带逐年日收益（`yearly_ret_{yyyy}` 列），对照臂逐年差用。
     """
     ex = execution or ctx.execution
     bt = VectorBacktest(strategy=strategy, rebalance_freq="M",
                         initial_capital=float(capital), costs=cost)
-    return _metrics(_run_once(bt, ctx, ex), capital)
+    res = _run_once(bt, ctx, ex, signal=signal)
+    out = _metrics(res, capital)
+    if yearly:
+        dr = res.daily_returns
+        for y, sub in dr.groupby(dr.index.year):
+            out[f"yearly_ret_{y}"] = float((1 + sub).prod() - 1)
+    return out
 
 
 def evaluate_weights(target_w: pd.DataFrame, ctx: CaliberContext,

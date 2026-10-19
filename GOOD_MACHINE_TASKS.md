@@ -1,4 +1,4 @@
-# GOOD_MACHINE_TASKS — 好机器大任务队列（2026-09-22 定稿；批次 1–11 终结，批次 12 = 新队列）
+# GOOD_MACHINE_TASKS — 好机器大任务队列（2026-09-22 定稿；批次 1–11 终结，批次 12–13 = 新队列）
 
 > 汇总全部需要好机器执行的大任务：批次顺序、完整命令、耗时估计、依赖与验收。
 > 本机半天级穿插项不在本清单（见 TODO §一 🥉）。**约定：批次内任务可并行，
@@ -7,6 +7,7 @@
 > **收官状态（10-17）**：批次 1–10 终判；批次 7 e2e 口径重跑收官；批次 11
 > cheap_lever 920 复验**环境分歧后切换搁置**（最终裁决移交批次 12 首项）；
 > **批次 12（10-17 立）= 新队列：v1w2 终裁 + 五项「挂 920 后」实验**。
+> **批次 13（10-19 立）= A1/A2 增量方向 920 复验三臂（overlay / stack / h60）**。
 > 结果速览真源 `reports/batch2385_结果速览.md` + `reports/batch1_920_收尾对照表.md`
 > + `reports/cheap_lever_scan/README.md`。命令与验收口径全文保留作复现存档。
 > **资源标注**：每批标 🖥️CPU / 🎮GPU / 💾大内存。
@@ -25,6 +26,7 @@
 | 10 | 920 后收尾对照包 | ✅ horizon_mix/stack/fundamental_blend/buffer/T 窗/income 复核/alt 终审全出（§⑫–⑯）；member_blend12 12 成员复验因 h1020 已裁决采纳不再必要 | 🖥️ CPU |
 | 11 | **cheap_lever 胜者 920 定版复验**（10-14 立项） | ⚠️ **10-17 复验环境分歧，切换搁置**：62 因子慢信号环境叠加臂 5/5 窗 +1.47pp 通过；本机补齐 P5 后（72 因子）仅 3/5 窗（2023+/2025+ 转负，全窗 +0.88pp）——近窗稳健性不成立，**维持 dingban**。字面迁移两环境均否、h1 减半操作成立。登记锚点 18.07 本机两态均不可复现（数据态年份差主导）。**最终裁决挂批次 12 = 好机器自家口径重跑**。产物 `reports/cheap_lever_scan/` | 🖥️ CPU |
 | 12 | **新队列（10-17 立）**：① v1w2-cheap 终裁 + ② 市场状态特征 + ③ 隔夜标签臂 + ④ 观点注入三臂 + ⑤ CVaR 组合臂 + ⑥ RD-Agent P2（WSL2）+ ⑦ AI97 消融 5 组 | ⬜ 见批次 12 节 | 🖥️💾 ①纯回测 <1h；②③④需全A 重训（💾≥64GB）；⑤⑦ CPU；⑥ WSL2+LLM |
+| 13 | **A1/A2 增量方向 920 定版复验（10-19 立）**：① A2 负向 overlay（neg6 + w=0.40 冻结）② A2 二阶 GBDT 融合（α=0.5 冻结，特征池按 920 残差榜早年列重算）③ A1 h60 第二策略（h60 清单 + 920 基座对照） | ⬜ 见批次 13 节 | 🖥️💾 ①纯回测 <1h；②残差首轮+训练 ~2h；③h60 清单可直用（选特征不依赖 pred）+ 训练 ~1h |
 
 ---
 
@@ -455,6 +457,60 @@ LLM 时加 `--llm openai`。全A 920 平行臂待接 panels 数据面后另行�
 - 成本粗估：≈1450 次 LLM 扩展/臂 + 1450 次面板评测（可多进程）；token ≈ AI97 llm 臂量级
 - **否定结果同样归档**：若 llm_oneshot ≈ mcts，结论即「LLM 语义生成为主、MCTS 控制增益有限」
 - 高频部分不做（min5_hs300 资源墙）
+
+---
+
+## 批次 13：A1/A2 增量方向 920 定版复验（10-19 立——三臂冻结迁移）
+
+> 来源：`TODO.md` §六 A1/A2 第二轮（882 口径全过组合层判据，证据
+> `reports/frontier_audit_2026-10-19/`）。**冻结迁移原则：882 上调出来的
+> 超参（overlay w=0.40、stack α=0.5）与因子集原样带过去，920 只做验证
+> 不做重调**——重调会把 920 变成新一轮 in-sample。
+
+### ① A2 负向 overlay（纯回测，<1h）
+
+```bash
+python -m scripts.evaluation.residual_overlay_probe \
+    --signal <920 定版信号登记键或 pred_path> --weights 0.10,0.20,0.40 \
+    --out reports/frontier_audit_920_reval/overlay
+```
+
+**验收**：920 定版口径下 neg6_w040 ΔSharpe ≥ +0.08 且逐年超额 ≥2/3 年
+正、placebo 仍 ≤0 ⇒ overlay 进出榜链候选（与 ② 分开裁决）。
+
+### ② A2 二阶 GBDT 融合（残差首轮 + 训练，~2h）
+
+```bash
+# 1) 920 残差首轮（若 920 pred 已有残差 CSV 则跳过）
+python -m scripts.evaluation.residual_ic_probe --pred-dir <920-pred> --resume \
+    --out reports/frontier_audit_920_reval
+# 2) stack（特征池自动按 920 榜的早年列重算，无选择前视口径不变）
+python -m scripts.evaluation.residual_stack_probe --pred-dir <920-pred> \
+    --out reports/frontier_audit_920_reval/residual_stack
+```
+
+**验收**：stage2 OOS IC（残差）≥0.02 且 fuse α=0.50 ΔSharpe ≥ +0.08、
+placebo ≤0 ⇒ 进融合层候选（与 h1020⊕s0.5 的融合优先级由数字定）。
+
+### ③ A1 h60 第二策略（清单可直用 + 训练，~1h）
+
+`selection_h60/y2023__h60.json` 直接迁移（选特征只依赖 h60 fwd IC，不依赖
+pred 口径）；训练与对照切 920 基座：
+
+```bash
+python -m scripts.evaluation.retrain_freq_ic --horizon 60 \
+    --sel-dir reports/frontier_audit_2026-10-19/selection_h60 --sel-year 2023 \
+    --refits 60 --save-pred --oos-begin 20240102 --oos-end 20260901 \
+    --out reports/frontier_audit_920_reval --out-tag h60_920
+python -m scripts.evaluation.horizon_cross_eval \
+    --preds m_h20=<920 h20 pred>,m_h60=reports/frontier_audit_920_reval/h60_920/pred_refit060.parquet \
+    --horizons 20,60 --portfolio --baseline <920 定版信号> \
+    --out reports/frontier_audit_920_reval/cross_eval
+```
+
+**验收**：同目标配对差仍显著（|t|≥2）且组合层 Sharpe ≥ 920 定版基线 −0.05
+且换手 ≤60% 基线 ⇒ 「低换手第二策略」立项进定版登记表（后续再做 m_h60 ⊕
+主信号融合与 h60 专属 buffer 网格）。
 
 ---
 

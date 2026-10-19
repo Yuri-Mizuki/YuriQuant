@@ -77,6 +77,7 @@
 | `evaluation/galaxy_l1.py` | 银河 0608 复现 L1：三标签 GBDT + 验证集 RankIC 质量门槛（stage2 Phase 2 前置）。 |
 | `evaluation/gp_tune_budget.py` | GP 评估预算 × 多 seed 调参实验（三段式，test 段受保护） |
 | `evaluation/gtja_repro_eval.py` | 国君研报复现：因子回测评估与研报基准对比 |
+| `evaluation/horizon_cross_eval.py` | A1 同目标交叉评估（2×2 IC 矩阵 + 配对差）+ 组合层对照（2026-10-19）。 |
 | `evaluation/horizon_mix.py` | E1'' horizon 混合消融：把慢 horizon OOS 预测混入 ens_h1h5 的对照实验。 |
 | `evaluation/horizon_probe.py` | 主信号 IC 随 h1–h120 的衰减 / 非重叠样本 / 有效样本数（2026-10-19，A1 前置）。 |
 | `evaluation/hp_search_ic.py` | 超参 × 预测 IC 小规模对照（**滚动口径**，只比预测 IC，不跑组合回测）。 |
@@ -94,7 +95,10 @@
 | `evaluation/pv_marginal_curve.py` | 量价因子边际增益曲线 —— 阶段 B（DPP 组合口径）。 |
 | `evaluation/regime_probe.py` | Regime 条件化探针（Phase 0/2 前置诊断，2026-10-15）。 |
 | `evaluation/residual_ic_probe.py` | 残差目标探针：raw/resfac/restgt/both 四口径 + NW t + 逐年方向（2026-10-19，A2）。 |
-| `evaluation/retrain_freq_ic.py` | 重训频率 × 预测 IC 小规模对照（只比预测 IC，**不跑组合回测**）。 |
+| `evaluation/residual_overlay_probe.py` | A2 负向残差因子 → 信号层低配/剔除 overlay（剂量臂 + 安慰剂，production 口径）。 |
+| `evaluation/residual_stack_probe.py` | A2 二阶 GBDT：残差收益目标 walk-forward + 融合组合层（特征池按早年列选，无选择前视）。 |
+| `evaluation/retrain_freq_ic.py` | 重训频率 × 预测 IC 小规模对照（只比预测 IC，**不跑组合回测**；`--save-pred` 可存 OOS pred 面板）。 |
+| `evaluation/select_horizon_features.py` | A1 长 horizon 特征清单选择器：h60 IC 质量窗 + DPP（fwd 不穿透选择窗）。 |
 | `evaluation/seq_predictor_compare.py` | P1 —— 时序预测器对照：序列归纳偏置 vs 截面/树归纳偏置。 |
 | `evaluation/stack_blend.py` | E6 stacking：滚动元学习器**学**融合权重（对齐 CFA ensemble / MSIF-OEM 两阶段 |
 | `evaluation/tabfm_rolling.py` | 批次 8：表格基础模型全量滚动对照（TabPFN-3 / TabICL V2 vs LightGBM）。 |

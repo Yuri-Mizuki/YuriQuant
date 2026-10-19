@@ -126,6 +126,9 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--out-tag", default="", help="产出子目录后缀")
     ap.add_argument("--quick", action="store_true",
                     help="冒烟：OOS 取末尾 15 日、档位 {5,1}（覆盖 --oos-*/--refits）")
+    ap.add_argument("--save-pred", action="store_true",
+                    help="把各档位 OOS 预测面板存 pred_refit{NNN}.parquet"
+                         "（同目标交叉评估 / 组合层回测用）")
     args = ap.parse_args(argv)
 
     if args.quick:
@@ -217,6 +220,9 @@ def main(argv: list[str] | None = None) -> None:
                                   args.window, embargo_days, 250,
                                   refit, params, cache)
         pred = raw.where(valid.reindex(index=oos_days))
+        if args.save_pred:
+            pred.astype(np.float32).to_parquet(
+                dest / f"pred_refit{refit:03d}.parquet")
         ic = masked_ic(pred, fwd, mask)
         st = ic_stats(ic)
         n_chunks = len(range(0, len(oos_days), refit))
