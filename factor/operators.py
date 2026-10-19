@@ -432,6 +432,10 @@ def cs_scale_abs(x: pd.DataFrame) -> pd.DataFrame:
 def cs_winsorize(x: pd.DataFrame) -> pd.DataFrame:
     """截面 MAD 去极值（逐交易日独立，中位数 ±5×MAD，与华泰口径一致）。
 
+    ⚠️ 与生产 ``panels_neu`` 的默认去极值（``preprocessing``：3×**1.4826**×MAD）
+    **不是同一口径**：本函数是研报/GP 复现的 5×MAD（不乘 1.4826）。跨表比较
+    入库因子与研究适应度时须注明（2026-10-19 审计 P1）。
+
     2026-08-17 收敛：复用 ``preprocessing.winsorize_mad``（其
     ``consistency_scale=False`` 即"不乘 1.4826"的华泰口径，等价于本函数），
     消除 `operators` / `preprocessing` 两处复制。

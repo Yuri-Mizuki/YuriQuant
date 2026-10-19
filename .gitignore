@@ -19,8 +19,9 @@ credentials*.yaml
 *.swp
 *.swo
 
-# Reports / outputs
-reports/
+# Reports / outputs（只跟踪治理文档 reports/README.md；实验产物不进 git）
+reports/*
+!reports/README.md
 output/
 
 # Logs

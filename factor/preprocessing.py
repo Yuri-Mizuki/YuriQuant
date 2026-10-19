@@ -25,12 +25,18 @@ _MAD_CONSISTENCY_CONST = 1.4826  # 使 MAD 在正态分布下与标准差同尺�
 # ===========================================================================
 # 去极值
 # ===========================================================================
-def winsorize_mad(panel: pd.DataFrame, n_mad: float = 3.0,
-                  consistency_scale: bool = True) -> pd.DataFrame:
+#: 生产因子预处理默认去极值口径：3×1.4826×MAD（``panels_neu`` 构建走此默认）。
+#: 研究/华泰复现口径是 5×MAD（不乘 1.4826），两者**有意不同**，跨表比较须注明。
+PROD_WINSOR_MAD_N = 3.0
+PROD_WINSOR_CONSISTENCY = True
+
+
+def winsorize_mad(panel: pd.DataFrame, n_mad: float = PROD_WINSOR_MAD_N,
+                  consistency_scale: bool = PROD_WINSOR_CONSISTENCY) -> pd.DataFrame:
     """按 MAD（中位数绝对偏差）去极值，逐日（截面）独立处理。
 
     Args:
-        n_mad: 截断倍数。
+        n_mad: 截断倍数（生产默认 3；研报复现传 5）。
         consistency_scale: 是否把 MAD 乘以 1.4826（正态一致性常数，使 MAD 与
             std 同尺度）。**华泰研报口径**：去极值用 ``中位数 ± 5×median(|X-中位数|)``
             **不乘** 1.4826 —— 复现研报时传 ``n_mad=5, consistency_scale=False``。

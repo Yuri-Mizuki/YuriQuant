@@ -434,6 +434,8 @@ def htai_preprocess(fp: pd.DataFrame, neutral_panels: dict | None = None,
     """华泰研报口径的**环内因子预处理**（报告21 适应度计算流程 a/b/c 三步）：
 
     1. 中位数去极值：median ± 5×median(|X - median|)（不乘 1.4826，与研报公式一致）；
+       ⚠️ 生产 ``panels_neu`` 的默认去极值是 3×1.4826×MAD（见
+       ``factor.preprocessing.PROD_WINSOR_*``），两者有意不同，跨表比较须注明。
     2. 中性化：行业 + 市值 + 20日动量/20日换手/20日波动（``neutral_panels`` 提供，
        由 neutralize 对全部连续协变量回归取残差）；
     3. 标准化：截面 z-score。
