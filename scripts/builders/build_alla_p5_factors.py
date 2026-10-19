@@ -45,6 +45,10 @@ from scripts.builders.common import HORIZONS, IC_CODE_STRIDE  # noqa: E402
 
 DATASET = "all_a_2018_2026"
 
+#: DSO/DIO/DPO/CCC 的「天/年」换算。研报口径用 A 股年交易日 244（不是会计日历
+#: 365）——沿用既有因子值，避免静默改变 920 因子库；改口径须重建面板并重跑。
+DAYS_PER_YEAR_BIZ = 244.0
+
 from scripts.builders.build_alla_constructed_factors import (  # noqa: E402
     pit,
     safe,
@@ -113,9 +117,9 @@ def build_panels(close_adj, close_raw, inc, bal, cfo, div):
     ar = _pit32(bal, cal_idx, codes, "ACC_RECEIVABLE")
     inv = _pit32(bal, cal_idx, codes, "INV")
     ap = _pit32(bal, cal_idx, codes, "ACCT_PAYABLE")
-    dso = safe(ar, rev_ttm) * 244.0
-    dio = safe(inv, cost_ttm) * 244.0
-    dpo = safe(ap, cost_ttm) * 244.0
+    dso = safe(ar, rev_ttm) * DAYS_PER_YEAR_BIZ
+    dio = safe(inv, cost_ttm) * DAYS_PER_YEAR_BIZ
+    dpo = safe(ap, cost_ttm) * DAYS_PER_YEAR_BIZ
     panels["ccc"] = dso + dio.fillna(0.0) - dpo.fillna(0.0)
     del ar, inv, ap, dso, dio, dpo
 

@@ -274,7 +274,7 @@ def test_build_panel_core(tmp_path: Path, mock_ds):
     assert returns.index.equals(panel["close"].index)
     assert returns.columns.equals(panel["close"].columns)
     # returns 与"用同一 close 现算的次日收益"逐元素一致（口径不漂移）
-    expected = panel["close"].pct_change().shift(-1)
+    expected = panel["close"].pct_change(fill_method=None).shift(-1)
     pd.testing.assert_frame_equal(returns, expected)
     # 至少存在有效收益（首行因 mask/复权可能为 NaN，不强制）
     assert returns.notna().any().any()

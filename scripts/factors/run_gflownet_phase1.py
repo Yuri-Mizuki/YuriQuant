@@ -299,7 +299,7 @@ def main():
     # ---- 测试段采样 + 低相关筛选（研报 §2.3） ----
     samples = sample_formulas(tb_net, mdp, reward_fn, args.samples, seed=args.seed)
     sr = [r for _, r in samples]
-    print(f"\n=== 测试段评估（训练奖励同口径） ===")
+    print("\n=== 测试段评估（训练奖励同口径） ===")
     print(f"TB R 均值={np.mean(sr):.4f} 中位数={np.median(sr):.4f} "
           f"top1={sr[0]:.4f} (基线 均值={np.mean(base_r):.4f})")
 

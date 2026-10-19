@@ -383,13 +383,6 @@ def compute_alpha158(d: AlphaData, skip: bool = True) -> dict[str, pd.DataFrame]
 ALPHA360: dict[str, object] = {}
 
 
-def _a360(name: str):
-    def deco(fn):
-        ALPHA360[name] = fn
-        return fn
-    return deco
-
-
 def _register_alpha360():
     """注册 Alpha360 的 360 个因子（6 字段 × 60 日）。"""
 

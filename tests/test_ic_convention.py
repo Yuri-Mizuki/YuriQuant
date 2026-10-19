@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from factor.gflownet.reward import rank_ic_series
 from stats.ic import calc_ic_series
@@ -94,3 +95,24 @@ def test_returns_rank_fast_path_diverges_on_scattered_nan():
     diff = (fast - slow).abs().dropna()
     assert diff.mean() > 1e-4                      # 确有分叉，不是等价实现
     assert fast.notna().sum() == slow.notna().sum()  # 但有效行集合不变
+
+
+def test_tradable_mask_and_min_samples():
+    """tradable 掩码只在可交易子集上算；min_samples 低于门槛记 NaN。
+
+    2026-10-19 审计 P1：入库 IC（无掩码、n≥5）与评估 IC（有掩码、n≥15/30）
+    必须通过显式参数选择，而不是各自维护一份实现。
+    """
+    factor, rets = _panels()
+    mask = pd.DataFrame(True, index=factor.index, columns=factor.columns)
+    mask.iloc[0, :20] = False
+    got = calc_ic_series(factor, rets, tradable=mask)
+    exp = factor.iloc[0][mask.iloc[0]].corr(rets.iloc[0][mask.iloc[0]],
+                                            method="spearman")
+    assert got.iloc[0] == pytest.approx(exp)
+
+    # 20 个有效样本：min_samples=30 时为 NaN，=5 时有值
+    assert np.isnan(calc_ic_series(factor, rets, tradable=mask,
+                                   min_samples=30).iloc[0])
+    assert not np.isnan(calc_ic_series(factor, rets, tradable=mask,
+                                       min_samples=5).iloc[0])

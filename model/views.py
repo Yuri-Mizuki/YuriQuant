@@ -95,13 +95,14 @@ class TwoStagePredictor(BasePredictor):
 
     def _daily_mask(self, view_panel: pd.DataFrame, idx: pd.Index,
                     cols: pd.Index) -> pd.DataFrame:
-        """逐日截面：观点分位 >= 阈值 → True（观点内组）。
+        """逐日截面：观点分位 >= **(1 − top_frac) 分位点** → True（观点内组）。
 
-        阈值 = 该截面有效值的中位数（稳健；观点值 NaN 的股票归观点外组
-        ——保守默认，观点缺失不享受观点溢价）。
+        2026-10-19 审计修复：此前恒用中位数，``top_frac`` 是死参数；现按
+        ``view_panel.quantile(1 - top_frac)`` 取阈值（默认 0.5 = 中位数）。
+        观点值 NaN 的股票归观点外组——保守默认，观点缺失不享受观点溢价。
         """
-        med = view_panel.median(axis=1)
-        mask = view_panel.ge(med, axis=0)
+        thr = view_panel.quantile(1.0 - self.top_frac, axis=1)
+        mask = view_panel.ge(thr, axis=0)
         return mask.reindex(index=idx, columns=cols).fillna(False).astype(bool)
 
     def fit(self, features: Mapping[str, pd.DataFrame],

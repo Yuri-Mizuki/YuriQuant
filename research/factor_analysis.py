@@ -19,7 +19,6 @@ factor/model/optimize/monitoring 等核心包请直接从 stats 导入，勿再�
 """
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
 
 from factor.preprocessing import neutralize, build_style_covariates

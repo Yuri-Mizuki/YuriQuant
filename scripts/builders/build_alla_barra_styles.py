@@ -89,12 +89,6 @@ def _ew_lambda(n: int, half_life: int) -> np.ndarray:
     return w / w.sum()
 
 
-def _ffill_coverage(panel: pd.DataFrame, min_obs: int = 60) -> pd.DataFrame:
-    """财报 PIT 面板前向填充占位：build_pit_panel 已按交易日 ffill，此函数仅保留
-    兼容签名（历史版本曾在此做 ffill；现口径下不重复处理）。"""
-    return panel
-
-
 # ---------------------------------------------------------------------------
 # 量价类描述变量（raw 暴露，不含任何截面标准化）
 # ---------------------------------------------------------------------------
@@ -191,12 +185,6 @@ def build_nl_size(mktcap: pd.DataFrame) -> pd.DataFrame:
     return -(z ** 3)
 
 
-def _turnover_series(close_raw: pd.DataFrame, mktcap: pd.DataFrame,
-                     days: int) -> pd.DataFrame:
-    """废弃占位：liquidity 由 :func:`build_liquidity` 内联实现（防误用）。"""
-    raise NotImplementedError
-
-
 def build_liquidity(amount: pd.DataFrame, mktcap: pd.DataFrame) -> pd.DataFrame:
     """Liquidity = 等权(STOM, STOQ, STOA)；STOx = ln(1 + 窗口Σ(成交额/市值))。
 
@@ -226,12 +214,6 @@ def _pit(report_df: pd.DataFrame, cal_idx: pd.DatetimeIndex, codes: pd.Index,
         return pd.DataFrame(np.nan, index=cal_idx, columns=codes)
     return build_pit_panel(report_df, cal_idx, field).reindex(
         index=cal_idx, columns=codes)
-
-
-def _ttm_yoy(df: pd.DataFrame, field: str) -> pd.DataFrame:
-    """财报长表上做 TTM 与同比（复用 fundamental builder 的口径）。"""
-    from scripts.builders.build_alla_fundamental_factors import add_ttm_yoy
-    return add_ttm_yoy(df, field, f"{field}_TTM", None)
 
 
 def build_fundamental_vars(cal_idx: pd.DatetimeIndex, codes: pd.Index,

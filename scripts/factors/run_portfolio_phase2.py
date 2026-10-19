@@ -34,6 +34,8 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from stats import PERIODS_PER_YEAR  # noqa: E402
+
 log = logging.getLogger("phase2")
 
 DECISION_FREQ = 10
@@ -119,7 +121,6 @@ def fit_label_models(df: pd.DataFrame, year: int, seed: int,
                  "pred": Series(date×code stack, 测试年)}}
     """
     import lightgbm as lgb
-    from stats.robust_stats import nw_tstat
 
     cache_file = cache_dir / f"signals_{year}_seed{seed}.parquet"
     if cache_file.exists():
@@ -473,7 +474,6 @@ def qp_arm_galaxy(px, mask, codes, f, z, decision_dates, bw, reward_kw):
         z = z.unstack().reindex(index=decision_dates, columns=codes).fillna(0.0)
     close = px["close"][codes]
     rets = close.pct_change(fill_method=None)
-    tm = _trad_mask(px, decision_dates, codes)
     w_prev = bw.iloc[0].to_numpy(dtype=float).copy()
     weights, n_fallback = {}, 0
     for t in decision_dates[:-1]:
@@ -513,7 +513,6 @@ def qp_arm_galaxy(px, mask, codes, f, z, decision_dates, bw, reward_kw):
 # 评估（与 Phase 1 同口径）
 # ===========================================================================
 def evaluate(name, weights, codes, decision_dates, period_returns, bw):
-    from scripts.factors.run_portfolio_ppo import evaluate_arm
     bw_row_cache = {d: bw.loc[d].to_numpy(dtype=float)
                     for d in decision_dates[:-1]}
     import scripts.factors.run_portfolio_ppo as p1
@@ -544,12 +543,10 @@ def _evaluate(name, weights, codes, decision_dates, period_returns, bw):
     if not rows:
         return {"n_periods": 0}, eq
     ex = np.array([r["excess"] for r in rows])
-    years = len(rows) * DECISION_FREQ / 244.0
+    years = len(rows) * DECISION_FREQ / PERIODS_PER_YEAR
     cagr = v ** (1.0 / years) - 1.0
     bcagr = float(np.prod([1 + r["idx_ret"] for r in rows])) ** (1 / years) - 1
-    vol = float(np.std([r["port_ret"] for r in rows], ddof=1)
-                * np.sqrt(244.0 / DECISION_FREQ))
-    exv = float(np.std(ex, ddof=1) * np.sqrt(244.0 / DECISION_FREQ))
+    exv = float(np.std(ex, ddof=1) * np.sqrt(PERIODS_PER_YEAR / DECISION_FREQ))
     return {
         "n_periods": len(rows), "nav": float(v), "cagr": cagr,
         "excess_cagr": cagr - bcagr,

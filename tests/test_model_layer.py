@@ -617,8 +617,6 @@ class TestLabelEngineering:
     def test_gauss_rank_hand_computed(self):
         """4 只股票手算：u = (rank-0.5)/n 过 Φ⁻¹，NaN 不参与秩。"""
         idx = pd.date_range("2023-01-02", periods=1)
-        close = pd.DataFrame(
-            {"a": [100.0], "b": [110.0], "c": [105.0], "d": [np.nan]}, index=idx)
         fwd = pd.DataFrame({"a": [0.10], "b": [0.20], "c": [0.15],
                             "d": [np.nan]}, index=idx)
         labels, embargo = build_labels(fwd_returns_panel=fwd, horizon=1,

@@ -6,7 +6,7 @@ formula_project 语法），在全A 面板上求值 → panels/llm_* + registry/
 用法: python -m scripts.builders.build_alla_llmmcts_factors [--csv path]
 """
 from __future__ import annotations
-import argparse, json, sys, time
+import argparse, json, sys
 from pathlib import Path
 import numpy as np, pandas as pd
 

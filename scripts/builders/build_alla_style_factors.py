@@ -102,7 +102,6 @@ FACTOR_DEFS = {
 def build_panels(close_adj, close_raw, inc, bal, cfo, div):
     codes = close_adj.columns
     cal_idx = close_adj.index
-    close = close_raw.astype(float)
 
     # ---- income: TTM / 单季，补齐研发/费用/盈利细分字段 ----
     inc = add_ttm_yoy(inc, "OPERA_REV", "OPERA_REV_TTM", None)
@@ -222,13 +221,6 @@ def _neutralize_one(name: str, panels_dir: Path, ds_dir: Path) -> float:
     return float(x.notna().mean().mean())
 
 
-def _load_styles_file(ds_dir: Path) -> list[dict]:
-    sp = ds_dir / "factor_stats_style.jsonl"
-    if not sp.exists():
-        return []
-    return [json.loads(l) for l in sp.read_text(encoding="utf-8").splitlines() if l.strip()]
-
-
 def main() -> None:
     ap = argparse.ArgumentParser(description="基本面风格因子族（C）构建")
     ap.add_argument("--resume", action="store_true")
@@ -249,8 +241,6 @@ def main() -> None:
         if args.resume and stats_path.exists() else set()
 
     close_adj, close_raw, income, balance, cashflow, equity, dividend = load_panels()
-    codes = close_adj.columns
-    cal_idx = close_adj.index
     fwd = {h: close_adj.pct_change(h, fill_method=None).shift(-h) for h in HORIZONS}
     ic_codes = close_adj.columns[::IC_CODE_STRIDE]
 

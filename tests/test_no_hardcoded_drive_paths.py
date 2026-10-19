@@ -47,11 +47,6 @@ SUFFIXES = (".py", ".yaml", ".yml", ".toml", ".bat", ".ps1", ".cmd")
 ALLOWED: dict[str, str] = {
     "tests/": "测试夹具：故意构造 Windows 绝对路径，验证路径归一化与任务 XML 生成，"
               "不读真实盘",
-    "scripts/reporting/build_daily_email_body.py":
-        "⏳ 待处理：history_stock_status.parquet 目前只在迁移前旧根 E: 有实体"
-        "（update_data 的状态步长期跑不完，config 根上没有该表）⇒ 直接改走 config "
-        "会立刻断掉日报链。回填该表到 config 根后，应改用 "
-        "Config.paths()['cache_root'] 并把本条从清单删除。",
 }
 
 

@@ -7,7 +7,8 @@
 流程:
 1. 输入: 因子值面板(date, code) + 收益率面板(date, code)
 2. 按调仓频率(rebalance_freq)取出截面
-3. 每个调仓日: 用策略算权重 → 持有至下个调仓日
+3. 每个调仓日: 用策略算权重 → 持有期间**每日按目标权重结算（constant-mix，
+   等价隐含日频再平衡；不是买入持有）**
 4. 计算组合日收益 = Σ(weight_i * return_i)
 5. 减去交易成本（佣金/印花税/滑点）
 6. 减去空头腿持有成本（借券费按日计提，ShortCostModel）
@@ -21,6 +22,7 @@
 """
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -371,6 +373,16 @@ class VectorBacktest:
                     f"造成重复结算的虚高收益。请提高调仓频率(如 rebalance_freq=D 时 "
                     f"用 horizon=1)，或将 rebalance_freq 调整为与 horizon 匹配的跨度。"
                 )
+            stretched = [t for t in rb_list if (fwd_starts[t] - t) > horizon]
+            if stretched:
+                # 2026-10-19 审计：区间跨度 > horizon 时，引擎只把 h 日前瞻收益
+                # 摊到 span 天（总收益 = 1+seg_gross），少算 h+1..span 的收益。
+                # 不改变既有数字，但必须让调用方知道 h>1 行不可与 h1 直接比。
+                warnings.warn(
+                    f"horizon={horizon} 但 {len(stretched)} 个调仓区间跨度 > horizon："
+                    "区间总收益按 h 日前瞻收益计（=1+seg_gross），不是 span 日实际收益；"
+                    "跨 h 比较前请统一调仓日与 horizon。",
+                    RuntimeWarning, stacklevel=2)
 
         # 次日执行价模式（execution_split）：执行日的收益拆为
         #   隔夜段（旧权重，Fill(E)/C(E-1)-1）+ 日内段（新权重，C(E)/Fill(E)-1）

@@ -54,6 +54,7 @@ import pandas as pd
 from backtest.costs import default_costs
 from backtest.engine import VectorBacktest, build_execution_split
 from scripts.pipelines import rolling_grid_alla as RG
+from stats import PERIODS_PER_YEAR
 from stats.ic import calc_ic_series
 from stats.robust_stats import nw_tstat
 from strategy.examples import TopFracLongOnly
@@ -212,7 +213,7 @@ def evaluate_pred(pred: pd.DataFrame, fwd: pd.DataFrame, trad, close: pd.DataFra
     return {
         "ic_raw": float(ic_raw.mean()) if len(ic_raw) else float("nan"),
         "ic_tradable": float(ic_tr.mean()) if len(ic_tr) else float("nan"),
-        "ic_ir_tradable": (float(ic_tr.mean() / ic_tr.std() * np.sqrt(244))
+        "ic_ir_tradable": (float(ic_tr.mean() / ic_tr.std() * np.sqrt(PERIODS_PER_YEAR))
                            if len(ic_tr) > 2 and ic_tr.std() > 0 else float("nan")),
         "nw_t": float(nw), "n_days": int(len(ic_tr)),
         "annual": m["annual"], "sharpe": m["sharpe"],

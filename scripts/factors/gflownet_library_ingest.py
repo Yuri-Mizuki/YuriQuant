@@ -197,7 +197,7 @@ def main():
     # ---- 合成评估（训练段 fit / 测试段评估；1 日与 10 日双口径） ----
     # 口径公平性：GFlowNet 因子按 10 日调仓奖励训练，GP 因子按日频 IC 挖掘——
     # 单一口径对一方有利，故两种 horizon 都报告。
-    print(f"\n=== 合成评估（训练段 fit / 测试段评估, 双 horizon） ===")
+    print("\n=== 合成评估（训练段 fit / 测试段评估, 双 horizon） ===")
     rets_by_h = {}
     for h in (1, 10):
         rets_by_h[h] = close.pct_change(h).shift(-h)
@@ -235,7 +235,7 @@ def main():
 
     out = pd.DataFrame(rows)
     out.to_csv("reports/gflownet_vs_gp_synthesis.csv", index=False)
-    print(f"\n结果已存 reports/gflownet_vs_gp_synthesis.csv")
+    print("\n结果已存 reports/gflownet_vs_gp_synthesis.csv")
     print(f"总耗时: {time.time() - t0:.0f}s")
 
 

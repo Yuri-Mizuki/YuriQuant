@@ -75,27 +75,6 @@ def _apply_header(ws, row, cols):
         cell.border = _BORDER
 
 
-def _write_value(ws, row, col, value, pct=False, color_pos=False):
-    """写入数值，自动格式化。"""
-    cell = ws[f"{col}{row}"]
-    if isinstance(value, float):
-        if pct:
-            cell.value = value
-            cell.number_format = "0.00%"
-        else:
-            cell.value = round(value, 4)
-            cell.number_format = "0.0000"
-    else:
-        cell.value = value
-    cell.font = _VALUE_FONT
-    cell.alignment = _RIGHT
-    cell.border = _BORDER
-    if color_pos and isinstance(value, float):
-        cell.font = _POS_FONT if value >= 0 else _NEG_FONT
-    if row % 2 == 0:
-        cell.fill = _ALT_FILL
-
-
 # ===========================================================================
 # 图表生成（matplotlib → PNG → 插入 Excel）
 # ===========================================================================

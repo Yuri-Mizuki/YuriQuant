@@ -394,7 +394,7 @@ def main():
     print(f"特质风险占比:       {s['idiosyncratic_ratio']*100:.2f}%")
     print(f"组合 VaR ({s['var_quantile']*100:.0f}%):  {s['portfolio_VaR']:.6f}")
     print(f"组合 CVaR ({s['var_quantile']*100:.0f}%): {s['portfolio_CVaR']:.6f}")
-    print(f"\nTop 5 风险贡献个股:")
+    print("\nTop 5 风险贡献个股:")
     for code, pct in s["top5_risk_contributors"].items():
         print(f"  {code}: {pct*100:.2f}%")
     print(f"{'='*60}")

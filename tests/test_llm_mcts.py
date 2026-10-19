@@ -34,7 +34,6 @@ from factor.mcts.reward import (
     six_part_reward,
     top_decile_turnover,
     weekly_grid,
-    weekly_stats,
 )
 from factor.mcts.seeds import SEEDS, SEED_WINDOW, compute_seed_panels
 from factor.mcts.tree import MCTSNode, MCTSTree
@@ -92,7 +91,6 @@ def test_seeds_are_29_rolling_classes_at_w20():
 def test_compute_seed_panels_finite(mock_panel):
     panels = compute_seed_panels(mock_panel)
     assert len(panels) == 29
-    close = mock_panel["close"]
     tail = slice(-200, None)          # 跳过滚动 warmup
     for name, fp in panels.items():
         frac = fp.iloc[tail].notna().mean().mean()
@@ -200,7 +198,7 @@ def test_tree_select_expand_backprop():
     tree = MCTSTree(root, max_depth=3)
     assert tree.select_target() is root            # 空树先扩根
     a = tree.add_child(root, "a", 0.7)
-    b = tree.add_child(root, "b", 0.4)
+    tree.add_child(root, "b", 0.4)
     assert root.visits == 2 and root.best_reward == 0.7
     # a 的 UCT(0.7+√(ln3/1)) 高于 b 与 root 的 virtual(0.7+0.08/2) → 下挖 a
     assert tree.select_target() is a
@@ -212,7 +210,7 @@ def test_tree_select_expand_backprop():
 def test_tree_depth_cap():
     root = MCTSNode(label="seed", depth=0, reward=0.5)
     tree = MCTSTree(root, max_depth=1)
-    c = tree.add_child(root, "c", 0.6)
+    tree.add_child(root, "c", 0.6)
     # 唯一子节点已到深度上限：select 退回其父（root）而非 c
     assert tree.select_target() is root
 

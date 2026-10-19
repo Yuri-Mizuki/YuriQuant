@@ -48,6 +48,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from stats import PERIODS_PER_YEAR
+
 from factor.mcts.engine import (
     RunConfig,
     SearchRecord,
@@ -85,7 +87,7 @@ def build_mock_panel(n_codes: int = 60, years: float = 8.6,
                      seed: int = 7) -> dict[str, pd.DataFrame]:
     """合成随机游走面板（冒烟用；2018 起 ~8.6 年覆盖默认 IS/OOS 窗口）。"""
     rng = np.random.default_rng(seed)
-    idx = pd.bdate_range("2018-01-01", periods=int(244 * years))
+    idx = pd.bdate_range("2018-01-01", periods=int(PERIODS_PER_YEAR * years))
     cols = [f"C{i:03d}" for i in range(n_codes)]
     base = 10.0 * np.exp(np.cumsum(rng.normal(0, 0.02, (len(idx), n_codes)), axis=0))
     close = pd.DataFrame(base, index=idx, columns=cols)

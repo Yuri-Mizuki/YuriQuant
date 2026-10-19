@@ -25,6 +25,9 @@ output/
 
 # Logs
 *.log
+# 一次性诊断输出（非日志）：stale panel 清单 / probe 摘要
+logs/*.txt
+logs/*.lst
 
 # SDK cache (user-specific)
 AmazingData/

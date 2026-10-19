@@ -38,6 +38,8 @@ def calc_ic_series(
     returns_panel: pd.DataFrame,
     method: str = "spearman",
     returns_rank: pd.DataFrame | None = None,
+    tradable: pd.DataFrame | None = None,
+    min_samples: int = 5,
 ) -> pd.Series:
     """计算每日 IC（因子值与未来收益的截面相关系数）。
 
@@ -47,6 +49,9 @@ def calc_ic_series(
         method: 'pearson' 或 'spearman'（默认，Rank IC）。
         returns_rank: **可选性能捷径**——预计算好的收益 rank 面板（训练中收益
             面板固定，省掉每次重复 rank，GFlowNet 实测约省 30% IC 耗时）。
+        tradable: 可选 bool 面板（True=可交易）。给定时只在可交易股票上算 IC
+            （2026-10-19 审计 P1：入库 IC 与评估 IC 的掩码口径必须可显式选择）。
+        min_samples: 当日有效样本门槛，低于此值记 NaN（默认 5，与历史一致）。
             ⚠️ **只在"因子不比收益多出任何 NaN"时才与默认路径完全等价**：
             IC 的有效掩码是 ``factor.notna() & returns.notna()``，依赖因子自身的
             NaN 模式，rank 值随掩码变化，因此预计算的 rank 无法对任意因子都成立。
@@ -70,11 +75,15 @@ def calc_ic_series(
     common_codes = factor_panel.columns.intersection(returns_panel.columns)
     fp = factor_panel.loc[common_dates, common_codes]
     rp = returns_panel.loc[common_dates, common_codes]
+    _valid = fp.notna() & rp.notna()
+    if tradable is not None:
+        _valid &= (tradable.reindex(index=common_dates, columns=common_codes)
+                   .fillna(False).astype(bool))
 
     if method == "spearman":
         # 只在因子与收益均有效的股票子集上做截面排名（与旧实现"先剔缺失再排名"
         # 严格一致，避免全截面排名带来的 rank 基准漂移），再 pearson = spearman。
-        valid = fp.notna() & rp.notna()
+        valid = _valid
         fr = fp.where(valid).rank(axis=1)
         # 预计算路径同样要按本次掩码 where —— 否则 rank 值来自另一个掩码
         if returns_rank is not None:
@@ -84,12 +93,15 @@ def calc_ic_series(
             rr = rp.where(valid).rank(axis=1)
         ic = fr.corrwith(rr, axis=1, method="pearson")
     else:
+        if tradable is not None:
+            fp = fp.where(_valid)
+            rp = rp.where(_valid)
         ic = fp.corrwith(rp, axis=1, method="pearson")
     ic = ic.astype(float)
 
-    # 与旧实现一致：有效观测 <5 的日期视为缺失
-    valid_cnt = (fp.notna() & rp.notna()).sum(axis=1)
-    ic[valid_cnt < 5] = np.nan
+    # 有效观测 < min_samples 的日期视为缺失（默认 5，与历史一致）
+    valid_cnt = _valid.sum(axis=1)
+    ic[valid_cnt < int(min_samples)] = np.nan
     ic.name = "ic"
     return ic
 

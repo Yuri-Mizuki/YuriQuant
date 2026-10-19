@@ -27,9 +27,9 @@ import json
 import random
 import re
 from dataclasses import dataclass, field
-from typing import Optional, Sequence
+from typing import Sequence
 
-from factor.rl.alphapool_env import CONSTANTS, FIELDS, MAX_EXPR_LENGTH, WINDOWS
+from factor.rl.alphapool_env import CONSTANTS, MAX_EXPR_LENGTH, WINDOWS
 from factor.rl.llm_pool import (
     OpenAICompatibleProposer,
     RNode,

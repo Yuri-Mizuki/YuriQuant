@@ -249,8 +249,6 @@ def portfolio_arm(sig: pd.DataFrame, panel: dict, trad: pd.DataFrame,
     openp = panel["open"]
     days = openp.index
     bounds = [b for b in _month_boundaries(days) if b >= pd.Timestamp("2025-01-01")]
-    costs = default_costs()
-    to_cost = costs.buy + costs.sell if hasattr(costs, "buy") else 0.003
     nav, turns, rets = 1.0, [], []
     for i in range(len(bounds) - 1):
         b, nb = bounds[i], bounds[i + 1]

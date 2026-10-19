@@ -27,7 +27,6 @@ import pandas as pd
 from scripts.pipelines import rolling_grid_alla as RG
 from backtest.costs import default_costs
 from backtest.engine import VectorBacktest, build_execution_split
-from stats.ic import calc_ic_series
 from strategy.examples import TopFracLongOnly
 
 

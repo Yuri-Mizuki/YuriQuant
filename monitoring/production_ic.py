@@ -84,22 +84,15 @@ MIN_SAMPLES = 30
 # 基础工具
 # ---------------------------------------------------------------------------
 def daily_rank_ic(score: pd.DataFrame, ret: pd.DataFrame) -> pd.Series:
-    """逐日截面 Spearman 相关（秩变换后 Pearson，向量化）。
+    """逐日截面 Spearman IC（转调 :func:`stats.ic.calc_ic_series`，唯一实现）。
 
     仅在两边都有值的 (date, code) 上计算；当天有效样本 < ``MIN_SAMPLES`` 记 NaN。
+    2026-10-19 审计：此前本模块自实现一份 Spearman（与 stats.ic 语义等价但
+    min_samples=30 vs 5），现统一走 stats 层，只保留监控侧门槛参数。
     """
-    valid = score.notna() & ret.notna()
-    if not valid.any().any():
-        return pd.Series(dtype=float)
-    s = score.where(valid).rank(axis=1)
-    r = ret.where(valid).rank(axis=1)
-    n = valid.sum(axis=1)
-    sc = s.sub(s.mean(axis=1), axis=0)
-    rc = r.sub(r.mean(axis=1), axis=0)
-    num = (sc * rc).sum(axis=1)
-    den = np.sqrt((sc ** 2).sum(axis=1) * (rc ** 2).sum(axis=1))
-    ic = num / den.replace(0, np.nan)
-    return ic.where(n >= MIN_SAMPLES)
+    from stats.ic import calc_ic_series
+
+    return calc_ic_series(score, ret, min_samples=MIN_SAMPLES)
 
 
 def _zscore_cs(df: pd.DataFrame) -> pd.DataFrame:
@@ -284,6 +277,33 @@ def collect_daily_scores(rank_dir: str | Path,
     return out
 
 
+def collect_daily_holdings(
+    rank_dir: str | Path,
+    exclude_suffixes: tuple[str, ...] = (),
+) -> pd.DataFrame:
+    """收集每日出榜的**实际持仓**（``ranking_*.csv`` 的 ``buffer_hold`` 列）。
+
+    2026-10-19 审计：监控原先把「全池 Top10%」当生产组合，而实际持仓是
+    buffer(entry/exit) 缓冲带（2026-10-16: 520 vs 769）。有该列时优先用它算
+    top_excess / z_*；无列（旧产物）回退到 Top10%。
+    """
+    d = Path(rank_dir)
+    rows: dict[pd.Timestamp, pd.Series] = {}
+    for p in sorted(d.glob("ranking_*.csv")):
+        ds = p.stem.replace("ranking_", "")
+        if not ds.isdigit() or any(ds.endswith(sfx) for sfx in exclude_suffixes):
+            continue
+        try:
+            df = pd.read_csv(p, index_col=0)
+        except Exception:  # noqa: BLE001
+            continue
+        if "buffer_hold" not in df.columns:
+            continue
+        ts = pd.to_datetime(ds, format="%Y%m%d")
+        rows[ts] = df["buffer_hold"].fillna(False).astype(bool)
+    return pd.DataFrame(rows).T if rows else pd.DataFrame()
+
+
 # ---------------------------------------------------------------------------
 # 主流程
 # ---------------------------------------------------------------------------
@@ -345,7 +365,12 @@ def run_production_ic(
     # （无论来自 legacy 榜还是 defv 榜）都算 live。历史/实时信号口径已对齐
     # （生产口径种子），见模块 docstring「注意」。
     hist_end = hist["pred"].index.max()
-    return compute_metrics(score, close, cov, out_path=out_path, hist_end=hist_end)
+    holdings = collect_daily_holdings(rank_dir)
+    if len(holdings):
+        log.info("实际持仓面板 %d 日（buffer_hold；优先于 Top10%% 纸面组合）",
+                 len(holdings))
+    return compute_metrics(score, close, cov, out_path=out_path, hist_end=hist_end,
+                           holdings=holdings if len(holdings) else None)
 
 
 def report_overlap(hist_cov: dict[str, pd.DataFrame],
@@ -370,7 +395,8 @@ def report_overlap(hist_cov: dict[str, pd.DataFrame],
 def compute_metrics(score: pd.DataFrame, close: pd.DataFrame,
                     cov: dict[str, pd.DataFrame],
                     out_path: str | Path | None = None,
-                    hist_end: str | pd.Timestamp | None = None) -> pd.DataFrame:
+                    hist_end: str | pd.Timestamp | None = None,
+                    holdings: pd.DataFrame | None = None) -> pd.DataFrame:
     """由打分面板 / 复权价 / 风格协变量算逐日 IC 与暴露，落盘并返回。
 
     Args:
@@ -378,6 +404,8 @@ def compute_metrics(score: pd.DataFrame, close: pd.DataFrame,
             ``predict_date <= hist_end`` 标 ``backtest``，否则 ``live``。
             调用方（:func:`run_production_ic`）传 hist pred 面板末日；
             传 ``None`` 时全部标 ``live``（无历史段概念的场景，如测试）。
+        holdings: 可选 date×code bool 面板（生产 buffer 持仓）。给定时
+            ``top_excess`` / ``z_*`` 用实际持仓；缺列/缺日的截面回退 Top10%。
     """
     # 停牌/退市边缘可能让 pct_change 产出 ±inf；不清洗会污染组合均值
     # （实测 2026-09-16 截面 top_excess 曾出现 -inf）。
@@ -408,6 +436,13 @@ def compute_metrics(score: pd.DataFrame, close: pd.DataFrame,
             continue
         k = max(int(len(s) * TOP_FRAC), 1)
         top = s.nlargest(k).index
+        hold_src = "top10"
+        if holdings is not None and d in holdings.index:
+            hrow = holdings.loc[d].dropna()
+            hcodes = hrow[hrow.astype(bool)].index
+            if len(hcodes):
+                top = hcodes
+                hold_src = "buffer"
         r = fwd.loc[d].dropna() if d in fwd.index else pd.Series(dtype=float)
         _r = r.reindex(s.index).dropna()
         row: dict[str, Any] = {
@@ -416,6 +451,7 @@ def compute_metrics(score: pd.DataFrame, close: pd.DataFrame,
             "n_scored": int(len(s)),
             "n_eval": int(len(_r)),
             "n_hold": int(len(top)),
+            "holdings_source": hold_src,
             "ic_raw": ic_raw.get(d, np.nan),
             "ic_neutral": ic_neu.get(d, np.nan),
             "ic_ind_neutral": ic_ind.get(d, np.nan),

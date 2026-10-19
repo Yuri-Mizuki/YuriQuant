@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-import pytest
 
 
 def _status_parquet(tmp_path, rows: dict) -> None:

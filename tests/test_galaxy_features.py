@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-import pytest
 
 from factor.classic import (
     _rolling_zscore,
@@ -117,9 +116,6 @@ def test_label_mdd_monotone_in_drawdown():
                        "b": np.concatenate([np.linspace(100, 130, 60),
                                             np.linspace(130, 95, 140)])},
                       index=idx)
-    px = {"open": up, "high": up * 1.001, "low": up * 0.999, "close": up,
-          "volume": pd.DataFrame(1e6, idx, up.columns),
-          "amount": pd.DataFrame(1e8, idx, up.columns)}
     fut_min = up.shift(-1).rolling(66).min().shift(-65)
     raw_mdd = fut_min / up - 1.0
     assert raw_mdd["a"].iloc[60] > raw_mdd["b"].iloc[60]    # 上涨股回撤更浅

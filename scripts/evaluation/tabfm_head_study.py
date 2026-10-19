@@ -28,6 +28,8 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from stats import PERIODS_PER_YEAR  # noqa: E402
+
 
 def _ns(idx) -> pd.DatetimeIndex:
     return pd.DatetimeIndex(idx).as_unit("ns")
@@ -67,7 +69,7 @@ def _head_stats(pred: pd.DataFrame, fwd: pd.DataFrame, frac: float = 0.10) -> di
         if prev_head is not None and len(prev_head):
             stay1.append(len(top.intersection(prev_head)) / len(top))
         prev_head = top
-    ann = 244.0
+    ann = float(PERIODS_PER_YEAR)
     return {
         "head_spread_ann": float(np.nanmean(head_spreads) * ann),
         "head_ic": float(np.nanmean(head_ics)),

@@ -84,15 +84,14 @@ def risk_attribution(
 # 组合级风险分解
 # ===========================================================================
 def _ffill_weights(weights_history: pd.DataFrame) -> pd.DataFrame:
-    """前向填充非调仓日权重。
+    """只填补 **NaN 缺失行**；0 是引擎记录的真实空仓，不得当缺失。
 
-    BacktestResult.weights_history 仅在调仓日有非零值，非调仓日为全 0
-    （与 brinson_attribution:231 同口径处理）。
+    2026-10-19 审计修复：旧实现 ``replace(0, nan).ffill()`` 会把「已清仓」
+    （权重 0）当缺失，复活成上一期持仓，Euler MRC / VaR / 行业贡献全部含
+    幽灵仓位。``VectorBacktest`` 自 2026-10 起逐日记录权重（非调仓日为上一期
+    持仓而非 0），因此 NaN 才是缺失语义。
     """
-    w = weights_history.copy()
-    # 用 0 替换 NaN 后 ffill（调仓日之间的空行沿用上一次持仓）
-    w = w.replace(0.0, np.nan).ffill().fillna(0.0)
-    return w
+    return weights_history.ffill().fillna(0.0)
 
 
 def _component_var_cvar(

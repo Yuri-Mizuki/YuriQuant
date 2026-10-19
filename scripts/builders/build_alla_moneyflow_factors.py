@@ -105,7 +105,6 @@ def _event_rolling(events: pd.DataFrame, cal_idx, codes,
     piv = piv.reindex(index=cal_idx, columns=codes).fillna(0.0)
     roll = piv.rolling(WINDOW, min_periods=1).sum()
     roll = roll.replace(0.0, np.nan)   # 无事件=NaN（无信号，而非 0）
-    key = list(set([("count" if count else value_col)]))
     return {value_col: roll.astype(np.float32)}
 
 

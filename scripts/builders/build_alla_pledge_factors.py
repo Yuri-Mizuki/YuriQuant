@@ -141,8 +141,6 @@ def main() -> None:
     express = (pd.read_parquet(cache_root / "profit_express.parquet")
                if (cache_root / "profit_express.parquet").exists() else None)
 
-    codes = close_adj.columns
-    cal_idx = close_adj.index
     fwd = {h: close_adj.pct_change(h, fill_method=None).shift(-h) for h in HORIZONS}
     ic_codes = close_adj.columns[::IC_CODE_STRIDE]
 

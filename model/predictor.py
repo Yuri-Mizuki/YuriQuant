@@ -145,16 +145,31 @@ class LGBMPredictor(BasePredictor):
 
     name = "gbdt"
 
-    def __init__(self, n_estimators: int = 300, learning_rate: float = 0.05,
-                 num_leaves: int = 31, max_depth: int = 6,
-                 min_child_samples: int = 20, n_jobs: int = -1, seed: int = 42):
-        self.n_estimators = n_estimators
-        self.learning_rate = learning_rate
-        self.num_leaves = num_leaves
-        self.max_depth = max_depth
-        self.min_child_samples = min_child_samples
+    def __init__(self, n_estimators: int | None = None,
+                 learning_rate: float | None = None,
+                 num_leaves: int | None = None, max_depth: int | None = None,
+                 min_child_samples: int | None = None, n_jobs: int = -1,
+                 seed: int | None = None):
+        """缺省超参从 :data:`model.params.DEFAULT_MODEL_PARAMS["gbdt"]` 解析。
+
+        2026-10-19 审计 P2：此前类默认值是 300/0.05/31/20/seed42，与生产固化的
+        150/0.03/15/50/seed0 不同；不显式传参的调用方会静默训练成另一个模型。
+        ``max_depth`` 不在 params 里，保留 6。
+        """
+        from model.params import DEFAULT_MODEL_PARAMS
+
+        p = DEFAULT_MODEL_PARAMS["gbdt"]
+        self.n_estimators = int(p["n_estimators"] if n_estimators is None
+                                else n_estimators)
+        self.learning_rate = float(p["learning_rate"] if learning_rate is None
+                                   else learning_rate)
+        self.num_leaves = int(p["num_leaves"] if num_leaves is None else num_leaves)
+        self.max_depth = 6 if max_depth is None else max_depth
+        self.min_child_samples = int(p["min_child_samples"]
+                                     if min_child_samples is None
+                                     else min_child_samples)
         self.n_jobs = n_jobs
-        self.seed = seed
+        self.seed = int(p["seed"] if seed is None else seed)
 
     def fit(self, features: Mapping[str, pd.DataFrame], labels: pd.DataFrame) -> "LGBMPredictor":
         try:

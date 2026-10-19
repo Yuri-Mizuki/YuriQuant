@@ -15,6 +15,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from optimize import risk
 from optimize.risk import risk_decomposition
 
 
@@ -288,14 +289,21 @@ def test_ffill_weights():
     codes = [f"{600000 + i:06d}.SH" for i in range(n_codes)]
     rets = pd.DataFrame(rng.normal(0, 0.02, (n_days, n_codes)), idx, codes)
 
-    # 仅第一天有权重
-    w = pd.DataFrame(0.0, idx, codes)
+    # 新契约：非调仓日为 NaN（引擎逐日写权重后，0 表示真实空仓，不再当缺失）
+    w = pd.DataFrame(np.nan, idx, codes)
     w.iloc[0] = 1.0 / n_codes
 
-    # 用 freq="D" 逐日计算
     result = risk_decomposition(
         w, rets, freq="D", min_periods=60, covariance_window=120,
     )
     if "error" not in result:
-        # 第一天之后的截面也应有效（ffill 后有权重）
         assert result["summary"]["n_periods"] >= 1
+
+
+def test_ffill_weights_does_not_revive_cleared_positions():
+    """清仓到 0 后不得被 ffill 复活（2026-10-19 审计 P1）。"""
+    idx = pd.date_range("2023-01-01", periods=3, freq="B")
+    codes = ["A", "B"]
+    w = pd.DataFrame([[0.5, 0.5], [0.0, 0.0], [0.0, 0.0]], index=idx, columns=codes)
+    out = risk._ffill_weights(w)
+    pd.testing.assert_frame_equal(out, w)

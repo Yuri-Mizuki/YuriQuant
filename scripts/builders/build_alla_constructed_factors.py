@@ -103,7 +103,6 @@ def build_panels(close_adj, close_raw, inc, bal, cfo, div):
     cal_idx = close_adj.index
     close = close_raw.astype(float)
     cap_pit = pit(bal, cal_idx, codes, "TOT_SHARE").astype(float) * close
-    ln_cap = np.log(cap_pit.clip(lower=1.0))
 
     # ---- income: TTM / 单季 / 加速度 ----
     inc = add_ttm_yoy(inc, "OPERA_REV", "OPERA_REV_TTM", "REV_YOY")
@@ -247,10 +246,7 @@ def main() -> None:
             stats_path.read_text(encoding="utf-8").splitlines() if l.strip()} \
         if args.resume and stats_path.exists() else set()
 
-    cache_root = Path(str(Config.cache()["root"]))
     close_adj, close_raw, income, balance, cashflow, equity, dividend = load_panels()
-    codes = close_adj.columns
-    cal_idx = close_adj.index
     fwd = {h: close_adj.pct_change(h, fill_method=None).shift(-h) for h in HORIZONS}
     ic_codes = close_adj.columns[::IC_CODE_STRIDE]
 

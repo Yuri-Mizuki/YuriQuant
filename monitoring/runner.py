@@ -427,10 +427,6 @@ def _status_zh(s: str) -> str:
     return _STATUS_ZH.get(s, s)
 
 
-def _category_zh(c: str) -> str:
-    return _CATEGORY_ZH.get(c, c)
-
-
 def _rule_zh(r: str) -> str:
     """规则中文展示名（保留英文 ID 便于与 alerts.csv 对照）。"""
     zh = _RULE_ZH.get(r)

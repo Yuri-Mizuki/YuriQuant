@@ -70,7 +70,8 @@
     python scripts/pipelines/alla_daily_rank.py --tradable-labels --out-tag _tl    # 标签掩码口径
     python scripts/pipelines/alla_daily_rank.py --window 750        # gbdt_w750 变体
     python scripts/pipelines/alla_daily_rank.py --deliverable-k 45  # 额外产可交付组合
-    python scripts/pipelines/alla_daily_rank.py --install-task 17:30   # 注册每日计划任务
+    python scripts/pipelines/alla_daily_rank.py --install-task       # 按 schedule.yaml 时点注册
+    python scripts/pipelines/alla_daily_rank.py --install-task 18:30 # 显式覆盖时点（慎用）
     python scripts/pipelines/alla_daily_rank.py --remove-task
 """
 
@@ -167,7 +168,8 @@ OUT_DIR = ROOT / "reports" / "alla_daily"
 
 # `--preset`：把「某套口径」需要协同变动的多个参数一次配齐，避免手工漏配任一
 # 项而静默跑出混合口径（本项目历史上最贵的一类事故）。显式传参优先于预设。
-#   legacy —— 现行生产口径（h1+h5 × ortho × 无慢信号 × 无 buffer），零改动；
+#   legacy —— 旧口径（h1+h5 × ortho × 无慢信号 × 无 buffer），仅复现历史产物用；
+#              2026-10-19 起 `--preset` 缺省不再是 legacy（改为 dingban）。
 #   dingban —— README 定版（真源 reports/batch1_920_收尾对照表.md §⑭⑯ 与
 #              scripts/evaluation/buffer_arm_920.py --variant defv）：
 #              fundind 快信号 h1020 ⊕ 慢信号 s0.5 + buffer(15/40) 执行层。
@@ -1706,7 +1708,7 @@ def write_outputs(ranking: pd.DataFrame, picks: pd.DataFrame,
 # ---------------------------------------------------------------------------
 # 计划任务（2026-09-21 收口到 scripts.common.task_scheduler）
 # ---------------------------------------------------------------------------
-def install_task(time_str: str) -> str:
+def install_task(time_str: str | None = None) -> str:
     """注册/更新每日计划任务（默认跑全流程含数据更新）。
 
     **注册单点 = ``config/schedule.yaml`` 的 ``alla_daily_rank`` 条**：本函数只转调
@@ -1714,9 +1716,9 @@ def install_task(time_str: str) -> str:
     一律从登记表读。这样"登记表已切定版口径、脚本里那份硬编码没跟上 ⇒ 重注册把任务
     静默切回旧口径"的老坑不复存在（2026-10-10 收口）。
 
-    （2026-09-21 起改用 XML 定义导入，显式关 ``DisallowStartIfOnBatteries`` /
-    ``StopIfGoingOnBatteries``；但 2026-10-10 事故已查明那两条**不是**本次根因——
-    真凶是傍晚 S0 现代待机撞上 1–2h 的运行窗口，见 :mod:`scripts.common.power`。）
+    ``time_str=None`` ⇒ 用登记表时点（18:30）；显式传值才会覆盖。此前
+    ``--install-task`` 缺省 17:30 会把登记表已经改好的 18:30 覆盖掉，重新撞上
+    安全软件维护窗口（2026-10-19 审计 P1 修复）。
     """
     from scripts.common.task_scheduler import install_from_registry
 
@@ -2071,8 +2073,8 @@ def main() -> None:
                          "配 fundind 臂特征清单）；zscore（原始面板 + 截面 zscore）")
     ap.add_argument("--preset", choices=tuple(PRESETS), default=None,
                     help="口径预设，一次配齐需协同变动的多个参数（显式传参优先）："
-                         "legacy（默认 = 现行生产口径，零改动）、dingban（README "
-                         "定版 = fundind 快信号 h1020⊕慢信号 s0.5 + buffer(15/40)）"
+                         "legacy（旧口径，仅复现历史产物）、dingban（**默认** = 现行"
+                         "生产口径：fundind 快信号 h1020⊕慢信号 s0.5 + buffer(15/40)）"
                          "或 v1w2-cheap（定版微调 = buffer(8/40) + h1 份额 0.125，"
                          "批次 11 复验环境分歧后切换搁置，待批次 12 终裁）")
     ap.add_argument("--h1-weight", type=float, default=None, metavar="W",
@@ -2108,13 +2110,21 @@ def main() -> None:
     ap.add_argument("--log-file", default=None, metavar="PATH",
                     help="把日志同时写入该文件（支持 {date} 占位 = YYYYMMDD）；"
                          "计划任务用，避免失败无痕")
-    ap.add_argument("--install-task", nargs="?", const="17:30", default=None,
-                    metavar="HH:MM", help="注册每日 Windows 计划任务并退出")
+    ap.add_argument("--install-task", nargs="?", const="__registry__", default=None,
+                    metavar="HH:MM",
+                    help="注册每日 Windows 计划任务并退出；不带值时用 schedule.yaml "
+                         "的时点（18:30），显式传 HH:MM 才覆盖")
     ap.add_argument("--remove-task", action="store_true", help="删除计划任务并退出")
     args = ap.parse_args()
 
-    # ---- 预设解析：显式传参 > 预设 > 代码默认（缺省一律走 legacy，零回归）----
-    preset = PRESETS.get(args.preset or "legacy", {})
+    # ---- 预设解析：显式传参 > 预设 > 代码默认（缺省 = dingban 生产口径）----
+    # 2026-10-19 审计 P1：缺省 legacy 会静默产出旧口径到 reports/alla_daily；
+    # 手工运行/重注册漏 --preset 即错。改为缺省 dingban，legacy 仅显式复现用。
+    _explicit_preproc = args.preproc
+    _explicit_sel = args.selection_dir
+    _explicit_out = args.out_tag
+    preset_name = args.preset or "dingban"
+    preset = PRESETS.get(preset_name, {})
     args.preproc = args.preproc or preset.get("preproc", DEFAULT_PREPROC)
     _h = args.horizons
     if _h is None:
@@ -2131,6 +2141,15 @@ def main() -> None:
         args.slow_panels_subdir = preset.get("slow_panels_subdir", "panels_neu")
     if args.selection_dir is None:
         args.selection_dir = preset.get("selection_dir")
+    # 2026-10-19 审计 P1：显式 --preproc 与 preset 口径冲突时，selection_dir/out_tag
+    # 必须也显式给 —— 否则会拼出「ortho 预处理 + fundind 清单」并写进生产目录。
+    if (_explicit_preproc and preset.get("preproc")
+            and _explicit_preproc != preset["preproc"]
+            and (_explicit_sel is None or _explicit_out is None)):
+        ap.error(
+            f"--preproc={_explicit_preproc} 与 --preset={preset_name}"
+            f"（{preset['preproc']}）不一致：必须同时显式给 --selection-dir 与 "
+            f"--out-tag，避免口径错配写进生产目录")
     _be = args.buffer_entry if args.buffer_entry is not None \
         else preset.get("buffer_entry")
     _bx = args.buffer_exit if args.buffer_exit is not None \
@@ -2155,12 +2174,13 @@ def main() -> None:
     if not args.horizons:
         ap.error("--horizons 不能为空")
     log.info("预设=%s | preproc=%s | horizons=%s | slow_blend=%.2f | buffer=%s | "
-             "tradable_labels=%s | out_tag=%s", args.preset or "legacy",
+             "tradable_labels=%s | out_tag=%s", preset_name,
              args.preproc, list(args.horizons), float(args.slow_blend or 0.0),
              f"{_be:.2f}/{_bx:.2f}" if args.buffer else "关",
              args.tradable_labels, args.out_tag or "(生产目录)")
-    if args.install_task:
-        print(install_task(args.install_task))
+    if args.install_task is not None:
+        _time = None if args.install_task == "__registry__" else args.install_task
+        print(install_task(_time))
         return
     if args.remove_task:
         print(remove_task())

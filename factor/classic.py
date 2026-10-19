@@ -340,8 +340,6 @@ def build_galaxy_labels(px: dict[str, pd.DataFrame],
 
     fwd_ex = ex.shift(-1).rolling(ret_win).sum().shift(-(ret_win - 1))
     fwd_ex_std = ex.shift(-1).rolling(ret_win).std().shift(-(ret_win - 1))
-    fwd_mdd = (close.shift(-1)
-               .rolling(mdd_win).max().shift(-(mdd_win - 1)))
     # 窗口内最低点相对窗口首日（=当前日）前收的回撤：min(close_future)/close - 1
     fut_min = close.shift(-1).rolling(mdd_win).min().shift(-(mdd_win - 1))
     fwd_mdd = fut_min / close - 1.0

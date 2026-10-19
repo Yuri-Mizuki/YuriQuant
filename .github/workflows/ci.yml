@@ -50,8 +50,9 @@ jobs:
       - run: uv lock --check
 
       - name: Ruff critical rules
-        # 只盯"真 bug"规则（未定义名/重复定义/format 占位符），风格类告警不入 CI 门禁
-        run: ruff check . --select F821,F811,F522,F523,F632 --output-format concise
+        # 2026-10-19 起全库 F 规则已清零（未用 import/变量、未定义名、重复定义、
+        # format 占位符）；风格类（E/I）仍不入 CI 门禁。
+        run: ruff check . --select F --output-format concise
 
       - name: Layer & convention guards
         # tee 落盘供下方 Surface failures 提取失败行
@@ -59,6 +60,7 @@ jobs:
           set -o pipefail
           pytest -q --tb=short \
             tests/test_layering.py tests/test_pipeline_layers.py tests/test_data_layer.py \
+            tests/test_execution_split.py tests/test_rebuild_guard.py \
             2>&1 | tee /tmp/pytest.log
 
       - name: Surface failures

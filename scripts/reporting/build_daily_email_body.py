@@ -52,8 +52,10 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from md_to_email_html import convert as md_to_html  # noqa: E402
 
-CALENDAR = Path(r"E:\data\parquet\calendar.parquet")
-STATUS = Path(r"E:\data\parquet\history_stock_status.parquet")
+def _cache_file(name: str) -> Path:
+    """行情缓存文件（Config.cache root；禁止硬编码盘符——多机适配约定）。"""
+    from config import Config
+    return Path(str(Config.cache()["root"])) / name
 
 
 def next_trading_day(ds: str) -> tuple[str | None, bool]:
@@ -64,7 +66,7 @@ def next_trading_day(ds: str) -> tuple[str | None, bool]:
     法定节假日以交易所公告为准，正文里必须如实标注是外推值。
     """
     try:
-        cal = pd.read_parquet(CALENDAR)
+        cal = pd.read_parquet(_cache_file("calendar.parquet"))
         days = sorted({str(x)[:10].replace("-", "") for x in cal.iloc[:, 0].astype(str)})
         later = [d for d in days if d > ds]
         if later:
@@ -275,8 +277,10 @@ def main() -> int:
     else:
         lines.append(f"**预测日**：{fmt_day(ds)} 收盘截面（代表对**下一个交易日**的选股观点）")
     lines.append(f"**模型**：GBDT（LightGBM）· {train_note} · 全 A 池 {n_scored} 只（有效打分）")
-    lines.append(f"**口径**：Top{frac:.0%} ＝ {int(h['n_top_frac'])} 只，"
-                 f"剔除不可交易后 ＝ **{n_picks} 只候选**（等权参考权重）")
+    _buf_s = str(h.get("buffer", "") or "")
+    _pick_label = f"buffer({_buf_s}) 执行层持仓" if _buf_s else "剔除不可交易后候选"
+    lines.append(f"**口径**：Top{frac:.0%} ＝ {int(h['n_top_frac'])} 只；"
+                 f"{_pick_label} ＝ **{n_picks} 只**（等权参考权重）")
     lines.append(f"**细分行业**：申万二级 {n_ind} 个")
     if preproc or ens:
         bits = []
@@ -518,7 +522,7 @@ def main() -> int:
                "`reports/monitoring/production_ic_daily.csv`。")
     # 状态表降级检测
     try:
-        st = pd.read_parquet(STATUS)
+        st = pd.read_parquet(_cache_file("history_stock_status.parquet"))
         col = next((c for c in st.columns
                     if str(c).lower() in ("date", "trade_date", "datetime")), None)
         if col is not None:
@@ -537,8 +541,14 @@ def main() -> int:
                        f"{fmt_day(smax)}，与预测日一致。")
     except Exception as e:
         cav.append(f"**状态表检查失败**：{e}")
-    cav.append("**分数含义**：新口径 score 为 h1/h5 两个 horizon 的"
-               "截面百分位秩均值（0~1，越大越靠前），"
+    _hz = str(h.get("horizons", "") or "")
+    _ens = str(h.get("ensemble", "") or "")
+    if _hz:
+        _score_desc = (f"{_hz} 的集成信号（{_ens}）截面百分位秩"
+                       if _ens else f"{_hz} 的截面百分位秩")
+    else:
+        _score_desc = "新口径 score 的截面百分位秩"
+    cav.append(f"**分数含义**：{_score_desc}（0~1，越大越靠前），"
                "与旧口径的原始回归分不可直接跨期比较。")
     # 慢信号滞后披露（联动件⑤）：slow_blend>0 时最终分 = (1-λ)·rank(快) + λ·rank(慢)，
     # 慢信号读冻结因子库 panels_neu，实际信号月由出榜链写入 history.csv

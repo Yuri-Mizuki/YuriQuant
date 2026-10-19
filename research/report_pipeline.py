@@ -29,7 +29,6 @@ collect 函数 + 注册一行，不碰任何已有代码。
 """
 from __future__ import annotations
 
-import json
 import logging
 import subprocess
 from collections import OrderedDict
@@ -79,27 +78,10 @@ def _safe_read_csv(path: Path) -> pd.DataFrame | None:
     return None
 
 
-def _safe_read_json(path: Path) -> dict | None:
-    try:
-        if path.exists() and path.stat().st_size > 0:
-            return json.loads(path.read_text(encoding="utf-8"))
-    except Exception as e:
-        log.warning("读取 JSON 失败 %s: %s", path, e)
-    return None
-
-
 def _fmt_pct(v) -> str:
     if v is None or (isinstance(v, float) and (np.isnan(v) or np.isinf(v))):
         return "-"
     return f"{float(v) * 100:.2f}%"
-
-
-def _fmt_num(v, dp: int = 4) -> str:
-    if v is None or (isinstance(v, float) and (np.isnan(v) or np.isinf(v))):
-        return "-"
-    if isinstance(v, (int, np.integer)):
-        return f"{int(v):,}"
-    return f"{float(v):.{dp}f}"
 
 
 def _df_to_html_table(df: pd.DataFrame, max_rows: int = 30,
@@ -131,7 +113,7 @@ def _git_hash() -> str:
 def collect_overview(ctx: ReportContext) -> Section | None:
     """概览章节：数据集、因子库规模、实验计数、git 版本。"""
     parts = []
-    parts.append(f"<div class='stats'>")
+    parts.append("<div class='stats'>")
     parts.append(f"<div class='stat'><span>数据集</span><b>{ctx.dataset}</b></div>")
     # 因子库规模
     lib_reg = ctx.report_dir / "factor_library_report.html"
@@ -181,7 +163,7 @@ def collect_factor_library(ctx: ReportContext) -> Section | None:
         return None
     if reg.empty:
         return None
-    parts = [f"<div class='stats'>"]
+    parts = ["<div class='stats'>"]
     parts.append(f"<div class='stat'><span>因子总数</span><b>{len(reg)}</b></div>")
     if "kind" in reg.columns:
         for k, g in reg.groupby("kind"):
@@ -212,7 +194,7 @@ def collect_factor_library(ctx: ReportContext) -> Section | None:
     cols = [c for c in ("name", "family", "ic_mean", "ic_ir", "t_stat_nw",
                         "best_sharpe", "maturity") if c in show.columns]
     show = show[cols].head(20)
-    parts.append(f"<h3>Top 20 因子（按 IR）</h3>")
+    parts.append("<h3>Top 20 因子（按 IR）</h3>")
     parts.append(_df_to_html_table(show, max_rows=20))
     return Section("因子库全览", "".join(parts), order=0)
 
@@ -320,8 +302,8 @@ def collect_oos(ctx: ReportContext) -> Section | None:
                     except (ValueError, TypeError):
                         pass
         if datasets:
-            parts.append(f"<h3>样本外净值曲线</h3><div style='position:relative;height:300px'>"
-                         f"<canvas id='oos_curves' role='img' aria-label='OOS 净值曲线'></canvas></div>")
+            parts.append("<h3>样本外净值曲线</h3><div style='position:relative;height:300px'>"
+                         "<canvas id='oos_curves' role='img' aria-label='OOS 净值曲线'></canvas></div>")
             charts_js = chart_js_line("oos_curves", datasets)
     return Section("OOS 合成对比", "".join(parts), order=50, charts_js=charts_js)
 

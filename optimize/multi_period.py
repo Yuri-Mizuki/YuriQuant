@@ -27,6 +27,7 @@
 """
 from __future__ import annotations
 
+import warnings
 from dataclasses import asdict, dataclass
 from typing import Any
 
@@ -37,6 +38,11 @@ from optimize.solver import optimize_weights_qp
 from strategy.base import Strategy
 
 __all__ = ["RebalanceConfig", "optimize_rebalance_weights", "run_multi_period_backtest"]
+
+#: 已由项目书面关闭的优化方法（QP 全家族 / HRP / risk_parity / BL）。
+#: 2026-10-19 审计：``RebalanceConfig.method`` 默认 mvo，会让不传参的调用方
+#: 静默走进已否决路径；这里显式告警（不硬报错，保留研究复现能力）。
+CLOSED_METHODS = frozenset({"mvo", "min_var", "tev", "bl", "risk_parity", "hrp"})
 
 
 @dataclass
@@ -171,6 +177,13 @@ def run_multi_period_backtest(
         turnover_series / cost_series / borrow_fee_series，可 .summary() 出绩效。
     """
     target = optimize_rebalance_weights(factor, returns, cfg, executable)
+    if cfg.method in CLOSED_METHODS:
+        warnings.warn(
+            f"method={cfg.method!r} 属项目已书面关闭的优化家族（QP/HRP/risk_parity/BL，"
+            "见 TODO §一/ RESEARCH_TODO 链路优化线）；生产基线是 "
+            "strategy.constraints + buffer，不传 method 时默认 mvo 会静默走进否决路径。"
+            "本次仅作研究对照。",
+            RuntimeWarning, stacklevel=2)
     strat = PrecomputedWeightsStrategy(target)
 
     if initial_capital is None:

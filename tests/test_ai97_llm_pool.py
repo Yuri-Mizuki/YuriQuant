@@ -750,7 +750,6 @@ def test_uniform_proposer_respects_bans():
     prop = UniformRandomProposer(seed=0)
     first = prop.propose(10)
     assert first, "前置条件：能产出公式"
-    proj0 = check_report_formula(first[0]).project
 
     nxt = UniformRandomProposer(seed=0).propose(10, avoid=[first[0]])
     assert check_report_formula(first[0]).project not in {
@@ -838,7 +837,6 @@ def test_arm_llm_with_llm_none_is_rejected_not_silently_degraded():
 
 def test_arm_choices_are_closed_set():
     """--arm 只接受三个值（防止拼错臂名静默落到默认 llm 臂）。"""
-    import argparse
     from scripts.factors.run_alphapool_ppo import build_parser
 
     ap = build_parser()

@@ -220,6 +220,10 @@ def deflate_best(
 ) -> dict[str, Any]:
     """一步到位：对 (T×N) 候选收益矩阵，挑样本内最优配置并算其 DSR。
 
+    ``metric`` 决定「最优」的排序键：``"sharpe"``（默认，逐期 Sharpe）或
+    ``"mean"``（逐期均值收益）。2026-10-19 审计修复：此前参数保存后从未使用，
+    永远按 Sharpe 选优。DSR 始终以被选中列的 Sharpe 计算。
+
     返回 dict：``best_index`` / ``best_column`` / ``best_sr``（逐期）/
     ``dsr`` / ``n_trials`` / ``t_obs`` / ``skew`` / ``kurt`` /
     ``trial_srs``。典型读法：``dsr >= 0.95`` 且 PBO 低 → 选择过程可信。
@@ -236,7 +240,15 @@ def deflate_best(
     srs = trial_sharpes(M)
     if not np.isfinite(srs).all():
         raise ValueError("存在零方差/无效配置（Sharpe 非有限），请先剔除")
-    k = int(np.argmax(srs))
+    if metric == "sharpe":
+        score = srs
+    elif metric == "mean":
+        score = M.mean(axis=0)
+    else:
+        raise ValueError(f"未知 metric={metric!r}，可选 'sharpe' / 'mean'")
+    if not np.isfinite(score).all():
+        raise ValueError(f"metric={metric!r} 存在非有限值，请先剔除无效配置")
+    k = int(np.argmax(score))
     col = M[:, k]
     centered = col - col.mean()
     var = float(np.var(col, ddof=1))

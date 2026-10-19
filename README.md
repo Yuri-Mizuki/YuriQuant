@@ -97,10 +97,10 @@ strategy/   因子值 → 组合权重
 research/   研究工具：IC/分层、归因、DPP、实验台账、报告渲染
 stats/      稳健统计与反过拟合（PBO / DSR）
 monitoring/ 生产监控：IC 台账、告警规则、账本
-scripts/    279 个脚本入口（ingest / factors / pipelines / portfolio /
-            evaluation / reporting / builders / common …）
+scripts/    190 个 tracked 脚本入口（ingest / factors / pipelines / portfolio /
+            evaluation / reporting / builders / common …；本地 oneoff 另计、gitignored）
 config/     settings.yaml（参数真源）+ baselines.yaml（定版登记表）+ schedule.yaml（调度登记表）
-tests/      94 个文件 / 1297 个用例
+tests/      96 个文件 / 1319 个用例
 reports/    实验产物、监控台账与设计文档
 ```
 
@@ -113,7 +113,7 @@ reports/    实验产物、监控台账与设计文档
 git clone https://github.com/Yuri-Mizuki/YuriQuant.git
 cd YuriQuant
 pip install -e ".[dev]"        # 或 uv sync --frozen --extra dev 精确复现锁定环境
-pytest tests/ -q              # 1186 个用例，无需任何数据凭证
+pytest tests/ -q              # 1319 个用例，无需任何数据凭证
 ```
 
 **没有商业数据源也能开发**：`config/settings.yaml` 把 `datasource.type` 切成
@@ -124,8 +124,8 @@ pytest tests/ -q              # 1186 个用例，无需任何数据凭证
 ```bash
 python -m scripts.ingest.update_data             # 建立/增量更新 Parquet 缓存
 python -m scripts.pipelines.rolling_grid_alla    # 主实验：全A 多年度 walk-forward 网格
-python -m scripts.pipelines.run_model_portfolio  # 投产组合：正交化 · h1+h5 集成 · 月频 Top10%
-python -m scripts.pipelines.alla_daily_rank      # 每日盘后推理出榜
+python -m scripts.pipelines.run_model_portfolio  # legacy 组合对照（h1+h5；非现行生产）
+python -m scripts.pipelines.alla_daily_rank --preset dingban  # 每日盘后推理出榜（现行）
 python -m scripts.reporting.generate_report      # 一键端到端 HTML 报告
 ```
 
@@ -135,10 +135,10 @@ python -m scripts.reporting.generate_report      # 一键端到端 HTML 报告
 
 ## 🧪 工程质量
 
-- **测试**：1186 个用例覆盖数据层、回测、因子挖掘、模型、优化、监控、报告全栈
-- **CI 两层**：push/PR 快检查（ruff 真 bug 规则 + 分层守卫，约 1 分钟）；全量测试手动触发
+- **测试**：1319 个用例覆盖数据层、回测、因子挖掘、模型、优化、监控、报告全栈
+- **CI 两层**：手动触发（`workflow_dispatch`）——快检查（ruff 真 bug 规则 + 分层守卫，约 1 分钟）+ 全量测试
 - **复现锁**：`uv.lock` 提交入库，`uv lock --check` 守卫；可选依赖按功能域分组（ml / gp / solver / rl），缺失时优雅降级
-- **Lint / 类型**：`ruff check .` + `mypy .`
+- **Lint / 类型**：`ruff check .`（F 规则为门禁）；`mypy` 以 Python 3.12 配置运行，存量类型告警未清零
 
 ## 📜 免责声明
 

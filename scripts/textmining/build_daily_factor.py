@@ -150,7 +150,7 @@ def main(task: str = "sue", model: str = "xgb", pool: str = "hs300",
     # 多空日频收益
     ls = layer_ret[5] - layer_ret[1]
     ls_annual = ls.mean() * 250 * 100
-    print(f"\n[分层日频回测]")
+    print("\n[分层日频回测]")
     print(f"  L5 年化 {(layer_ret[5].mean()*250*100):.2f}%")
     print(f"  L1 年化 {(layer_ret[1].mean()*250*100):.2f}%")
     print(f"  多空年化 {ls_annual:.2f}%")
@@ -169,7 +169,7 @@ def main(task: str = "sue", model: str = "xgb", pool: str = "hs300",
         fh.write(f"日均覆盖: {cov.mean():.0f} 只 (中位 {cov.median():.0f})\n\n")
         fh.write(f"[日频 RankIC] {len(ics)} 个交易日\n")
         fh.write(f"  IC 均值 {ic_mean:.4f} | ICIR {icir:.2f} | 正占比 {pos_ratio:.0%}\n\n")
-        fh.write(f"[分层日频回测]\n")
+        fh.write("[分层日频回测]\n")
         fh.write(f"  L5 年化 {(layer_ret[5].mean()*250*100):.2f}%\n")
         fh.write(f"  L1 年化 {(layer_ret[1].mean()*250*100):.2f}%\n")
         fh.write(f"  多空年化 {ls_annual:.2f}%\n")

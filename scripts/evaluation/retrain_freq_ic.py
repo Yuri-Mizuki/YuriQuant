@@ -56,6 +56,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.common.cli_common import setup_logging  # noqa: E402
+from stats.significance import mean_inference  # noqa: E402
 
 log = setup_logging("retrain_freq_ic")
 
@@ -213,8 +214,7 @@ def main(argv: list[str] | None = None) -> None:
             "ic_mean": st["ic"],
             "ic_ir": st["ir"],
             "ic_win": st["win"],
-            "ic_t": (st["ic"] / (ic.dropna().std() / np.sqrt(st["n"])))
-            if st["n"] > 1 and ic.dropna().std() else float("nan"),
+            "ic_t": mean_inference(ic, robust=False)["t_stat"],
             "sec": round(time.time() - t1, 1),
         })
         ic.to_frame("ic").to_csv(dest / f"ic_refit{refit:03d}.csv",

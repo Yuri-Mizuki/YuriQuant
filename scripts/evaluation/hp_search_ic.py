@@ -51,6 +51,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.common.cli_common import setup_logging  # noqa: E402
+from stats.significance import mean_inference  # noqa: E402
 from scripts.evaluation.retrain_freq_ic import (  # noqa: E402
     SEL_DIR,
     TRADABLE_LABELS,
@@ -203,8 +204,7 @@ def main(argv: list[str] | None = None) -> None:
         pred = raw.where(valid.reindex(index=oos_days))
         ic = masked_ic(pred, fwd, mask)
         st = ic_stats(ic)
-        ic_t = (st["ic"] / (ic.dropna().std() / np.sqrt(st["n"]))
-                if st["n"] > 1 and ic.dropna().std() else float("nan"))
+        ic_t = mean_inference(ic, robust=False)["t_stat"]
         rows.append({
             "config": name,
             "n_estimators": params["n_estimators"],

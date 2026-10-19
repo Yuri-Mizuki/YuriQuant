@@ -93,29 +93,6 @@ EXTRA_TECH: dict[str, tuple] = {
 }
 
 # ===========================================================================
-# 面板级基础算子（作用于 date×code DataFrame，时间轴在 index）
-# ===========================================================================
-
-def _ema(x: pd.DataFrame, n: int) -> pd.DataFrame:
-    """EMA：Y = (X*2 + Y'*(N-1))/(N+1)，与 ts_ema 一致。"""
-    return x.ewm(span=n, adjust=False, min_periods=n).mean()
-
-def _sma_tdx(x: pd.DataFrame, n: int, m: int = 1) -> pd.DataFrame:
-    """通达信 SMA(X,N,M) 递归：Y = (X*M + Y'*(N-M))/N。
-
-    等价于 ewm(alpha=M/N, adjust=False)。KDJ/RSI 的平滑依赖此式。
-    """
-    alpha = m / n
-    return x.ewm(alpha=alpha, adjust=False, min_periods=n).mean()
-
-def _sma_ma(x: pd.DataFrame, n: int) -> pd.DataFrame:
-    """简单移动平均（右闭窗口，前 n-1 行为 NaN）。"""
-    return x.rolling(n, min_periods=n).mean()
-
-def _sma_sum(x: pd.DataFrame, n: int) -> pd.DataFrame:
-    return x.rolling(n, min_periods=n).sum()
-
-# ===========================================================================
 # 主流程
 # ===========================================================================
 

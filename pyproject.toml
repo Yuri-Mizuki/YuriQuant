@@ -92,7 +92,9 @@ exclude = [
 select = ["E", "F", "I"]
 
 [tool.mypy]
-python_version = "3.10"
+# 2026-10-19：从 3.10 改为 3.12 —— numpy 2.5 的 stub 使用 `type` 语句，
+# python_version=3.10 时 mypy 第一屏即语法错误、检查完全跑不起来。
+python_version = "3.12"
 ignore_missing_imports = true
 warn_unused_ignores = false
 

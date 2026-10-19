@@ -53,13 +53,13 @@ def auto_lag(n: int, method: str = "andrews") -> int:
     return max(1, int(np.floor(4.0 * (n / 100.0) ** (2 / 9) + 1e-9)))
 
 
-def _clean_series(series: Sequence[float]) -> np.ndarray:
+def _clean_series(series: Sequence[float] | np.ndarray) -> np.ndarray:
     s = np.asarray(series, dtype=float)
     return s[~np.isnan(s)]
 
 
 def nw_tstat(
-    series: Sequence[float],
+    series: Sequence[float] | np.ndarray,
     lag: int | None = None,
     method: str = "andrews",
 ) -> tuple[float, float, int]:

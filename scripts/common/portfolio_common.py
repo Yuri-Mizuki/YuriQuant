@@ -67,7 +67,11 @@ def build_style_covariates_panel(panel):
     cache = DataCache(OfflineQuietDataSource())
     payload = {
         "close": panel["close"], "volume": panel["volume"],
-        "tot_share": panel["market_cap"] / panel["close"].where(panel["close"] > 0),
+        # 市值 = PIT 股本 × 未复权 close（build_panel 同时给 close_raw；
+        # 旧 panel 无该键时退化为 close——仅当未复权/无除权差异时可用）
+        "tot_share": (panel["market_cap"]
+                      / panel.get("close_raw", panel["close"]).where(
+                          panel.get("close_raw", panel["close"]) > 0)),
     }
     ind = IndustryClassification(cache, level=1).get_industry_panel(
         panel["close"].columns, panel["close"].index)

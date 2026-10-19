@@ -299,7 +299,7 @@ def returns_from_cache(cache, begin: int, end: int,
     d = pd.read_parquet(Path(cache.root) / f"daily_{pool}.parquet")
     close_w = d.reset_index().pivot(index="date", columns="code", values="close").sort_index()
     close_w = close_w.loc[str(begin): str(end)]
-    return close_w.pct_change().shift(-1)
+    return close_w.pct_change(fill_method=None).shift(-1)
 
 
 # 财务字段（PIT 展开）与市值所需字段
@@ -337,8 +337,9 @@ def build_panel(
     覆盖两处原有 build_real_panel 的全部能力，口径一致：
     - **PIT 并集池 + membership mask**（历史在册成分，消除幸存者偏差）；
     - 后复权日线（close/high/low/open/volume/amount，mask 后复权）；
+    - **未复权** ``close_raw``（供市值/估值因子分母用）；
     - 财务字段 PIT 展开（公告日对齐，无未来函数）；
-    - 可选市值面板（``TOT_SHARE``(PIT) × 后复权 close，研报市值中性化用）。
+    - 可选市值面板（``TOT_SHARE``(PIT) × **未复权** close，与生产/回测同口径）。
 
     Args:
         cfg: 至少含 ``{"universe": {"index_code", "adjust"}}``。
@@ -389,21 +390,24 @@ def build_panel(
         codes, cal, daily = load_daily(cache, uni, index_code, begin, end, pool=pool)
 
     # 3) 宽表 + 后复权（mask 已体现在长表，unstack 后非在册自然为 NaN）
-    close = daily["close"].unstack("code")
+    #    close_raw 保留未复权价供市值/估值因子使用（2026-10-19 审计修复：
+    #    市值必须是 PIT 股本 × 未复权 close，不能用后复权价）。
+    close_raw = daily["close"].unstack("code")
     high = daily["high"].unstack("code")
     low = daily["low"].unstack("code")
     open_ = daily["open"].unstack("code")
     volume = daily["volume"].unstack("code")
     amount = daily["amount"].unstack("code")
     backward = load_backward_factor(cache, codes)
-    backward = backward.reindex(index=close.index, columns=close.columns).ffill()
-    close = close * backward
+    backward = backward.reindex(index=close_raw.index, columns=close_raw.columns).ffill()
+    close = close_raw * backward
     high = high * backward
     low = low * backward
     open_ = open_ * backward
 
     panel = {
-        "close": close, "open": open_, "high": high, "low": low,
+        "close": close, "close_raw": close_raw,
+        "open": open_, "high": high, "low": low,
         "volume": volume, "amount": amount,
     }
 
@@ -428,11 +432,13 @@ def build_panel(
             raise RuntimeError("资产负债表 TOT_SHARE 缺失，无法构建市值面板")
         tot_share = build_pit_panel(balance, cal, "TOT_SHARE").reindex(
             index=close.index, columns=close.columns)
+        raw_m = close_raw.where(mask)
         panel["close_m"] = close_m
-        panel["market_cap"] = (tot_share * close_m).where(mask)
+        # 市值 = PIT 总股本 × **未复权** close（生产/回测同口径；2026-10-19 修复）
+        panel["market_cap"] = (tot_share * raw_m).where(mask)
         panel["mask"] = mask
 
-    returns_panel = close.pct_change().shift(-1)
+    returns_panel = close.pct_change(fill_method=None).shift(-1)
     return panel, returns_panel
 
 
@@ -493,7 +499,10 @@ def build_htai_neutral_panels(panel: dict[str, pd.DataFrame],
             ind["out_date"] = pd.to_datetime(ind["out_date"], errors="coerce")
             rows = {}
             for d in dates:
-                m = ind[(ind["in_date"] <= d) & (ind["out_date"].fillna(pd.Timestamp.max) >= d)]
+                # 与 data.point_in_time.lookup_intervals 同口径：out_date 为**开区间**
+                # （调出日当天不再属于该行业）；2026-10-19 审计修复。
+                m = ind[(ind["in_date"] <= d)
+                        & (ind["out_date"].fillna(pd.Timestamp.max) > d)]
                 rows[d] = {r["code"]: r["industry_name"]
                            for _, r in m.iterrows() if r["code"] in codes}
             out["industry"] = pd.DataFrame(rows).T.reindex(index=dates, columns=codes)

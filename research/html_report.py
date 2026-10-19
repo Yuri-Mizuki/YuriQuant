@@ -377,7 +377,7 @@ def chart_js_line(canvas_id: str, datasets: list, y_fmt: str = "value", title: s
             "plugins": {"legend": {"labels": {"boxWidth": 12, "font": {"size": 11}}}},
             "scales": {
                 "x": {"type": "time", "time": {"unit": "month"}, "grid": {"display": False}},
-                "y": {"ticks": {"callback": f"v=>v.toFixed(2)"}},
+                "y": {"ticks": {"callback": "v=>v.toFixed(2)"}},
             },
         },
     }

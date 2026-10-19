@@ -21,7 +21,6 @@ RL 无优势），判定标准是四臂评估链路自洽、无口径 bug，而�
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 import sys
 from pathlib import Path
@@ -32,6 +31,8 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+from stats import PERIODS_PER_YEAR  # noqa: E402
 
 log = logging.getLogger("portfolio_ppo")
 
@@ -262,11 +263,12 @@ def evaluate_arm(name: str, weights: dict[pd.Timestamp, np.ndarray],
         return {}, eq
     ex = np.array([r["excess"] for r in rows])
     n = len(rows)
-    years = n * DECISION_FREQ / 244.0
+    years = n * DECISION_FREQ / PERIODS_PER_YEAR
     cagr = v ** (1.0 / years) - 1.0
     bench_cagr = float(np.prod([1.0 + r["idx_ret"] for r in rows])) ** (1.0 / years) - 1.0
-    vol = float(np.std([r["port_ret"] for r in rows], ddof=1) * np.sqrt(244.0 / DECISION_FREQ))
-    ex_vol = float(np.std(ex, ddof=1) * np.sqrt(244.0 / DECISION_FREQ))
+    vol = float(np.std([r["port_ret"] for r in rows], ddof=1)
+                * np.sqrt(PERIODS_PER_YEAR / DECISION_FREQ))
+    ex_vol = float(np.std(ex, ddof=1) * np.sqrt(PERIODS_PER_YEAR / DECISION_FREQ))
     metrics = {
         "n_periods": n,
         "nav": float(v),

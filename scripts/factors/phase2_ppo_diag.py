@@ -22,9 +22,8 @@ POOL, BEGIN, END = "zz1000", "2019-06-01", "2026-06-30"
 def main():
     from stable_baselines3 import PPO
     from scripts.factors.run_portfolio_phase2 import (
-        PPO_KW, DECISION_FREQ, make_env, load_pool_panels, build_frame,
+        PPO_KW, make_env, load_pool_panels, build_frame,
         fit_label_models, assemble_fz)
-    from factor.rl.portfolio_env import map_actions_to_weights
 
     px, mask = load_pool_panels(POOL, BEGIN, END)
     codes = list(mask.columns)

@@ -88,7 +88,7 @@ def main():
                      f"{time.time()-t0:.0f}s")
 
     table = pd.DataFrame(rows)
-    print(f"\n===== 调仓频率精修（gbdt中性化Top20%, test 2025, 含成本）=====")
+    print("\n===== 调仓频率精修（gbdt中性化Top20%, test 2025, 含成本）=====")
     print(f"沪深300指数年化: {bench_annual:.2%}\n")
     for hz in HORIZONS:
         print(f"--- horizon={hz} ---")

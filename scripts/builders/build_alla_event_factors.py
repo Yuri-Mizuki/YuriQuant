@@ -168,9 +168,6 @@ def _pit_restricted(restricted: pd.DataFrame, cal_idx, codes) -> dict:
     r = r.dropna(subset=["code", "list_date", "share_lst"])
     r = r[r["list_date"].isin(cal_idx)]     # 只保留落在交易日历的解禁
 
-    # 每交易日每股票：当日解禁股累计（同一日多条=不同解禁批次，求和）
-    r_daily = (r.groupby(["code", "list_date"], sort=False)["share_lst"].sum())
-
     # 未来 20 交易日解禁窗口：对每个交易日 d，累计窗口=[d, d+19] 的解禁比例
     # 做法：将每个解禁事件展开到 [list_date, list_date+window-1] 每个交易日累加其
     #       SHARE_RATIO（该批解禁/总股本），得"当前日起未来 20 交易日内解禁占比"。

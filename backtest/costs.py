@@ -264,7 +264,10 @@ def default_costs(factor_cost: bool = True) -> TransactionCosts:
     消费方一律走本函数，禁止再硬编码费率字面量（防 config 改动后漂移）。
     """
     if not factor_cost:
-        return TransactionCosts(commission_rate=0.0, stamp_duty=0.0, slippage_bp=0.0)
+        # 无成本对照必须真的为零：commission_min（最低 5 元）也要置零，
+        # 否则每次调仓仍扣 5 元（2026-10-19 审计 P2）。
+        return TransactionCosts(commission_rate=0.0, stamp_duty=0.0,
+                                slippage_bp=0.0, commission_min=0.0)
     from config import Config  # 延迟导入：让本模块顶层保持"纯成本模型"无配置副作用
 
     cfg = Config.costs()

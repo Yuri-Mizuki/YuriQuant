@@ -135,10 +135,12 @@ def _gp_preprocess_features(panel: dict[str, pd.DataFrame], cfg: dict | None = N
             # 逐日：code -> industry 映射
             rows = {}
             for d in dates:
-                m = ind[(ind["in_date"] <= d) & (ind["out_date"].fillna(pd.Timestamp.max) >= d)]
+                # 与 lookup_intervals 同口径：out_date 为开区间（调出日不算在册）。
+                m = ind[(ind["in_date"] <= d)
+                        & (ind["out_date"].fillna(pd.Timestamp.max) > d)]
                 rows[d] = {r["code"]: r["industry_name"] for _, r in m.iterrows() if r["code"] in codes}
             industry_panel = pd.DataFrame(rows).T.reindex(columns=codes)
-        # 市值：TOT_SHARE × close（PIT 股本 × 原始收盘价）
+        # 市值：TOT_SHARE × 未复权 close（PIT 股本 × 原始收盘价；2026-10-19 审计修复）
         balance = cache.get_balance_sheet(codes)
         if not balance.empty and "TOT_SHARE" in balance.columns and "close" in panel:
             from data.financials import build_pit_panel
@@ -147,9 +149,10 @@ def _gp_preprocess_features(panel: dict[str, pd.DataFrame], cfg: dict | None = N
             b = c["fetch"]["begin_date"]
             e = c.get("end_date") or c["fetch"]["end_date"]
             cal = cache.get_calendar(b, e if e else b)
+            _raw = panel.get("close_raw", panel["close"])
             ts = build_pit_panel(balance, cal, "TOT_SHARE").reindex(
-                index=panel["close"].index, columns=panel["close"].columns)
-            market_cap_panel = ts * panel["close"]
+                index=_raw.index, columns=_raw.columns)
+            market_cap_panel = ts * _raw
     except Exception as exc:
         log.warning("GP 特征中性化面板构建失败（跳过中性化，仅 zscore）: %s", exc)
 

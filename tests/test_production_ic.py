@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from monitoring.production_ic import (
     MIN_SAMPLES,
@@ -72,6 +73,28 @@ def test_compute_metrics_has_drift_column_and_summarize_keys():
     s = summarize(out, window=20)
     assert "mktcap_drift_full" in s and "mktcap_drift_recent" in s
     assert isinstance(s["mktcap_drift_yearly"], dict) and s["mktcap_drift_yearly"]
+
+
+def test_compute_metrics_prefers_actual_holdings():
+    """holdings 给定时 top_excess / z_* 用实际 buffer 持仓，而非全池 Top10%。"""
+    score = _panel(days=20, codes=80, seed=21)
+    close = (1 + score * 0).add(100) + _panel(days=20, codes=80, seed=3).cumsum() * 0.01
+    cov = {"size": _panel(days=20, codes=80, seed=11).abs() + 1.0}
+    d0 = score.index[0]
+    top2 = score.loc[d0].nlargest(2).index
+    holdings = pd.DataFrame(False, index=score.index, columns=score.columns)
+    holdings.loc[d0, top2] = True
+
+    out = compute_metrics(score, close, cov, out_path=None, holdings=holdings)
+    row = out[out["predict_date"] == d0].iloc[0]
+    assert row["holdings_source"] == "buffer"
+    assert row["n_hold"] == 2
+
+    fwd = close.pct_change(fill_method=None).shift(-1)
+    s = score.loc[d0].dropna()
+    exp_top = fwd.loc[d0].reindex(top2).dropna().mean()
+    exp_univ = fwd.loc[d0].reindex(s.index).dropna().mean()
+    assert row["top_excess"] == pytest.approx(exp_top - exp_univ)
 
 
 def test_compute_metrics_missing_size_gives_nan_column():

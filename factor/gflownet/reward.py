@@ -110,10 +110,12 @@ def rank_ic_series(factor_panel: pd.DataFrame, returns_panel: pd.DataFrame,
 
 
 def build_horizon_returns(close: pd.DataFrame, horizon: int = 10) -> pd.DataFrame:
-    """未来 ``horizon`` 日收益：``close[t+h]/close[t] - 1``（t 对齐因子日）。"""
-    if horizon <= 1:
-        return close.pct_change().shift(-1) if horizon == 1 else close.pct_change(horizon).shift(-horizon)
-    return close.pct_change(horizon).shift(-horizon)
+    """未来 ``horizon`` 日收益：``close[t+h]/close[t] - 1``（t 对齐因子日）。
+
+    显式 ``fill_method=None``：pandas 2.x 默认 pad 会跨越停牌/非在册空洞桥接
+    收益（pandas 3 已改默认 None），不能依赖版本默认（2026-10-19 审计）。
+    """
+    return close.pct_change(horizon, fill_method=None).shift(-horizon)
 
 
 def _bucket_top_bot(panel_df: pd.DataFrame, top_q: float):

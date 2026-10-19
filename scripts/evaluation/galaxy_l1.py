@@ -91,9 +91,7 @@ def run_one_year(df: pd.DataFrame, year: int, seed: int) -> dict:
     from stats.robust_stats import nw_tstat
 
     dates = df.index.get_level_values(0)
-    d0, d1 = dates.min(), dates.max()
     train_end = pd.Timestamp(f"{year}-12-31")
-    valid_start = train_end - pd.offsets.BYearEnd(0) - pd.Timedelta(days=0)
     # 验证集 = 训练窗最后 20%（研报：约等于第 3 年）
     win = df[(dates >= pd.Timestamp(f"{year - 3}-01-01")) & (dates <= train_end)]
     if win.empty:

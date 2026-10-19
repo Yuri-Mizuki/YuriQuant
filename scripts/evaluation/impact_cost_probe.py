@@ -43,15 +43,19 @@ from strategy.examples import TopFracLongOnly  # noqa: E402
 
 BASE_DIR = ROOT / "reports" / "alla_rolling" / "_base"
 PRED_DEFAULT = ROOT / "reports" / "alla_rolling_ortho" / "pred" / "ens_h1h5__h1.parquet"
-# 覆盖最全的 daily_all_a（E: 2015 起；D: 仅 2022 起）→ 保证 2022 前 ADV 不缺
-# 而被静默低估为 0（2026-10-13 核对：两份 amount 逐位一致 ratio=1.0）。
-DAILY_CANDIDATES = (Path("e:/data/parquet/daily_all_a.parquet"),
-                    Path("d:/data/parquet/daily_all_a.parquet"))
+
+
+def _daily_candidates() -> tuple[Path, ...]:
+    """daily_all_a 缓存（Config.cache root；禁止硬编码盘符）。"""
+    from config import Config
+
+    return (Path(str(Config.cache()["root"])) / "daily_all_a.parquet",)
 
 
 def _load_daily_amount() -> pd.DataFrame:
+    candidates = _daily_candidates()
     best, best_n = None, -1
-    for p in DAILY_CANDIDATES:
+    for p in candidates:
         if not p.exists():
             continue
         d = pd.read_parquet(p)
@@ -59,7 +63,7 @@ def _load_daily_amount() -> pd.DataFrame:
         if len(lv) > best_n:
             best, best_n = d, len(lv)
     if best is None:
-        raise FileNotFoundError(f"无可用 daily_all_a：{DAILY_CANDIDATES}")
+        raise FileNotFoundError(f"无可用 daily_all_a：{candidates}")
     out = best["amount"].unstack("code").astype(float)
     out.index = pd.DatetimeIndex(out.index).normalize()
     return out
