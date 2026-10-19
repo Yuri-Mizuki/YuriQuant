@@ -58,12 +58,14 @@ class Universe:
         return self.get_constituent("000852.SH", date)
 
     def get_all_a(self, date: int) -> list[str]:
-        """全 A 池：本地缓存 daily_all_a 中截至该日出现过的全部代码。
+        """全 A 池：本地缓存 daily_all_a 中**该日处于上市区间**的代码。
 
-        PIT 语义：上市前无行情 → 未出现在缓存 → 天然不属于该日池，
-        等价于按"上市日期"过滤，无需额外接口。缓存中代码上限即全市场
-        A 股（约 5400 只，daily_all_a 未拉取时回退 daily_hs300 只返回
-        HS300 集合并给出警告）。
+        2026-10-19 审计修复：此前 ``date`` 只做类型转换后丢弃（返回"曾出现过的
+        全部代码"），与 docstring 的 PIT 语义不符。现按首末行情日过滤：
+        ``first_date <= date <= last_date``（末行近似退市/长期停牌边界）。
+
+        缓存中代码上限即全市场 A 股（约 5400 只；daily_all_a 未拉取时返回空池
+        并给出警告）。
         """
         import warnings
         d = self._cache.read_daily("all_a")
@@ -74,10 +76,18 @@ class Universe:
                 stacklevel=2,
             )
             return []
-        codes = d.index.get_level_values("code").unique().tolist()
-        if not isinstance(date, (int, str)):
-            date = int(pd.Timestamp(date).strftime("%Y%m%d"))
-        return codes
+        if len(d) == 0:
+            return []
+        # PIT 近似：首末行情日界定上市区间（末行 = 退市/最后交易日）
+        dts = pd.DatetimeIndex(d.index.get_level_values("date"))
+        cds = d.index.get_level_values("code")
+        by_code = pd.Series(dts, index=cds)
+        first = by_code.groupby(level=0).min()
+        last = by_code.groupby(level=0).max()
+        t = (pd.Timestamp(str(date)) if isinstance(date, (int, str))
+             else pd.Timestamp(date))
+        keep = (first <= t) & (last >= t)
+        return first.index[keep].tolist()
 
     def get_default(self, date: int) -> list[str]:
         """按 config 中 universe.default 返回。"""

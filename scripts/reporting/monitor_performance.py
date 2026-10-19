@@ -116,13 +116,16 @@ def task_scheduler_cmd(dataset: str = "hs300_2022_2025", python_path: str | None
 
 
 def install_task(dataset: str = "hs300_2022_2025", python_path: str | None = None) -> str:
-    """注册/更新 Windows 计划任务，返回 schtasks 输出。"""
-    import subprocess
+    """**禁止再注册**：本链已在 ``config/schedule.yaml`` 标记 retired。
 
-    cmd = task_scheduler_cmd(dataset=dataset, python_path=python_path)
-    proc = subprocess.run(cmd, shell=True, capture_output=True, text=True)
-    out = (proc.stdout or "") + (proc.stderr or "")
-    return (f"cmd: {cmd}\n" + out.strip()).strip()
+    2026-10-19 审计：此前仍保留裸 ``schtasks /Create ... /ST 17:30``，对退休脚本
+    执行即可绕过登记表把 ``YuriQuant Monitor`` 复活（并撞回安全软件窗口）。
+    现役生产监控 = ``scripts/reporting/monitor_production_ic.py``。
+    """
+    raise RuntimeError(
+        "YuriQuant Monitor 已退休（schedule.yaml status=retired）；"
+        "现役监控为 scripts/reporting/monitor_production_ic.py，"
+        "请勿用裸 schtasks 复活旧任务")
 
 
 def main(argv: list[str] | None = None) -> int:
