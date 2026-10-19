@@ -108,7 +108,7 @@ def _transform(panel: pd.DataFrame, mode: str, mc: pd.DataFrame, ind: pd.DataFra
     else:
         winsorize = None if mode == "zero_inflated" else "mad"
         # fundind 变体：基本面/股东族只剥行业（与 build_alla_factor_neutralized_fundind 同口径）
-        from scripts.pipelines.rolling_grid_alla import FUNDAMENTAL_FAMILY_SETS
+        from scripts.common.alla_common import FUNDAMENTAL_FAMILY_SETS
         if fundind and name in FUNDAMENTAL_FAMILY_SETS:
             x = preprocess_factor(p, industry_panel=g, winsorize=winsorize)
         else:

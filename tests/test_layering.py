@@ -248,14 +248,12 @@ def test_model_params_live_in_model_layer():
 def test_experiment_entry_scripts_are_not_imported_by_other_scripts():
     """实验入口脚本不得被其他 scripts 反向 import（防"入口变依赖库"回潮）。
 
-    2026-09-11 收口：``scripts/pipelines/run_model_portfolio.py`` 是主实验入口（全A正交化
-    管线），却把 ``DEFAULT_MODEL_PARAMS`` / ``default_costs`` 以及 4 个 legacy
-    组件定义在自身，被 ``rolling_grid_alla``（主实验）、``alla_daily_rank``（生产）
-    与 ``buffer_tune`` / ``freq_tune`` / ``multiyear_oos`` 反向 import。现四类
-    共享件均已下沉：超参 → :mod:`model.params`，成本 → :mod:`backtest.costs`，
-    legacy 组件 → :mod:`scripts.common.portfolio_common`。本守卫钉住"入口脚本只进不出"。
+    2026-10-19 架构清理：``rolling_grid_alla`` 原先被 25 个脚本反向 import
+    （``load_base`` / ``res_metrics`` / ``FeatureStore`` / ``_rank_average`` …）。
+    共享件已下沉 :mod:`scripts.common.alla_common`，本守卫钉住该入口"只进不出"；
+    ``run_model_portfolio`` 已归入 ``scripts/archive/``（legacy）。
     """
-    entry_mods = {"scripts.pipelines.run_model_portfolio"}
+    entry_mods = {"scripts.pipelines.rolling_grid_alla"}
     entry_files = {m.rsplit(".", 1)[-1] + ".py" for m in entry_mods}
     offenders = []
     for f in (ROOT / "scripts").rglob("*.py"):

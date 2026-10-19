@@ -54,7 +54,7 @@ def main(argv: list[str] | None = None) -> None:
     from scripts.evaluation.cheap_lever_revalidate_920 import wrank_avg
     from scripts.evaluation.fundamental_blend import build_slow_panel
     from scripts.evaluation.horizon_mix import load
-    from scripts.pipelines import rolling_grid_alla as RG
+    from scripts.common import alla_common as AC
 
     t0 = time.time()
     pred_dir = Path(args.pred_dir)
@@ -65,7 +65,7 @@ def main(argv: list[str] | None = None) -> None:
     rest = (1.0 - w) / 3.0
     fast = wrank_avg(ranked, {1: w, 5: rest, 10: rest, 20: rest})
 
-    base = RG.load_base()
+    base = AC.load_base()
     slow, _mx, _wt = build_slow_panel(base, fast.index, 24, 2, 0.5, 12, log=print)
     slow_rank = slow.rank(axis=1, pct=True)
     seed = 0.5 * fast.rank(axis=1, pct=True) + 0.5 * slow_rank

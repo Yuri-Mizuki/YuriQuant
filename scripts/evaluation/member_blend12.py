@@ -4,7 +4,7 @@
   - 成员 12 个 = 3 模型族（gbdt / ranker / ridge）× 4 horizon（h1/h5/h10/h20）。
     各 horizon 的训练目标本身不同（h1 短视 → h20 长视），
     即 AI29"多标签"维度的现有 pred 等价物；ir/calmar 另类标签需重训（挂 920）。
-  - A 等权组（零学习，RG._rank_average 与生产同源）：
+  - A 等权组（零学习，AC.rank_average 与生产同源）：
       solo 单成员（模型基本盘）→ horizon 内三模型等权 → 族内四 horizon 等权
       → 全 12 等权，逐级看增益来自哪个维度。
   - B 学权组：walk-forward 秩空间 lstsq（与 stack_blend 完全同参：
@@ -26,7 +26,7 @@ import pandas as pd
 
 from backtest.costs import default_costs
 from backtest.engine import VectorBacktest
-from scripts.pipelines import rolling_grid_alla as RG
+from scripts.common import alla_common as AC
 from strategy.examples import TopFracLongOnly
 
 MODELS = ("gbdt", "ranker", "ridge")
@@ -51,7 +51,7 @@ def main():
     def load(n):
         return pd.read_parquet(pred_dir / "pred" / f"{n}.parquet")
 
-    base = RG.load_base()
+    base = AC.load_base()
     close = base["close"]
     mask = base["mask"].astype(bool)
     costs = default_costs()
@@ -74,7 +74,7 @@ def main():
         return ranks[name]
 
     def eq(names):
-        return RG._rank_average([members[n] for n in names]) \
+        return AC.rank_average([members[n] for n in names]) \
             .reindex(index=oos_days, columns=close.columns) \
             .rank(axis=1, pct=True)
 
@@ -159,13 +159,13 @@ def main():
         res = bt.run(sig, fwd, executable_mask=mask_oos, horizon=1,
                      rebalance_days=None)
         dr = res.daily_returns
-        m = RG.res_metrics(dr, bench_idx, res.turnover_series)
+        m = AC.res_metrics(dr, bench_idx, res.turnover_series)
         row = {"run_id": name, "annual": m["annual"], "excess_idx": m["excess"],
-               "excess_eqw": m["annual"] - RG.ann(bench_eqw),
+               "excess_eqw": m["annual"] - AC.ann(bench_eqw),
                "sharpe": m["sharpe"], "max_dd": m["max_dd"],
                "turnover": m["turnover"], "n_days": len(dr.dropna())}
         rows_overall.append(row)
-        rows_yearly.extend(RG._yearly_rows(row, dr, bench_idx,
+        rows_yearly.extend(AC.yearly_rows(row, dr, bench_idx,
                                            res.turnover_series))
         print(f"[{name}] 年化={row['annual'] * 100:.2f}% "
               f"超额(指)={row['excess_idx'] * 100:+.2f}pp "

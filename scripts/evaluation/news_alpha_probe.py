@@ -58,7 +58,7 @@ NEWS_PANELS = (
 def load_news_features(idx: pd.DatetimeIndex, cols: pd.Index,
                        names=NEWS_PANELS) -> dict[str, pd.DataFrame]:
     """载入 news 族面板并对齐到 (idx, cols) 网格（NaN 保留，LGBM 原生处理）。"""
-    from scripts.pipelines.rolling_grid_alla import ds_root
+    from scripts.common.alla_common import ds_root
 
     pdir = ds_root() / "panels"
     out: dict[str, pd.DataFrame] = {}
@@ -171,7 +171,7 @@ def main(argv: list[str] | None = None) -> None:
 
     from backtest.costs import default_costs
     from backtest.engine import VectorBacktest
-    from scripts.pipelines.rolling_grid_alla import ann, load_base, res_metrics
+    from scripts.common.alla_common import ann, load_base, res_metrics
     from stats.ic import calc_ic_series
     from strategy.examples import TopFracLongOnly, TopKLongOnly
 

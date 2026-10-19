@@ -52,13 +52,17 @@ if str(ROOT) not in sys.path:
 
 from config import Config  # noqa: E402
 from scripts.common.cli_common import setup_logging  # noqa: E402
+from scripts.common.alla_common import (  # noqa: E402
+    FUNDAMENTAL_FAMILY_SETS, FeatureStore, ann, ds_root,
+    existence_mask, load_base, rank_average as _rank_average, res_metrics,
+    yearly_rows as _yearly_rows,
+)
 
 log = setup_logging("rolling_grid_alla")
 
 # ---------------------------------------------------------------------------
 # 实验配置（单一真源）
 # ---------------------------------------------------------------------------
-DATASET = "all_a_2018_2026"
 OUT = Path("reports") / "alla_rolling"
 PANELS_DIR: Path | None = None   # --preproc ortho 时指向 panels_neu 中性化面板
 # --preproc mixed：基本面/股东族逐因子指向 panels_neu，量价仍用 panels（混合口径）
@@ -76,42 +80,8 @@ MAX_FEATURES = 50
 MIN_COVERAGE = 0.5
 DPP_SIGMA = 0.2                    # DPP 相似度核带宽（研报/项目正典默认）
 DEDUP_TOP_CANDIDATES = 150      # 进入 DPP 去冗余的候选数
-# 基本面慢变量族（A族股东结构 + B族财务报表）保留席位：IC 弱于量价、会被 DPP 质量项
-# 边缘化而静默缺席，故每期为基本面族保留固定席位（按当期 IC 强度择优），其余席位由 DPP 填充。
+#: 基本面慢变量族保留席位数（IC 弱于量价，避免被 DPP 质量项边缘化）
 RESERVED_FUNDAMENTAL_SLOTS = 8
-HOLDER_SETS = {"holder_num_chg", "holder_num_yoy", "inst_holding",
-               "top10_hhi", "top10_holding", "top1_holding", "top5_holding"}
-# B族：财务报表基本面（价值/质量/成长/规模/杠杆/周转/分红）——慢变量、与量价低相关，
-# 同样需保护进入 DPP 候选池（build_alla_fundamental_factors 构建）。
-FUNDAMENTAL_SETS = {
-    "ln_mktcap", "float_ratio",
-    "ep_ttm", "bp", "sp_ttm", "pcf_ttm", "pcf", "fcf_yield", "netcf_yield", "peg",
-    "div_yield", "div_yield_ttm", "div_payout_ratio",
-    "roe_ttm", "roa_ttm", "gross_margin", "net_margin", "accruals", "roic_ttm",
-    "fin_exp_ratio_ttm", "asset_turnover_ttm", "inv_turnover_ttm", "recv_turnover_ttm",
-    "leverage", "rev_growth_yoy", "np_growth_yoy", "np_growth_sq_yoy", "np_growth_sq_qoq",
-    "rev_growth_sq_yoy", "rev_growth_sq_qoq", "oppro_growth_sq_yoy", "oppro_growth_sq_qoq",
-    "np_ded_growth_ttm_yoy", "cfo_growth_ttm_yoy",
-    # B+ 族：商誉/股权质押/业绩预告/业绩快报（build_alla_pledge_factors 构建）
-    "goodwill_ratio", "pledge_ratio", "pledge_holder_ratio", "frozen_ratio",
-    "profit_notice_chg", "profit_express_np_yoy", "profit_express_rev_yoy",
-    # B++ 族：构造型基本面（build_alla_constructed_factors 构建）
-    "np_ded_ratio", "main_profit_ratio", "ebit_margin",
-    "altman_zscore", "debt_to_ebitda", "interest_coverage",
-    "np_rev_gap", "rev_recv_gap", "cfo_to_np",
-    "margin_delta_ttm", "np_accel_sq", "roe_vol_pit",
-    "risky_asset_ratio", "div_growth_yoy", "div_consecutive_years",
-    # B5 族：P5 补缺（build_alla_p5_factors 构建，2026-09-22）——
-    # sue_q（h20 IC -0.068 随 horizon 走强，负号=A股超预期反转）与
-    # asset_growth_yoy（-0.046，资产扩张负向）为强因子；capex_intensity/spsr
-    # 弱、bonus_freq_3y 覆盖 0.21（过不了 MIN_COVERAGE），入族参与席位竞争
-    "sue_q", "asset_growth_yoy", "capex_intensity", "spsr", "bonus_freq_3y",
-    "ccc", "report_delay", "piotroski_f", "inv_rev_gap",
-}
-# 注：float_mktcap（流通市值）剔除——其 float_share 底层在 2021-01~04 覆盖 0.000 有数据洞，
-# 且与 ln_mktcap 规模信息冗余；规模/流通维度由 ln_mktcap + float_ratio 覆盖。
-# 低相关基本面慢变量族（A族股东结构 + B族财务报表），统合进 DPP 候选保护
-FUNDAMENTAL_FAMILY_SETS = HOLDER_SETS | FUNDAMENTAL_SETS
 
 # ---------------------------------------------------------------------------
 # 另类数据族（2026-09-12 接入）：事件 / 资金流(含两融) / 停牌状态
@@ -463,70 +433,9 @@ def stage_prep(mask_lag: int = 1):
     log.info("prep 完成 %.0fs", time.time() - t0)
 
 
-def load_base() -> dict:
-    base = OUT / "_base"
-    need = ["close_adj", "market_cap", "tradable_mask", "bench_index", "bench_eqw"]
-    missing = [n for n in need if not (base / f"{n}.parquet").exists()]
-    if missing:
-        raise FileNotFoundError(f"基础面板缺失 {missing}，先跑 --stage prep")
-    close_adj = pd.read_parquet(base / "close_adj.parquet")
-    cov = {}
-    for k in ("size", "industry", "mom", "vol", "turn"):
-        p = base / f"cov_{k}.parquet"
-        if p.exists():
-            cov[k] = pd.read_parquet(p)
-    return {
-        "close": close_adj,
-        "market_cap": pd.read_parquet(base / "market_cap.parquet"),
-        "cov": cov,
-        "mask": pd.read_parquet(base / "tradable_mask.parquet"),
-        "bench_index": pd.read_parquet(base / "bench_index.parquet")["ret"],
-        "bench_eqw": pd.read_parquet(base / "bench_eqw.parquet")["ret"],
-    }
-
-
-def ds_root() -> Path:
-    from config import Config
-    return Path(str(Config.get()["factor_library"]["root"])) / DATASET
-
-
 # ---------------------------------------------------------------------------
 # Phase B: 特征筛选（每年 × horizon，仅用过去数据）
 # ---------------------------------------------------------------------------
-class FeatureStore:
-    """因子面板 LRU 读取（float32，全A面板单个 ~50MB）。
-
-    加载时统一做截面 zscore + ±10σ 剪裁（与因子库"入库即 zscore"及
-    multiyear_oos 的加载口径对齐；全A原始公式值含爆炸量级——alpha191_017
-    最大 ~3e38，直接进 Ridge 的稠密矩阵会 SVD 崩溃，2026-09-01 实证）。
-    IC/去冗余均为秩相关，不受该单调变换影响。
-    """
-
-    def __init__(self, panels_dir: Path, cap: int = 130,
-                 name_dir: dict[str, Path] | None = None):
-        self.dir = panels_dir
-        self.name_dir = name_dir or {}   # 逐因子目录覆盖（mixed 口径）
-        self.cap = cap
-        self._cache: dict[str, pd.DataFrame] = {}
-        self._order: list[str] = []
-
-    def get(self, name: str) -> pd.DataFrame:
-        if name not in self._cache:
-            if len(self._order) >= self.cap:
-                evict = self._order.pop(0)
-                self._cache.pop(evict, None)
-            from factor.preprocessing import standardize_zscore
-            src = self.name_dir.get(name, self.dir)
-            p = pd.read_parquet(src / f"{name}.parquet")
-            p = standardize_zscore(p).clip(-10.0, 10.0).astype(np.float32)
-            self._cache[name] = p
-            self._order.append(name)
-        return self._cache[name]
-
-    def get_many(self, names: list[str]) -> dict[str, pd.DataFrame]:
-        return {n: self.get(n) for n in names}
-
-
 def _reserve_alt(quality: pd.Series, cov_ok: pd.Series) -> list[str]:
     """另类数据族保留席位：子族轮转 + 按 |IC| 择优 + 同值去重。
 
@@ -783,28 +692,6 @@ def rolling_window_oos(predictor_cls, params, features: dict, labels: pd.DataFra
     return out
 
 
-def existence_mask(feats: dict, close: pd.DataFrame,
-                    test_days: pd.DatetimeIndex) -> pd.DataFrame:
-    """股票在信号日的可用性掩码：当日有行情 且 >=1/4 特征非 NaN。
-
-    全A滚动 IPO 场景的关键守卫（2026-09-01 quick 冒烟发现）：LightGBM 对
-    全 NaN 特征行照样输出预测，未上市/新股会占满信号顶部（买入 1110 只
-    幽灵股 → 组合近似空仓）。特征可用率掩码把预测限制在"当时真实存在、
-    因子已有值"的股票上（PIT 正确）。
-    """
-    valid = close.loc[test_days].notna()
-    if feats:
-        avail = None
-        for p in feats.values():
-            a = p.loc[test_days].notna() if test_days.isin(p.index).all() \
-                else p.reindex(index=test_days).notna()
-            # 注意 bool+bool 在 pandas 2.x 下仍为 bool（0/1），须显式整型累加
-            avail = a.astype(np.int16) if avail is None \
-                else avail + a.astype(np.int16)
-        valid = valid & (avail >= max(1, len(feats) // 4))
-    return valid
-
-
 def stage_predict(quick: bool = False, only_horizons: list[int] | None = None):
     from model.labels import build_labels
     from model.predictor import PREDICTORS
@@ -1011,64 +898,6 @@ def _rebalance_days_validated(dates: pd.DatetimeIndex, horizon: int,
         if span >= horizon:
             out.append(d)
     return set(out)
-
-
-def ann(dr: pd.Series) -> float:
-    dr = dr.dropna()
-    if len(dr) < 20:
-        return 0.0
-    from backtest.metrics import PERIODS_PER_YEAR
-    return float((1 + dr).prod() ** (PERIODS_PER_YEAR / len(dr)) - 1)
-
-
-def _yearly_metrics(dr: pd.Series, bench: pd.Series) -> dict[int, dict]:
-    from backtest.metrics import PERIODS_PER_YEAR
-    out = {}
-    for year, sub in dr.groupby(dr.index.year):
-        sub = sub.dropna()
-        if len(sub) < 20:
-            continue
-        b = bench.reindex(sub.index).fillna(0.0)
-        ann_ret = ann(sub)
-        b_ann = ann(b)
-        sd = sub.std()
-        eq = (1 + sub).cumprod()
-        out[int(year)] = {
-            "annual": ann_ret, "excess": ann_ret - b_ann, "bench_annual": b_ann,
-            "sharpe": float(sub.mean() / sd * np.sqrt(PERIODS_PER_YEAR)) if sd > 0 else 0.0,
-            "max_dd": float(abs((eq / eq.cummax() - 1).min())),  # 正幅度（同 metrics 约定）
-        }
-    return out
-
-
-def _yearly_rows(base_row: dict, dr: pd.Series, bench: pd.Series,
-                 turnover: pd.Series | None) -> list[dict]:
-    """逐年指标行：所有度量列**重算**，绝不从整体行继承。
-
-    2026-09-14 修 bug：此前 stage_backtest / stage_smallcap / stage_ensemble
-    三处都写 ``{**row, "year": year, **ym}``，而 `row` 里的
-    excess_idx / excess_eqw / ir / turnover 是**整体**口径值，
-    `_yearly_metrics` 又不返回这几个键 → 逐年表里这几列"每年完全相同"，
-    读表者会误以为各年超额/IR/换手一模一样。只保留标识列，度量列一律重算。
-    """
-    from backtest.metrics import PERIODS_PER_YEAR
-    keep = ("run_id", "model", "ensemble", "horizon", "freq", "neut",
-            "frac", "weight", "arm", "scheme")
-    out = []
-    for year, ym in _yearly_metrics(dr, bench).items():
-        idx_y = dr.index[dr.index.year == year]
-        ex = (dr.reindex(idx_y) - bench.reindex(idx_y).fillna(0.0)).dropna()
-        to_y = (turnover.reindex(idx_y).dropna() if turnover is not None
-                else pd.Series(dtype=float))
-        out.append({
-            **{k: base_row[k] for k in keep if k in base_row},
-            "year": year, **ym,
-            "excess_idx": ym["excess"],
-            "ir": (float(ex.mean() / ex.std() * np.sqrt(PERIODS_PER_YEAR))
-                   if len(ex) > 20 and ex.std() > 0 else np.nan),
-            "turnover": float(to_y.mean()) if len(to_y) else np.nan,
-        })
-    return out
 
 
 def _exec_sfx(execution: str) -> str:
@@ -1372,28 +1201,6 @@ def stage_backtest(quick: bool = False, execution: str = "open"):
     log.info("backtest 完成 %.0fs（%d 组合）", time.time() - t0, len(rows_overall))
 
 
-def res_metrics(dr: pd.Series, bench: pd.Series, turnover: pd.Series | None) -> dict:
-    """从日收益序列计算整体指标（首跑与断点续跑同口径）。"""
-    from backtest.metrics import calc_all_metrics
-    dr = dr.dropna()
-    m = calc_all_metrics(dr, bench.reindex(dr.index).fillna(0.0), None)
-    to = turnover.dropna() if turnover is not None else pd.Series(dtype=float)
-    return {
-        "annual": m.get("annual_return", 0.0),
-        "excess": m.get("excess_return", 0.0),
-        "sharpe": m.get("sharpe", 0.0),
-        "sharpe_t_stat": m.get("sharpe_t_stat", np.nan),
-        "years_to_prove": m.get("years_to_prove", np.nan),
-        "excess_t_stat": m.get("excess_t_stat", np.nan),
-        "ir": m.get("information_ratio", 0.0),
-        "max_dd": m.get("max_drawdown", 0.0),
-        "beta": m.get("beta", np.nan),
-        "turnover": float(to.mean()) if len(to) else 0.0,
-    }
-
-
-# ---------------------------------------------------------------------------
-
 def stage_smallcap(quick: bool = False):
     """聚焦子网格：验证 A股小盘溢价 × 集中度 × 信号加权 的增厚空间。
 
@@ -1514,42 +1321,6 @@ def stage_smallcap(quick: bool = False):
                                      index=False, encoding="utf-8-sig")
     log.info("smallcap 完成 %.0fs（%d 组合, model=%s）",
              time.time() - t0, len(rows_overall), SC_MODEL)
-
-
-def _rank_average(panels: list[pd.DataFrame], min_panels: int = 2) -> pd.DataFrame:
-    """逐日截面秩平均（与 calc_ic 的 Spearman 同口径的单调变换）。
-
-    对每个 (日期, 股票)：在 k 个模型预测里取截面百分位秩，仅当当日
-    有效面板数 >= min_panels 时求平均，否则置 NaN —— 避免单一模型
-    的离群值/全缺失股票凭凑数进入合成信号。秩平均使不同模型量纲
-    （ridge 值 / gbdt 分 / ranker 分）可比，集成在"排序信息"层面。
-    """
-    out = pd.DataFrame(np.nan, index=panels[0].index, columns=panels[0].columns)
-    if not panels:
-        return out
-    codes = panels[0].columns
-    for d in panels[0].index:
-        ranks = []
-        for p in panels:
-            if d not in p.index:
-                continue
-            row = p.loc[d]
-            r = row.rank(pct=True)
-            r = r[~row.isna()]
-            ranks.append(r)
-        # 对齐当日所有面板的有效代码，取交集计数
-        valid_codes = ranks[0].index if ranks else codes[:0]
-        for r in ranks[1:]:
-            valid_codes = valid_codes.intersection(r.index)
-        if len(valid_codes) < 1 or len(ranks) < min_panels:
-            continue
-        sub = [r.reindex(valid_codes) for r in ranks]
-        ok = pd.concat(sub, axis=1).dropna(axis=0)
-        if len(ok) < 30:
-            out.loc[d, valid_codes] = pd.concat(sub, axis=1).mean(axis=1)
-            continue
-        out.loc[d, ok.index] = ok.mean(axis=1).astype(np.float32)
-    return out
 
 
 def stage_ensemble(quick: bool = False, execution: str = "open"):

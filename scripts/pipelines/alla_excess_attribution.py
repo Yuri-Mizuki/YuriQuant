@@ -37,7 +37,7 @@ def run_main_strategy_backtest(frac: float = 0.10):
     """重跑单组合回测，返回 (日收益, 权重历史, base dict, OOS 交易日)。"""
     from backtest.costs import default_costs
     from backtest.engine import VectorBacktest
-    from scripts.pipelines.rolling_grid_alla import load_base
+    from scripts.common.alla_common import load_base
     from strategy.examples import TopFracLongOnly
 
     base = load_base()

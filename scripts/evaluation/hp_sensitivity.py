@@ -79,7 +79,7 @@ def main(argv: list[str] | None = None) -> None:
     from factor.preprocessing import standardize_zscore
     from model.predictor import LGBMPredictor
     from scripts.evaluation.news_alpha_probe import ic_stats, masked_ic
-    from scripts.pipelines.rolling_grid_alla import load_base
+    from scripts.common.alla_common import load_base
     from stats.ic import calc_ic_series
 
     dest = Path(args.out)

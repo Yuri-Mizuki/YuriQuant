@@ -24,7 +24,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from scripts.pipelines import rolling_grid_alla as RG
+from scripts.common import alla_common as AC
 from backtest.costs import default_costs
 from backtest.engine import VectorBacktest, build_execution_split
 from strategy.examples import TopFracLongOnly
@@ -73,8 +73,8 @@ def build_slow_panel(base: dict, oos_days: pd.DatetimeIndex, ic_months: int,
     fwd20 = close.pct_change(20, fill_method=None).shift(-20)
 
     needed = pd.DatetimeIndex(sorted(set(t0_days) | set(ic_days_all)))
-    family = set(RG.FUNDAMENTAL_FAMILY_SETS) | set(extra_family or ())
-    panels = load_family_slices(family, needed, RG.ds_root(), panels_subdir)
+    family = set(AC.FUNDAMENTAL_FAMILY_SETS) | set(extra_family or ())
+    panels = load_family_slices(family, needed, AC.ds_root(), panels_subdir)
     names = sorted(panels)
     log(f"[slow] 家族因子 {len(family)} 个、面板就绪 "
         f"{len(names)} 个（缺失 {sorted(family - set(names))}）")
@@ -179,7 +179,7 @@ def main():
     h20 = pd.read_parquet(pred_dir / "pred" / "gbdt__h20.parquet")
     print(f"[load] 预测面板就绪 {time.time() - t0:.0f}s", flush=True)
 
-    base = RG.load_base()
+    base = AC.load_base()
     close = base["close"]
     mask = base["mask"].astype(bool)
     costs = default_costs()
@@ -198,14 +198,14 @@ def main():
         base, oos_days, args.ic_months, args.embargo_months,
         args.min_cov, args.min_months,
         extra_family=(hold_dyn if args.include_holder_dyn else None)
-        or ({n for n in pd.read_parquet(RG.ds_root() / "ic_h1.parquet").columns
+        or ({n for n in pd.read_parquet(AC.ds_root() / "ic_h1.parquet").columns
              if n.startswith("alt_news_")} if args.include_alt_news else None),
         panels_subdir=args.panels_subdir)
     weights.to_csv(dest / "slow_weights.csv", index=False, encoding="utf-8-sig")
 
-    fast = RG._rank_average([h1, h5]).reindex(index=oos_days,
+    fast = AC.rank_average([h1, h5]).reindex(index=oos_days,
                                               columns=close.columns)
-    fast1020 = RG._rank_average([h1, h5, h10, h20]).reindex(index=oos_days,
+    fast1020 = AC.rank_average([h1, h5, h10, h20]).reindex(index=oos_days,
                                                             columns=close.columns)
     fast_r, fast1020_r = fast.rank(axis=1, pct=True), fast1020.rank(axis=1, pct=True)
     slow_r, slow_max_r = slow.rank(axis=1, pct=True), slow_max.rank(axis=1, pct=True)
@@ -248,13 +248,13 @@ def main():
             res = bt.run(sig, fwd, executable_mask=mask_oos, horizon=1,
                          rebalance_days=None)
         dr = res.daily_returns
-        m = RG.res_metrics(dr, bench_idx, res.turnover_series)
+        m = AC.res_metrics(dr, bench_idx, res.turnover_series)
         row = {"run_id": name, "annual": m["annual"], "excess_idx": m["excess"],
-               "excess_eqw": m["annual"] - RG.ann(bench_eqw),
+               "excess_eqw": m["annual"] - AC.ann(bench_eqw),
                "sharpe": m["sharpe"], "max_dd": m["max_dd"],
                "turnover": m["turnover"], "n_days": len(dr.dropna())}
         rows_overall.append(row)
-        rows_yearly.extend(RG._yearly_rows(row, dr, bench_idx, res.turnover_series))
+        rows_yearly.extend(AC.yearly_rows(row, dr, bench_idx, res.turnover_series))
         print(f"[{name}] 年化={row['annual'] * 100:.2f}% "
               f"超额(指)={row['excess_idx'] * 100:+.2f}pp "
               f"超额(等权)={row['excess_eqw'] * 100:+.2f}pp "

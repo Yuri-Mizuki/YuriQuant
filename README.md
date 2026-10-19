@@ -124,7 +124,7 @@ pytest tests/ -q              # 1331 个用例，无需任何数据凭证
 ```bash
 python -m scripts.ingest.update_data             # 建立/增量更新 Parquet 缓存
 python -m scripts.pipelines.rolling_grid_alla    # 主实验：全A 多年度 walk-forward 网格
-python -m scripts.pipelines.run_model_portfolio  # legacy 组合对照（h1+h5；非现行生产）
+python -m scripts.archive.run_model_portfolio  # legacy 组合对照（h1+h5；非现行生产）
 python -m scripts.pipelines.alla_daily_rank --preset dingban  # 每日盘后推理出榜（现行）
 python -m scripts.reporting.generate_report      # 一键端到端 HTML 报告
 ```

@@ -128,7 +128,7 @@ def main(argv: list[str] | None = None) -> None:
     from model.labels import build_labels
     from model.params import DEFAULT_MODEL_PARAMS
     from scripts.evaluation.news_alpha_probe import ic_stats, masked_ic
-    from scripts.pipelines.rolling_grid_alla import (
+    from scripts.common.alla_common import (
         FeatureStore,
         ds_root,
         existence_mask,

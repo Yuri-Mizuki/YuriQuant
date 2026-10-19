@@ -30,12 +30,12 @@ def _make_base(tmp_path):
 
 
 def test_yearly_metrics_basic():
-    from scripts.pipelines.rolling_grid_alla import _yearly_metrics
+    from scripts.common.alla_common import yearly_metrics
     idx = pd.bdate_range("2019-01-01", "2020-12-31")
     rng = np.random.default_rng(0)
     dr = pd.Series(rng.normal(0.0005, 0.01, len(idx)), index=idx)
     bench = pd.Series(0.0, index=idx)
-    ym = _yearly_metrics(dr, bench)
+    ym = yearly_metrics(dr, bench)
     assert set(ym) == {2019, 2020}
     for y, m in ym.items():
         sub = dr[dr.index.year == y]
@@ -123,8 +123,10 @@ def test_res_metrics_matches_manual():
 
 
 def test_load_base_guard(tmp_path, monkeypatch):
+    from scripts.common import alla_common as AC
     from scripts.pipelines import rolling_grid_alla as R
-    monkeypatch.setattr(R, "OUT", tmp_path)
+    # load_base 已下沉 common：默认目录由 AC.BASE_DIR 决定（不再随入口 OUT 变）
+    monkeypatch.setattr(AC, "BASE_DIR", tmp_path / "_base")
     with pytest.raises(FileNotFoundError, match="先跑 --stage prep"):
         R.load_base()
     _make_base(tmp_path)

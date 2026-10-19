@@ -97,7 +97,7 @@ def load_setup(dataset: str, top: int, test_begin: str,
     tb = pd.Timestamp(test_begin)
     if dataset == "all_a_2018_2026":
         # 全A：直接读 rolling prep 的 _base 面板（hs300 口径的 build_panel 不适用）
-        from scripts.pipelines import rolling_grid_alla as RG
+        from scripts.common import alla_common as AC
         # open_adj/tradable_mask 只在带执行价的 prep 产物里（out-tag 目录的 _base）
         bdir = Path("reports") / "alla_rolling_ortho920v2" / "_base"
         close = pd.read_parquet(bdir / "close_adj.parquet")
@@ -111,7 +111,7 @@ def load_setup(dataset: str, top: int, test_begin: str,
         days = close.index
         dev_days = days[days < tb]
         valid_days = dev_days[dev_days > tb - pd.Timedelta(days=365)]
-        root = RG.ds_root()
+        root = AC.ds_root()
         ic1 = pd.read_parquet(root / "ic_h1.parquet")
         ranked = ic1.mean().abs().sort_values(ascending=False)
         cand = list(ranked.index[:prefilter]) if prefilter else list(ranked.index)

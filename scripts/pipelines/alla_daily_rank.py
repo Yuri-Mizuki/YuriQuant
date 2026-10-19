@@ -1735,7 +1735,7 @@ def remove_task() -> str:
 # 主流程
 # ---------------------------------------------------------------------------
 def run(args) -> dict:
-    from scripts.pipelines.rolling_grid_alla import existence_mask
+    from scripts.common.alla_common import existence_mask
 
     t0 = time.time()
     if not args.skip_update:
@@ -1793,7 +1793,7 @@ def run(args) -> dict:
                  *cap_panel.shape,
                  "可用" if tail.get("industry") is not None else "缺失(退化为仅市值)")
     elif preproc == "ortho_fundind":
-        from scripts.pipelines.rolling_grid_alla import FUNDAMENTAL_FAMILY_SETS
+        from scripts.common.alla_common import FUNDAMENTAL_FAMILY_SETS
         cap_panel = compute_market_cap(tail["close_raw"], long_tables)
         set_panel_transform(make_ortho_fundind_transform(
             cap_panel, tail.get("industry"), FUNDAMENTAL_FAMILY_SETS))
@@ -1872,9 +1872,9 @@ def run(args) -> dict:
     slow_meta: dict = {}
     if slow_lam > 0:
         from scripts.evaluation.fundamental_blend import build_slow_panel, month_firsts
-        from scripts.pipelines import rolling_grid_alla as _RG
+        from scripts.common import alla_common as _AC
 
-        _base = _RG.load_base()
+        _base = _AC.load_base()
         _bmf = month_firsts(pd.DatetimeIndex(_base["close"].index))
         _oos = pd.DatetimeIndex(sorted(set(_bmf[-24:]) | {predict_date}))
         slow_panel, _slow_max, _slow_w = build_slow_panel(

@@ -186,7 +186,7 @@ def main(argv: list[str] | None = None) -> None:
         masked_ic,
         rolling_predict,
     )
-    from scripts.pipelines.rolling_grid_alla import load_base
+    from scripts.common.alla_common import load_base
     from stats.ic import calc_ic_series
 
     dest = Path(args.out)
@@ -270,7 +270,7 @@ def main(argv: list[str] | None = None) -> None:
     # ---------------- 4) 组合层融合 ----------------
     from backtest.costs import default_costs
     from backtest.engine import VectorBacktest
-    from scripts.pipelines.rolling_grid_alla import ann, res_metrics
+    from scripts.common.alla_common import ann, res_metrics
     from strategy.examples import TopFracLongOnly, TopKLongOnly
 
     fwd_engine = close.pct_change(fill_method=None).loc[oos_days]

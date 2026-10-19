@@ -84,7 +84,7 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--out", default="reports/text_factor_probe/placebo")
     args = ap.parse_args(argv)
 
-    from scripts.pipelines.rolling_grid_alla import OUT as ROLL_OUT
+    from scripts.common.alla_common import ROLL_DIR as ROLL_OUT
 
     dest = Path(args.out)
     dest.mkdir(parents=True, exist_ok=True)

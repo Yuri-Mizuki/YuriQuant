@@ -18,10 +18,10 @@ open 可执行定版数字以 920 重跑为准）：年化 15.5%、超额上证 
     python scripts/builders/build_alla_alpha_panels.py ...    # 因子面板（已存在则跳过）
 
 用法:
-    python -m scripts.pipelines.run_model_portfolio                       # 全流程（当年预测+回测+今日选股）
-    python -m scripts.pipelines.run_model_portfolio --frac 0.20           # 覆盖持仓比例
-    python -m scripts.pipelines.run_model_portfolio --refresh-base        # 先重建 _base 再跑
-    python -m scripts.pipelines.run_model_portfolio --no-train            # 复用上次预测面板（只回测/选股）
+    python -m scripts.archive.run_model_portfolio                       # 全流程（当年预测+回测+今日选股）
+    python -m scripts.archive.run_model_portfolio --frac 0.20           # 覆盖持仓比例
+    python -m scripts.archive.run_model_portfolio --refresh-base        # 先重建 _base 再跑
+    python -m scripts.archive.run_model_portfolio --no-train            # 复用上次预测面板（只回测/选股）
 """
 
 from __future__ import annotations

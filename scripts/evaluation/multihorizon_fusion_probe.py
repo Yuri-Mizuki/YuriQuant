@@ -74,7 +74,7 @@ from model.labels import build_labels  # noqa: E402
 from model.params import DEFAULT_MODEL_PARAMS  # noqa: E402
 from model.predictor import LGBMPredictor  # noqa: E402
 from scripts.evaluation import caliber  # noqa: E402
-from scripts.pipelines.rolling_grid_alla import (  # noqa: E402
+from scripts.common.alla_common import (  # noqa: E402
     DATASET,
     FeatureStore,
     existence_mask,

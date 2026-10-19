@@ -101,7 +101,7 @@ def main(argv: list[str] | None = None) -> None:
     from backtest.engine import VectorBacktest, build_execution_split
     from scripts.evaluation.fundamental_blend import build_slow_panel
     from scripts.evaluation.horizon_mix import load
-    from scripts.pipelines import rolling_grid_alla as RG
+    from scripts.common import alla_common as AC
     from strategy.examples import BufferedTopFracLongOnly
 
     t0 = time.time()
@@ -110,9 +110,9 @@ def main(argv: list[str] | None = None) -> None:
     # ---- 1) 快信号四面板 + 慢信号（全窗构造，逐字对齐 buffer_arm_920 --variant defv）
     h = {k: load(pred_dir, f"gbdt__h{k}") for k in (1, 5, 10, 20)}
     ranked = {k: p.rank(axis=1, pct=True) for k, p in h.items()}
-    fast_eq = RG._rank_average([h[1], h[5], h[10], h[20]])
+    fast_eq = AC.rank_average([h[1], h[5], h[10], h[20]])
 
-    base = RG.load_base()
+    base = AC.load_base()
     close = base["close"]
     sig_idx = fast_eq.index
     slow, _mx, _w = build_slow_panel(base, sig_idx, 24, 2, 0.5, 12, log=print)
@@ -172,7 +172,7 @@ def main(argv: list[str] | None = None) -> None:
                      .shift(1).where(mask_oos),
                      fwd.loc[oos], horizon=1, rebalance_days=rb_exec,
                      execution_split=split)
-        m = RG.res_metrics(res.daily_returns, bench, res.turnover_series)
+        m = AC.res_metrics(res.daily_returns, bench, res.turnover_series)
         return dict(ann=m["annual"], sharpe=m["sharpe"], max_dd=m["max_dd"],
                     turnover=m["turnover"], n_days=len(res.daily_returns.dropna()))
 

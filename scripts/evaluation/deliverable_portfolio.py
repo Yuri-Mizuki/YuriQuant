@@ -61,7 +61,7 @@ def load_signal(pred_dir: Path, kind: str, base: dict) -> pd.DataFrame:
             raise SystemExit(f"{fp} 缺失（--signal ens_h1h5 需要该文件）")
         return pd.read_parquet(fp)
 
-    from scripts.pipelines import rolling_grid_alla as RG
+    from scripts.common import alla_common as AC
 
     hs = []
     for h in (1, 5, 10, 20):
@@ -69,7 +69,7 @@ def load_signal(pred_dir: Path, kind: str, base: dict) -> pd.DataFrame:
         if not fp.exists():
             raise SystemExit(f"{fp} 缺失（--signal {kind} 需要四 horizon gbdt pred）")
         hs.append(pd.read_parquet(fp))
-    sig = RG._rank_average(hs)
+    sig = AC.rank_average(hs)
 
     if kind == "defv":
         from scripts.evaluation.fundamental_blend import build_slow_panel
@@ -126,7 +126,7 @@ def main(argv: list[str] | None = None) -> None:
 
     from backtest.costs import default_costs
     from backtest.engine import VectorBacktest
-    from scripts.pipelines.rolling_grid_alla import ann, load_base, res_metrics
+    from scripts.common.alla_common import ann, load_base, res_metrics
 
     pred_dir = Path(args.pred_dir)
     dest = Path(args.out)

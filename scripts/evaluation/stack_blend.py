@@ -23,7 +23,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from scripts.pipelines import rolling_grid_alla as RG
+from scripts.common import alla_common as AC
 from scripts.evaluation.fundamental_blend import build_slow_panel
 from backtest.costs import default_costs
 from backtest.engine import VectorBacktest, build_execution_split
@@ -50,7 +50,7 @@ def main():
     def load(n):
         return pd.read_parquet(pred_dir / "pred" / f"{n}.parquet")
 
-    base = RG.load_base()
+    base = AC.load_base()
     close = base["close"]
     mask = base["mask"].astype(bool)
     costs = default_costs()
@@ -127,12 +127,12 @@ def main():
         return pd.DataFrame(np.where(den > 0, num / den, np.nan),
                             index=oos_days, columns=close.columns)
 
-    h1020 = RG._rank_average([members["gbdt_h1"], members["gbdt_h5"],
+    h1020 = AC.rank_average([members["gbdt_h1"], members["gbdt_h5"],
                               members["gbdt_h10"], members["gbdt_h20"]]) \
         .reindex(index=oos_days, columns=close.columns).rank(axis=1, pct=True)
     variants = {
-        # 基线：等权秩平均（RG._rank_average，与生产 ens 同源）
-        "baseline_ens_h1h5": RG._rank_average(
+        # 基线：等权秩平均（AC.rank_average，与生产 ens 同源）
+        "baseline_ens_h1h5": AC.rank_average(
             [members["gbdt_h1"], members["gbdt_h5"]])
             .reindex(index=oos_days, columns=close.columns).rank(axis=1, pct=True),
         "h1020_baseline": h1020,
@@ -170,13 +170,13 @@ def main():
             res = bt.run(sig, fwd, executable_mask=mask_oos, horizon=1,
                          rebalance_days=None)
         dr = res.daily_returns
-        m = RG.res_metrics(dr, bench_idx, res.turnover_series)
+        m = AC.res_metrics(dr, bench_idx, res.turnover_series)
         row = {"run_id": name, "annual": m["annual"], "excess_idx": m["excess"],
-               "excess_eqw": m["annual"] - RG.ann(bench_eqw),
+               "excess_eqw": m["annual"] - AC.ann(bench_eqw),
                "sharpe": m["sharpe"], "max_dd": m["max_dd"],
                "turnover": m["turnover"], "n_days": len(dr.dropna())}
         rows_overall.append(row)
-        rows_yearly.extend(RG._yearly_rows(row, dr, bench_idx, res.turnover_series))
+        rows_yearly.extend(AC.yearly_rows(row, dr, bench_idx, res.turnover_series))
         print(f"[{name}] 年化={row['annual'] * 100:.2f}% "
               f"超额(指)={row['excess_idx'] * 100:+.2f}pp "
               f"超额(等权)={row['excess_eqw'] * 100:+.2f}pp "

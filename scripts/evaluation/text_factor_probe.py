@@ -179,7 +179,7 @@ def run_arms(arms: list[tuple[str, pd.DataFrame]], fwd_engine: pd.DataFrame,
     """逐臂回测；信号**按自身列宽**对齐（不回填到全 A 宽度，省内存）。"""
     from backtest.costs import default_costs
     from backtest.engine import VectorBacktest
-    from scripts.pipelines.rolling_grid_alla import ann, res_metrics
+    from scripts.common.alla_common import ann, res_metrics
     from strategy.examples import TopFracLongOnly, TopKLongOnly
 
     factory = {
@@ -225,7 +225,7 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--fuse-weights", default="0.5,0.7,0.8,0.9")
     args = ap.parse_args(argv)
 
-    from scripts.pipelines.rolling_grid_alla import OUT as ROLL_OUT
+    from scripts.common.alla_common import ROLL_DIR as ROLL_OUT
 
     dest = Path(args.out)
     dest.mkdir(parents=True, exist_ok=True)

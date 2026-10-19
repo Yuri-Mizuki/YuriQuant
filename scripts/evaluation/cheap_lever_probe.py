@@ -121,7 +121,7 @@ def main(argv: list[str] | None = None) -> None:
             # 自定义调仓日：走复刻的 open 分支（引擎 rebalance_days 显式传入）
             res = _run_open_custom_rb(ctx_x, sig if sig is not None else ctx_x.pred,
                                       rb_signal or set(), rb_exec, strat, cost, cap)
-            from scripts.pipelines.rolling_grid_alla import res_metrics
+            from scripts.common.alla_common import res_metrics
             m = res_metrics(res.daily_returns,
                             pd.Series(0.0, index=res.daily_returns.index),
                             res.turnover_series)

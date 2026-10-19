@@ -39,7 +39,7 @@ OUT_SUBDIR = "panels_neu_fundind"
 
 def _process_one(name: str) -> tuple[str, float]:
     from factor.preprocessing import preprocess_factor
-    from scripts.pipelines.rolling_grid_alla import FUNDAMENTAL_FAMILY_SETS
+    from scripts.common.alla_common import FUNDAMENTAL_FAMILY_SETS
     ds = Path(str(__import__("config").Config.get()["factor_library"]["root"])) / DATASET
     base = ROOT / BASE_DIR
     p = pd.read_parquet(ds / "panels" / f"{name}.parquet")
@@ -72,7 +72,7 @@ def main() -> None:
     args = ap.parse_args()
 
     from config import Config
-    from scripts.pipelines.rolling_grid_alla import FUNDAMENTAL_FAMILY_SETS
+    from scripts.common.alla_common import FUNDAMENTAL_FAMILY_SETS
 
     ds = Path(str(Config.get()["factor_library"]["root"])) / DATASET
     reg = pd.read_csv(ds / "registry.csv")

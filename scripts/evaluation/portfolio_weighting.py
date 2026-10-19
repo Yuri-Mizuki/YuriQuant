@@ -207,7 +207,7 @@ def main(argv: list[str] | None = None) -> None:
     from backtest.engine import VectorBacktest
     from backtest.metrics import annual_return
     from scripts.evaluation.deliverable_portfolio import load_signal
-    from scripts.pipelines.rolling_grid_alla import load_base, res_metrics
+    from scripts.common.alla_common import load_base, res_metrics
 
     dest = ROOT / args.out
     dest.mkdir(parents=True, exist_ok=True)

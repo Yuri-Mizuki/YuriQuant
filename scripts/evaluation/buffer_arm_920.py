@@ -44,7 +44,7 @@ def main(argv: list[str] | None = None) -> None:
     from backtest.costs import default_costs
     from backtest.engine import VectorBacktest, build_execution_split
     from scripts.evaluation.horizon_mix import load
-    from scripts.pipelines import rolling_grid_alla as RG
+    from scripts.common import alla_common as AC
     from strategy.examples import BufferedTopFracLongOnly, TopFracLongOnly
 
     pred_dir, dest = Path(args.pred_dir), Path(args.out)
@@ -53,9 +53,9 @@ def main(argv: list[str] | None = None) -> None:
 
     h1, h5 = load(pred_dir, "gbdt__h1"), load(pred_dir, "gbdt__h5")
     h10, h20 = load(pred_dir, "gbdt__h10"), load(pred_dir, "gbdt__h20")
-    sig = RG._rank_average([h1, h5, h10, h20])
+    sig = AC.rank_average([h1, h5, h10, h20])
 
-    base = RG.load_base()
+    base = AC.load_base()
     if args.variant == "defv":
         # 定版 h1020⊕s0.5：0.5·rank(h1020) + 0.5·rank(slow)（fundamental_blend 同口径：
         # trailing 24 月 ICIR、embargo 2 月末、min_cov 0.5、min_months 12）
@@ -105,10 +105,10 @@ def main(argv: list[str] | None = None) -> None:
         else:
             res = bt.run(sig_in, fwd, executable_mask=mask_oos, horizon=1,
                          rebalance_days=None)
-        m = RG.res_metrics(res.daily_returns, bench_idx, res.turnover_series)
+        m = AC.res_metrics(res.daily_returns, bench_idx, res.turnover_series)
         rows.append({"variant": name, "annual": m["annual"],
                      "excess_idx": m["excess"],
-                     "excess_eqw": m["annual"] - RG.ann(bench_eqw),
+                     "excess_eqw": m["annual"] - AC.ann(bench_eqw),
                      "sharpe": m["sharpe"], "ir": m["ir"], "max_dd": m["max_dd"],
                      "turnover": m["turnover"], "n_days": len(res.daily_returns.dropna())})
         log.info("%s | 年化=%.2f%% 超额(指)=%+.2fpp 换手=%.1f%%",

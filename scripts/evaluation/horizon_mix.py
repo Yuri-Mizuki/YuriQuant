@@ -23,7 +23,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from scripts.pipelines import rolling_grid_alla as RG
+from scripts.common import alla_common as AC
 from backtest.costs import default_costs
 from backtest.engine import VectorBacktest, build_execution_split
 from stats.ic import calc_ic_series
@@ -35,7 +35,7 @@ def load(pred_dir: Path, name: str) -> pd.DataFrame:
 
 
 def weighted_rank_average(panels: list, weights: list) -> pd.DataFrame:
-    """与 RG._rank_average 同构的加权版（逐日截面百分位秩的加权和）。"""
+    """与 AC.rank_average 同构的加权版（逐日截面百分位秩的加权和）。"""
     out = pd.DataFrame(np.nan, index=panels[0].index, columns=panels[0].columns)
     wv = np.asarray(weights, dtype=float)
     for d in panels[0].index:
@@ -80,16 +80,16 @@ def main():
     h1, h5 = load(pred_dir, "gbdt__h1"), load(pred_dir, "gbdt__h5")
     h10, h20 = load(pred_dir, "gbdt__h10"), load(pred_dir, "gbdt__h20")
     variants = {
-        "baseline_ens_h1h5": RG._rank_average([h1, h5]),
-        "ens_h1h5h20": RG._rank_average([h1, h5, h20]),
-        "ens_h1h5h10h20": RG._rank_average([h1, h5, h10, h20]),
+        "baseline_ens_h1h5": AC.rank_average([h1, h5]),
+        "ens_h1h5h20": AC.rank_average([h1, h5, h20]),
+        "ens_h1h5h10h20": AC.rank_average([h1, h5, h10, h20]),
         "blend_h20_l25": weighted_rank_average([h1, h5, h20], [3, 3, 2]),
         "blend_h20_l40": weighted_rank_average([h1, h5, h20], [3, 3, 4]),
         "gbdt_h20_only": h20,
     }
     print(f"[load] 预测面板就绪 {time.time() - t0:.0f}s", flush=True)
 
-    base = RG.load_base()
+    base = AC.load_base()
     close = base["close"]
     mask = base["mask"].astype(bool)
     costs = default_costs()
@@ -132,17 +132,17 @@ def main():
             res = bt.run(sig, fwd, executable_mask=mask_oos, horizon=1,
                          rebalance_days=None)
         dr = res.daily_returns
-        m = RG.res_metrics(dr, bench_idx, res.turnover_series)
+        m = AC.res_metrics(dr, bench_idx, res.turnover_series)
         row = {
             "run_id": name, "oos_ic": oos_ic,
             "annual": m["annual"], "excess_idx": m["excess"],
-            "excess_eqw": m["annual"] - RG.ann(bench_eqw),
+            "excess_eqw": m["annual"] - AC.ann(bench_eqw),
             "sharpe": m["sharpe"], "ir": m["ir"], "max_dd": m["max_dd"],
             "turnover": m["turnover"], "beta": m["beta"],
             "n_days": len(dr.dropna()),
         }
         rows_overall.append(row)
-        rows_yearly.extend(RG._yearly_rows(row, dr, bench_idx, res.turnover_series))
+        rows_yearly.extend(AC.yearly_rows(row, dr, bench_idx, res.turnover_series))
         print(f"[{name}] IC={oos_ic:.4f} 年化={row['annual'] * 100:.2f}% "
               f"超额(指)={row['excess_idx'] * 100:+.2f}pp "
               f"超额(等权)={row['excess_eqw'] * 100:+.2f}pp "

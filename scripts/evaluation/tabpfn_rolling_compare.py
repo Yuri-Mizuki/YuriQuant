@@ -53,7 +53,7 @@ import pandas as pd
 
 from backtest.costs import default_costs
 from backtest.engine import VectorBacktest, build_execution_split
-from scripts.pipelines import rolling_grid_alla as RG
+from scripts.common import alla_common as AC
 from stats import PERIODS_PER_YEAR
 from stats.ic import calc_ic_series
 from stats.robust_stats import nw_tstat
@@ -206,7 +206,7 @@ def evaluate_pred(pred: pd.DataFrame, fwd: pd.DataFrame, trad, close: pd.DataFra
     res = bt.run(sig.shift(1).where(mask) if mask is not None else sig.shift(1),
                  rets_t, horizon=1, rebalance_days=rb_exec,
                  execution_split=exec_split)
-    m = RG.res_metrics(res.daily_returns, bench_eqw, res.turnover_series) \
+    m = AC.res_metrics(res.daily_returns, bench_eqw, res.turnover_series) \
         if bench_eqw is not None else {
             "annual": float("nan"), "sharpe": float("nan"),
             "max_dd": float("nan"), "turnover": float(res.turnover_series.mean())}
