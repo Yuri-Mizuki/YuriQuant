@@ -1,6 +1,11 @@
 """
-端到端工作流共享模块
-====================
+端到端工作流共享模块（HS300 时代；2026-10-19 已归档）
+====================================================
+
+⚠️ 位置：``scripts/archive/e2e_common.py``。原在 ``scripts/common/``，但绑死
+已停更的 ``daily_hs300.parquet`` / ``hs300_2022_2025``，属退役链路。活跃脚本
+（cpcv / tabfm / gflownet）仍临时 import 本模块；后续把 ``select_features``
+与 ``im_*`` 拆到 ``scripts/common/`` 中性模块后再切断依赖（审计 §6.6 ④）。
 
 e2e_backtest.py（walk-forward 回测）与
 investment_report / optimize_e2e 等 e2e 家族脚本共用的编排逻辑：

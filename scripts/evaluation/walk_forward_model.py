@@ -227,7 +227,7 @@ def main():
              args.horizon, args.mode, embargo)
 
     # ---------------- 3. 定型期特征选择（test 不参与；单一实现） ----------------
-    from scripts.common.e2e_common import select_features
+    from scripts.archive.e2e_common import select_features
     n_all = len(feats)
     feats_sel, quality = select_features(
         feats, fwd, quality_days=valid_days, panel_days=dev_days,

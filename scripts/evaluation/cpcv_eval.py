@@ -119,7 +119,7 @@ def _build_real_data():
     # 特征选择：用全段 valid 段 IC 排序选 top 12（单一实现 e2e_common.select_features）
     va_days = labels.index[(labels.index > pd.Timestamp("2024-01-01"))
                            & (labels.index <= pd.Timestamp("2024-12-31"))]
-    from scripts.common.e2e_common import select_features
+    from scripts.archive.e2e_common import select_features
     feats, _quality = select_features(classic, fwd, quality_days=va_days,
                                       panel_days=fwd.index, max_features=12)
     return feats, labels, fwd

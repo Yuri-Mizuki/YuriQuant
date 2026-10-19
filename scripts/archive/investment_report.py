@@ -56,7 +56,7 @@ from scripts.archive.e2e_backtest import (  # noqa: E402
     run_risk_parity_backtest,
     walk_forward_predictions,
 )
-from scripts.common.e2e_common import (  # noqa: E402
+from scripts.archive.e2e_common import (  # noqa: E402
     HORIZON,
     drop_stale_factors,
     load_daily_data,
@@ -193,7 +193,7 @@ def run(args) -> dict:
 
     # ---- 4b. 风格中性化（默认开启：五因子残差剥离风格，实测 Sharpe 0.41→0.66）----
     if args.neutralize and args.real:
-        from scripts.common.e2e_common import build_neutral_covariates, neutralize_predictions
+        from scripts.archive.e2e_common import build_neutral_covariates, neutralize_predictions
         mc_panel, ind_panel, extra = build_neutral_covariates(px, close, real=True)
         pred_reb = neutralize_predictions(pred_reb, mc_panel, ind_panel, extra)
         pred_reb.to_csv(out_dir / "walk_forward_predictions_neutralized.csv",

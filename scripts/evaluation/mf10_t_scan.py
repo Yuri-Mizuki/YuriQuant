@@ -175,7 +175,7 @@ def _load_real_data(dataset: str, top: int, features: str | None, horizon: int,
         符号对齐（合成函数内部会按各自窗口重算 IC 矩阵）。
     """
     from research.factor_library import FactorLibrary
-    from scripts.common.e2e_common import load_library_grid_panels
+    from scripts.archive.e2e_common import load_library_grid_panels
     from stats.ic import calc_ic_series
 
     lib = FactorLibrary(dataset=dataset)

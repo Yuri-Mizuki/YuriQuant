@@ -33,7 +33,7 @@ from scripts.archive.e2e_backtest import (  # noqa: E402
     run_equal_weight_backtest,
     walk_forward_predictions,
 )
-from scripts.common.e2e_common import (  # noqa: E402
+from scripts.archive.e2e_common import (  # noqa: E402
     DATASET,
     HORIZON,
     drop_stale_factors,

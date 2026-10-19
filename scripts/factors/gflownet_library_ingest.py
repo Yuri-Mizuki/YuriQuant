@@ -102,7 +102,7 @@ def main():
         args.train_begin, args.test_end, offline=args.offline)
     # 特征集对齐（2026-10-06）：raw+im ckpt 的 n_actions 与 raw 版不同，
     # 必须经 attach_im_features 展开同名特征集再建 MDP（移植自 phase1）
-    from scripts.common.e2e_common import attach_im_features
+    from scripts.archive.e2e_common import attach_im_features
     panel, features, _im_idx = attach_im_features(
         panel, args.feat_source, dataset=args.im_dataset)
     print(f"面板: {panel['close'].shape} | 特征集: {args.feat_source} "

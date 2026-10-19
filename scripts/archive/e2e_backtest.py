@@ -53,7 +53,7 @@ from backtest.metrics import (  # noqa: E402
 from data.mock import load_mock_data  # noqa: E402
 from factor.classic import compute_classic_features  # noqa: E402
 from model.labels import build_label_pair  # noqa: E402
-from scripts.common.e2e_common import (  # noqa: E402
+from scripts.archive.e2e_common import (  # noqa: E402
     GBDT_PARAMS,
     HORIZON,
     drop_stale_factors,

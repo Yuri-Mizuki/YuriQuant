@@ -60,7 +60,7 @@ from factor.gflownet.net import TBPolicy  # noqa: E402
 from factor.gflownet.reward import RewardCache, make_reward_fn  # noqa: E402
 from factor.gflownet.selection import select_low_corr  # noqa: E402
 from factor.gflownet.tb import sample_formulas, sample_uniform, train_tb  # noqa: E402
-from scripts.common.e2e_common import (  # noqa: E402
+from scripts.archive.e2e_common import (  # noqa: E402
     FEAT_SOURCES,
     RAW_FEATURES,
     aligned_eval_masks,
@@ -110,7 +110,7 @@ OP_NAMES = [
 ]
 WINDOWS = (5, 10, 20, 30, 60)  # 研报 §2.2 为 5 个可选窗口；正文未列具体值，按华泰同族惯例补 30
 #: ``--feat-source raw`` 时的终端特征（= 改动前的行为）。启用 im 后实际特征集由
-#: :func:`scripts.common.e2e_common.attach_im_features` 在 main 内动态给出。
+#: :func:`scripts.archive.e2e_common.attach_im_features` 在 main 内动态给出。
 FEATURES = list(RAW_FEATURES)
 
 

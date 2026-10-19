@@ -98,7 +98,7 @@ def main(skip_tune: bool = False, do_register: bool = True) -> None:
     fwd = forward_returns(px["close"], horizon=HORIZON)
 
     # ---------------- 4. 特征漏斗（dev 段；单一实现 e2e_common.select_features） ----------------
-    from scripts.common.e2e_common import select_features
+    from scripts.archive.e2e_common import select_features
     feats, quality = select_features(feats_all, fwd, quality_days=va_days,
                                      panel_days=dev_days, max_features=12)
     if quality is not None:

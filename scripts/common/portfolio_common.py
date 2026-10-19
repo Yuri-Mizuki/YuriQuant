@@ -87,7 +87,7 @@ def build_model_panel(model: str, horizon: int, test_days: pd.DatetimeIndex):
     from model.labels import build_labels
     from model.predictor import PREDICTORS, rolling_oos
     from research.factor_library import FactorLibrary
-    from scripts.common.e2e_common import select_features
+    from scripts.archive.e2e_common import select_features
 
     disc = Config.discipline()
     panel, _ = build_panel(Config.get(), disc["begin"], 20261231, offline=True,

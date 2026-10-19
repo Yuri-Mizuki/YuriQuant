@@ -41,7 +41,7 @@ OUT = Path("reports") / "multiyear"
 def build_features(close, valid_days, dev_days):
     from factor.preprocessing import standardize_zscore
     from research.factor_library import FactorLibrary
-    from scripts.common.e2e_common import select_features
+    from scripts.archive.e2e_common import select_features
 
     feats = FactorLibrary(dataset=DATASET).load_library_features()
     feats = {k: v for k, v in feats.items() if v.index[0].year <= 2022}

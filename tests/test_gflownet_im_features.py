@@ -17,7 +17,7 @@ import pytest
 
 from factor.gflownet.env import FactorMDP
 from factor.gflownet.reward import make_reward_fn
-from scripts.common.e2e_common import (
+from scripts.archive.e2e_common import (
     FEAT_SOURCES,
     RAW_FEATURES,
     aligned_eval_masks,

@@ -34,7 +34,7 @@ from scripts.common.cli_common import add_real_mock_args, setup_logging  # noqa:
 from data.mock import load_mock_data  # noqa: E402
 from factor.classic import compute_classic_features  # noqa: E402
 from model.labels import build_label_pair  # noqa: E402
-from scripts.common.e2e_common import (  # noqa: E402
+from scripts.archive.e2e_common import (  # noqa: E402
     HORIZON,
     RIDGE_ALPHA,
     drop_stale_factors,
@@ -89,7 +89,7 @@ def train_and_predict(
     if model == "gbdt":
         try:
             from model.predictor import LGBMPredictor
-            from scripts.common.e2e_common import GBDT_PARAMS
+            from scripts.archive.e2e_common import GBDT_PARAMS
             p = LGBMPredictor(**GBDT_PARAMS)
         except ImportError:
             log.warning("lightgbm 不可用，降级 ridge")

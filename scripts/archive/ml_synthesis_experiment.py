@@ -50,7 +50,7 @@ log = setup_logging("ml_synthesis_experiment")
 # （2026-08-29 收敛逐字副本；保留本别名兼容历史 import 与内部调用）
 from factor.classic import compute_classic_features as _classic_features  # noqa: E402
 from model.evaluation import eval_row, fit_predict_valid_ic, monthly_ic  # noqa: E402
-from scripts.common.e2e_common import load_library_grid_panels  # noqa: E402
+from scripts.archive.e2e_common import load_library_grid_panels  # noqa: E402
 
 DATASET = "hs300_2022_2025"
 HORIZON = 5
@@ -72,7 +72,7 @@ def run(horizon: int = HORIZON, out_dir: str | None = None,
 # ---------------------------------------------------------------------------
 # 数据：量价面板（离线缓存） + 因子库 GP 因子
 # ---------------------------------------------------------------------------
-# 面板加载：load_library_grid_panels（scripts.common.e2e_common，2026-08-31 下沉）
+# 面板加载：load_library_grid_panels（scripts.archive.e2e_common，2026-08-31 下沉）
 # 评价工具：eval_row / monthly_ic / fit_predict_valid_ic（model.evaluation，下沉）
 
 
@@ -165,7 +165,7 @@ def _main_impl(H: int, out_dir: Path, skip_tune: bool, do_register: bool):
     fwd = forward_returns(px["close"], horizon=H)
 
     # ---------------- 4. 特征选择（只在 dev 段；单一实现 e2e_common.select_features） ----------------
-    from scripts.common.e2e_common import select_features
+    from scripts.archive.e2e_common import select_features
     feats, quality = select_features(feats_all, fwd, quality_days=va_days,
                                      panel_days=dev_days, max_features=MAX_FEATURES)
     selected = sorted(feats)

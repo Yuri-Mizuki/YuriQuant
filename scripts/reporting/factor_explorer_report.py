@@ -578,7 +578,7 @@ def main() -> None:
     log.info("因子库 %s: %d 因子", args.dataset, len(reg))
 
     # 收益面板（与 IC/回测同口径：未来一期收益）
-    from scripts.common.e2e_common import load_daily_data
+    from scripts.archive.e2e_common import load_daily_data
     px, _ = load_daily_data(begin=20220101)
     returns = px["close"].pct_change(fill_method=None).shift(-1)
     log.info("收益面板: %d 日 × %d 股", returns.shape[0], returns.shape[1])

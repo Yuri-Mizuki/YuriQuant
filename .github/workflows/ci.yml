@@ -54,6 +54,11 @@ jobs:
         # format 占位符）；风格类（E/I）仍不入 CI 门禁。
         run: ruff check . --select F --output-format concise
 
+      - name: scripts index fresh
+        # scripts/README.md 是 156 个入口的唯一索引；docstring/新增脚本变更后
+        # 必须重新生成，否则索引静默过期（2026-10-19 审计 ③）。
+        run: python -m scripts.data_tools.gen_scripts_index --check
+
       - name: Layer & convention guards
         # tee 落盘供下方 Surface failures 提取失败行
         run: |

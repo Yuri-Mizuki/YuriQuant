@@ -50,13 +50,13 @@ def load_im_panels(source: str = "im_independent",
                    dataset: str = "hs300_2022_2025") -> tuple[dict, dict]:
     """从因子库取 im_* 面板与公式说明；im_independent 只取独立显著 17 个。
 
-    2026-09-16：实现已上移 ``scripts.common.e2e_common.load_im_panels``，
+    2026-09-16：实现已上移 ``scripts.archive.e2e_common.load_im_panels``，
     与 ``scripts.factors.run_gflownet_phase1``（GFlowNet 接分钟特征）共用同一
     份筛选口径，避免两条链路漂移；此处只保留入口。搬迁等价性由
     ``scripts.oneoff._probe_im_loader_equiv`` 逐位验证（17/42 面板 max|Δ|=0、
     md5 一致）。
     """
-    from scripts.common.e2e_common import load_im_panels as _load
+    from scripts.archive.e2e_common import load_im_panels as _load
 
     return _load(source, dataset)
 
@@ -78,7 +78,7 @@ def main() -> None:
     args = ap.parse_args()
 
     from factor.genetic_mining import run_gp_mining
-    from scripts.common.e2e_common import load_daily_data
+    from scripts.archive.e2e_common import load_daily_data
 
     im_panels, im_docs = load_im_panels(args.source)
     if len(im_panels) < 4:

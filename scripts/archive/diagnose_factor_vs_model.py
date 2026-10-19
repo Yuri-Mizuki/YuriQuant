@@ -27,7 +27,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 from scripts.common.cli_common import add_real_mock_args, setup_logging  # noqa: E402
 
-from scripts.common.e2e_common import HORIZON, drop_stale_factors, load_daily_data  # noqa: E402
+from scripts.archive.e2e_common import HORIZON, drop_stale_factors, load_daily_data  # noqa: E402
 from factor.classic import compute_classic_features  # noqa: E402
 from model.labels import build_labels  # noqa: E402
 from scripts.archive.e2e_backtest import (  # noqa: E402

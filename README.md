@@ -97,8 +97,9 @@ strategy/   因子值 → 组合权重
 research/   研究工具：IC/分层、归因、DPP、实验台账、报告渲染
 stats/      稳健统计与反过拟合（PBO / DSR）
 monitoring/ 生产监控：IC 台账、告警规则、账本
-scripts/    190 个 tracked 脚本入口（ingest / factors / pipelines / portfolio /
-            evaluation / reporting / builders / common …；本地 oneoff 另计、gitignored）
+scripts/    155 个活跃入口（ingest / factors / pipelines / portfolio /
+            evaluation / reporting / builders / common …；完整索引见
+            scripts/README.md；退役入口在 scripts/archive/；本地 oneoff 另计、gitignored）
 config/     settings.yaml（参数真源）+ baselines.yaml（定版登记表）+ schedule.yaml（调度登记表）
 tests/      96 个文件 / 1333 个用例
 reports/    实验产物、监控台账与设计文档

@@ -92,7 +92,7 @@ def load_setup(dataset: str, top: int, test_begin: str,
     from data.tradability import build_tradable_mask
     from factor.preprocessing import standardize_zscore
     from research.factor_library import FactorLibrary
-    from scripts.common.e2e_common import select_features
+    from scripts.archive.e2e_common import select_features
 
     tb = pd.Timestamp(test_begin)
     if dataset == "all_a_2018_2026":
