@@ -75,7 +75,7 @@ baselines:
   # ---------------------------------------------------------------------------
   - id: v1-dingban
     created: "2026-10-02"
-    updated: "2026-10-14"
+    updated: "2026-10-19"
     status: production
     label: "定版主模型 v1（920 fundind 快信号 h1020 ⊕ 慢信号 s0.5 + buffer(15/40)）"
     signal_key: dingban_fundind
@@ -219,29 +219,29 @@ baselines:
           caliber_ann: 0.1552
           caliber_sharpe: 0.631
         open:
-          # ⚠️ 2026-10-19 执行价口径修复后，本 reference **已作废**：旧 reference 与旧
-          # caliber 共享同一 build/run 配对错误（build 收执行日 E ⇒ fill 落 E+1、
-          # open 退化为 T+1 收盘），两者“逐项吻合”是同一个 bug 的自洽，不是正确性证据。
-          ref: "reports/alla_rolling_ortho/metrics_overall_open.csv ens_h1h5__h1__M__raw__f0.10（2026-09-10，**pre-exec-fix，已作废**）"
-          ref_ann: 0.1466
-          ref_sharpe: 0.593
+          # 2026-10-19 执行价修复后重跑：ensemble 与 caliber 两条路径均修正 build(T)/run(E)
+          ref: "reports/alla_rolling_ortho/metrics_ensemble.csv ens_ens_h1h5__h1__M__raw__f0.10__equal（2026-10-19 修复后重跑）"
+          ref_ann: 0.1461
+          ref_sharpe: 0.589
           ref_turnover: 0.730
           caliber_ann: 0.1461
           caliber_sharpe: 0.589
           note: >
-            修复后的生产口径以 profiles.production 为准；ensemble 侧需重跑后
-            （同样修正 build 传参）才能重新对拍。
+            修复后 caliber 与 ensemble 路径逐项吻合（Δ ≤ 0.01pp / 0.001）。
+            旧 reference `metrics_overall_open.csv`（2026-09-15）与修复前 caliber
+            共享同一 build/run 配对错误（build 收执行日 E ⇒ fill 落 E+1、open
+            退化为 T+1 收盘），其“逐项吻合”是同一个 bug 的自洽，已作废。
         note: >
-          close 路径仍逐项吻合（Δ ≤ 0.02pp / 0.001）；open 路径的旧 reference
-          已按 2026-10-19 审计结论作废。close/open 的语义差（T 收盘 vs T+1 开盘）
-          不因本次修复改变，但旧 open 数字混入了一天信号滞后，不可再作为
-          “执行价差 = +0.7pp”的证据。
+          close 路径仍逐项吻合（Δ ≤ 0.02pp / 0.001）；open 路径已于 2026-10-19
+          修复后重新对拍。close/open 的语义差（T 收盘 vs T+1 开盘）不因本次修复
+          改变，但旧 open 数字混入了一天信号滞后，不可再作为“执行价差 = +0.7pp”
+          的证据。
     fingerprint: b7d7e9342986
     reproducible_local: true
     regen_cmd: >
       D:/python/Python312/python.exe scripts/evaluation/caliber.py
       --signal ens_h1h5 --window prod --profile production --buffer 0.15:0.40
-    source: "reports/caliber/baseline_prod.json / baseline_fair.json（caliber.py 产出）"
+    source: "reports/caliber/baseline_prod.json / baseline_fair.json（caliber.py 产出）；2026-10-19 修复后重跑：reports/caliber_execfix_20261019.json + reports/alla_rolling_ortho/metrics_ensemble.csv"
     verified_local: true
     notes: >
       与 v1 的差额 = 信号口径（fundind 特征集 + 慢信号）≈ +0.5~0.7pp（当前数据态估）。
@@ -260,7 +260,7 @@ baselines:
   # ---------------------------------------------------------------------------
   - id: v1w2-cheap
     created: "2026-10-14"
-    updated: "2026-10-17"
+    updated: "2026-10-19"
     status: working
     label: "候选微调（切换搁置）：定版信号 buffer(8/40) + h1 份额 0.125（920 复验环境分歧）"
     signal_key: dingban_fundind          # 920 复验后生产形态 = 定版信号 + 两处微调
