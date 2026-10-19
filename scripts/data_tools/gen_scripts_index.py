@@ -27,6 +27,7 @@ ARCHIVED = [
     ("scripts/evaluation/tabfm_head_portfolio.py", "TabPFN/TabICL 头部组合验证"),
     ("scripts/evaluation/tabfm_head_study.py", "TabPFN/TabICL 头部诊断"),
     ("scripts/factors/phase2_ppo_diag.py", "Phase2 PPO 诊断"),
+    ("scripts/factors/run_gflownet_phase0.py", "GFlowNet phase0 入口（已被 phase1 取代）"),
     ("scripts/reporting/factor_correlation.py", "因子相关性报告"),
     ("scripts/reporting/risk_decomposition_report.py", "风险分解报告"),
 ]

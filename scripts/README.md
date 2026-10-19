@@ -1,6 +1,6 @@
 # scripts 入口索引
 
-> 自动生成（155 个活跃入口；archive/oneoff 不计）。改脚本 docstring 后运行 `python -m scripts.data_tools.gen_scripts_index` 更新；`--check` 校验是否过期。
+> 自动生成（154 个活跃入口；archive/oneoff 不计）。改脚本 docstring 后运行 `python -m scripts.data_tools.gen_scripts_index` 更新；`--check` 校验是否过期。
 
 约定：`python -m scripts.<目录>.<文件名>` 运行；退役入口在 `scripts/archive/`（仍可运行，但不再维护）。
 
@@ -129,7 +129,6 @@
 | `factors/mine_factors.py` | 因子挖掘 CLI |
 | `factors/mine_im_combos.py` | 第二层：im_* 统计特征之上的 GP 组合公式挖掘（降维路线主产出） |
 | `factors/run_alphapool_ppo.py` | 华泰 AI97《大模型+强化学习因子挖掘》—— AlphaPool + MaskablePPO 训练入口 |
-| `factors/run_gflownet_phase0.py` | GFlowNet Phase 0 最小闭环：运行入口 |
 | `factors/run_gflownet_phase1.py` | GFlowNet Phase 1：真实 HS300 对齐研报 |
 | `factors/run_llm_mcts.py` | 东吴 LLM-MCTS 因子迭代 Phase 0 —— 同题四引擎对照 runner |
 | `factors/run_portfolio_phase2.py` | stage2 Phase 2：zz1000 主实验（信号管线 + PPO 滚动集成 / 银河口径 QP / 基准）。 |
@@ -219,5 +218,6 @@
 | `scripts/evaluation/tabfm_head_portfolio.py` | `scripts/archive/tabfm_head_portfolio.py` | TabPFN/TabICL 头部组合验证 |
 | `scripts/evaluation/tabfm_head_study.py` | `scripts/archive/tabfm_head_study.py` | TabPFN/TabICL 头部诊断 |
 | `scripts/factors/phase2_ppo_diag.py` | `scripts/archive/phase2_ppo_diag.py` | Phase2 PPO 诊断 |
+| `scripts/factors/run_gflownet_phase0.py` | `scripts/archive/run_gflownet_phase0.py` | GFlowNet phase0 入口（已被 phase1 取代） |
 | `scripts/reporting/factor_correlation.py` | `scripts/archive/factor_correlation.py` | 因子相关性报告 |
 | `scripts/reporting/risk_decomposition_report.py` | `scripts/archive/risk_decomposition_report.py` | 风险分解报告 |

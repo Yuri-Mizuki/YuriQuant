@@ -290,6 +290,18 @@ model层 / ML合成，其余已删、可重跑复现——结论见 §三.13~17�
   - **快照**：`E:\YuriQuant_snapshot_project_20260923_manifest.txt`（1992 文件，含 size+md5）；
     副本 `%USERPROFILE%\_yq_backup\20260923_project_cleanup\`。
 
+- **2026-10-19（脚本归档 + 索引）**：`scripts/` 去重收尾。
+  - **归档 8 个入口**（`git mv` 到 `scripts/archive/`，历史保留）：`ai97_pbo_report`、
+    `pv_marginal_quality`、`tabfm_head_{study,portfolio}`、`phase2_ppo_diag`、
+    `run_gflownet_phase0`、`factor_correlation`、`risk_decomposition_report`——均为
+    tracked 引用全零、无文档/产物引用的一次性诊断/报告脚本。
+  - **`e2e_common` 迁出公共层**：`scripts/common/e2e_common.py` →
+    `scripts/archive/e2e_common.py`（HS300 停更缓存链路；20 处 import 同步）。
+  - **新增 `scripts/README.md`**：155 个活跃入口分组索引 + 归档映射；
+    `scripts/data_tools/gen_scripts_index.py --check` 进 CI。
+  - **未归档**：textmining 7 个（只被 gitignored reports README 记录）、退市/财务
+    回补与数据工具（仍有人工流程）——逐条确认后再动，避免断现网操作。
+
 - **2026-09-24（docs 合并 + 冒烟去重）**：
   - **research_notes 17 → 14 篇**：两组同主题合并——`另类数据调研三部曲_2026-09-20.md`
     （方向调研/全景分类/现成源实测对照三篇，演进链同日成册）与
