@@ -112,3 +112,74 @@ def test_execution_split_rejects_horizon_gt1():
         bt.run(signal, close / close.shift(1) - 1.0, horizon=5,
                rebalance_days={days[0]}, check_convention=False,
                execution_split=(on, idr))
+
+
+# ---------------------------------------------------------------------------
+# 适配层配对守卫（2026-10-19 审计 P0-1）
+# ---------------------------------------------------------------------------
+def test_caliber_run_once_buys_at_next_open():
+    """caliber 适配层：build 收信号日 T、run 收执行日 E=T+1，成交价必须生效。
+
+    回归背景：2026-10-19 审计发现 9 处调用把「执行日 E」同时传给
+    ``build_execution_split``，fill 被写到 E+1，open 臂退化为 T+1 收盘成交。
+    本测试直接驱动 ``caliber._run_once``（白盒，见 test_layering 白名单），
+    断言执行日净值 = Close(E)/Fill(E)，而不是 1.0 或 Close(E)/Close(T)。
+    """
+    import pandas as pd
+
+    from backtest.costs import TransactionCosts
+    from backtest.engine import VectorBacktest
+    from scripts.evaluation import caliber
+
+    close, open_ = _panels()
+    days = close.index
+    pred = pd.DataFrame({"A": [1.0, np.nan, np.nan, np.nan],
+                         "B": [np.nan] * 4, "C": [np.nan] * 4}, index=days)
+    mask = pd.DataFrame(True, index=days, columns=close.columns)
+    fwd = close.pct_change(fill_method=None)
+    ones = pd.DataFrame(1.0, index=days, columns=close.columns)
+    ctx = caliber.CaliberContext(
+        window="prod", signal="test", begin=str(days[0].date()),
+        pred=pred, close=close, fwd=fwd, mask=mask, amt=ones, vol60=ones,
+        ret_hist=fwd, fingerprint="unit-test", execution="open", fill=open_)
+    bt = VectorBacktest(strategy=TopFracLongOnly(frac=1.0, weight_mode="equal"),
+                        rebalance_freq="M", initial_capital=1.0,
+                        costs=TransactionCosts(commission_rate=0.0,
+                                               stamp_duty=0.0,
+                                               slippage_bp=0.0,
+                                               commission_min=0.0))
+    eq = caliber._run_once(bt, ctx, "open").equity_curve
+    # 信号 T=01-02 → 执行日 E=01-03 以开盘 10.5 买入：净值 = 11/10.5
+    assert eq.loc[days[0]] == pytest.approx(1.0)
+    assert eq.loc[days[1]] == pytest.approx(11.0 / 10.5)
+    assert eq.loc[days[2]] == pytest.approx(12.0 / 10.5)
+
+
+def test_all_build_execution_split_callers_pass_signal_days():
+    """静态守卫：调用 ``build_execution_split`` 时不得传「执行日」集合。
+
+    审计 P0-1 的根因是 9 个调用都把 ``rb_exec``（E）传进 build。这里用 AST
+    扫描全部入库调用，要求最后一个位置参数名不含 ``exec``（约定：
+    ``rb_signal`` / ``signal_days`` / 字面量信号日集合）。
+    """
+    import ast
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    bad: list[str] = []
+    for p in sorted((root / "scripts").rglob("*.py")):
+        src = p.read_text(encoding="utf-8")
+        if "build_execution_split(" not in src:
+            continue
+        tree = ast.parse(src)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            fn = node.func
+            name = fn.attr if isinstance(fn, ast.Attribute) else getattr(fn, "id", "")
+            if name != "build_execution_split" or not node.args:
+                continue
+            arg = ast.get_source_segment(src, node.args[-1]) or ""
+            if "exec" in arg:
+                bad.append(f"{p.relative_to(root)}:{node.lineno} -> {arg}")
+    assert not bad, "build_execution_split 收到执行日集合（应传信号日 T）:\n" + "\n".join(bad)

@@ -22,6 +22,11 @@
 #    「--mask-lag 1 + T+1 open」可执行口径（现值即此，零改动）；mask-lag 0 +
 #    T 收盘仅研究上限对照，数字不得与报数并列。提频实验先读
 #    `reports/docs/consistency_checks/口径核对_掩码取样日错配.md`（周频 +3.76pp）。
+# 7. **2026-10-19 执行价口径修复（审计 P0-1）**：`build_execution_split` 必须收
+#    **信号日 T**、引擎 `rebalance_days` 收**执行日 E=T+1**。修复前 9 处调用把 E
+#    同时传给两者 ⇒ fill 落 E+1、`open` 臂实际是 T+1 收盘成交。**修复前所有
+#    `open` 数字须视作旧口径**：882 代理已重跑（v1w-ortho882 production 16.39/0.681）；
+#    920 线（v1/v1w2）因本机无 pred 尚未重跑，引用时须注明「pre-exec-fix」。
 #
 # 每个 baseline 的字段
 # --------------------
@@ -40,7 +45,7 @@
 # =============================================================================
 
 version: 2
-updated: "2026-10-14"
+updated: "2026-10-19"
 
 # 评估口径的规范值（caliber.py 的硬编码副本，供快速查阅；改 caliber 时同步）
 conventions:
@@ -117,6 +122,9 @@ baselines:
         ✅ 2026-10-14 已修复：仓库 `.env` 写入 `YQ_DATA_ROOT=E:/data`（root 指向齐全副本，
         七个必需表齐全，`test_no_hardcoded_drive_paths` / `test_caliber` 14 passed）。
         ⇒ 要在本机拿到该信号的实测值，须先重建 920 的 pred（见 `regen_cmd`，估数小时）。
+        🔧 2026-10-19 审计 P0-1：执行价配对修复（build 收信号日 T、run 收执行日 E）。
+        本条 18.07/0.805 是**修复前** open 产物，待 920 pred 重建后重跑；882 代理
+        基线已重跑（v1w-ortho882 production 16.39/0.681）。
     metrics:
       window_label: "2018-2026 OOS（v2 旧数据态）"
       annual: 0.1807
@@ -147,7 +155,7 @@ baselines:
   # ---------------------------------------------------------------------------
   - id: v1w-ortho882
     created: "2026-10-13"
-    updated: "2026-10-14"
+    updated: "2026-10-19"
     status: working
     label: "本机工作基线：882 ortho ens_h1h5 + buffer(15/40)（生产执行层形态）"
     signal_key: ens_h1h5
@@ -175,17 +183,18 @@ baselines:
       # ---- 按口径组合分组（caliber.py 实测）----
       profiles:
         production:                     # = v1-dingban 同源口径（固定10bp/T+1open/1e6）
+          # 2026-10-19 执行价口径修复后重跑（caliber.py；修复前 14.66/0.593、16.46/0.685）
           eqw_top10pct:
-            ann: 0.1466
-            sharpe: 0.593
+            ann: 0.1461
+            sharpe: 0.589
             turnover: 0.730
-            cost_bp: 4199
+            cost_bp: 4245
             n_active: 406
           eqw_buf0.15_0.4:
-            ann: 0.1646
-            sharpe: 0.685
+            ann: 0.1639
+            sharpe: 0.681
             turnover: 0.371
-            cost_bp: 2202
+            cost_bp: 2217
             n_active: 608
         fair:                           # = 研究压力口径（impact/close/1e8）
           eqw_top10pct:
@@ -210,17 +219,23 @@ baselines:
           caliber_ann: 0.1552
           caliber_sharpe: 0.631
         open:
-          ref: "reports/alla_rolling_ortho/metrics_overall_open.csv ens_h1h5__h1__M__raw__f0.10"
+          # ⚠️ 2026-10-19 执行价口径修复后，本 reference **已作废**：旧 reference 与旧
+          # caliber 共享同一 build/run 配对错误（build 收执行日 E ⇒ fill 落 E+1、
+          # open 退化为 T+1 收盘），两者“逐项吻合”是同一个 bug 的自洽，不是正确性证据。
+          ref: "reports/alla_rolling_ortho/metrics_overall_open.csv ens_h1h5__h1__M__raw__f0.10（2026-09-10，**pre-exec-fix，已作废**）"
           ref_ann: 0.1466
           ref_sharpe: 0.593
           ref_turnover: 0.730
-          caliber_ann: 0.1466
-          caliber_sharpe: 0.593
+          caliber_ann: 0.1461
+          caliber_sharpe: 0.589
+          note: >
+            修复后的生产口径以 profiles.production 为准；ensemble 侧需重跑后
+            （同样修正 build 传参）才能重新对拍。
         note: >
-          两条执行路径**逐项吻合**（Δ ≤ 0.02pp / 0.001）⇒ 加载、调仓日、掩码、
-          成本、**以及 close/open 两种执行价结算**均无实现错误。
-          与 v1-dingban 的差额 = ①信号口径（882 ortho vs 920 fundind⊕慢信号，
-          ≈ +0.5~0.7pp）+ ②数据态（旧 vs 当前）。
+          close 路径仍逐项吻合（Δ ≤ 0.02pp / 0.001）；open 路径的旧 reference
+          已按 2026-10-19 审计结论作废。close/open 的语义差（T 收盘 vs T+1 开盘）
+          不因本次修复改变，但旧 open 数字混入了一天信号滞后，不可再作为
+          “执行价差 = +0.7pp”的证据。
     fingerprint: b7d7e9342986
     reproducible_local: true
     regen_cmd: >
@@ -285,6 +300,8 @@ baselines:
           复验 3/5 为正（+0.88/+1.33/+0.45/−0.46/−0.36，近两窗转负）——
           见 revalidate_920_72f.csv，切换据此搁置
         # ---- 882 工作基线证据（10-14，origin；产物不在本机，见 caveats ④）----
+        # ⚠️ 2026-10-19 执行价修复前产物；修复后 882 生产口径整体 ≈ −0.07pp（v1w 已重跑），
+        #    本组未重跑，引用须注明 pre-exec-fix。
       origin_882:
         annual: 0.1731
         sharpe: 0.707

@@ -192,10 +192,11 @@ def evaluate_pred(pred: pd.DataFrame, fwd: pd.DataFrame, trad, close: pd.DataFra
     s_ = pd.Series(test_days, index=test_days)
     firsts = s_.groupby(test_days.to_period("M")).first()
     pos_ = {d: i for i, d in enumerate(test_days)}
-    rb_exec = {test_days[pos_[t] + 1] for t in firsts
-               if pos_[t] + 1 < len(test_days)}
+    rb_signal = {t for t in firsts if pos_[t] + 1 < len(test_days)}
+    rb_exec = {test_days[pos_[t] + 1] for t in rb_signal}
+    # build 收信号日 T，run 收执行日 E=T+1（2026-10-19 口径修复）
     exec_split = build_execution_split(
-        open_px.reindex(index=test_days, columns=close.columns), close, rb_exec)
+        open_px.reindex(index=test_days, columns=close.columns), close, rb_signal)
     mask = trad.reindex(index=test_days, columns=close.columns).fillna(False) \
         if trad is not None else None
     strat = TopFracLongOnly(frac=0.10, weight_mode="equal")

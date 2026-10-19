@@ -14,7 +14,8 @@
 
 口径：caliber **production**（固定 10bp · T+1 open · 1e6 · 几何 Sharpe · 窗口 2018+）。
 锚点：``BufferedTopFracLongOnly(0.15, 0.40)`` + ``ens_h1h5`` 必须逐位复现登记基线
-16.46%/0.685，Δ≠0 直接 abort —— 结论先于数字无效。
+16.39%/0.681（2026-10-19 执行价口径修复后；修复前 16.46/0.685），Δ≠0 直接 abort
+—— 结论先于数字无效。
 
 用法：
     python -m scripts.evaluation.cheap_lever_probe
@@ -37,7 +38,8 @@ log = logging.getLogger("cheap_lever")
 PRED_DIR = ROOT / "reports" / "alla_rolling_ortho" / "pred"
 OUT = ROOT / "reports" / "cheap_lever_scan"
 
-ANCHOR_ANN, ANCHOR_SHARPE = 16.46, 0.685  # v1w-ortho882 · production 登记
+# v1w-ortho882 · production（2026-10-19 执行价口径修复后：16.39/0.681；修复前 16.46/0.685）
+ANCHOR_ANN, ANCHOR_SHARPE = 16.39, 0.681
 FRACS = (0.05, 0.08, 0.10, 0.12, 0.15, 0.20)
 K_OFFSETS = (1, 2, 3, 5)
 H_WEIGHTS = (0.0, 0.25, 0.75, 1.0)  # 0.5 = 现行（锚点覆盖）
@@ -56,24 +58,35 @@ def _blend_two(p1: pd.DataFrame, p2: pd.DataFrame, w: float) -> pd.DataFrame:
     return out.where(both).astype(np.float32)
 
 
-def _rb_kth(idx: pd.DatetimeIndex, k: int) -> set:
-    """每月第 k 个交易日的**次一交易日**（k=1 逐位等于 caliber.next_day_rebalance）。"""
+def _sig_kth(idx: pd.DatetimeIndex, k: int) -> set:
+    """每月第 k 个交易日（**信号日 T**）。"""
     s = pd.Series(idx, index=idx)
-    kth = s.groupby(s.index.to_period("M")).nth(k - 1)
+    return set(s.groupby(s.index.to_period("M")).nth(k - 1).values)
+
+
+def _rb_kth(idx: pd.DatetimeIndex, k: int) -> set:
+    """每月第 k 个交易日的**次一交易日**（执行日 E；k=1 逐位等于
+    ``caliber.next_day_rebalance``）。"""
+    signal_days = _sig_kth(idx, k)
     pos = {d: i for i, d in enumerate(idx)}
-    return {idx[pos[t] + 1] for t in kth if pos[t] + 1 < len(idx)}
+    return {idx[pos[t] + 1] for t in signal_days if pos[t] + 1 < len(idx)}
 
 
-def _run_open_custom_rb(ctx: caliber.CaliberContext, signal: pd.DataFrame, rb: set,
+def _run_open_custom_rb(ctx: caliber.CaliberContext, signal: pd.DataFrame,
+                        rb_signal: set, rb_exec: set,
                         strategy, cost, capital: float):
-    """复刻 ``caliber._run_once`` 的 open 分支，仅调仓日集合可换（不引私有名）。"""
+    """复刻 ``caliber._run_once`` 的 open 分支，仅调仓日集合可换（不引私有名）。
+
+    2026-10-19 口径修复：``build_execution_split`` 收**信号日 T**（``rb_signal``），
+    引擎 ``rebalance_days`` 收**执行日 E=T+1**（``rb_exec``）。
+    """
     from backtest.engine import VectorBacktest, build_execution_split
 
     sig_used = signal.shift(1).where(ctx.mask)
-    split = build_execution_split(ctx.fill, ctx.close, rb)
+    split = build_execution_split(ctx.fill, ctx.close, rb_signal)
     bt = VectorBacktest(strategy=strategy, rebalance_freq="M",
                         initial_capital=float(capital), costs=cost)
-    return bt.run(sig_used, ctx.fwd, horizon=1, rebalance_days=rb,
+    return bt.run(sig_used, ctx.fwd, horizon=1, rebalance_days=rb_exec,
                   execution_split=split,
                   adv_panel=ctx.amt, vol_panel=ctx.vol60)
 
@@ -101,12 +114,13 @@ def main(argv: list[str] | None = None) -> None:
 
     def run(tag: str, dim: str, strat, sig: pd.DataFrame | None = None,
             ctx_use: caliber.CaliberContext | None = None,
-            execution: str = "open", rb: set | None = None) -> None:
+            execution: str = "open", rb_signal: set | None = None,
+            rb_exec: set | None = None) -> None:
         ctx_x = ctx_use or ctx
-        if rb is not None:
+        if rb_exec is not None:
             # 自定义调仓日：走复刻的 open 分支（引擎 rebalance_days 显式传入）
             res = _run_open_custom_rb(ctx_x, sig if sig is not None else ctx_x.pred,
-                                      rb, strat, cost, cap)
+                                      rb_signal or set(), rb_exec, strat, cost, cap)
             from scripts.pipelines.rolling_grid_alla import res_metrics
             m = res_metrics(res.daily_returns,
                             pd.Series(0.0, index=res.daily_returns.index),
@@ -164,9 +178,10 @@ def main(argv: list[str] | None = None) -> None:
 
     # ---- 3) 调仓日偏移（k=1 应逐位等于锚点）----
     for k in K_OFFSETS:
-        rb = _rb_kth(ctx.pred.index, k)
         run(f"月第{k}日", "rebalance_day",
-            BufferedTopFracLongOnly(0.15, 0.40), rb=rb)
+            BufferedTopFracLongOnly(0.15, 0.40),
+            rb_signal=_sig_kth(ctx.pred.index, k),
+            rb_exec=_rb_kth(ctx.pred.index, k))
 
     # ---- 4) 免费信号臂（存档面板，零训练成本）----
     for name, f in (("gbdt_h1_only", "gbdt__h1.parquet"),

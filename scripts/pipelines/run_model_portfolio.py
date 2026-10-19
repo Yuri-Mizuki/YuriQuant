@@ -240,12 +240,15 @@ def main():
         firsts = s_.groupby(s_.index.to_period(
             {"D": "D", "W": "W"}.get(cfg["rebalance_freq"], "M"))).first()
         pos_ = {d: i for i, d in enumerate(test_days)}
+        rb_signal = set()
         rb_exec = set()
         for t in firsts:
             i_ = pos_[t]
             if i_ + 1 < len(test_days):
+                rb_signal.add(t)
                 rb_exec.add(test_days[i_ + 1])
-        exec_split = build_execution_split(fill, close, rb_exec)
+        # build 收信号日 T，run 收执行日 E=T+1（2026-10-19 口径修复）
+        exec_split = build_execution_split(fill, close, rb_signal)
         log.info("成交价口径: %s（fill=%s，调仓日=T 信号日次一交易日，%d 个）",
                  execution, fp.name, len(rb_exec))
 

@@ -28,6 +28,11 @@
 新鲜信号月可用 → **直接空转退出（exit 0）**。⇒ 天然月频、缺了会自愈。
 （`task_scheduler` 只支持 `daily`/`minute` 触发器，无 monthly，月频只能靠脚本内守卫。）
 
+⚠️ 目标日必须取**独立交易日历**（`calendar.parquet` / `daily_all_a.parquet`），
+不能取 `_base/close_adj` —— 否则 `_base` 一陈旧 target 就跟着变旧、守卫永久
+判「已覆盖」（2026-10-19 审计 P0-2 修复）。`_base` 自身陈旧由
+:func:`needs_rebuild` 的第 2 条判据单独报出。
+
 ⚠️ 未纳入本脚本（如实标注边界）：`registry.csv` / `ic_h*.parquet`（因子 IC 表）与
 `reports/alla_rolling_ortho920fundind/selection`（当年特征清单）**不重建** —— 前者影响
 `--stage select`，后者是出榜链读的静态清单，均与"面板覆盖到哪一天"正交。
@@ -230,26 +235,98 @@ def coverage_table() -> dict[str, str]:
     }
 
 
-def _prev_month_end_trading_day() -> str | None:
-    """上一个自然月的最后一个交易日（取 `_base/close_adj` 的交易日历）。
+def _dates_from_parquet(path: Path) -> pd.DatetimeIndex:
+    """从 parquet 取日期序列：兼容 ``date`` 列（int/str/datetime）与日期索引。
 
-    `_base` 本身陈旧时它同时是"重建链的第 ② 步也过期"的信号 —— 此时
-    ``last`` 会早于真实上月末，守卫仍判定需要重建（正确行为，不掩盖问题）。
+    ``calendar.parquet`` 是 ``date`` int64 列（无索引），不能像宽表那样只读索引；
+    ``daily_all_a`` 则是 ``(date, code)`` MultiIndex。两者都要能喂给守卫。
     """
-    p = BASE_DIR / "close_adj.parquet"
-    if not p.exists():
+    df = pd.read_parquet(path)
+    if df.empty:
+        return pd.DatetimeIndex([])
+    if "date" in df.columns:
+        col = df["date"]
+        if pd.api.types.is_integer_dtype(col):
+            d = pd.to_datetime(col.astype(str), format="%Y%m%d", errors="coerce")
+        else:
+            d = pd.to_datetime(col, errors="coerce")
+        return pd.DatetimeIndex(d.dropna())
+    idx = df.index
+    if isinstance(idx, pd.MultiIndex):
+        idx = idx.get_level_values(0)
+    return pd.DatetimeIndex(pd.to_datetime(pd.Index(idx), errors="coerce").dropna())
+
+
+def _calendar_dates() -> pd.DatetimeIndex | None:
+    """**独立**交易日历（不依赖 ``_base``）：优先 ``calendar.parquet``，
+    回退 ``daily_all_a.parquet``（均位于 ``Config.cache()["root"]``）。
+
+    2026-10-19 修复（审计 P0-2）：守卫的「上月末」必须来自独立真源。
+    此前取 ``_base/close_adj`` 的日历，``_base`` 一陈旧 target 就跟着变旧，
+    `panels_neu` 永远判「已覆盖」——重建链自锁。
+    """
+    from config import Config
+
+    root = Path(str(Config.cache()["root"]))
+    cal_p = root / "calendar.parquet"
+    if cal_p.exists():
+        try:
+            cal = _dates_from_parquet(cal_p)
+            if len(cal):
+                return cal
+        except Exception as exc:  # noqa: BLE001
+            log.warning("读取独立交易日历 %s 失败：%s", cal_p, exc)
+    daily_p = root / "daily_all_a.parquet"
+    if daily_p.exists():
+        try:
+            return _index_dates(daily_p)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("读取独立交易日历 %s 失败：%s", daily_p, exc)
+    return None
+
+
+def _prev_month_end_trading_day(
+    today: pd.Timestamp | None = None,
+    cal: pd.DatetimeIndex | None = None,
+) -> str | None:
+    """上一个自然月的最后一个交易日（独立日历，不取 ``_base``）。
+
+    ``cal`` 仅测试注入用；生产走 :func:`_calendar_dates`。
+    ``_base`` 是否陈旧由 :func:`needs_rebuild` 单独判定（不再由 target 掩盖）。
+    """
+    cal = _calendar_dates() if cal is None else pd.DatetimeIndex(cal)
+    if cal is None or len(cal) == 0:
         return None
-    try:
-        cal = _index_dates(p)
-    except Exception as exc:  # noqa: BLE001
-        log.warning("读取交易日历失败：%s", exc)
-        return None
-    if len(cal) == 0:
-        return None
-    today = pd.Timestamp(datetime.now().date())
+    today = (pd.Timestamp(today) if today is not None
+             else pd.Timestamp(datetime.now().date()))
     this_month = today.to_period("M")
     before = cal[cal.to_period("M") < this_month]
     return str(before.max().date()) if len(before) else None
+
+
+def needs_rebuild(cov: dict[str, str], target: str | None) -> tuple[bool, list[str]]:
+    """守卫判定（纯函数，便于回归测试）。
+
+    返回 ``(need, reasons)``。判据：
+    1. 拿不到 target ⇒ 需要重建（保守）；
+    2. ``_base/close_adj`` 不可读或 **落后于 target** ⇒ 需要（重建链第②步也过期）；
+    3. ``panels_neu`` 不可读或落后于 target ⇒ 需要。
+    深检（逐因子 vs 原始面板）由 ``main`` 另行追加。
+    """
+    reasons: list[str] = []
+    if target is None:
+        return True, ["拿不到目标交易日（独立日历不可用）"]
+    base = cov.get("base(close_adj)", "缺失")
+    if base.startswith("ERR") or base == "缺失":
+        reasons.append(f"_base/close_adj 覆盖末日不可读（{base}）")
+    elif base < target:
+        reasons.append(f"_base/close_adj 止 {base} < 目标 {target}（重建链第②步也过期）")
+    neu = cov.get("panels_neu", "缺失")
+    if neu.startswith("ERR") or neu in ("缺失", "全部读取失败"):
+        reasons.append(f"panels_neu 覆盖末日不可读（{neu}）")
+    elif neu < target:
+        reasons.append(f"panels_neu 止 {neu} < 目标 {target}")
+    return bool(reasons), reasons
 
 
 # ---------------------------------------------------------------------------
@@ -373,19 +450,12 @@ def main() -> int:
         return 0
 
     # ---- 守卫 ----
-    neu_max = cov["panels_neu"]
-    need = False
-    if target is None:
-        log.warning("拿不到目标交易日 ⇒ 无法守判，视为需要重建")
-        need = True
-    elif neu_max.startswith("ERR") or neu_max in ("缺失", "全部读取失败"):
-        log.warning("panels_neu 覆盖末日不可读（%s）⇒ 视为需要重建", neu_max)
-        need = True
-    elif neu_max < target:
-        log.info("守判：panels_neu 止 %s < 目标 %s ⇒ 需要重建", neu_max, target)
-        need = True
-    else:
-        log.info("守判：panels_neu 已覆盖 %s ≥ 目标 %s（抽样 min）", neu_max, target)
+    need, reasons = needs_rebuild(cov, target)
+    for reason in reasons:
+        log.warning("守判：%s ⇒ 需要重建", reason)
+    if not need:
+        log.info("守判：_base 与 panels_neu 均覆盖 %s ≥ 目标 %s（抽样 min）",
+                 cov["panels_neu"], target)
     # ---- 深检（全量，逐因子 vs 自己的原始面板）----
     # 抽样只管 3 个因子；这里是"整库有没有落后"的真判据。见 `_stale_panels`。
     # 两套 neutral 都查：fundind 不在出榜链上（快信号是实时重算的），

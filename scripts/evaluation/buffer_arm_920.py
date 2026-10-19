@@ -84,9 +84,10 @@ def main(argv: list[str] | None = None) -> None:
         s_ = pd.Series(oos_days, index=oos_days)
         firsts = s_.groupby(s_.index.to_period("M")).first()
         pos_ = {d: i for i, d in enumerate(oos_days)}
-        rb_exec = {oos_days[pos_[t] + 1] for t in firsts
-                   if pos_[t] + 1 < len(oos_days)}
-        exec_split = build_execution_split(fill, close, rb_exec)
+        rb_signal = {t for t in firsts if pos_[t] + 1 < len(oos_days)}
+        rb_exec = {oos_days[pos_[t] + 1] for t in rb_signal}
+        # build 收信号日 T，run 收执行日 E=T+1（2026-10-19 口径修复）
+        exec_split = build_execution_split(fill, close, rb_signal)
 
     sig_in = sig.reindex(index=oos_days, columns=close.columns)
     variants = [

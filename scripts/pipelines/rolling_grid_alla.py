@@ -1287,7 +1287,7 @@ def stage_backtest(quick: bool = False, execution: str = "open"):
                             log.warning("[eq 指纹失配] %s 产物过期，重算"
                                         "（口径或 pred 已变）", run_id)
                         strat = TopFracLongOnly(frac=frac, weight_mode="equal")
-                        rb = None
+                        rb_exec = None
                         exec_split = None
                         sig_used = sig
                         if execution != "close":
@@ -1304,26 +1304,30 @@ def stage_backtest(quick: bool = False, execution: str = "open"):
                             period = {"D": "D", "W": "W"}.get(freq, "M")
                             firsts = s_.groupby(s_.index.to_period(period)).first()
                             pos_ = {d: i for i, d in enumerate(oos_days)}
-                            rb = set()
+                            rb_signal = set()
+                            rb_exec = set()
                             for t in firsts:
                                 i_ = pos_[t]
                                 if i_ + 1 < len(oos_days):
-                                    rb.add(oos_days[i_ + 1])
-                            if not rb:
+                                    rb_signal.add(t)
+                                    rb_exec.add(oos_days[i_ + 1])
+                            if not rb_exec:
                                 log.warning("[%s] 无有效调仓日，跳过", run_id)
                                 continue
-                            exec_split = build_execution_split(fill, close, rb)
+                            # build 收信号日 T，run 收执行日 E=T+1
+                            # （2026-10-19 口径修复；此前两者都传 E，open 退化为收盘）
+                            exec_split = build_execution_split(fill, close, rb_signal)
                         bt = VectorBacktest(strategy=strat,
                                             rebalance_freq=("M" if freq == "2M" else freq),
                                             initial_capital=1_000_000.0, costs=costs)
                         try:
                             if execution != "close":
                                 res = bt.run(sig_used, fwd, horizon=1,
-                                             rebalance_days=rb,
+                                             rebalance_days=rb_exec,
                                              execution_split=exec_split)
                             else:
                                 res = bt.run(sig, fwd, executable_mask=mask_oos,
-                                             horizon=h, rebalance_days=rb)
+                                             horizon=h, rebalance_days=rb_exec)
                         except ValueError as e:
                             log.warning("[%s] 不可行: %s", run_id, str(e)[:100])
                             continue
@@ -1620,9 +1624,10 @@ def stage_ensemble(quick: bool = False, execution: str = "open"):
         s_ = pd.Series(oos_days, index=oos_days)
         firsts = s_.groupby(s_.index.to_period("M")).first()
         pos_ = {d: i for i, d in enumerate(oos_days)}
-        rb_exec = {oos_days[pos_[t] + 1] for t in firsts
-                   if pos_[t] + 1 < len(oos_days)}
-        exec_split = build_execution_split(fill, close, rb_exec)
+        rb_signal = {t for t in firsts if pos_[t] + 1 < len(oos_days)}
+        rb_exec = {oos_days[pos_[t] + 1] for t in rb_signal}
+        # build 收信号日 T，run 收执行日 E=T+1（2026-10-19 口径修复）
+        exec_split = build_execution_split(fill, close, rb_signal)
         log.info("[ensemble] 执行价口径: %s（fill=%s，调仓日=T 信号日次一交易日，%d 个）",
                  execution, fp.name, len(rb_exec))
 

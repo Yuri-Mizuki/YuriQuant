@@ -401,10 +401,14 @@ def _metrics(res: BacktestResult, capital: float) -> dict:
 
 
 def next_day_rebalance(idx: pd.DatetimeIndex) -> set:
-    """T+1 成交口径的调仓日集合：每月首个交易日的**次一交易日**。
+    """T+1 成交口径的**执行日**集合：每月首个交易日的**次一交易日**。
 
     与 ``scripts/evaluation/buffer_arm_920.py`` 及 ``rolling_grid_alla`` 的
     ``execution != "close"`` 分支逐字一致（信号 T 收盘产生、T+1 开盘执行）。
+
+    2026-10-19 口径修复：本集合只用于 ``run(rebalance_days=...)``；
+    ``build_execution_split`` 必须收**信号日 T**（:func:`rebalance_dates`），
+    否则 fill 会被写到 E+1、执行价失效（详见 :func:`_run_once`）。
     """
     s = pd.Series(idx, index=idx)
     firsts = s.groupby(s.index.to_period("M")).first()
@@ -418,8 +422,13 @@ def _run_once(bt: VectorBacktest, ctx: CaliberContext, execution: str,
 
     ``close``：T 收盘成交（引擎默认路径，传 ``executable_mask``）。
     ``open`` / ``vwap``：**生产 T+1 口径** —— 信号 ``shift(1)`` 预掩码、
-    调仓日 = 次一交易日、经 ``build_execution_split`` 结算。与
+    执行日 = 信号日次一交易日、经 ``build_execution_split`` 结算。与
     ``buffer_arm_920.py`` 的三行调用逐字对齐。
+
+    2026-10-19 修复（审计 P0-1）：``build_execution_split`` 收**信号日 T**
+    （:func:`rebalance_dates`），``run`` 收**执行日 E=T+1**
+    （:func:`next_day_rebalance`）。此前两者都传 E，fill 被写到 E+1、
+    实际变成 T+1 收盘成交。
     """
     if execution == "close":
         panel = ctx.pred if signal is None else signal
@@ -431,9 +440,10 @@ def _run_once(bt: VectorBacktest, ctx: CaliberContext, execution: str,
             f"load_context(..., execution={execution!r}) 加载成交价面板。")
     panel = ctx.pred if signal is None else signal
     sig_used = panel.shift(1).where(ctx.mask)
-    rb = next_day_rebalance(ctx.pred.index)
-    split = build_execution_split(ctx.fill, ctx.close, rb)
-    return bt.run(sig_used, ctx.fwd, horizon=1, rebalance_days=rb,
+    rb_signal = set(rebalance_dates(ctx.pred.index))
+    rb_exec = next_day_rebalance(ctx.pred.index)
+    split = build_execution_split(ctx.fill, ctx.close, rb_signal)
+    return bt.run(sig_used, ctx.fwd, horizon=1, rebalance_days=rb_exec,
                   execution_split=split,
                   adv_panel=ctx.amt, vol_panel=ctx.vol60)
 

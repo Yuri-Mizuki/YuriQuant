@@ -161,14 +161,16 @@ def main(argv: list[str] | None = None) -> None:
         s_ = pd.Series(oos, index=oos)
         firsts = s_.groupby(s_.index.to_period("M")).first()
         pos_ = {d: i for i, d in enumerate(oos)}
-        rb = {oos[pos_[t] + 1] for t in firsts if pos_[t] + 1 < len(oos)}
-        split = build_execution_split(fill, close, rb)
+        rb_signal = {t for t in firsts if pos_[t] + 1 < len(oos)}
+        rb_exec = {oos[pos_[t] + 1] for t in rb_signal}
+        # build 收信号日 T，run 收执行日 E=T+1（2026-10-19 口径修复）
+        split = build_execution_split(fill, close, rb_signal)
         bt = VectorBacktest(strategy=BufferedTopFracLongOnly(fe, fx),
                             rebalance_freq="M", initial_capital=1_000_000.0,
                             costs=costs)
         res = bt.run(sig.reindex(index=oos, columns=close.columns)
                      .shift(1).where(mask_oos),
-                     fwd.loc[oos], horizon=1, rebalance_days=rb,
+                     fwd.loc[oos], horizon=1, rebalance_days=rb_exec,
                      execution_split=split)
         m = RG.res_metrics(res.daily_returns, bench, res.turnover_series)
         return dict(ann=m["annual"], sharpe=m["sharpe"], max_dd=m["max_dd"],
