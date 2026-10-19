@@ -101,32 +101,83 @@ def load_panel(fp: Path, idx: pd.DatetimeIndex,
     return x.replace([np.inf, -np.inf], np.nan).astype(np.float32)
 
 
-def penalty_mean(names: list[str], pdir: Path, idx: pd.DatetimeIndex,
-                 cols: pd.Index, shift: int = 0) -> pd.DataFrame:
-    """等权平均因子截面百分位 rank。shift>0 = 时间循环平移（安慰剂）。
-
-    某股票部分因子缺失时用可得因子均值；全缺为 NaN（由调用方 fillna(0.5)）。
-    """
-    acc: pd.DataFrame | None = None
-    cnt: pd.DataFrame | None = None
+def load_rank_cache(names: list[str], pdir: Path, idx: pd.DatetimeIndex,
+                    cols: pd.Index) -> dict[str, pd.DataFrame]:
+    """一次性读因子面板并预排名（截面百分位），供固定集 / walk-forward 共用。"""
+    cache: dict[str, pd.DataFrame] = {}
     for n in names:
         x = load_panel(pdir / f"{n}.parquet", idx, cols)
         if x is None:
             log.warning("因子面板缺失/不可用：%s", n)
             continue
-        if shift:
-            x = pd.DataFrame(np.roll(x.to_numpy(), shift, axis=0),
-                             index=x.index, columns=x.columns)
-        r = x.rank(axis=1, pct=True)
+        cache[n] = x.rank(axis=1, pct=True).astype(np.float32)
+        del x
+    if not cache:
+        raise FileNotFoundError(f"因子面板全部缺失：{names}")
+    return cache
+
+
+def penalty_from_cache(names: list[str], cache: dict[str, pd.DataFrame],
+                       idx: pd.DatetimeIndex) -> pd.DataFrame:
+    """从 rank 缓存组合 penalty 均值（部分缺失取可得均值，全缺 NaN）。"""
+    acc: pd.DataFrame | None = None
+    cnt: pd.DataFrame | None = None
+    for n in names:
+        r = cache.get(n)
+        if r is None:
+            continue
+        r = r.reindex(index=idx)
         if acc is None:
             acc = r.astype(np.float32).where(r.notna(), np.nan)
             cnt = r.notna().astype(np.float32)
         else:
             acc = acc.add(r.where(r.notna()), fill_value=0.0)
             cnt = cnt.add(r.notna().astype(np.float32), fill_value=0.0)
-        del x
     assert acc is not None and cnt is not None
     return (acc / cnt.replace(0, np.nan)).astype(np.float32)
+
+
+def penalty_mean(names: list[str], pdir: Path, idx: pd.DatetimeIndex,
+                 cols: pd.Index, shift: int = 0) -> pd.DataFrame:
+    """等权平均因子截面百分位 rank。shift>0 = 时间循环平移（安慰剂）。
+
+    某股票部分因子缺失时用可得因子均值；全缺为 NaN（由调用方 fillna(0.5)）。
+    """
+    cache = load_rank_cache(names, pdir, idx, cols)
+    pen = penalty_from_cache(names, cache, idx)
+    if shift:
+        pen = pd.DataFrame(np.roll(pen.to_numpy(), shift, axis=0),
+                           index=pen.index, columns=pen.columns)
+    return pen
+
+
+def walkforward_sets(csv_path: Path, ks: list[int],
+                     start_year: int = 2019,
+                     min_hist: int = 2) -> dict[int, dict[int, list[str]]]:
+    """逐年因子集：每年初用「截至上年末」的残差 IC 年份列重选负向 top-K。
+
+    候选池 = 首轮 CSV 里 `both_nw_t<0` 且 cov≥0.3 的全部负向行（选择交给
+    逐年数据，不预设 t 门槛）；排序键 = 历史年份列的 |均值/std·√n|（t 值），
+    负向最强在前。``start_year`` 前无足够历史 ⇒ 该年无 overlay（penalty 置
+    NaN → fillna(0.5) 中性，等价 base）。
+    """
+    df = pd.read_csv(csv_path)
+    df = df[(df["both_nw_t"] < 0) & (df["cov"] >= 0.3)]
+    ic_cols = [c for c in df.columns if c.startswith("ic_")]
+    years = sorted(int(c[3:]) for c in ic_cols)
+    out: dict[int, dict[int, list[str]]] = {}
+    for y in years:
+        if y < start_year:
+            continue
+        hist = [f"ic_{h}" for h in years if h < y]
+        if len(hist) < min_hist:
+            continue
+        sub = df.copy()
+        sub["_t"] = (sub[hist].mean(axis=1)
+                     / (sub[hist].std(axis=1) / np.sqrt(len(hist))))
+        sub = sub.sort_values("_t")          # 负向 t 最小在前
+        out[y] = {k: list(sub.head(k)["name"]) for k in ks}
+    return out
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -138,6 +189,15 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--panels-dir", default="panels_neu")
     ap.add_argument("--weights", default="0.05,0.10,0.20")
     ap.add_argument("--placebo-shift", type=int, default=250)
+    ap.add_argument("--walkforward", action="store_true",
+                    help="追加 walk-forward 因子选择臂：每年初用截至上年末的"
+                         "残差 IC 年份列重选负向 top-K（消除选择前视）")
+    ap.add_argument("--wf-k", default="6,9", help="walk-forward 的 K 档位")
+    ap.add_argument("--wf-csv",
+                    default="reports/frontier_audit_2026-10-19/"
+                            "residual_ic_h1_nonpv_s3.csv")
+    ap.add_argument("--wf-weight", type=float, default=0.40,
+                    help="walk-forward 臂的冻结 w（沿用固定集最优档）")
     ap.add_argument("--out", default="reports/frontier_audit_2026-10-19/overlay")
     args = ap.parse_args(argv)
 
@@ -182,6 +242,34 @@ def main(argv: list[str] | None = None) -> None:
     arms.append((f"placebo_w{int(round(w_pl*100)):03d}",
                  (score - w_pl * pens["placebo"]).astype(np.float32)))
 
+    if args.walkforward:
+        ks = [int(x) for x in args.wf_k.split(",")]
+        sets = walkforward_sets(Path(args.wf_csv), ks)
+        involved = sorted({n for ym in sets.values() for lst in ym.values()
+                           for n in lst})
+        log.info("walk-forward：候选涉及 %d 个因子（%d 个年份段 %s）",
+                 len(involved), len(sets), sorted(sets))
+        cache = load_rank_cache(involved, pdir, idx, cols)
+        wf_pens: dict[int, pd.DataFrame] = {}
+        for k in ks:
+            pen = pd.DataFrame(np.nan, index=idx, columns=cols,
+                               dtype=np.float32)
+            for y in sorted(sets):
+                y_days = idx[idx.year == y]
+                if len(y_days) == 0:
+                    continue
+                pen.loc[y_days] = penalty_from_cache(sets[y][k], cache,
+                                                     y_days)
+            wf_pens[k] = pen.fillna(0.5)     # 无历史年份 = 中性 = base 行为
+            _w = args.wf_weight
+            arms.append((f"wf{k}_w{int(round(_w*100)):03d}",
+                         (score - _w * wf_pens[k]).astype(np.float32)))
+        (Path(args.out)).mkdir(parents=True, exist_ok=True)
+        (Path(args.out) / "wf_factor_sets.json").write_text(
+            json.dumps({str(y): {str(k): v for k, v in ym.items()}
+                        for y, ym in sets.items()}, ensure_ascii=False,
+                       indent=2), encoding="utf-8")
+
     rows = []
     for name, sig in arms:
         t1 = time.time()
@@ -206,10 +294,16 @@ def main(argv: list[str] | None = None) -> None:
         "profile": prof.name, "signal": args.signal, "window": args.window,
         "panels_dir": args.panels_dir, "weights": ws,
         "neg_factors": NEG_FACTORS, "placebo_shift": args.placebo_shift,
+        "walkforward": bool(args.walkforward),
+        "wf_weight": args.wf_weight if args.walkforward else None,
+        "wf_csv": args.wf_csv if args.walkforward else None,
         "strategy": "BufferedTopFracLongOnly(0.15, 0.40) rebalance=M",
         "oos": f"{ctx.begin} ~ {ctx.pred.index[-1].date()} ({ctx.n_days} days)",
-        "caveat": ("因子集为全期 in-sample 残差 IC 所选（选择层前视风险，见脚本 "
-                   "docstring「已知边界」）；主信号 882 ortho，920 复验挂好机器。"),
+        "caveat": ("固定因子集臂（neg*）的选择层是全期 in-sample 残差 IC"
+                   "（前视风险，见脚本 docstring「已知边界」）；walk-forward 臂"
+                   "（wf*）的因子集每年初用截至上年末数据重选，无选择前视"
+                   "（w 档位仍为固定集最优的冻结值）。主信号 882 ortho，"
+                   "920 复验挂好机器。"),
         "elapsed_s": round(time.time() - t0, 1),
     }
     (dest / "meta.json").write_text(json.dumps(meta, ensure_ascii=False,

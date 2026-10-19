@@ -1,10 +1,12 @@
-"""A1/A2 增量方向三个新探针的口径测试（2026-10-19）。
+"""A1/A2 增量方向新探针的口径测试（2026-10-19）。
 
 覆盖：
 1. `residual_overlay_probe.penalty_mean`：多因子均值语义（部分缺失取可得
    均值、全缺 NaN）、安慰剂时间平移保留截面结构；
-2. `select_horizon_features.quality_window`：fwd 不穿透选择窗（防前视）；
-3. `horizon_cross_eval.ic_stats`：NW t 与 `stats.robust_stats.nw_tstat` 同源、
+2. `residual_overlay_probe.walkforward_sets`：逐年重选只用历史年份列
+   （无选择前视）、start_year/min_hist 门槛；
+3. `select_horizon_features.quality_window`：fwd 不穿透选择窗（防前视）；
+4. `horizon_cross_eval.ic_stats`：NW t 与 `stats.robust_stats.nw_tstat` 同源、
    空序列安全。
 """
 from __future__ import annotations
@@ -14,7 +16,10 @@ import pandas as pd
 import pytest
 
 from scripts.evaluation.horizon_cross_eval import ic_stats
-from scripts.evaluation.residual_overlay_probe import penalty_mean
+from scripts.evaluation.residual_overlay_probe import (
+    penalty_mean,
+    walkforward_sets,
+)
 from scripts.evaluation.select_horizon_features import quality_window
 from stats.robust_stats import nw_tstat
 
@@ -111,3 +116,40 @@ class TestCrossEvalStats:
         st = ic_stats(pd.Series(dtype=float))
         assert st["n"] == 0
         assert np.isnan(st["ic_mean"])
+
+
+class TestWalkforwardSets:
+    @staticmethod
+    def _csv(tmp_path, rows):
+        fp = tmp_path / "res.csv"
+        pd.DataFrame(rows).to_csv(fp, index=False)
+        return fp
+
+    def test_uses_only_prior_years(self, tmp_path):
+        # A：2018 极负、2019 转正；B：2018 正、2019 极负
+        # 2019 年初选因子只看 ic_2018 → A；2020 年初看 2018+2019 → B
+        rows = [
+            {"name": "A", "both_nw_t": -1.0, "cov": 0.6,
+             "ic_2018": -0.05, "ic_2019": +0.05, "ic_2020": 0.0},
+            {"name": "B", "both_nw_t": -1.0, "cov": 0.6,
+             "ic_2018": +0.01, "ic_2019": -0.06, "ic_2020": 0.0},
+        ]
+        sets = walkforward_sets(self._csv(tmp_path, rows), [1],
+                                start_year=2019, min_hist=1)
+        assert sets[2019][1] == ["A"]
+        assert sets[2020][1] == ["B"]
+
+    def test_negative_pool_only_and_gates(self, tmp_path):
+        rows = [
+            {"name": "pos", "both_nw_t": +5.0, "cov": 0.9,
+             "ic_2018": -0.05, "ic_2019": -0.05, "ic_2020": 0.0},
+            {"name": "lowcov", "both_nw_t": -5.0, "cov": 0.1,
+             "ic_2018": -0.05, "ic_2019": -0.05, "ic_2020": 0.0},
+            {"name": "ok", "both_nw_t": -2.0, "cov": 0.5,
+             "ic_2018": -0.03, "ic_2019": -0.03, "ic_2020": 0.0},
+        ]
+        sets = walkforward_sets(self._csv(tmp_path, rows), [1, 2],
+                                start_year=2020, min_hist=2)
+        assert sets[2020][1] == ["ok"] and sets[2020][2] == ["ok"]
+        # min_hist=2 时 2019（只有 2018 一年历史）无段
+        assert 2019 not in sets

@@ -29,6 +29,10 @@ IC 差不能归因于「h60 训练更好」。本脚本做两件事：
         --horizons 20,60
     # 组合层（同窗对照，窗口取两 pred 交集）
     python -m scripts.evaluation.horizon_cross_eval ... --portfolio
+    # 融合臂 + 安慰剂 + h60 专属 buffer 网格（A1 下一步三件套）
+    python -m scripts.evaluation.horizon_cross_eval --preds m_h60=... \
+        --horizons 60 --portfolio --fuse 0.25,0.50 \
+        --buffer-grid "0.10,0.30;0.20,0.50"
 """
 from __future__ import annotations
 
@@ -72,6 +76,14 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--baseline", default="ens_h1h5",
                     help="组合层的基线信号（caliber SIGNALS 键）")
     ap.add_argument("--portfolio", action="store_true", help="跑组合层对照")
+    ap.add_argument("--fuse", default=None,
+                    help="逗号分隔 α 档位：追加融合臂 "
+                         "(1-α)·rank(baseline) + α·rank(pred)（每个 pred 一组）")
+    ap.add_argument("--placebo-shift", type=int, default=250,
+                    help="融合臂的安慰剂：pred 时间循环平移 N 日再融合（0=关）")
+    ap.add_argument("--buffer-grid", default=None,
+                    help="分号分隔 entry,exit 对（如 0.10,0.30;0.15,0.40）："
+                         "对每个 pred 臂追加各形态（0=关）")
     ap.add_argument("--out", default="reports/frontier_audit_2026-10-19/cross_eval")
     args = ap.parse_args(argv)
 
@@ -152,26 +164,56 @@ def main(argv: list[str] | None = None) -> None:
         log.info("组合层窗口 %s ~ %s（%d 日，production 口径）",
                  ctx.begin, ctx.pred.index[-1].date(), ctx.n_days)
         cost = cost_profile(prof.cost)
-        arms = {args.baseline: ctx.pred}
+        arms: list[tuple[str, pd.DataFrame, tuple[float, float]]] = [
+            (args.baseline, ctx.pred, (0.15, 0.40))]
+        base_rank = ctx.pred.rank(axis=1, pct=True).astype(np.float32)
         for name, p in preds.items():
-            arms[name] = p.reindex(index=ctx.pred.index,
-                                   columns=ctx.pred.columns)
-        for name, sig in arms.items():
-            m = evaluate_strategy(BufferedTopFracLongOnly(0.15, 0.40), ctx,
+            pr = p.reindex(index=ctx.pred.index, columns=ctx.pred.columns)
+            arms.append((name, pr, (0.15, 0.40)))
+            if args.fuse:
+                pr_rank = pr.rank(axis=1, pct=True).astype(np.float32)
+                for a in [float(x) for x in args.fuse.split(",")]:
+                    fused = ((1 - a) * base_rank + a * pr_rank).astype(np.float32)
+                    arms.append((f"fuse_{name}_a{int(round(a*100)):03d}",
+                                 fused, (0.15, 0.40)))
+                    if args.placebo_shift:
+                        rolled = pd.DataFrame(
+                            np.roll(pr_rank.to_numpy(), args.placebo_shift,
+                                    axis=0),
+                            index=pr_rank.index, columns=pr_rank.columns)
+                        arms.append((
+                            f"plac_{name}_a{int(round(a*100)):03d}",
+                            ((1 - a) * base_rank + a * rolled)
+                            .astype(np.float32), (0.15, 0.40)))
+            if args.buffer_grid:
+                for pair in args.buffer_grid.split(";"):
+                    e, x = (float(v) for v in pair.split(","))
+                    arms.append((f"{name}_buf{int(e*100):02d}{int(x*100):02d}",
+                                 pr, (e, x)))
+        for name, sig, (be, bx) in arms:
+            m = evaluate_strategy(BufferedTopFracLongOnly(be, bx), ctx,
                                   cost, prof.capital, signal=sig, yearly=True)
             calmar = (m["ann"] / m["max_dd"] if m["max_dd"] > 0 else np.nan)
-            pf_rows.append({"arm": name, "calmar": calmar, **m})
-            log.info("组合 | %-10s ann=%.2f%% sharpe=%.3f calmar=%.2f "
-                     "mdd=%.3f turn=%.1f%%", name, 100 * m["ann"], m["sharpe"],
-                     calmar, m["max_dd"], 100 * m["turnover"])
+            pf_rows.append({"arm": name, "buffer": f"{be:.2f}/{bx:.2f}",
+                            "calmar": calmar, **m})
+            log.info("组合 | %-18s buf=%.2f/%.2f ann=%.2f%% sharpe=%.3f "
+                     "calmar=%.2f mdd=%.3f turn=%.1f%%",
+                     name, be, bx, 100 * m["ann"], m["sharpe"], calmar,
+                     m["max_dd"], 100 * m["turnover"])
         pf_df = pd.DataFrame(pf_rows)
+        ref = pf_df[pf_df.arm == args.baseline].iloc[0]
+        for c in ("ann", "sharpe", *[c for c in pf_df.columns
+                                     if c.startswith("yearly_ret_")]):
+            pf_df[f"d_{c.replace('yearly_ret_', 'yr')}"] = pf_df[c] - ref[c]
         pf_df.to_csv(dest / "portfolio.csv", index=False, encoding="utf-8-sig")
 
     meta = {"preds": {t.partition("=")[0].strip(): t.partition("=")[2].strip()
                       for t in args.preds.split(",")},
             "horizons": horizons, "baseline": args.baseline,
             "n_days": int(len(idx)), "oos": f"{idx[0].date()} ~ {idx[-1].date()}",
-            "portfolio": bool(args.portfolio)}
+            "portfolio": bool(args.portfolio), "fuse": args.fuse,
+            "placebo_shift": args.placebo_shift,
+            "buffer_grid": args.buffer_grid}
     (dest / "meta.json").write_text(json.dumps(meta, ensure_ascii=False,
                                                indent=2), encoding="utf-8")
     log.info("完成 -> %s", dest)

@@ -26,7 +26,7 @@
 | 10 | 920 后收尾对照包 | ✅ horizon_mix/stack/fundamental_blend/buffer/T 窗/income 复核/alt 终审全出（§⑫–⑯）；member_blend12 12 成员复验因 h1020 已裁决采纳不再必要 | 🖥️ CPU |
 | 11 | **cheap_lever 胜者 920 定版复验**（10-14 立项） | ⚠️ **10-17 复验环境分歧，切换搁置**：62 因子慢信号环境叠加臂 5/5 窗 +1.47pp 通过；本机补齐 P5 后（72 因子）仅 3/5 窗（2023+/2025+ 转负，全窗 +0.88pp）——近窗稳健性不成立，**维持 dingban**。字面迁移两环境均否、h1 减半操作成立。登记锚点 18.07 本机两态均不可复现（数据态年份差主导）。**最终裁决挂批次 12 = 好机器自家口径重跑**。产物 `reports/cheap_lever_scan/` | 🖥️ CPU |
 | 12 | **新队列（10-17 立）**：① v1w2-cheap 终裁 + ② 市场状态特征 + ③ 隔夜标签臂 + ④ 观点注入三臂 + ⑤ CVaR 组合臂 + ⑥ RD-Agent P2（WSL2）+ ⑦ AI97 消融 5 组 | ⬜ 见批次 12 节 | 🖥️💾 ①纯回测 <1h；②③④需全A 重训（💾≥64GB）；⑤⑦ CPU；⑥ WSL2+LLM |
-| 13 | **A1/A2 增量方向 920 定版复验（10-19 立）**：① A2 负向 overlay（neg6 + w=0.40 冻结）② A2 二阶 GBDT 融合（α=0.5 冻结，特征池按 920 残差榜早年列重算）③ A1 h60 第二策略（h60 清单 + 920 基座对照） | ⬜ 见批次 13 节 | 🖥️💾 ①纯回测 <1h；②残差首轮+训练 ~2h；③h60 清单可直用（选特征不依赖 pred）+ 训练 ~1h |
+| 13 | **A1/A2 增量方向 920 定版复验（10-19 立）**：① A2 负向 overlay（walk-forward 因子选择版，w=0.40 冻结）② A2 二阶 GBDT 融合（α=0.5 冻结，特征池按 920 残差榜早年列重算）③ A1 h60 第二策略（h60 清单 + 920 基座对照） | ⬜ 见批次 13 节 | 🖥️💾 ①纯回测 <1h；②残差首轮+训练 ~2h；③h60 清单可直用（选特征不依赖 pred）+ 训练 ~1h |
 
 ---
 
@@ -467,16 +467,24 @@ LLM 时加 `--llm openai`。全A 920 平行臂待接 panels 数据面后另行�
 > 超参（overlay w=0.40、stack α=0.5）与因子集原样带过去，920 只做验证
 > 不做重调**——重调会把 920 变成新一轮 in-sample。
 
-### ① A2 负向 overlay（纯回测，<1h）
+### ① A2 负向 overlay（纯回测，<1h；**以 walk-forward 版为准**）
+
+> 10-19 第三轮修正：固定 neg6 的 +0.17 ΔSharpe 里约 7/8 是选择前视
+> （`overlay_wf/` walk-forward 复核后仅 +0.02）；复验与采纳判定都用
+> walk-forward 臂，固定集臂只作上限参照。
 
 ```bash
 python -m scripts.evaluation.residual_overlay_probe \
-    --signal <920 定版信号登记键或 pred_path> --weights 0.10,0.20,0.40 \
-    --out reports/frontier_audit_920_reval/overlay
+    --signal <920 定版信号登记键或 pred_path> --weights 0.40 \
+    --walkforward --wf-csv reports/frontier_audit_920_reval/residual_ic_h1_nonpv_s3.csv \
+    --out reports/frontier_audit_920_reval/overlay_wf
 ```
 
-**验收**：920 定版口径下 neg6_w040 ΔSharpe ≥ +0.08 且逐年超额 ≥2/3 年
-正、placebo 仍 ≤0 ⇒ overlay 进出榜链候选（与 ② 分开裁决）。
+（`--wf-csv` 指向 920 残差首轮产物；若 920 首轮未跑，先按 ② 步骤 1 补跑。）
+
+**验收**：wf6_w040 ΔSharpe ≥ +0.015 且近年（对应 920 榜的 2023+ 段）逐年
+为正、placebo ≤0 ⇒ 作为薄剔除规则评估进出榜链（预期量级 +0.4~1pp/年，
+与 882 一致即可，不要求大幅超额）。
 
 ### ② A2 二阶 GBDT 融合（残差首轮 + 训练，~2h）
 
