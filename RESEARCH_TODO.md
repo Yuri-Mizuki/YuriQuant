@@ -649,8 +649,14 @@ python -m scripts.factors.run_portfolio_phase2 --pool zz1000 \
 
 ---
 
-## 六、建议推进顺序（2026-10-09 刷新）
+## 六、建议推进顺序（2026-10-19 刷新）
 
+> **2026-10-19 增量线指针**：横截面选股在「当前数据 × h1–h20 × long-only」格子
+> 已收口；新立项 = `TODO.md` §六（A1 长 horizon / A2 残差目标 / B1 beta hedge /
+> 指数增强 / B2 SDK 未用表）。A2 探针脚本 `scripts/evaluation/residual_ic_probe.py`
+> 已落地并开跑，结果落 `reports/frontier_audit_2026-10-19/`。本表旧的 1–4 项
+> 保留作历史，不再覆盖新线。
+>
 > 排序原则变化：长实验队列已全部收官（序 0 划线），本表剩项 = 资源墙后置线 +
 > 定版落地工程（后者真源在 TODO §一）。
 

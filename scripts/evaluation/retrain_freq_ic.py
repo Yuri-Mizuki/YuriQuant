@@ -116,6 +116,12 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--window", type=int, default=500, help="滚动训练窗（交易日）")
     ap.add_argument("--sel-year", type=int, default=None,
                     help="用哪一年的特征清单（默认 = 清单目录里最新年份）")
+    ap.add_argument("--sel-horizon", type=int, default=None,
+                    help="特征清单的 horizon（默认 = --horizon；长 horizon 探针可"
+                         "复用 h20 清单，如 --horizon 60 --sel-horizon 20）")
+    ap.add_argument("--sel-dir", default=None,
+                    help="特征清单目录（默认 920 fundind；882 口径传 "
+                         "reports/alla_rolling_ortho/selection）")
     ap.add_argument("--out", default="reports/retrain_freq_ic")
     ap.add_argument("--out-tag", default="", help="产出子目录后缀")
     ap.add_argument("--quick", action="store_true",
@@ -127,13 +133,13 @@ def main(argv: list[str] | None = None) -> None:
 
     from model.labels import build_labels
     from model.params import DEFAULT_MODEL_PARAMS
-    from scripts.evaluation.news_alpha_probe import ic_stats, masked_ic
     from scripts.common.alla_common import (
         FeatureStore,
         ds_root,
         existence_mask,
         load_base,
     )
+    from scripts.evaluation.news_alpha_probe import ic_stats, masked_ic
 
     t0 = time.time()
     refits = [int(x) for x in str(args.refits).split(",") if x.strip()]
@@ -148,18 +154,27 @@ def main(argv: list[str] | None = None) -> None:
     all_days = close.index
 
     # ---- 特征清单（定版 E5 fundind，按年冻结）----
+    sel_h = args.sel_horizon or h
+    sel_dir = Path(args.sel_dir) if args.sel_dir else SEL_DIR
     if args.sel_year is None:
-        cands = sorted(SEL_DIR.glob(f"y*__h{h}.json"))
+        cands = sorted(sel_dir.glob(f"y*__h{sel_h}.json"))
         if not cands:
-            raise SystemExit(f"{SEL_DIR} 下无 y*__h{h}.json")
+            raise SystemExit(f"{sel_dir} 下无 y*__h{sel_h}.json")
         sel_year = int(cands[-1].name[1:5])
     else:
         sel_year = args.sel_year
-    sel_path = SEL_DIR / f"y{sel_year}__h{h}.json"
+    sel_path = sel_dir / f"y{sel_year}__h{sel_h}.json"
     if not sel_path.exists():
         raise SystemExit(f"特征清单缺失：{sel_path}")
     names = json.loads(sel_path.read_text(encoding="utf-8"))
-    log.info("特征清单 %s：%d 个", sel_path.name, len(names))
+    pdir = ds_root() / "panels_neu_fundind"
+    avail = {p.stem for p in pdir.glob("*.parquet")}
+    missing = [n for n in names if n not in avail]
+    if missing:
+        log.warning("清单里 %d 个特征在 %s 无面板，剔除：%s",
+                    len(missing), pdir.name, missing[:5])
+        names = [n for n in names if n in avail]
+    log.info("特征清单 %s：%d 个（sel_h=%d）", sel_path.name, len(names), sel_h)
 
     # ---- OOS 区间 ----
     if args.quick:
@@ -226,7 +241,8 @@ def main(argv: list[str] | None = None) -> None:
     df = pd.DataFrame(rows).sort_values("refit_every")
     df.to_csv(dest / "summary.csv", index=False, encoding="utf-8-sig")
     meta = {"horizon": h, "window": args.window, "sel_year": sel_year,
-            "n_features": len(names), "oos_begin": str(oos_days[0].date()),
+            "sel_horizon": sel_h, "n_features": len(names),
+            "oos_begin": str(oos_days[0].date()),
             "oos_end": str(oos_days[-1].date()), "n_oos_days": len(oos_days),
             "tradable_labels": TRADABLE_LABELS,
             "gbdt_params": params, "refits": refits,

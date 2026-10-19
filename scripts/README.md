@@ -78,6 +78,7 @@
 | `evaluation/gp_tune_budget.py` | GP 评估预算 × 多 seed 调参实验（三段式，test 段受保护） |
 | `evaluation/gtja_repro_eval.py` | 国君研报复现：因子回测评估与研报基准对比 |
 | `evaluation/horizon_mix.py` | E1'' horizon 混合消融：把慢 horizon OOS 预测混入 ens_h1h5 的对照实验。 |
+| `evaluation/horizon_probe.py` | 主信号 IC 随 h1–h120 的衰减 / 非重叠样本 / 有效样本数（2026-10-19，A1 前置）。 |
 | `evaluation/hp_search_ic.py` | 超参 × 预测 IC 小规模对照（**滚动口径**，只比预测 IC，不跑组合回测）。 |
 | `evaluation/hp_sensitivity.py` | 模型层超参敏感度探针（P2）。 |
 | `evaluation/intraday_analysis.py` | 日内收益分解 + 时段效应分析 |
@@ -92,6 +93,7 @@
 | `evaluation/prod_baseline_compare.py` | P1b —— 生产基线同口径复验：定版因子 gbdt vs alpha360 gbdt / GRU。 |
 | `evaluation/pv_marginal_curve.py` | 量价因子边际增益曲线 —— 阶段 B（DPP 组合口径）。 |
 | `evaluation/regime_probe.py` | Regime 条件化探针（Phase 0/2 前置诊断，2026-10-15）。 |
+| `evaluation/residual_ic_probe.py` | 残差目标探针：raw/resfac/restgt/both 四口径 + NW t + 逐年方向（2026-10-19，A2）。 |
 | `evaluation/retrain_freq_ic.py` | 重训频率 × 预测 IC 小规模对照（只比预测 IC，**不跑组合回测**）。 |
 | `evaluation/seq_predictor_compare.py` | P1 —— 时序预测器对照：序列归纳偏置 vs 截面/树归纳偏置。 |
 | `evaluation/stack_blend.py` | E6 stacking：滚动元学习器**学**融合权重（对齐 CFA ensemble / MSIF-OEM 两阶段 |
