@@ -1,6 +1,6 @@
 # scripts 入口索引
 
-> 自动生成（154 个活跃入口；archive/oneoff 不计）。改脚本 docstring 后运行 `python -m scripts.data_tools.gen_scripts_index` 更新；`--check` 校验是否过期。
+> 自动生成（136 个活跃入口；archive/oneoff 不计）。改脚本 docstring 后运行 `python -m scripts.data_tools.gen_scripts_index` 更新；`--check` 校验是否过期。
 
 约定：`python -m scripts.<目录>.<文件名>` 运行；退役入口在 `scripts/archive/`（仍可运行，但不再维护）。
 
@@ -8,9 +8,6 @@
 
 | 脚本 | 说明 |
 |---|---|
-| `builders/backfill_delisted_backward.py` | 退市股后复权因子回补：为 daily_all_a 中 backward_factor 缺失的退市股补宽表。 |
-| `builders/backfill_delisted_equity.py` | 退市股股本结构回补：为 daily_all_a 中缺失的 349 只退市股补 equity_structure.parquet。 |
-| `builders/backfill_delisted_kline.py` | 退市股 K线 回补：把 daily_all_a.parquet 缺失的退市股历史K线并入。 |
 | `builders/backfill_financial_alla.py` | 回补全A财务报表四表（income/balance_sheet/cash_flow/dividend）到含退市。 |
 | `builders/backfill_holder_alla.py` | 回补股东结构数据（holder_num / share_holder）到全 A 口径（含退市）。 |
 | `builders/backfill_pledge_profit_alla.py` | 回补全A（含退市）股权质押 / 业绩预告 / 业绩快报三张新表到本地 parquet。 |
@@ -20,7 +17,6 @@
 | `builders/build_alla_barra_styles.py` | Barra CNE6 风格因子原始暴露面板（简化版）→ all_a_2018_2026/panels_barra/。 |
 | `builders/build_alla_constructed_factors.py` | 构造型基本面因子族（B++）→ 并入 all_a_2018_2026 数据集。 |
 | `builders/build_alla_disc_holder_dyn.py` | 大宗折价率 + 股东明细动态因子 → 并入 all_a_2018_2026 数据集。 |
-| `builders/build_alla_e4_interaction_factors.py` | E4 交互特征：基本面状态分桶 × 量价因子组内 zscore（GOOD_MACHINE_TASKS 批次 6）。 |
 | `builders/build_alla_event_factors.py` | 全A事件驱动短周期因子面板（evt 族）→ 并入 all_a_2018_2026 数据集。 |
 | `builders/build_alla_factor_neutralized.py` | 预计算全注册因子的因子层中性化面板（#3 优化）。 |
 | `builders/build_alla_factor_neutralized_fundind.py` | E5 变体：基本面族「只对行业中性化」的面板变体（GOOD_MACHINE_TASKS 批次 6）。 |
@@ -37,7 +33,6 @@
 | `builders/build_alla_sue_pledge_factors.py` | SUE 标准化意外盈余 + 质押深度因子 → 并入 all_a_2018_2026 数据集。 |
 | `builders/common.py` | 全A builder 共用件（2026-09-11 自 11 个 build_alla_* builder 收敛）。 |
 | `builders/fetch_alla_history.py` | 全A历史数据回填（2015~now）——分批断点续拉版。 |
-| `builders/refetch_status_all_a.py` | 全量重拉 history_stock_status：完整历史清单（含退市）→ 2015 至今。 |
 | `builders/run_evt_margin_build.py` | 事件/两融/资金流数据回补 + 因子构建编排器（串行，防止 SDK 单连接竞争）。 |
 
 ## common
@@ -56,11 +51,9 @@
 
 | 脚本 | 说明 |
 |---|---|
-| `data_tools/cleanup_data.py` | 数据层体检与整理脚本（2026-08-26 数据整理的可复用工具）。 |
 | `data_tools/dump_pdf_text.py` | 把研报 PDF 抽成带页码标记的纯文本，便于按关键词定位口径参数。 |
 | `data_tools/fix_meta.py` | 修复 e:/data/parquet/_meta.json：对齐实际日期 + 补文本表 + 加 pool 口径。 |
 | `data_tools/gen_scripts_index.py` | 生成 ``scripts/README.md`` 入口索引（2026-10-19 审计 ③）。 |
-| `data_tools/split_zz1000.py` | 将 daily/min5 中异池代码分离归档（保留当前主池）。 |
 
 ## evaluation
 
@@ -71,7 +64,6 @@
 | `evaluation/buffer_tune.py` | 执行阻尼实验：排名缓冲带 vs 硬切 Top20%（2026-09-01） |
 | `evaluation/caliber.py` | 统一评估口径 —— 全项目**唯一真源**（2026-10-13 建立）。 |
 | `evaluation/capacity_table.py` | 组合层容量表：集中度 × AUM（统一口径，2026-10-13）。 |
-| `evaluation/cheap_lever_probe.py` | 低成本微调总扫描（2026-10-14，由莉酱问「低成本的优化方案是真的没有了吗」）。 |
 | `evaluation/cheap_lever_revalidate.py` | cheap_lever_scan 候选的多窗口复验（2026-10-14）。 |
 | `evaluation/cheap_lever_revalidate_920.py` | cheap_lever 胜者的 920 定版信号复验（好机器批次 11，2026-10-17）。 |
 | `evaluation/cost_penalty_probe.py` | 成本感知优化探针（P0-2，2026-10-13）。 |
@@ -88,12 +80,10 @@
 | `evaluation/horizon_mix.py` | E1'' horizon 混合消融：把慢 horizon OOS 预测混入 ens_h1h5 的对照实验。 |
 | `evaluation/hp_search_ic.py` | 超参 × 预测 IC 小规模对照（**滚动口径**，只比预测 IC，不跑组合回测）。 |
 | `evaluation/hp_sensitivity.py` | 模型层超参敏感度探针（P2）。 |
-| `evaluation/impact_cost_probe.py` | 成本摩擦探针：固定滑点 vs 逐股冲击 vs 整手约束（P0-1 / P1，2026-10-13）。 |
 | `evaluation/intraday_analysis.py` | 日内收益分解 + 时段效应分析 |
 | `evaluation/member_blend12.py` | 多模型×多标签预测合成对照（Task ⑥ / AI29·国金19 语义）。 |
 | `evaluation/mf10_t_scan.py` | 多因子10 T 扫描：合成权重回看窗 T 的参数敏感性实验（研报 §2.1 口径）。 |
 | `evaluation/model_objective_scan.py` | P2 —— 模型层「目标函数 / 样本权重」扫描。 |
-| `evaluation/multihorizon_fusion_probe.py` | 多 horizon「前融合 vs 后融合」最小验证探针（P0，2026-10-14 立项）。 |
 | `evaluation/multiyear_oos.py` | 多年度 OOS 稳健性实验：模型 × horizon × 调仓频率 × 年份 |
 | `evaluation/news_alpha_probe.py` | news 族独立建模 + 可交易口径验真伪 + 组合层融合（2026-10-10，P0 路径）。 |
 | `evaluation/pbo_report.py` | 实验产物接 PBO 出报告（TODO §二；华泰 AI19/22 方法论落地）。 |
@@ -124,8 +114,6 @@
 | `factors/build_paper_factors.py` | 论文复现因子构建与入库（awesome-systematic-trading 21 式） |
 | `factors/build_technical_factors.py` | 技术面迭代/累积类指标 → 日频因子构建与入库 |
 | `factors/factor_library.py` | 因子库 CLI |
-| `factors/fetch_textmining.py` | 抓取文本挖掘数据（Phase 0 CLI） |
-| `factors/gflownet_library_ingest.py` | GFlowNet v4 因子池入库 + GP 池对比 + 合成评估 |
 | `factors/mine_factors.py` | 因子挖掘 CLI |
 | `factors/mine_im_combos.py` | 第二层：im_* 统计特征之上的 GP 组合公式挖掘（降维路线主产出） |
 | `factors/run_alphapool_ppo.py` | 华泰 AI97《大模型+强化学习因子挖掘》—— AlphaPool + MaskablePPO 训练入口 |
@@ -188,22 +176,16 @@
 | `textmining/_paths.py` | textmining 输出路径约定。 |
 | `textmining/analyze_word_importance.py` | 词重要性分析（对齐华泰 AI 51/AI 57 模型可解释性） |
 | `textmining/build_daily_factor.py` | 日频因子面板构建 |
-| `textmining/build_enhanced_top25.py` | 因子增强 Top25 组合（对齐华泰 AI 63/92 组合构建） |
 | `textmining/build_fadt_samples.py` | FADT 事件样本构建（对齐华泰 AI 57 文本FADT选股） |
-| `textmining/build_rawtone_factor.py` | 原始语气得分直接作为 FADT 因子（AI 63 扩展测试 5 的无微调对照） |
 | `textmining/build_senti_factors.py` | AI 41 研报情感四因子构建（senti / senti_adj / report_num / report_score） |
 | `textmining/build_senti_scores.py` | 研报摘要 FinBERT 情感打分（对齐华泰 AI 41 研报情感因子） |
 | `textmining/build_sue_txt_samples.py` | SUE.txt 事件样本构建（对齐华泰 AI 51 文本PEAD） |
 | `textmining/derive_pooler_encoding.py` | Pooler（全连接层）编码推导（AI 63 消融：CLS vs 全连接层） |
 | `textmining/encode_fadt_bert.py` | FinBERT CLS 编码（对齐华泰 AI 63 文本表示升级） |
-| `textmining/encode_fadt_seg.py` | 分段编码（AI 63 消融：截断 vs 分段） |
 | `textmining/evaluate_fadt.py` | FADT 因子评估（对齐华泰 AI 57） |
-| `textmining/evaluate_fadt_ablation.py` | AI 63 消融实验汇总评估 |
 | `textmining/evaluate_senti.py` | AI 41 研报情感因子族评估 |
 | `textmining/evaluate_short_window.py` | 短窗口日频超额评估（T+1~T+5） |
 | `textmining/evaluate_sue_txt.py` | SUE.txt 因子评估（对齐华泰 AI 51） |
-| `textmining/fetch_all_a_backfill.py` | 全A文本数据补爬（backfill）。 |
-| `textmining/register_text_factors.py` | 文本因子入库 factor_library（AI 41 情感残差族） |
 | `textmining/train_fadt.py` | FADT 训练与因子构建（对齐华泰 AI 57 文本FADT选股） |
 | `textmining/train_fadt_bert.py` | BERT 版 FADT 训练（对齐华泰 AI 63 文本表示升级） |
 | `textmining/train_sue_txt.py` | SUE.txt 训练与因子构建（对齐华泰 AI 51 文本PEAD） |
@@ -221,3 +203,21 @@
 | `scripts/factors/run_gflownet_phase0.py` | `scripts/archive/run_gflownet_phase0.py` | GFlowNet phase0 入口（已被 phase1 取代） |
 | `scripts/reporting/factor_correlation.py` | `scripts/archive/factor_correlation.py` | 因子相关性报告 |
 | `scripts/reporting/risk_decomposition_report.py` | `scripts/archive/risk_decomposition_report.py` | 风险分解报告 |
+| `scripts/evaluation/cheap_lever_probe.py` | `scripts/archive/cheap_lever_probe.py` | 廉价杠杆探针 |
+| `scripts/evaluation/impact_cost_probe.py` | `scripts/archive/impact_cost_probe.py` | 冲击成本探针 |
+| `scripts/evaluation/multihorizon_fusion_probe.py` | `scripts/archive/multihorizon_fusion_probe.py` | 多 horizon 融合探针 |
+| `scripts/builders/backfill_delisted_backward.py` | `scripts/archive/backfill_delisted_backward.py` | 退市股后复权回补 |
+| `scripts/builders/backfill_delisted_equity.py` | `scripts/archive/backfill_delisted_equity.py` | 退市股股本结构回补 |
+| `scripts/builders/backfill_delisted_kline.py` | `scripts/archive/backfill_delisted_kline.py` | 退市股 K 线回补 |
+| `scripts/builders/build_alla_e4_interaction_factors.py` | `scripts/archive/build_alla_e4_interaction_factors.py` | E4 交互因子构建 |
+| `scripts/builders/refetch_status_all_a.py` | `scripts/archive/refetch_status_all_a.py` | 全A状态重取 |
+| `scripts/factors/fetch_textmining.py` | `scripts/archive/fetch_textmining.py` | 文本挖掘数据拉取 |
+| `scripts/factors/gflownet_library_ingest.py` | `scripts/archive/gflownet_library_ingest.py` | GFlowNet 因子入库 |
+| `scripts/data_tools/cleanup_data.py` | `scripts/archive/cleanup_data.py` | 数据清理工具 |
+| `scripts/data_tools/split_zz1000.py` | `scripts/archive/split_zz1000.py` | ZZ1000 拆分工具 |
+| `scripts/textmining/build_enhanced_top25.py` | `scripts/archive/build_enhanced_top25.py` | 增强 Top25 构建 |
+| `scripts/textmining/build_rawtone_factor.py` | `scripts/archive/build_rawtone_factor.py` | 原始情绪因子构建 |
+| `scripts/textmining/encode_fadt_seg.py` | `scripts/archive/encode_fadt_seg.py` | FADT 分段编码 |
+| `scripts/textmining/evaluate_fadt_ablation.py` | `scripts/archive/evaluate_fadt_ablation.py` | FADT 消融评估 |
+| `scripts/textmining/fetch_all_a_backfill.py` | `scripts/archive/fetch_all_a_backfill.py` | 全A文本数据回补 |
+| `scripts/textmining/register_text_factors.py` | `scripts/archive/register_text_factors.py` | 文本因子入库 |

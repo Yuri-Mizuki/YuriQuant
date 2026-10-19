@@ -291,10 +291,13 @@ model层 / ML合成，其余已删、可重跑复现——结论见 §三.13~17�
     副本 `%USERPROFILE%\_yq_backup\20260923_project_cleanup\`。
 
 - **2026-10-19（脚本归档 + 索引）**：`scripts/` 去重收尾。
-  - **归档 8 个入口**（`git mv` 到 `scripts/archive/`，历史保留）：`ai97_pbo_report`、
+  - **归档 26 个入口**（`git mv` 到 `scripts/archive/`，历史保留）：`ai97_pbo_report`、
     `pv_marginal_quality`、`tabfm_head_{study,portfolio}`、`phase2_ppo_diag`、
-    `run_gflownet_phase0`、`factor_correlation`、`risk_decomposition_report`——均为
-    tracked 引用全零、无文档/产物引用的一次性诊断/报告脚本。
+    `run_gflownet_phase0`、`factor_correlation`、`risk_decomposition_report`、
+    3 个 `cheap_lever/impact_cost/multihorizon` 探针、3 个退市回补、
+    `build_alla_e4_interaction_factors`、`refetch_status_all_a`、
+    2 个 `fetch_textmining/gflownet_library_ingest`、2 个 data_tools、
+    6 个 textmining 数据准备脚本——均为 tracked 引用全零、无文档/产物引用。
   - **`e2e_common` 迁出公共层**：`scripts/common/e2e_common.py` →
     `scripts/archive/e2e_common.py`（HS300 停更缓存链路；20 处 import 同步）。
   - **新增 `scripts/README.md`**：155 个活跃入口分组索引 + 归档映射；
