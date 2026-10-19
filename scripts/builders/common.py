@@ -22,6 +22,8 @@ factor_stats jsonl 文件名与两处小开关）、``ffill_pit_multi`` 4 份、
 from __future__ import annotations
 
 import json
+import time
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -226,3 +228,101 @@ def merge_outputs(ds_dir: Path, family: str, *,
     for h in horizons:
         fuse_horizon_ic(ds_dir, h, family, close_adj_loader=close_adj_loader,
                         ic_code_stride=ic_code_stride, skip_existing=skip_existing)
+
+
+# ---------------------------------------------------------------------------
+# 因子层中性化面板（neutralized / fundind 两个 90% 重复脚本的唯一实现）
+# ---------------------------------------------------------------------------
+#: 进入中性化的 registry coverage 下限（与 MIN_IC_COVERAGE 对齐）
+MIN_NEU_COVERAGE = 0.3
+_ROOT = Path(__file__).resolve().parents[2]
+_NEU_BASE_DIR = _ROOT / "reports" / "alla_rolling" / "_base"
+
+
+def neutralize_one(task: tuple[str, str, str, bool]) -> tuple[str, float]:
+    """处理单个因子：去极值 → 行业(+市值)中性化 → zscore → 原子写盘。
+
+    task = (factor_name, ds_dir, out_subdir, industry_only)。顶层函数便于
+    ``ProcessPoolExecutor`` pickle；``industry_only=True`` 用于 E5 fundind
+    变体（基本面/股东族只剥行业、保留市值风格）。
+    """
+    name, ds_str, out_subdir, industry_only = task
+    from factor.preprocessing import preprocess_factor
+
+    ds = Path(ds_str)
+    base = _NEU_BASE_DIR
+    p = pd.read_parquet(ds / "panels" / f"{name}.parquet")
+    mc = pd.read_parquet(base / "market_cap.parquet")
+    ind = pd.read_parquet(base / "cov_industry.parquet")
+    common = mc.index.intersection(p.index)
+    p = p.reindex(index=common)
+    mc = mc.reindex(index=common, columns=p.columns)
+    ind = ind.reindex(index=common, columns=p.columns)
+    if industry_only:
+        # E5：只剥行业，保市值（价值/红利）风格信息
+        x = preprocess_factor(p, industry_panel=ind)
+    else:
+        x = preprocess_factor(p, market_cap_panel=mc, industry_panel=ind)
+    x = x.replace([np.inf, -np.inf], np.nan).astype(np.float32).clip(-10.0, 10.0)
+    cov = float(x.notna().mean().mean())
+    # 原子写 + 抗瞬时占用（Windows os.replace 撞杀软/索引器；见 atomic_io）
+    from scripts.common.atomic_io import write_parquet_atomic
+    write_parquet_atomic(x, ds / out_subdir / f"{name}.parquet")
+    return name, cov
+
+
+def run_neutralization(ds: Path, out_subdir: str, *,
+                       workers: int = 6,
+                       only: list[str] | None = None,
+                       force: bool = False,
+                       set_name: str = "neutralized",
+                       label: str = "中性化",
+                       stats_file: str | None = None,
+                       industry_only: frozenset[str] = frozenset()) -> int:
+    """按 registry 批量构建中性化面板（两脚本共用；返回处理因子数）。"""
+    from scripts.common.atomic_io import sweep_stale_tmp
+
+    reg = pd.read_csv(ds / "registry.csv")
+    names = (only if only else
+             reg.loc[reg["name"].isin(reg["name"]), "name"].tolist())
+    if not only:
+        # drop_duplicates：registry 偶发重复名会让 .get 返回 Series
+        cov_ok = (reg.drop_duplicates(subset="name", keep="last")
+                  .set_index("name")["coverage"])
+        names = [n for n in names if float(cov_ok.get(n, 0)) >= MIN_NEU_COVERAGE]
+    out_dir = ds / out_subdir
+    out_dir.mkdir(parents=True, exist_ok=True)
+    _n_tmp = sweep_stale_tmp(out_dir)
+    if _n_tmp:
+        print(f"清理无主 tmp 残渣: {_n_tmp} 个", flush=True)
+    done = set() if force else {f.stem for f in out_dir.glob("*.parquet")}
+    todo = [n for n in names if n not in done]
+    # registry 行存在但 panels/ 缺失：跳过，不让单点缺失崩整批
+    _no_panel = [n for n in todo if not (ds / "panels" / f"{n}.parquet").exists()]
+    if _no_panel:
+        print(f"跳过 {len(_no_panel)} 个无原始面板的因子: "
+              f"{', '.join(_no_panel[:8])}", flush=True)
+        todo = [n for n in todo if n not in set(_no_panel)]
+    print(f"{label}待处理因子: {len(todo)}；已存在跳过: {len(done)}", flush=True)
+
+    t0 = time.time()
+    stats = []
+    tasks = [(n, str(ds), out_subdir, n in industry_only) for n in todo]
+    if workers > 1 and len(tasks) > 1:
+        with ProcessPoolExecutor(max_workers=workers) as ex:
+            for i, (name, cov) in enumerate(ex.map(neutralize_one, tasks), 1):
+                stats.append({"name": name, "set": set_name, "coverage": cov})
+                print(f"[{i}/{len(tasks)}] {name} cov={cov:.3f} "
+                      f"({time.time()-t0:.0f}s)", flush=True)
+    else:
+        for i, task in enumerate(tasks, 1):
+            _name, cov = neutralize_one(task)
+            stats.append({"name": _name, "set": set_name, "coverage": cov})
+            print(f"[{i}/{len(tasks)}] {_name} cov={cov:.3f} "
+                  f"({time.time()-t0:.0f}s)", flush=True)
+
+    (ds / (stats_file or f"factor_stats_{set_name}.jsonl")).open(
+        "w", encoding="utf-8").write(
+        "\n".join(json.dumps(s, ensure_ascii=False) for s in stats) + "\n")
+    print(f"{label}面板完成 {len(stats)} 个因子 ({time.time()-t0:.0f}s)", flush=True)
+    return len(stats)

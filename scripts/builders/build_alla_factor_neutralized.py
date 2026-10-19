@@ -10,6 +10,8 @@
 
 中性化所用市值/行业面板来自 reports/alla_rolling/_base（与 close_adj
 同 date×code 对齐）。multiprocessing 加速（每因子独立，写不同 parquet）。
+共享实现见 ``scripts.builders.common.run_neutralization``（与 fundind 变体
+共用，2026-10-19 去重）。
 
 用法:
     python -m scripts.builders.build_alla_factor_neutralized [--workers 6]
@@ -17,44 +19,14 @@
 from __future__ import annotations
 
 import argparse
-import json
 import sys
-import time
-from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
-
-import numpy as np
-import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 DATASET = "all_a_2018_2026"
-BASE_DIR = Path("reports") / "alla_rolling" / "_base"
-MIN_COVERAGE = 0.3   # 低于此覆盖率的因子不进入模型候选，跳过中性化省算力
-
-
-def _process_one(name: str) -> tuple[str, float]:
-    from factor.preprocessing import preprocess_factor
-    ds = Path(str(__import__("config").Config.get()["factor_library"]["root"])) / DATASET
-    base = ROOT / BASE_DIR
-    p = pd.read_parquet(ds / "panels" / f"{name}.parquet")
-    mc = pd.read_parquet(base / "market_cap.parquet")
-    ind = pd.read_parquet(base / "cov_industry.parquet")
-    common = mc.index.intersection(p.index)
-    p = p.reindex(index=common)
-    mc = mc.reindex(index=common, columns=p.columns)
-    ind = ind.reindex(index=common, columns=p.columns)
-    x = preprocess_factor(p, market_cap_panel=mc, industry_panel=ind)
-    x = x.replace([np.inf, -np.inf], np.nan).astype(np.float32)
-    x = x.clip(-10.0, 10.0)
-    cov = float(x.notna().mean().mean())
-    # 原子写 + 抗瞬时占用：Windows 上 os.replace 撞上杀软/索引器扫描会抛 WinError 5，
-    # 一次瞬时锁就会让整批中断（2026-10-16 实测）。见 scripts/common/atomic_io.py
-    from scripts.common.atomic_io import write_parquet_atomic
-    write_parquet_atomic(x, ds / "panels_neu" / f"{name}.parquet")
-    return name, cov
 
 
 def main() -> None:
@@ -68,50 +40,13 @@ def main() -> None:
     args = ap.parse_args()
 
     from config import Config
+    from scripts.builders import common
+
     ds = Path(str(Config.get()["factor_library"]["root"])) / DATASET
-    reg = pd.read_csv(ds / "registry.csv")
-    names = (args.only if args.only else
-             reg.loc[reg["name"].isin(reg["name"]), "name"].tolist())
-    if not args.only:
-        # drop_duplicates：registry 偶发重复名会让 .get 返回 Series（真值歧义崩溃）
-        cov_ok = (reg.drop_duplicates(subset="name", keep="last")
-                  .set_index("name")["coverage"])
-        names = [n for n in names if float(cov_ok.get(n, 0)) >= MIN_COVERAGE]
-    out_dir = ds / "panels_neu"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    from scripts.common.atomic_io import sweep_stale_tmp
-    _n_tmp = sweep_stale_tmp(out_dir)
-    if _n_tmp:
-        print(f"清理无主 tmp 残渣: {_n_tmp} 个", flush=True)
-    done = set() if args.force else {f.stem for f in out_dir.glob("*.parquet")}
-    todo = [n for n in names if n not in done]
-    # registry 行存在但 panels/ 文件缺失的因子跳过（builder 重跑失败/数据墙所致），
-    # 不让单点缺失崩掉整批（09-27 ctrl_change_cnt_60d 实测）
-    _no_panel = [n for n in todo if not (ds / "panels" / f"{n}.parquet").exists()]
-    if _no_panel:
-        print(f"跳过 {len(_no_panel)} 个无原始面板的因子: {', '.join(_no_panel[:8])}",
-              flush=True)
-        todo = [n for n in todo if n not in set(_no_panel)]
-    print(f"待中性化因子: {len(todo)}；已存在跳过: {len(done)}", flush=True)
-
-    t0 = time.time()
-    stats = []
-    if args.workers > 1 and len(todo) > 1:
-        with ProcessPoolExecutor(max_workers=args.workers) as ex:
-            for i, (name, cov) in enumerate(ex.map(_process_one, todo), 1):
-                stats.append({"name": name, "set": "neutralized", "coverage": cov})
-                print(f"[{i}/{len(todo)}] {name} cov={cov:.3f} ({time.time()-t0:.0f}s)",
-                      flush=True)
-    else:
-        for i, name in enumerate(todo, 1):
-            _name, cov = _process_one(name)
-            stats.append({"name": _name, "set": "neutralized", "coverage": cov})
-            print(f"[{i}/{len(todo)}] {_name} cov={cov:.3f} ({time.time()-t0:.0f}s)",
-                  flush=True)
-
-    (ds / "factor_stats_neutralized.jsonl").open("w", encoding="utf-8").write(
-        "\n".join(json.dumps(s, ensure_ascii=False) for s in stats) + "\n")
-    print(f"中性化面板完成 {len(stats)} 个因子 ({time.time()-t0:.0f}s)", flush=True)
+    common.run_neutralization(
+        ds, "panels_neu", workers=args.workers, only=args.only,
+        force=args.force, set_name="neutralized", label="中性化",
+        stats_file="factor_stats_neutralized.jsonl")
 
 
 if __name__ == "__main__":
