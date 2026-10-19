@@ -52,7 +52,7 @@ from scripts.common.cli_common import setup_logging  # noqa: E402
 
 log = setup_logging("build_alla_holder")
 from scripts.builders import common  # noqa: E402
-from scripts.builders.common import KEEP_FROM, HORIZONS, IC_CODE_STRIDE  # noqa: E402
+from scripts.builders.common import HORIZONS, IC_CODE_STRIDE  # noqa: E402
 
 DATASET = "all_a_2018_2026"
 
@@ -60,33 +60,15 @@ INST_KEYWORDS = ("基金", "保险", "信托", "证券", "银行", "社保", "�
                  "资产管理", "投资", "企业年金", "养老", "QFII", "外资")
 
 
-def load_panels() -> tuple[pd.DataFrame, pd.DataFrame,
-                           pd.DataFrame, pd.DataFrame]:
-    """加载全A日线/复权/股东两张表，返回 (close_adj, holder_num, share_holder)。"""
+def load_panels() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """加载全A复权价 + 股东两张表，返回 (close_adj, holder_num, share_holder)。"""
     from config import Config
+    from scripts.builders import common
 
     cache_root = Path(str(Config.cache()["root"]))
-    daily = pd.read_parquet(cache_root / "daily_all_a.parquet")
-    daily.index = daily.index.set_levels(daily.index.levels[0].normalize(),
-                                         level=0)
-    k0 = pd.Timestamp(KEEP_FROM)
-    daily = daily[daily.index.get_level_values(0) >= k0]
-
-    bf = pd.read_parquet(cache_root / "backward_factor.parquet")
-    bf.index = bf.index.normalize()
-    bf = bf.loc[bf.index >= k0]
-
-    close_raw = daily["close"].unstack()
-    # 只保留股票交集（bf 宽表含基金列，反向扩张会让基本面面板混入 ETF）
-    cols = close_raw.columns.intersection(bf.columns)
-    close_raw = close_raw.reindex(close_raw.index.intersection(bf.index),
-                                  columns=cols)
-    bf = bf.reindex(index=close_raw.index, columns=close_raw.columns)
-    close_adj = (close_raw * bf).astype(np.float32)
-
     holder_num = pd.read_parquet(cache_root / "holder_num.parquet")
     share_holder = pd.read_parquet(cache_root / "share_holder.parquet")
-    return close_adj, holder_num, share_holder
+    return common.load_close_adj(), holder_num, share_holder
 
 
 def pit_holder_num(holder_num: pd.DataFrame, cal_idx, codes) -> dict:

@@ -43,7 +43,7 @@ from scripts.common.cli_common import setup_logging  # noqa: E402
 
 log = setup_logging("build_alla_margin")
 from scripts.builders import common  # noqa: E402
-from scripts.builders.common import KEEP_FROM, HORIZONS, IC_CODE_STRIDE  # noqa: E402
+from scripts.builders.common import HORIZONS, IC_CODE_STRIDE  # noqa: E402
 
 DATASET = "all_a_2018_2026"
 
@@ -51,28 +51,11 @@ DATASET = "all_a_2018_2026"
 def load_panels() -> tuple[pd.DataFrame, pd.DataFrame]:
     """返回 (close_adj, margin_detail)。"""
     from config import Config
+    from scripts.builders import common
 
-    cache_root = Path(str(Config.cache()["root"]))
-    daily = pd.read_parquet(cache_root / "daily_all_a.parquet")
-    daily.index = daily.index.set_levels(daily.index.levels[0].normalize(), level=0)
-    k0 = pd.Timestamp(KEEP_FROM)
-    daily = daily[daily.index.get_level_values(0) >= k0]
-
-    bf = pd.read_parquet(cache_root / "backward_factor.parquet")
-    bf.index = bf.index.normalize()
-    bf = bf.loc[bf.index >= k0]
-
-    close_raw = daily["close"].unstack()
-    cols = close_raw.columns.intersection(bf.columns)
-    close_raw = close_raw.reindex(close_raw.index.intersection(bf.index), columns=cols)
-    bf = bf.reindex(index=close_raw.index, columns=close_raw.columns)
-    close_adj = (close_raw * bf).astype(np.float32)
-
-    margin = pd.DataFrame()
-    mp = cache_root / "margin_detail.parquet"
-    if mp.exists():
-        margin = pd.read_parquet(mp)
-    return close_adj, margin
+    mp = Path(str(Config.cache()["root"])) / "margin_detail.parquet"
+    return common.load_close_adj(), (pd.read_parquet(mp) if mp.exists()
+                                     else pd.DataFrame())
 
 
 def _pit_margin(margin: pd.DataFrame, cal_idx, codes) -> dict:

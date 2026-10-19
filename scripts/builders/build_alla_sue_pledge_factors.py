@@ -49,7 +49,7 @@ from scripts.common.cli_common import setup_logging  # noqa: E402
 
 log = setup_logging("build_alla_sue_pledge")
 from scripts.builders import common  # noqa: E402
-from scripts.builders.common import KEEP_FROM, HORIZONS, IC_CODE_STRIDE  # noqa: E402
+from scripts.builders.common import HORIZONS, IC_CODE_STRIDE  # noqa: E402
 
 DATASET = "all_a_2018_2026"
 EVENT_WINDOW = 20
@@ -235,22 +235,10 @@ def _to_num(df, cols):
 
 def load_panels():
     from config import Config
-    cache_root = Path(str(Config.cache()["root"]))
-    daily = pd.read_parquet(cache_root / "daily_all_a.parquet")
-    daily.index = daily.index.set_levels(
-        daily.index.levels[0].normalize(), level=0)
-    k0 = pd.Timestamp(KEEP_FROM)
-    daily = daily[daily.index.get_level_values(0) >= k0]
-    bf = pd.read_parquet(cache_root / "backward_factor.parquet")
-    bf.index = bf.index.normalize()
-    bf = bf.loc[bf.index >= k0]
-    close_raw = daily["close"].unstack()
-    cols = close_raw.columns.intersection(bf.columns)
-    close_raw = close_raw.reindex(close_raw.index.intersection(bf.index),
-                                  columns=cols)
-    bf = bf.reindex(index=close_raw.index, columns=close_raw.columns)
-    close_adj = (close_raw * bf).astype(np.float32)
+    from scripts.builders import common
 
+    cache_root = Path(str(Config.cache()["root"]))
+    close_adj, close_raw = common.load_close_adj(with_raw=True)
     tabs = {}
     for fn, k in [("profit_notice", "notice"), ("profit_express", "express"),
                   ("equity_pledge_freeze", "pledge")]:
