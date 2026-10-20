@@ -1063,18 +1063,26 @@ def run_data_update(max_attempts: int = 3) -> None:
     cmd = [sys.executable, "-m", "scripts.ingest.update_data", "--pool", "all_a",
            "--no-minute"]
     timeout_s = int(Config.get().get("fetch", {}).get("update_total_timeout_s", 1800))
+    # 子进程 stderr 落盘：schtasks 无控制台，update_data 的异常（exit=1 时）
+    # 原先进黑洞，10-17~19 三晚失败零留痕、只剩 exit code 可猜（2026-10-20 补）。
+    log_path = ROOT / "logs" / "update_data_task.log"
     for attempt in range(1, max_attempts + 1):
-        log.info("数据更新(第 %d/%d 次，预算 %ds): %s",
-                 attempt, max_attempts, timeout_s, " ".join(cmd))
+        log.info("数据更新(第 %d/%d 次，预算 %ds): %s（stderr → %s）",
+                 attempt, max_attempts, timeout_s, " ".join(cmd), log_path)
         try:
-            proc = subprocess.run(cmd, cwd=ROOT, timeout=timeout_s)
+            with log_path.open("ab") as errf:
+                errf.write(f"\n===== {time.strftime('%Y-%m-%d %H:%M:%S')} "
+                           f"attempt {attempt} =====\n".encode("utf-8"))
+                errf.flush()
+                proc = subprocess.run(cmd, cwd=ROOT, timeout=timeout_s,
+                                      stderr=errf)
         except subprocess.TimeoutExpired:
             log.warning("数据更新超过 %ds 预算已被终止；改用其已推进的缓存继续出榜"
                         "（各表水位独立，下次运行自动续拉）", timeout_s)
             return
         if proc.returncode == 0:
             return
-        log.warning("数据更新失败（exit=%d）", proc.returncode)
+        log.warning("数据更新失败（exit=%d，详情见 %s）", proc.returncode, log_path)
         if attempt < max_attempts:
             time.sleep(60)
     log.warning("数据更新连续 %d 次失败；改用现有缓存继续出榜（predict_date 以缓存"
