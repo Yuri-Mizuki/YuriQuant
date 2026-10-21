@@ -317,3 +317,134 @@ class TestRunFactorReturns:
         fr = rb.run_factor_returns(inputs, min_names=100)
         # 末日无 T+1 收益 → 不入表
         assert dates[-1] not in fr.index
+
+
+# ---------------------------------------------------------------------------
+# 5. 第二期：多风格 Σ / 贝叶斯压缩 / VRA / Bias
+# ---------------------------------------------------------------------------
+class TestMultiStyleSigma:
+    def test_each_style_gets_its_own_exposure(self):
+        """多风格时每个 sty 列用各自暴露（10-21 修：旧版全赋同一个 Series）。"""
+        codes = ["c1", "c2", "c3"]
+        sty = {
+            "vl": pd.Series({"c1": 1.0, "c2": 0.0, "c3": 0.0}),
+            "mom": pd.Series({"c1": 0.0, "c2": 1.0, "c3": 0.0}),
+        }
+        ind_row = pd.Series({"c1": "A", "c2": "A", "c3": "A"})
+        names = ["ind:A", "sty:vl", "sty:mom"]
+        # 行业方差 0（纯风格）；vl 方差 1、mom 方差 4
+        f_cov = pd.DataFrame(np.diag([0.0, 1.0, 4.0]), index=names, columns=names)
+        spec = pd.Series(0.0, index=codes)
+
+        sigma = assemble_sigma(sty, ind_row, f_cov, spec)
+        assert sigma.loc["c1", "c1"] == pytest.approx(1.0)
+        assert sigma.loc["c2", "c2"] == pytest.approx(4.0)
+        assert sigma.loc["c3", "c3"] == pytest.approx(0.0)
+        # 协方差项：c1 与 c2 无共享因子 → 0（旧 bug 会算出非零）
+        assert sigma.loc["c1", "c2"] == pytest.approx(0.0)
+
+    def test_missing_style_raises(self):
+        names = ["ind:A", "sty:vl"]
+        f_cov = pd.DataFrame(np.eye(2) * 1e-4, index=names, columns=names)
+        with pytest.raises(KeyError):
+            assemble_sigma({"mom": pd.Series({"c1": 1.0})},
+                           pd.Series({"c1": "A"}), f_cov,
+                           pd.Series({"c1": 1e-4}))
+
+
+class TestBayesShrink:
+    def _fr(self, n=600, k=6, seed=5):
+        rng = np.random.default_rng(seed)
+        dates = pd.bdate_range("2020-01-01", periods=n)
+        names = [f"f{i}" for i in range(k)]
+        # 共同因子 + 特异噪声 → 样本相关有噪声，压缩应把它拉平
+        common = rng.normal(0, 0.01, (n, 1))
+        X = 0.6 * common + rng.normal(0, 0.008, (n, k))
+        return pd.DataFrame(X, index=dates, columns=names)
+
+    def test_psd_diagonal_kept_and_delta_in_range(self):
+        from research.barra import bayes_shrink_fcov, factor_covariance
+        fr = self._fr()
+        base = factor_covariance(fr)
+        shrunk, delta = bayes_shrink_fcov(fr, base)
+        assert 0.05 <= delta <= 0.95
+        # 对角（各因子方差）保持不变——压缩只动相关结构
+        np.testing.assert_allclose(np.diag(shrunk.values), np.diag(base.values),
+                                   rtol=1e-6)
+        vals = np.linalg.eigvalsh(shrunk.values)
+        assert vals.min() > -1e-12
+        np.testing.assert_allclose(shrunk.values, shrunk.values.T, atol=1e-14)
+
+    def test_shrinks_offdiagonal_spread(self):
+        """压缩后非对角相关的离散度应下降（向 ρ̄ 靠拢）。"""
+        from research.barra import bayes_shrink_fcov
+        fr = self._fr(n=120, k=6)          # 短样本 → delta 大
+        base = factor_covariance(fr, halflife=60)
+        shrunk, _ = bayes_shrink_fcov(fr, base)
+        d0 = np.sqrt(np.diag(base.values))
+        c0 = base.values / np.outer(d0, d0)
+        d1 = np.sqrt(np.diag(shrunk.values))
+        c1 = shrunk.values / np.outer(d1, d1)
+        off = ~np.eye(len(c0), dtype=bool)
+        assert c1[off].std() < c0[off].std()
+
+    def test_fixed_delta_respected(self):
+        from research.barra import bayes_shrink_fcov
+        fr = self._fr(n=300)
+        _, delta = bayes_shrink_fcov(fr, delta=0.3)
+        assert delta == pytest.approx(0.3)
+
+
+class TestVolRegimeAdjust:
+    def test_scale_reflects_vol_jump(self):
+        """近期波动突然放大 → 特异 scale > 1（上钳 2.0）。"""
+        from research.barra import vol_regime_adjust
+        rng = np.random.default_rng(7)
+        dates = pd.bdate_range("2020-01-01", periods=400)
+        codes = [f"c{i}" for i in range(30)]
+        resid = pd.DataFrame(rng.normal(0, 0.01, (400, 30)),
+                             index=dates, columns=codes)
+        resid.iloc[-60:] *= 6.0            # 近 60 日波动 ×6
+        names = ["ind:A", "sty:vl"]
+        f_cov = pd.DataFrame(np.eye(2) * 1e-4, index=names, columns=names)
+        fr = pd.DataFrame(rng.normal(0, 0.002, (400, 2)), index=dates,
+                          columns=names)
+        out, fs, ss = vol_regime_adjust(f_cov, fr, resid)
+        assert ss == pytest.approx(2.0)    # 6 倍 → 钳到 2.0
+        np.testing.assert_allclose(out.values, f_cov.values * fs ** 2)
+
+    def test_no_history_keeps_identity(self):
+        from research.barra import vol_regime_adjust
+        names = ["ind:A"]
+        f_cov = pd.DataFrame(np.eye(1) * 1e-4, index=names, columns=names)
+        out, fs, ss = vol_regime_adjust(f_cov)
+        assert (fs, ss) == (1.0, 1.0)
+        np.testing.assert_allclose(out.values, f_cov.values)
+
+
+class TestRiskBias:
+    def test_bias_is_one_when_sigma_matches_realized(self):
+        from research.barra import risk_bias_stat
+        rng = np.random.default_rng(3)
+        codes = [f"c{i}" for i in range(400)]
+        h = 20
+        true_sd = 0.02
+        # 构造 Σ = diag(true_sd²)，未来收益 ~ N(0, true_sd²·h)
+        sigma = pd.DataFrame(np.diag(np.full(len(codes), true_sd ** 2)),
+                             index=codes, columns=codes)
+        fut = pd.Series(rng.normal(0, true_sd * np.sqrt(h), len(codes)),
+                        index=codes)
+        st = risk_bias_stat(sigma, fut, horizon=h)
+        assert 0.9 < st["bias"] < 1.1
+        assert abs(st["mean_z"]) < 0.1
+
+    def test_underestimate_raises_bias(self):
+        from research.barra import risk_bias_stat
+        codes = [f"c{i}" for i in range(400)]
+        h = 20
+        sigma = pd.DataFrame(np.diag(np.full(len(codes), (0.01) ** 2)),
+                             index=codes, columns=codes)
+        rng = np.random.default_rng(4)
+        fut = pd.Series(rng.normal(0, 0.04 * np.sqrt(h), len(codes)), index=codes)
+        st = risk_bias_stat(sigma, fut, horizon=h)
+        assert st["bias"] > 2.0            # 低估 4 倍波动 → bias ≈ 4
