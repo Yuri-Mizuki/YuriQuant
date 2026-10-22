@@ -85,8 +85,10 @@
 ## 一、P0 待推进（按 ROI 排序）
 
 > ~~920 治本口径重跑优先于本节全部条目~~ **已完成（09-24~10-02，定版落定）**；本节
-> 大部分条目已随批次收官闭环（各节带 ✅ 终态），真正待推进仅剩国金24 残余②
-> （全A 分钟扩容资源墙）与 🥉 区两个真实未决项（观点注入三臂、CVaR 组合臂）。
+> 大部分条目已随批次收官闭环（各节带 ✅ 终态）。🥉 区观点注入三臂与
+> CVaR 组合臂**已于 10-21 批次 12④⑤ 落判（均负结果归档**，证据
+> `reports/views_arm_920/` + `reports/cvar_arm_920/`）；真正待推进仅剩
+> 国金24 残余②（全A 分钟扩容资源墙）。
 
 ### 🥇 国金24 残余（③④⑤ 已闭环，仅剩② 资源墙）
 
@@ -254,7 +256,8 @@ ic_max 0.0215→0.0147）；但 NW t ≤1.4 不显著、绝对量级弱——该
   `rolling_grid_alla --market-features`（须配 --out-tag）旁路注入 stage_predict——不过 select
   漏斗（逐股 IC 对日级广播特征无定义）、不做截面 zscore（同日同值 std=0→全 NaN 坑）、
   不进 existence_mask。默认上证+国证A指（2015 起缓存全期；沪深300 缺 2018 不默认）。
-  **实验待跑**（挂 920 后新 pred）。
+  ✅ **实验已跑（10-21 批次 12②）**：国证A指 399317 本地缓存已补拉，
+  `ortho920mf` 全A 重训——verdict 见 GOOD_MACHINE_TASKS 批次 12②。
 - [x] **llm_pool 机制抽取（QuantaAlpha 转译，09-23 完成）**：① `structure_similarity`
   AST 子树 Jaccard 去重（同族不同窗=1.0、异族=0.0 实测；`_update` 入池前拦截）；
   ② `param_heavy` + `too_many_features`（MAX_BASE_FEATURES=6 固定上限）；

@@ -78,6 +78,10 @@
 | `news_alpha_probe/` | news 族**验真伪 + 组合层融合**（2026-10-10，P0 路径**关闭**）：news-only 可交易 IC 仅 0.0098(h1)/0.0174(h20) = 主模型 1/8~1/12，集中持仓为负（TopK45 −8.6%/−6.4%）；融合增益 h1 在 ±0.3pp 噪声内、h20 系统性负 → 脚本 `scripts/evaluation/news_alpha_probe.py` |
 | `factor_pool_composition/` | 因子池构成体检（2026-10-10）：**三层占比** 池 84% → 入选 72% → 归因 gain 90.5%（非量价拿 28% 席位只贡献 9.5%）；「83.6%」= 旧 955 口径、今 `panels_neu` 实为 86.0%；查出 **alt 20 因子未进 panels_neu** + 26 无面板 + 26 哈希未登记 → 脚本 `scripts/evaluation/factor_pool_composition.py` |
 | `altf_neu_backfill/` | alt 族 `panels_neu` 回填（2026-10-10，**修数据面问题 #1**）：family-aware（零膨胀→跳过 MAD / 广播→时序 z）+ `bonus_freq_3y`；门槛 **strict 通过** ⇒ 不再需要 `YURIQUANT_PANEL_CHECK=warn`。A/B 实测**入选集逐位不变**（alt 不在 `ALT_FAMILY_SETS`、窗内 |IC| 排名 783–948 ⇒ 死重）→ 脚本 `scripts/builders/build_alla_altfactor_neu.py` |
+| `frontier_audit_920_reval/` | **批次 13 920 复验（2026-10-21，A1/A2 三臂全败线封）**：defv 定版信号面板（caliber 登记 `dingban_fundind`）+ 残差首轮两 CSV + overlay/stack/h60 三臂产物；结论真源其 README。 |
+| `cvar_arm_920/` / `views_arm_920/` | 批次 12⑤/12④（2026-10-21）：CVaR 组合臂（不升级）与观点注入三臂（零增量）负结果归档。 |
+| `alla_rolling_ortho920mf/` / `alla_rolling_ortho920fundind_lblco/` | 批次 12②/12③（2026-10-21/22）：市场状态特征（**唯一正结果 +1.44pp 建议采纳挂拍板**）与隔夜标签臂（判负）。 |
+| `sync/` | **产物远端同步捆绑**（`batch1213_products_20261022.zip` = 批次 12/13 全部 CSV/MD/JSON，304KB；大件 parquet 不入 zip、由 GOOD_MACHINE_TASKS 存档命令可重建）——reports 产物整体仍不进 git，仅此 zip 由用户指示 force-add 入库。 |
 | `frontier_audit_2026-10-19/` | **增量方向 frontier audit（2026-10-19，A1/A2）**：`horizon_probe` 主信号 IC h1–h120 衰减（h60 反而升到 0.161）+ `residual_ic_probe` 920 因子对主信号残差的四口径 IC；脚本 `scripts/evaluation/{horizon_probe,residual_ic_probe}.py`，结论回写 TODO §六。 |
 | `text_factor_probe/` | 论文族 `pap_*`(21) + 情绪族 `txt_*`(5) **生产口径收尾（2026-10-13，P0）**：口径修正——面板实体**存在**（哈希名在 `panels/`），缺的是未进 `panels_neu` ⇒ 从未中性化/竞争；`txt_*` 5 个自身可交易 IR **0.008~0.105 ≪ 0.3 门槛**、独立 Sharpe 0.47~0.57 < 主 0.631；**融合层「Sharpe +0.05~0.12」经安慰剂证伪**（值置换复现中位 71% ⇒ 覆盖率掩码/市值暴露，非 alpha）；`pap_*` 无一条过「正交+够强」；106 项 BH-FDR **仅 1 条存活且为负** → 脚本 `scripts/evaluation/text_factor_probe.py` + `fuse_placebo.py` |
 
