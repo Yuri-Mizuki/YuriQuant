@@ -2,7 +2,7 @@
 分钟统计特征 → 因子库体检入库（降维路线第一层）
 ================================================
 
-对 ``factor/intraday_features.py`` 的 42 个分钟统计特征做单因子体检：
+对 ``factor/intraday_features.py`` 的 58 个分钟统计特征做单因子体检：
 
 1. **口径对齐**：除权除息日剔除（分钟线不复权，除权日 bar 收益是污染源，
    掩码逻辑与 ``build_intraday_factors`` 一致）→ 截面 zscore → 入库
@@ -12,7 +12,7 @@
    残差 IC 检验（残差 |NW-t|>2 = 含库外增量信息）。
 
 产出：
-- 入库 42 个 ``im_*`` 因子（hs300_2022_2025 数据集，覆盖同名重注册）
+- 入库 94 个 ``im_*`` 因子（hs300_2022_2025 数据集，覆盖同名重注册）
 - ``reports/intraday_stat_checkup.csv``：体检明细表
 - 终端摘要（按 |NW-t| 排序）
 
@@ -52,8 +52,9 @@ log = setup_logging("build_intraday_stat_factors")
 
 #: 特征组 → 六维标签 family（入库元数据）
 FAMILY_MAP = {
-    "mom_": "动量", "ret_": "其他", "vol_": "波动率",
+    "mom_": "动量", "ret_": "其他", "vol_": "波动率", "cond_": "波动率",
     "shape_": "技术", "pv_": "流动性", "candle_": "技术",
+    "path_": "技术", "dom_": "波动率", "evt_": "事件",
 }
 PREFIX = "im_"
 

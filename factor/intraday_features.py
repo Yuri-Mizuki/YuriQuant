@@ -31,6 +31,15 @@ ret_rms。量价类（ret_vol_corr 等）为 Alpha掘金 22 的量价维度，ts
 直接对应。
 2026-10-14 增：时段切片矩阵族（20 分钟窗 × 动量/波动/量，`*_segNN_*` 36 个，
 见 ``_segment_slices``）——「分钟频挖掘第三层扩原料」第一项（TODO §二）。
+2026-10-23 增：成交量占比自相关族 3 个（`pv_volshare_*`）+ 量价相关方向拆分 2 个
+（`pv_ret_vol_corr_{up,dn}`）——「高频数据低频化：为什么量比价更重要」P0 落点，
+见 `reports/docs/research_notes/短板匹配与微信文章研读_2026-09-22.md` §2b；同批再加
+路径 `path_*` 2 个、分域显著性 `dom_*` 1 个、稀疏事件 `evt_*` 3 个（P1 落点）。
+2026-10-23 再增：条件分布族 3 个（`cond_ret_{hi,lo}_mean` / `cond_ret_hi_lo_diff`）——
+「高频研究系列六」第 4 章，P3-③ 落点；量价转移熵 2 个（`pv_te_{vol_ret,ret_vol}`）——
+「高频研究系列八」`te_Comb`，P3-④ 落点；零收益 bar 占比 1 个（`pv_zero_ret_share`）——
+P3-⑤ 非同步交易探针的正向落点（零成交维度不可用，改用价格粘滞度）。
+共 59 个非时段特征 + 36 个时段特征。
 """
 from __future__ import annotations
 
@@ -114,6 +123,37 @@ def _autocorr(x: np.ndarray, lag: int) -> np.ndarray:
         return np.nansum(d[:, lag:] * d[:, :-lag], axis=1) / np.nansum(d * d, axis=1)
 
 
+def _acf_disp(x: np.ndarray, max_lag: int = 5) -> np.ndarray:
+    """lag1..max_lag 的 |自相关| 均值（多阶自相关离散度）。
+
+    高频低频化文章的多阶自相关变体：单看某一阶会被噪声误导，取前几阶
+    绝对值的均值刻画"序列是否长期扎堆"，对阶数选择不敏感。
+    """
+    acs = np.stack([_autocorr(x, k) for k in range(1, max_lag + 1)], axis=0)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        return np.nanmean(np.abs(acs), axis=0)
+
+
+def _ar1_resid_autocorr(x: np.ndarray) -> np.ndarray:
+    """AR(1) 残差的 lag-1 自相关（NaN 感知，成对有效）。
+
+    对每个 (日, 码) 用 x_{t-1} 回归 x_t，再取残差 e_t 的一阶自相关。
+    这是「高频数据低频化」排名第一的构造本身（输入换成成交量占比后
+    RankIC 0.0649 / 11 年年年正）。
+    """
+    a, b = x[:, :-1, :], x[:, 1:, :]
+    W = np.isfinite(a) & np.isfinite(b)
+    n = W.sum(axis=1)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        ma = np.nansum(np.where(W, a, np.nan), axis=1) / n
+        mb = np.nansum(np.where(W, b, np.nan), axis=1) / n
+        da = np.where(W, a - ma[:, None, :], np.nan)
+        db = np.where(W, b - mb[:, None, :], np.nan)
+        slope = np.nansum(da * db, axis=1) / np.nansum(da * da, axis=1)
+    resid = db - slope[:, None, :] * da
+    return _autocorr(resid, 1)
+
+
 def _corr(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     """两序列沿 bar 轴的相关系数（NaN 感知）。"""
     ma, mb = _mean(a), _mean(b)
@@ -124,6 +164,49 @@ def _corr(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     vb = np.nansum(db * db, axis=1)
     with np.errstate(invalid="ignore", divide="ignore"):
         return cov / np.sqrt(va * vb)
+
+
+def _discretize(x: np.ndarray, n_bins: int = 3) -> np.ndarray:
+    """按当日截面（每 (日,码) 自身时序）分位离散化，返回 int8 分箱（NaN → -1）。"""
+    qs = np.nanquantile(x, np.arange(1, n_bins) / n_bins, axis=1, keepdims=True)
+    b = np.zeros(x.shape, dtype=np.int8)
+    for k in range(n_bins - 1):
+        b += (x > qs[k]).astype(np.int8)
+    b[~np.isfinite(x)] = -1
+    return b
+
+
+def _transfer_entropy(src: np.ndarray, dst: np.ndarray,
+                      n_bins: int = 3) -> np.ndarray:
+    """转移熵 TE(src→dst)：[D, B, C] 序列对，返回 [D, C]（单位 nats）。
+
+    TE = Σ p(s_t, d_t, d_{t+1}) · ln[ p(s_t,d_t,d_{t+1})·p(d_t)
+                                    / (p(s_t,d_t)·p(d_t,d_{t+1})) ]
+
+    刻画"知道 src 的当期值后，对 dst 下一期的不确定性减少多少"。分箱按
+    (日,码) 自己的三分位，天然消除量纲；Laplace +0.5 平滑避免空盒
+    log(0)。只允许 lag=1（48 bar/日，更长 lag 的样本量撑不住 27 个盒子）。
+    """
+    D, B, C = src.shape
+    nb = n_bins
+    bs, bd = _discretize(src, nb), _discretize(dst, nb)
+    s_t, d_t, d_n = bs[:, :-1, :], bd[:, :-1, :], bd[:, 1:, :]
+    valid = (s_t >= 0) & (d_t >= 0) & (d_n >= 0)
+    cell = (s_t.astype(np.int64) * nb + d_t) * nb + d_n
+    base = (np.arange(D)[:, None, None] * C
+            + np.arange(C)[None, None, :]) * (nb ** 3)
+    idx = (base + np.where(valid, cell, 0)).ravel()
+    w = valid.ravel().astype(np.float64)
+    counts = np.bincount(idx, weights=w, minlength=D * C * nb ** 3)
+    p = counts.reshape(D, C, nb, nb, nb) + 0.5
+    p /= p.sum(axis=(2, 3, 4), keepdims=True)
+    p_sd = p.sum(axis=4)                          # (s_t, d_t)
+    p_dd = p.sum(axis=2)                          # (d_t, d_{t+1})
+    p_d = p.sum(axis=(2, 4))                      # d_t 边际
+    with np.errstate(invalid="ignore", divide="ignore"):
+        ratio = (p * p_d[:, :, None, :, None]
+                 / (p_sd[:, :, :, :, None] * p_dd[:, :, None, :, :]))
+        return np.nansum(p * np.log(ratio), axis=(2, 3, 4))
 
 
 def _longest_run(mask: np.ndarray) -> np.ndarray:
@@ -258,6 +341,22 @@ def _extract_inner(close, open_, high, low, volume, amount,
     out["ret_rms"] = panel(guard(np.sqrt(np.nansum(r * r, axis=1) / n_r)))
     out["ret_up_ratio"] = panel(guard((r > 0).sum(axis=1) / n_r))
 
+    # ---- 条件分布类（兴业「高频研究系列六」第 4 章：先按波动状态筛选再统计收益）----
+    # 日内 bar 的 |r| 分位作为「高波/低波」状态：上 20% 记高波、下 20% 记低波，
+    # 分别取带符号收益均值。与 vol_rsj 的区别：RSJ 只用平方量（幅度），这里保留
+    # 方向——"高波时涨"与"高波时跌"是相反信号，平方量会把它们抹平。
+    absr = np.where(np.isfinite(r), np.abs(r), np.nan)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        q_hi = np.nanquantile(absr, 0.8, axis=1, keepdims=True)
+        q_lo = np.nanquantile(absr, 0.2, axis=1, keepdims=True)
+        hi_m = np.isfinite(r) & (absr >= q_hi)
+        lo_m = np.isfinite(r) & (absr <= q_lo)
+        hi_mean = np.nansum(np.where(hi_m, r, np.nan), axis=1) / hi_m.sum(axis=1)
+        lo_mean = np.nansum(np.where(lo_m, r, np.nan), axis=1) / lo_m.sum(axis=1)
+    out["cond_ret_hi_mean"] = panel(guard(hi_mean))
+    out["cond_ret_lo_mean"] = panel(guard(lo_mean))
+    out["cond_ret_hi_lo_diff"] = panel(guard(hi_mean - lo_mean))
+
     # ---- 波动类 ----
     with np.errstate(invalid="ignore", divide="ignore"):
         up = np.where(r > 0, r * r, 0.0)
@@ -285,6 +384,43 @@ def _extract_inner(close, open_, high, low, volume, amount,
     out["shape_longest_pos_run"] = panel(guard(_longest_run(r_finite & (r > 0))))
     out["shape_longest_neg_run"] = panel(guard(_longest_run(r_finite & (r < 0))))
 
+    # ---- 路径：极值邻域伴随状态（记"当时伴随什么"，不是"发生在什么时候"）----
+    hi_src = high if high is not None else close
+    lo_src = low if low is not None else close
+    pos = np.arange(B)[None, :, None]
+    valid_hi = np.isfinite(hi_src).any(axis=1)
+    valid_lo = np.isfinite(lo_src).any(axis=1)
+    k_nb = max(1, 20 // period)  # ±20 分钟邻域
+    with np.errstate(invalid="ignore", divide="ignore"):
+        arg_hi = np.nanargmax(np.where(np.isfinite(hi_src), hi_src, -np.inf), axis=1)
+        arg_lo = np.nanargmin(np.where(np.isfinite(lo_src), lo_src, np.inf), axis=1)
+        near_hi = np.abs(pos - arg_hi[:, None, :]) <= k_nb
+        near_lo = np.abs(pos - arg_lo[:, None, :]) <= k_nb
+        rv_bar = np.where(np.isfinite(r), r * r, 0.0)
+        rv_hi = np.nansum(np.where(near_hi, rv_bar, np.nan), axis=1)
+        rv_lo = np.nansum(np.where(near_lo, rv_bar, np.nan), axis=1)
+        out["path_extreme_rv_diff"] = panel(guard(np.where(
+            valid_hi & valid_lo, rv_hi - rv_lo, np.nan)))
+
+    # ---- 稀疏事件：只记冲击深度，不记修复速度 ----
+    with np.errstate(invalid="ignore", divide="ignore"):
+        # 最大反转幅度：日内低点之后回升的最大幅度（下档承接厚度）
+        after_lo = pos > arg_lo[:, None, :]
+        hi_after = np.nanmax(np.where(after_lo, close, np.nan), axis=1)
+        lo_val = np.take_along_axis(close, arg_lo[:, None, :], axis=1)[:, 0, :]
+        out["evt_max_reversal_depth"] = panel(guard(np.where(
+            valid_lo, hi_after / lo_val - 1.0, np.nan)))
+        # 冲击深度：自日内累计高点的最大回撤幅度
+        cummax = np.maximum.accumulate(
+            np.where(np.isfinite(close), close, -np.inf), axis=1)
+        dd = np.where(np.isfinite(close) & (cummax > 0), close / cummax - 1.0, np.nan)
+        out["evt_drawdown_depth"] = panel(guard(-np.nanmin(dd, axis=1)))
+        # 极端下行 bar 到达率（尾部频次；与 vol_extreme_bar_share 的"幅度占比"互补）
+        thr = np.nanpercentile(np.where(np.isfinite(r), r, np.nan), 5,
+                               axis=1, keepdims=True)
+        out["evt_down_tail_share"] = panel(guard(
+            ((r <= thr) & np.isfinite(r)).sum(axis=1) / n_r))
+
     # ---- 量价类 ----
     if volume is not None:
         with np.errstate(invalid="ignore", divide="ignore"):
@@ -295,6 +431,11 @@ def _extract_inner(close, open_, high, low, volume, amount,
             vslope, _ = _ols_trend(vol_norm)
             out["pv_vol_trend"] = panel(guard(vslope * B))
             out["pv_ret_vol_corr"] = panel(guard(_corr(r, volume)))
+            # 价格粘滞度：零收益 bar 占比（非同步交易的日频代理）。5 分钟 bar 上
+            # 零成交几乎不发生（87.8% 的 (日,码) 单元零成交 bar 数为 0），故用
+            # "价格未动"而非"无成交"度量不活跃；与 ret_up_ratio 有机械负相关
+            # （涨+跌+平=1），但剔除后仍有递增残差信息（见研读笔记 §2b.15）
+            out["pv_zero_ret_share"] = panel(guard((r == 0).sum(axis=1) / n_r))
             vsum = np.nansum(volume, axis=1)
             third = max(1, B // 3)
             head = _mean(volume[:, :third, :])
@@ -305,6 +446,54 @@ def _extract_inner(close, open_, high, low, volume, amount,
                 np.nansum(np.where(big, volume, 0.0), axis=1)
                 / np.where(vsum > 0, vsum, np.nan)))
             out["pv_vol_skew"] = panel(guard(_skew(volume)))
+            # ---- 成交量占比自相关族（「量比价更耐久」，见研读笔记 §2b.1 结论 1）----
+            # 占比 = 该 bar 量 / 当日总量。自相关对常数缩放不变，故占比化不改变
+            # 相关系数，只统一 AR(1) 斜率与残差的量纲；跨截面可比性由 zscore 承担。
+            vshare = volume / np.where(vsum[:, None, :] > 0, vsum[:, None, :], np.nan)
+            out["pv_volshare_autocorr_l1"] = panel(guard(_autocorr(vshare, 1)))
+            out["pv_volshare_acf_disp"] = panel(guard(_acf_disp(vshare)))
+            out["pv_volshare_ar1_resid_acf"] = panel(guard(_ar1_resid_autocorr(vshare)))
+            # ---- 量价耦合按涨跌方向拆分（混算会让两种机制相互抵消）----
+            up_m, dn_m = r > 0, r < 0
+            out["pv_ret_vol_corr_up"] = panel(guard(_corr(
+                np.where(up_m, r, np.nan), np.where(up_m, volume, np.nan))))
+            # 下跌分钟量价相关通常为负，取负号使「放量下跌」= 高值（与上涨侧同向）
+            out["pv_ret_vol_corr_dn"] = panel(guard(-_corr(
+                np.where(dn_m, r, np.nan), np.where(dn_m, volume, np.nan))))
+            # ---- 转移熵：量价非线性关联（系列八 te_Comb）----
+            # 线性相关看不到"放量后下一 bar 涨跌"的非线性传导；TE 三分位离散后
+            # 测条件不确定性下降，两个方向各自成因子（不合成，避免再出 ρ≈1 冗余）。
+            out["pv_te_vol_ret"] = panel(guard(_transfer_entropy(volume, r)))
+            out["pv_te_ret_vol"] = panel(guard(_transfer_entropy(r, volume)))
+            # 极值邻域的成交量份额差（「当时伴随了多少量」，非「什么时候」）
+            vol_ok = np.isfinite(volume)
+            v_hi = np.nansum(np.where(near_hi & vol_ok, volume, np.nan), axis=1)
+            v_lo = np.nansum(np.where(near_lo & vol_ok, volume, np.nan), axis=1)
+            with np.errstate(invalid="ignore", divide="ignore"):
+                out["path_extreme_volshare_diff"] = panel(guard(
+                    (v_hi - v_lo) / np.where(vsum > 0, vsum, np.nan)))
+            # 分域显著性：按成交量 5 档测 RV 偏离全天均值的相对幅度
+            # （文章结论：强度变量有效、方向变量无效，故只做波动/量）
+            vv = vol_ok & np.isfinite(r)
+            n_bkt = 5
+            order = np.argsort(np.where(vv, volume, np.inf), axis=1, kind="stable")
+            ranks = np.empty(order.shape, dtype=np.int64)
+            np.put_along_axis(ranks, order, np.broadcast_to(
+                np.arange(volume.shape[1])[None, :, None], order.shape).copy(), axis=1)
+            n_ok = vv.sum(axis=1)
+            bkt = np.clip((ranks * n_bkt) // np.maximum(n_ok[:, None, :], 1),
+                          0, n_bkt - 1)
+            rv_all = np.nansum(np.where(vv, rv_bar, np.nan), axis=1) \
+                / np.maximum(n_ok, 1)
+            sig = np.full(rv_all.shape, -np.inf)
+            for b in range(n_bkt):
+                m = vv & (bkt == b)
+                mean_b = np.nansum(np.where(m, rv_bar, np.nan), axis=1) \
+                    / np.maximum(m.sum(axis=1), 1)
+                with np.errstate(invalid="ignore", divide="ignore"):
+                    sig = np.fmax(sig, mean_b / np.where(rv_all > 0, rv_all, np.nan))
+            out["dom_vol_rv_sig"] = panel(guard(np.where(
+                np.isfinite(sig), sig - 1.0, np.nan)))
         if amount is not None:
             with np.errstate(invalid="ignore", divide="ignore"):
                 amihud = np.abs(r) / np.where(amount > 0, amount, np.nan)
@@ -405,6 +594,9 @@ FEATURE_DOCS: dict[str, str] = {
     "ret_abs_sum": "bar收益绝对值和（absolute_sum_of_changes近似）",
     "ret_rms": "bar收益均方根（root_mean_square）",
     "ret_up_ratio": "上涨bar占比",
+    "cond_ret_hi_mean": "高波bar（|r|上20%）的带符号收益均值",
+    "cond_ret_lo_mean": "低波bar（|r|下20%）的带符号收益均值",
+    "cond_ret_hi_lo_diff": "高波-低波收益均值差（方向随波动状态的分化）",
     "vol_rv": "已实现波动率Σr²",
     "vol_rsj": "好坏波动差（RSJ）",
     "vol_downside_rms": "下行bar收益均方根",
@@ -417,9 +609,23 @@ FEATURE_DOCS: dict[str, str] = {
     "shape_longest_neg_run": "最长连续下跌bar数",
     "pv_vol_trend": "成交量日内趋势斜率×B（归一化）",
     "pv_ret_vol_corr": "bar收益与成交量相关系数",
+    "pv_zero_ret_share": "零收益bar占比（价格粘滞度，非同步交易的日频代理）",
     "pv_vol_tail_ratio": "尾1/3时段均量/首1/3时段均量",
     "pv_big_move_vol_share": "最剧烈10% bar的成交量占比",
     "pv_vol_skew": "成交量分布偏度（放量集中度）",
+    "pv_volshare_autocorr_l1": "成交量占比序列一阶自相关（交易扎堆惯性）",
+    "pv_volshare_acf_disp": "成交量占比 lag1~5 |自相关| 均值（多阶离散度）",
+    "pv_volshare_ar1_resid_acf": "成交量占比 AR(1) 残差自相关（量比价耐久主构造）",
+    "pv_ret_vol_corr_up": "上涨 bar 的量价相关（放量上涨=买盘推进）",
+    "pv_ret_vol_corr_dn": "下跌 bar 量价相关的绝对值口径（取负，放量下跌=高值）",
+    "pv_te_vol_ret": "量→收益转移熵（lag1，三分位离散，非线性传导强度）",
+    "pv_te_ret_vol": "收益→量转移熵（lag1，反向传导强度）",
+    "path_extreme_rv_diff": "最高/最低价 ±20 分钟邻域的已实现波动差（伴随状态）",
+    "path_extreme_volshare_diff": "最高/最低价 ±20 分钟邻域的成交量份额差",
+    "dom_vol_rv_sig": "按成交量 5 档的最大 RV 偏离（域内显著性，强度变量）",
+    "evt_max_reversal_depth": "日内低点之后的极大回升幅度（下档承接厚度）",
+    "evt_drawdown_depth": "自日内累计高点的最大回撤幅度（冲击深度）",
+    "evt_down_tail_share": "极端下行 bar 到达率（尾部频次，不记速度）",
     "pv_amihud": "日内Amihud非流动性 mean(|r|/amount)",
     "pv_vwap_dev": "收盘价相对日内VWAP偏离",
     "candle_high_in_am": "当日最高价是否出现在上午(1/0)",

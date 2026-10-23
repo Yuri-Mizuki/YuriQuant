@@ -137,7 +137,11 @@ def _slow_reference(long_df: pd.DataFrame) -> dict[str, pd.DataFrame]:
         "mom_intraday_ret", "mom_am_ret", "mom_trend_drift", "ret_mean", "ret_std",
         "ret_skew", "ret_kurt", "vol_rv", "vol_rsj", "shape_autocorr_l1",
         "shape_longest_pos_run", "pv_vwap_dev", "pv_amihud", "mom_pos_in_range",
-        "shape_crossing_cnt", "candle_close_pos")}
+        "shape_crossing_cnt", "candle_close_pos",
+        "pv_volshare_autocorr_l1", "pv_volshare_acf_disp",
+        "pv_volshare_ar1_resid_acf", "pv_ret_vol_corr_up", "pv_ret_vol_corr_dn",
+        "path_extreme_rv_diff", "path_extreme_volshare_diff", "dom_vol_rv_sig",
+        "evt_max_reversal_depth", "evt_drawdown_depth", "evt_down_tail_share")}
     long_df = long_df.reset_index()
     long_df["date"] = long_df["kline_time"].dt.normalize()
     for (date, code), g in long_df.groupby(["date", "code"], sort=True):
@@ -180,6 +184,42 @@ def _slow_reference(long_df: pd.DataFrame) -> dict[str, pd.DataFrame]:
         put("shape_crossing_cnt", ((r[:-1] < m) & (r[1:] >= m)).sum())
         rng = h - lo_arr
         put("candle_close_pos", ((c - lo_arr) / rng).mean())
+
+        # 成交量占比自相关族 + 方向拆分量价相关
+        vs = v / v.sum()
+
+        def acf(x, lag):
+            d = x - x.mean()
+            return (d[lag:] * d[:-lag]).sum() / (d * d).sum()
+
+        put("pv_volshare_autocorr_l1", acf(vs, 1))
+        put("pv_volshare_acf_disp", np.mean([abs(acf(vs, k)) for k in range(1, 6)]))
+        a_, b_ = vs[:-1], vs[1:]
+        sl = np.polyfit(a_, b_, 1)[0]
+        e = b_ - (b_.mean() + sl * (a_ - a_.mean()))
+        de = e - e.mean()
+        put("pv_volshare_ar1_resid_acf", (de[1:] * de[:-1]).sum() / (de * de).sum())
+        upm, dnm = r > 0, r < 0
+        put("pv_ret_vol_corr_up", np.corrcoef(r[upm], v[upm])[0, 1])
+        put("pv_ret_vol_corr_dn", -np.corrcoef(r[dnm], v[dnm])[0, 1])
+
+        # 路径（极值邻域）/ 分域显著性 / 稀疏事件
+        k_nb = max(1, 20 // 30)
+        i_hi, i_lo = int(np.argmax(h)), int(np.argmin(lo_arr))
+        near_hi = np.abs(np.arange(B) - i_hi) <= k_nb
+        near_lo = np.abs(np.arange(B) - i_lo) <= k_nb
+        rv = r * r
+        put("path_extreme_rv_diff", rv[near_hi].sum() - rv[near_lo].sum())
+        put("path_extreme_volshare_diff",
+            (v[near_hi].sum() - v[near_lo].sum()) / v.sum())
+        bkt = np.clip((np.argsort(np.argsort(v, kind="stable")) * 5) // B, 0, 4)
+        rv_all = rv.mean()
+        put("dom_vol_rv_sig", max(rv[bkt == b].mean() / rv_all
+                                  for b in range(5) if (bkt == b).any()) - 1)
+        put("evt_max_reversal_depth",
+            c[i_lo + 1:].max() / c[i_lo] - 1 if i_lo < B - 1 else np.nan)
+        put("evt_drawdown_depth", -(c / np.maximum.accumulate(c) - 1).min())
+        put("evt_down_tail_share", (r <= np.percentile(r, 5)).mean())
 
     panels = {name: pd.Series(vals) for name, vals in out.items()}
     panels = {name: s.unstack() for name, s in panels.items()}
@@ -233,14 +273,20 @@ class TestIntradayFeatures:
             "mom_trend_drift", "mom_trend_r2", "mom_pos_in_range",
             "ret_mean", "ret_std", "ret_skew", "ret_kurt", "ret_min", "ret_max",
             "ret_median", "ret_abs_sum", "ret_rms", "ret_up_ratio",
+            "cond_ret_hi_mean", "cond_ret_lo_mean", "cond_ret_hi_lo_diff",
             "vol_rv", "vol_rsj", "vol_downside_rms", "vol_range",
             "vol_extreme_bar_share",
             "shape_autocorr_l1", "shape_autocorr_l2", "shape_crossing_cnt",
             "shape_longest_pos_run", "shape_longest_neg_run",
-            "pv_vol_trend", "pv_ret_vol_corr", "pv_vol_tail_ratio",
+            "pv_vol_trend", "pv_ret_vol_corr", "pv_zero_ret_share", "pv_vol_tail_ratio",
             "pv_big_move_vol_share", "pv_vol_skew", "pv_amihud", "pv_vwap_dev",
+            "pv_volshare_autocorr_l1", "pv_volshare_acf_disp",
+            "pv_volshare_ar1_resid_acf", "pv_ret_vol_corr_up", "pv_ret_vol_corr_dn",
+            "pv_te_vol_ret", "pv_te_ret_vol",
             "candle_high_in_am", "candle_upper_shadow", "candle_lower_shadow",
             "candle_close_pos",
+            "path_extreme_rv_diff", "path_extreme_volshare_diff", "dom_vol_rv_sig",
+            "evt_max_reversal_depth", "evt_drawdown_depth", "evt_down_tail_share",
         }
         assert produced <= set(FEATURE_DOCS)
         non_seg = {k for k in FEATURE_DOCS if "_seg" not in k}
