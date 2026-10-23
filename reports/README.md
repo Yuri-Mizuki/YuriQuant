@@ -91,7 +91,7 @@
 > 都把同一份数据源缓存**重算一遍写进各臂自己的 `_base/`**，不共享。故 09-11 删臂后，
 > 只要有人再跑一轮 `--stage all`，`_base/` 就会"复活"。实测四臂 `_base` **字节级完全相同**
 > （md5 一致，各 446.2MB），09-15 14:58~15:02 曾被四臂依次重建一遍。
-> 移除时已用 md5 清单存档到 `E:\YuriQuant_snapshot_alla_arms_base_manifest_20260916.txt`，
+> 移除时登记过 md5 清单（清单文件已清理，删除件副本在 `%USERPROFILE%\_yq_backup\`），
 > **无任何生产代码读取它们**；如需重跑该臂，`--stage all` 会自动重建（约 1 分钟/臂）。
 
 > **二轮清理（同日）已删**：归档脚本产物（`diagnose/` `diagnose_neu/` `screening/`
@@ -292,8 +292,8 @@ model层 / ML合成，其余已删、可重跑复现——结论见 §三.13~17�
     `alla_rolling/_base/` **字节级完全相同**（md5 已核），但 README 定 ortho 为「管线默认
     （最终臂）」而非已归档臂，按 §1.2「活跃臂请保留」规则**未自动删**；若确认可删，
     省 446.5MB（prep 会按确定性重建）。
-  - **快照**：`E:\YuriQuant_snapshot_project_20260923_manifest.txt`（1992 文件，含 size+md5）；
-    副本 `%USERPROFILE%\_yq_backup\20260923_project_cleanup\`。
+  - **快照**：1992 文件，含 size+md5（清单文件已清理）；
+    删除件副本 `%USERPROFILE%\_yq_backup\20260923_project_cleanup\`。
 
 - **2026-10-19（脚本归档 + 索引）**：`scripts/` 去重收尾。
   - **归档 26 个入口**（`git mv` 到 `scripts/archive/`，历史保留）：`ai97_pbo_report`、
@@ -320,8 +320,8 @@ model层 / ML合成，其余已删、可重跑复现——结论见 §三.13~17�
   - **冒烟去重**：`llm_mcts_phase0/` 删 3 个调试中途轮（断链修复前/中的 superseded 运行），
     留四臂最终轮 + realsmoke；`llm_mcts_phase0_realsmoke/` 并入 `llm_mcts_phase0/`
     （`*_realsmoke` 后缀）；根部散件 `portfolio_phase2_mask_smoke.log` 归位为该目录 `run.log`。
-  - **快照**：`E:\YuriQuant_snapshot_reports_20260924_manifest.txt`（17 文件 / 148.1KB，
-    含 md5）；删除均走 `_recycle_batch.py` 回收站。根部文件复核恰 5 项。
+  - **快照**：17 文件 / 148.1KB，含 md5（清单文件已清理）；
+    删除均走 `_recycle_batch.py` 回收站。根部文件复核恰 5 项。
 - **2026-09-11**：
   - 删除 §三所列 12 项（约 2.4GB，其中 alla_rolling_mixed / nofund 占 98%）。
   - 新建 `docs/design/`、`docs/research_notes/`、`archive/` 并移入文档型报告；
@@ -336,7 +336,7 @@ model层 / ML合成，其余已删、可重跑复现——结论见 §三.13~17�
 - **2026-09-16 散件治理（根目录 38 → 5）**：本轮**只做 A 档（纯归类 + 清临时件），不碰代码**。
   - **回收站删除 22 个临时件**（当天 pytest/smoke/探针残留，共 61.6KB，零引用）：
     `_pytest_*.log`×7、`_smoke_*.{json,log}`×11、`alphapool_real_smoke_{prevfix,vwapfix}.{json,log}`×4。
-    删除前已 `cp` 全量快照到仓库外 `E:\YuriQuant_snapshot_reports_20260916`（38 个根文件）。
+    删除前已 `cp` 全量快照到仓库外（38 个根文件；该快照目录已清理）。
   - **新建 `docs/consistency_checks/`**，移入 3 份核对报告 + 3 个 GFlowNet 公平性核对日志。
   - **7 个运行日志归位到所属实验目录**（不再堆根目录）：`e2e_p0_intraday_daily*`→其目录、
     `p0_ab_w*`→对应窗口目录、`mine_im_combos_run.log`→新建 `logs/`。
@@ -354,11 +354,11 @@ model层 / ML合成，其余已删、可重跑复现——结论见 §三.13~17�
   - **安全性**：全仓无生产代码读这两个目录；唯一读方 `scripts/oneoff/compare_three_arms.py`
     读的 `mixed/metrics_overall.csv` 早已不存在（该脚本本身也已随本轮 oneoff 清理移除）。
     需要时 `--stage all` 自动重建，**能力无损**。
-  - **存档**：md5 清单 → `E:\YuriQuant_snapshot_alla_arms_base_manifest_20260916.txt`。
+  - **存档**：md5 清单（清单文件已清理；删除件副本在 `%USERPROFILE%\_yq_backup\`）。
   - **验证**：`pytest --collect-only` → **883**（与治理前一致）；全仓引用扫描确认无残留。
 - **2026-09-23 一次性中间产物清理 + 同族目录合并**（目标：顶层目录 62→53）：
-  - **删除 93 个一次性文件、共 1026.9 MB**（删除前逐项登记路径+大小+MD5 →
-    `E:\YuriQuant_snapshot_reports_20260923_manifest.txt`）：
+  - **删除 93 个一次性文件、共 1026.9 MB**（删除前逐项登记路径+大小+MD5，
+    清单文件已清理）：
     ① **20 个 pred parquet**（`alla_arms` 四臂 8 + `holder_dyn_ablation` 4 + `holder_dyn_forced` 4
     + `limit_pos_ablation_p1b` 4，各约 52–55MB）——回测/集成早已结算，结论都在同目录
     `report.md` 与 metrics csv，pred 无二次读取方；
