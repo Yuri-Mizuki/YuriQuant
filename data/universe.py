@@ -64,6 +64,13 @@ class Universe:
         全部代码"），与 docstring 的 PIT 语义不符。现按首末行情日过滤：
         ``first_date <= date <= last_date``（末行近似退市/长期停牌边界）。
 
+        2026-10-23 回归修复：晚间 update_data 以 ``target=今天`` 调本方法，而
+        缓存数据止于上一交易日 ⇒ 右界 ``last >= 今天`` 恒假、返回**空池** →
+        update 误判「本地无缓存」回退 API 清单 + 日K按 begin_date 走 4 年
+        全量拉 → 超 1800s 预算被杀 → 数据永远落后一天（死循环；10-20~22
+        三晚出榜故障根因）。修法：``t`` 钳制到缓存末日——数据滞后时按
+        「截至已知数据」判断在市，PIT 语义不变（末行仍近似退市边界）。
+
         缓存中代码上限即全市场 A 股（约 5400 只；daily_all_a 未拉取时返回空池
         并给出警告）。
         """
@@ -86,6 +93,7 @@ class Universe:
         last = by_code.groupby(level=0).max()
         t = (pd.Timestamp(str(date)) if isinstance(date, (int, str))
              else pd.Timestamp(date))
+        t = min(t, dts.max())     # 缓存滞后日右界钳制（见 docstring 回归修复）
         keep = (first <= t) & (last >= t)
         return first.index[keep].tolist()
 
