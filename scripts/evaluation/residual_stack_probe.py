@@ -112,6 +112,10 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--window", type=int, default=500)
     ap.add_argument("--refit", type=int, default=60)
     ap.add_argument("--placebo-shift", type=int, default=250)
+    ap.add_argument("--audit-dir", default="reports/frontier_audit_2026-10-19",
+                    help="残差首轮 CSV 所在目录（top200 + nonpv_s3；"
+                         "920 复验指 frontier_audit_920_reval，特征池按该榜"
+                         "的早年列重算）")
     ap.add_argument("--out",
                     default="reports/frontier_audit_2026-10-19/residual_stack")
     args = ap.parse_args(argv)
@@ -131,7 +135,7 @@ def main(argv: list[str] | None = None) -> None:
     t0 = time.time()
     dest = Path(args.out)
     dest.mkdir(parents=True, exist_ok=True)
-    audit = Path("reports/frontier_audit_2026-10-19")
+    audit = Path(args.audit_dir)
     pool_tab = early_table([audit / "residual_ic_h1_top200.csv",
                             audit / "residual_ic_h1_nonpv_s3.csv"])
     pv = pool_tab[pool_tab["name"].str.startswith(("alpha", "gtja"))]

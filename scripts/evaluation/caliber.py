@@ -104,21 +104,22 @@ SIGNALS: dict[str, dict] = {
         "desc": "882 ortho · 全模型族集成",
         "reproducible": True,
     },
-    # 生产定版信号（fundind 快信号 h1020 ⊕ 慢信号 s0.5）。**本机无 pred 实体**：
-    # 只产出了 y2026 的 selection（出榜链只需 y2026），历史回测面板缺失。
+    # 生产定版信号（fundind 快信号 h1020 ⊕ 慢信号 s0.5）。
     # 🚨 2026-10-14 更正：该信号**不是** ``stage_ensemble`` 的产物 —— 该阶段只写
     # ``ens_rgr`` / ``ens_h1h5`` / ``ens_all``（源码 ``rolling_grid_alla.py:1588-1596``），
-    # **没有** ``ens_h1020``。此前本表指向的 ``pred/ens_h1020__h1.parquet`` 是个
-    # **永远不会生成的文件名**。它由 ``scripts/evaluation/buffer_arm_920.py
+    # **没有** ``ens_h1020``。它由 ``scripts/evaluation/buffer_arm_920.py
     # --variant defv`` **现场构造**：``_rank_average([gbdt__h1, h5, h10, h20])``
     # ⊕ ``0.5·rank(slow)``（slow 来自 ``fundamental_blend.build_slow_panel``）。
-    # ⇒ 故 ``path=None``（无落盘实体），避免按错文件名重建。
+    # ✅ 2026-10-21（批次 12/13）：pred 四件套已随 920 产物同步到本机，defv 面板
+    # 已构造落盘（同 buffer_arm_920 defv 逐口径，72 因子慢信号当前数据态），
+    # 登记转 ``reproducible=True``；数字属 income 补齐后数据态（≠ 登记表 18.07
+    # 旧数据态，见 baselines.yaml data_state）。
     "dingban_fundind": {
-        "path": None,
+        "path": "reports/frontier_audit_920_reval/defv_sig__h1.parquet",
         "desc": "920 fundind · h1/5/10/20 秩平均 ⊕ 慢信号 s0.5（**生产定版**）",
-        "reproducible": False,
+        "reproducible": True,
         "construct": "scripts/evaluation/buffer_arm_920.py --variant defv",
-        "regen_inputs": ("reports/alla_rolling_ortho920tl/pred/"
+        "regen_inputs": ("reports/alla_rolling_ortho920fundind/pred/"
                          "gbdt__h{1,5,10,20}.parquet"),
     },
 }

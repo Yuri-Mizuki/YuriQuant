@@ -260,9 +260,9 @@ baselines:
   # ---------------------------------------------------------------------------
   - id: v1w2-cheap
     created: "2026-10-14"
-    updated: "2026-10-19"
-    status: working
-    label: "候选微调（切换搁置）：定版信号 buffer(8/40) + h1 份额 0.125（920 复验环境分歧）"
+    updated: "2026-10-21"
+    status: superseded
+    label: "已终判否决（10-21 批次 12①）：定版信号 buffer(8/40) + h1 份额 0.125 —— 3/5 窗未达门槛，链路优化线关闭"
     signal_key: dingban_fundind          # 920 复验后生产形态 = 定版信号 + 两处微调
     window: prod
     signal:

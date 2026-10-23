@@ -540,6 +540,12 @@ def select_features_for_year(year: int, horizon: int, ic_cache: pd.DataFrame,
                            and cov_ok[n] >= ALT_MIN_COVERAGE
                            and n not in cands and n not in reserved]
     cands = cands + _extra
+    # exclude 对 _extra 路径同样生效：_extra 从 registry（cov_ok）取名而非
+    # quality，会绕过上面的 quality.drop——2026-10-22 批次 12③ 实测踩坑
+    # （排除 7 个缺面板 P5 后仍被基本面补位池捞回，select 采样读面板炸）。
+    if exclude:
+        _excl = set(exclude)
+        cands = [n for n in cands if n not in _excl]
     k_remain = max(0, MAX_FEATURES - len(reserved))
     if k_remain == 0:
         return reserved

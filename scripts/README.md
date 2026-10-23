@@ -67,6 +67,7 @@
 | `evaluation/cheap_lever_revalidate.py` | cheap_lever_scan 候选的多窗口复验（2026-10-14）。 |
 | `evaluation/cheap_lever_revalidate_920.py` | cheap_lever 胜者的 920 定版信号复验（好机器批次 11，2026-10-17）。 |
 | `evaluation/cost_penalty_probe.py` | 成本感知优化探针（P0-2，2026-10-13）。 |
+| `evaluation/cvar_arm_920.py` | 批次 12⑤：CVaR 约束组合臂 vs Top10% 等权 vs buffer（production 口径，2026-10-21）。 |
 | `evaluation/cpcv_eval.py` | CPCV 多路径评估 —— 挖因子方法选型决策工具。 |
 | `evaluation/cpcv_h1_eval.py` | h=1 模型 CPCV 无偏评估 |
 | `evaluation/deliverable_portfolio.py` | 可交付组合：集中度 × 行业约束（P0 落地，2026-10-10 固化）。 |
@@ -96,7 +97,8 @@
 | `evaluation/regime_probe.py` | Regime 条件化探针（Phase 0/2 前置诊断，2026-10-15）。 |
 | `evaluation/residual_ic_probe.py` | 残差目标探针：raw/resfac/restgt/both 四口径 + NW t + 逐年方向（2026-10-19，A2）。 |
 | `evaluation/residual_overlay_probe.py` | A2 负向残差因子 → 信号层低配/剔除 overlay（剂量臂 + 安慰剂，production 口径）。 |
-| `evaluation/residual_stack_probe.py` | A2 二阶 GBDT：残差收益目标 walk-forward + 融合组合层（特征池按早年列选，无选择前视）。 |
+| `evaluation/residual_stack_probe.py` | A2 二阶 GBDT：残差收益目标 walk-forward + 融合组合层（特征池按早年列选，无选择前视；`--audit-dir` 指 920 榜，2026-10-21）。 |
+| `evaluation/views_arm_920.py` | 批次 12④：观点注入三臂（BL 优化层 / 特征复制 / 两段模型）对照（production 口径，2026-10-21）。 |
 | `evaluation/retrain_freq_ic.py` | 重训频率 × 预测 IC 小规模对照（只比预测 IC，**不跑组合回测**；`--save-pred` 可存 OOS pred 面板）。 |
 | `evaluation/select_horizon_features.py` | A1 长 horizon 特征清单选择器：h60 IC 质量窗 + DPP（fwd 不穿透选择窗）。 |
 | `evaluation/seq_predictor_compare.py` | P1 —— 时序预测器对照：序列归纳偏置 vs 截面/树归纳偏置。 |
