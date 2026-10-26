@@ -197,6 +197,9 @@ def run_variant(bundle, panels: dict, spec: dict, w0: int | None = None,
     cash_w = live[cash] if cash in live.columns else pd.Series(0.0, index=live.index)
     years = max(len(res.daily_returns) / 252.0, 1e-9)
     cost_drag = float(res.cost_series.sum()) / 1_000_000.0 / years
+    rb_dates = res.turnover_series.dropna().index
+    wd = w.loc[rb_dates] if len(rb_dates) else w
+    hold_counts = (wd[held].abs() > 1e-9).sum(axis=1)
     return {
         "annual_return": m["annual_return"],
         "sharpe": m["sharpe"],
@@ -207,6 +210,7 @@ def run_variant(bundle, panels: dict, spec: dict, w0: int | None = None,
         "avg_holdings": float((live[held].abs() > 1e-9).sum(axis=1).mean()) if len(live) else 0.0,
         "avg_cash": float(cash_w.mean()) if len(cash_w) else 0.0,
         "cost_drag": cost_drag,
+        "hold_counts": hold_counts,
         "equity": res.equity_curve,
     }
 

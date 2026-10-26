@@ -72,6 +72,11 @@ COST: list[dict] = [
      "commission_bp": 1.0, "slippage_bp": 10.0},
 ]
 
+# 持仓只数分布（单变体诊断）。
+HOLD: list[dict] = [
+    {**P1_BASE, "name": "champ_hold", "signal": "mom_crowd_f20", "defense": "mix"},
+]
+
 # 最优组合项（def_mix_crowd_f20）的邻域网格：防御腿类型 / 成本 / 目标波动 / 集中度。
 ROBUST: list[dict] = [
     {**P1_BASE, "name": "dm_mix_c20", "signal": "mom_crowd_f20", "defense": "mix"},
@@ -167,7 +172,8 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--begin", type=int, default=20200102)
     ap.add_argument("--end", type=int, default=None)
     ap.add_argument("--out", default=str(OUT))
-    ap.add_argument("--variants", choices=("main", "robust", "freq", "cost"), default="main")
+    ap.add_argument("--variants", choices=("main", "robust", "freq", "cost", "hold"),
+                    default="main")
     args = ap.parse_args(argv)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -180,8 +186,10 @@ def main(argv: list[str] | None = None) -> None:
     print(f"份额 PIT 面板覆盖 {panels['mom_crowd_f20'].notna().sum().sum():,} 个有效格", flush=True)
 
     rows, seg_rows, eq = [], [], {}
-    variants = {"main": VARIANTS, "robust": ROBUST, "freq": FREQ, "cost": COST}[args.variants]
-    tag = {"main": "", "robust": "_robust", "freq": "_freq", "cost": "_cost"}[args.variants]
+    variants = {"main": VARIANTS, "robust": ROBUST, "freq": FREQ,
+                "cost": COST, "hold": HOLD}[args.variants]
+    tag = {"main": "", "robust": "_robust", "freq": "_freq",
+           "cost": "_cost", "hold": "_hold"}[args.variants]
     for spec in variants:
         extra = None
         if spec.get("defense"):
@@ -195,7 +203,8 @@ def main(argv: list[str] | None = None) -> None:
                             rebalance_days=_rebalance_days(close, spec, lo, hi))
             segs.append(r["annual_return"])
         n_pos = int(sum(s > 0 for s in segs))
-        rows.append({**spec, **{k: v for k, v in full.items() if k != "equity"},
+        rows.append({**spec, **{k: v for k, v in full.items()
+                                 if k not in ("equity", "hold_counts")},
                      "seg_pos": n_pos,
                      **{f"seg_{i + 1}": s for i, s in enumerate(segs)}})
         seg_rows.append({"name": spec["name"], **{f"seg_{i + 1}": s for i, s in enumerate(segs)}})
@@ -205,6 +214,12 @@ def main(argv: list[str] | None = None) -> None:
               f"to={full['avg_turnover']:.2%} hold={full['avg_holdings']:.1f} "
               f"cash={full['avg_cash']:.1%} cost={full['cost_drag']:.2%}/yr "
               f"seg={n_pos}/3", flush=True)
+        if args.variants == "hold":
+            cnt = full["hold_counts"]
+            dist = cnt.value_counts(normalize=True).sort_index()
+            print("  持仓只数分布: " + " / ".join(
+                f"{int(k)}只 {v:.1%}" for k, v in dist.items()) +
+                f"；平均 {cnt.mean():.2f} 只、最少 {int(cnt.min())} 只", flush=True)
 
     summary = pd.DataFrame(rows)
     if (summary["name"] == "p1_base").any():
