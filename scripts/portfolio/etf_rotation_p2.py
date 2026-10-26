@@ -54,6 +54,13 @@ VARIANTS: list[dict] = [
     {**P1_BASE, "name": "def_mix_crowd_f20", "signal": "mom_crowd_f20", "defense": "mix"},
 ]
 
+# 调仓频率对照：月频（基准）/ 每 10 个交易日 / 周频。
+FREQ: list[dict] = [
+    {**P1_BASE, "name": "champ_m", "signal": "mom_crowd_f20", "defense": "mix"},
+    {**P1_BASE, "name": "champ_2w", "signal": "mom_crowd_f20", "defense": "mix", "every_n": 10},
+    {**P1_BASE, "name": "champ_w", "signal": "mom_crowd_f20", "defense": "mix", "freq": "W"},
+]
+
 # 最优组合项（def_mix_crowd_f20）的邻域网格：防御腿类型 / 成本 / 目标波动 / 集中度。
 ROBUST: list[dict] = [
     {**P1_BASE, "name": "dm_mix_c20", "signal": "mom_crowd_f20", "defense": "mix"},
@@ -118,6 +125,18 @@ def build_r2(close: pd.DataFrame, win: int = 60) -> pd.DataFrame:
     return logp.rolling(win, min_periods=45).corr(t).pow(2)
 
 
+def _rebalance_days(close: pd.DataFrame, spec: dict,
+                    w0: int | None, w1: int | None) -> set | None:
+    """``every_n`` 型调仓日：窗口内每 n 个交易日调一次；其余变体返回 None（用引擎频率）。"""
+    n = spec.get("every_n")
+    if not n:
+        return None
+    lo = pd.Timestamp(str(w0)) if w0 is not None else close.index.min()
+    hi = pd.Timestamp(str(w1)) if w1 is not None else close.index.max()
+    idx = close.index[(close.index >= lo) & (close.index <= hi)]
+    return set(idx[:: int(n)])
+
+
 def build_extra_panels(close: pd.DataFrame, panels: dict) -> dict:
     """在 P1 面板上追加 P2 三个信号面板。"""
     r2 = build_r2(close)
@@ -137,7 +156,7 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--begin", type=int, default=20200102)
     ap.add_argument("--end", type=int, default=None)
     ap.add_argument("--out", default=str(OUT))
-    ap.add_argument("--variants", choices=("main", "robust"), default="main")
+    ap.add_argument("--variants", choices=("main", "robust", "freq"), default="main")
     args = ap.parse_args(argv)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -150,18 +169,19 @@ def main(argv: list[str] | None = None) -> None:
     print(f"份额 PIT 面板覆盖 {panels['mom_crowd_f20'].notna().sum().sum():,} 个有效格", flush=True)
 
     rows, seg_rows, eq = [], [], {}
-    variants = VARIANTS if args.variants == "main" else ROBUST
-    tag = "" if args.variants == "main" else "_robust"
+    variants = {"main": VARIANTS, "robust": ROBUST, "freq": FREQ}[args.variants]
+    tag = {"main": "", "robust": "_robust", "freq": "_freq"}[args.variants]
     for spec in variants:
         extra = None
         if spec.get("defense"):
             extra = pd.DataFrame({"DEF": def_levels[spec["defense"]]})
-        full = run_variant(bundle, panels, spec, args.begin, args.end, extra_close=extra)
+        full = run_variant(bundle, panels, spec, args.begin, args.end, extra_close=extra,
+                           rebalance_days=_rebalance_days(close, spec, args.begin, args.end))
         segs = []
         for y0, y1 in SEGMENTS:
-            r = run_variant(bundle, panels, spec,
-                            max(args.begin, y0 * 10000 + 101), y1 * 10000 + 1231,
-                            extra_close=extra)
+            lo, hi = max(args.begin, y0 * 10000 + 101), y1 * 10000 + 1231
+            r = run_variant(bundle, panels, spec, lo, hi, extra_close=extra,
+                            rebalance_days=_rebalance_days(close, spec, lo, hi))
             segs.append(r["annual_return"])
         n_pos = int(sum(s > 0 for s in segs))
         rows.append({**spec, **{k: v for k, v in full.items() if k != "equity"},
@@ -171,7 +191,8 @@ def main(argv: list[str] | None = None) -> None:
         eq[spec["name"]] = full["equity"]
         print(f"{spec['name']:<22} ann={full['annual_return']:+.2%} "
               f"sh={full['sharpe']:.2f} mdd={full['max_drawdown']:.2%} "
-              f"to={full['avg_turnover']:.2%} seg={n_pos}/3", flush=True)
+              f"to={full['avg_turnover']:.2%} hold={full['avg_holdings']:.1f} "
+              f"cash={full['avg_cash']:.1%} seg={n_pos}/3", flush=True)
 
     summary = pd.DataFrame(rows)
     if (summary["name"] == "p1_base").any():

@@ -140,7 +140,8 @@ def slice_bundle(bundle, panels: dict, w0: int | None, w1: int | None):
 
 
 def run_variant(bundle, panels: dict, spec: dict, w0: int | None = None,
-                w1: int | None = None, extra_close: pd.DataFrame | None = None) -> dict:
+                w1: int | None = None, extra_close: pd.DataFrame | None = None,
+                rebalance_days: set | None = None) -> dict:
     """在（可选）窗口上跑一个变体，返回指标与净值。
 
     ``extra_close`` 用于注入合成资产列（如防御腿 DEF：债+金的净值水平线）。
@@ -186,8 +187,12 @@ def run_variant(bundle, panels: dict, spec: dict, w0: int | None = None,
                                        slippage_bp=5.0 * cx))
     res = bt.run(factor_panel=factor, returns_panel=returns,
                  executable_mask=mask if spec.get("mask", True) else None,
-                 horizon=1)
+                 horizon=1, rebalance_days=rebalance_days)
     m = res.metrics(benchmark_returns=bench if len(bench) else None)
+    w = res.weights_history
+    live = w[w.abs().sum(axis=1) > 1e-9]
+    held = [c for c in w.columns if c not in ("CASH", "DEF")]
+    cash_w = live[cash] if cash in live.columns else pd.Series(0.0, index=live.index)
     return {
         "annual_return": m["annual_return"],
         "sharpe": m["sharpe"],
@@ -195,6 +200,8 @@ def run_variant(bundle, panels: dict, spec: dict, w0: int | None = None,
         "excess": m["annual_return"] - (m.get("benchmark_annual_return") or 0.0),
         "avg_turnover": m.get("avg_turnover", 0.0),
         "n_rebalance": int(res.turnover_series.notna().sum()),
+        "avg_holdings": float((live[held].abs() > 1e-9).sum(axis=1).mean()) if len(live) else 0.0,
+        "avg_cash": float(cash_w.mean()) if len(cash_w) else 0.0,
         "equity": res.equity_curve,
     }
 
