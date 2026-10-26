@@ -36,7 +36,8 @@
 | `multiyear/` | 多年度 OOS 稳健性（2026-09-01 修复后重跑） |
 | `buffer_tune/` | 换手缓冲带调参 |
 | `gtja_repro/` | 国金因子复现对照（读自身 `baseline.csv`） |
-| `etf_rotation/` | ETF 轮动报告 |
+| `etf_rotation/` | ⚠️ legacy ETF 轮动报告（2026-08-26，15 只池 + 周频合成动量，无 PIT 掩码）；仅历史追溯，**被 `etf_rotation_probe/` 取代** |
+| `etf_rotation_probe/` | **ETF 轮动 P1 探针（2026-10-26，现行）**：41 只跨资产池 + PIT 流动性掩码，13 变体主表 + 7 变体稳健网格；基线 `dual_ivvt15_m5` 年化 7.14% / Sharpe 0.62 / MDD 19.01%（结论真源其 README）；脚本 `scripts/portfolio/etf_rotation_probe.py` |
 | `risk_decomposition/` | 组合风险分解报告（Euler 分解 / 因子方差贡献 / VaR 成分） |
 | `ml_synthesis_h1/` | ⚠️ 虽属归档时代，但 `monitor_performance.py` 读其预测面板，删除会破坏监控 |
 | `investment_report/` | HS300 时代投资收益报告（最终交付物存档；数字有 ~3% 年化口径偏移待重跑，TODO §一第 3 条；归档脚本 `diagnose_factor_vs_model` 以其为输入） |

@@ -45,6 +45,7 @@ AQR + JFE 复核）同向收口；LLM-MCTS 是唯一产出超门槛因子的挖�
 - **另类数据自建通道**：7 个免费公开源落地——巨潮快讯 **119 万条**（2014 年起自建存档）、增减持 26.6 万行全历史、宏观日历 6.5 万行、董监高/亲属买卖/实控人变动
 - **另类数据三族因子（altf）**：`scripts/builders/build_alla_altfactors.py` 一轮产出 20 个面板因子（增减持/宏观日历 surprise/快讯情绪三族，公告日与 15:00 收盘闸门双 PIT 口径），并入 all_a_2018_2026 registry + ic_h
 - **分钟数据内存映射面板**：GB 级分钟行情按年分区 `np.memmap` 稠密化 `[日, bar, 股票]`，全市场分钟数据不进内存，之上直接跑 59 个"分钟→日频"统计特征 + 36 个时段切片特征
+- **ETF 数据通道（2026-10-26）**：41 只跨资产 ETF 池（宽基/行业/主题/债券/商品/跨境）+ 份额 / 净值 / IOPV 三表全池回补（`scripts/ingest/update_etf_flow.py`，份额按 `ANN_DATE ≥ CHANGE_DATE` PIT 校验 1.000）；入池体检（上市满 3 年 + 60 日均成交额 ≥ 3000 万）随 `update_etf` 自动打印
 
 ### 🧬 因子层：本系统最完整的主干
 
@@ -78,6 +79,7 @@ AQR + JFE 复核）同向收口；LLM-MCTS 是唯一产出超门槛因子的挖�
 - **反过拟合三件套**：CSCV PBO 过拟合概率（12870 个组合秒级算完）、Deflated Sharpe Ratio、三段式训练纪律（train / valid / test 分段 + embargo，配置冻结）
 - **增量方向探针族（frontier，2026-10-19）**：h60 长 horizon 全链（`select_horizon_features.py` 清单 + `retrain_freq_ic --save-pred` 训练 + `horizon_cross_eval.py` 同目标交叉与组合层——h60 第二策略 Sharpe 1.028/换手 17.5%）；残差目标（`residual_ic_probe.py` 四口径 + `residual_overlay_probe.py` 负向低配 overlay + `residual_stack_probe.py` 二阶 GBDT 融合，均带安慰剂臂）。证据 `reports/frontier_audit_2026-10-19/`，920 复验挂批次 13
 - **指数增强探针（B1，2026-10-26）**：`scripts/evaluation/index_enhance_probe.py`——中证500 成分约束 + TE–超额曲线 + 安慰剂。结论：成分内 IC 有效（0.069/t=4.3），但 3–5% TE 净超额仅 +1.5~1.9%（t≈0.8）、2025 单年 −7% ⇒ 归档为风险偏好型替代，不立项为 α（`reports/index_enhance_probe/`）
+- **ETF 轮动基线 P1（2026-10-26）**：`scripts/portfolio/etf_rotation_probe.py`——41 池 × PIT 流动性掩码下对照 12-1 动量 / Dual Momentum / 逆波动 / 波动率目标 / 缓冲区（13 变体 + 7 变体稳健网格）。结论：**波动率目标是唯一有效增量**，`dual_ivvt15_m5` 年化 7.14% / Sharpe 0.62 / MDD 19.01%（旧基线 0.26 / 38.4%）；稳健网格 7/7 过线（`reports/etf_rotation_probe/`）
 
 ### 🏭 生产化：研究系统的最后一公里
 
@@ -99,7 +101,7 @@ strategy/   因子值 → 组合权重
 research/   研究工具：IC/分层、归因、DPP、实验台账、报告渲染
 stats/      稳健统计与反过拟合（PBO / DSR）
 monitoring/ 生产监控：IC 台账、告警规则、账本
-scripts/    147 个活跃入口（ingest / factors / pipelines / portfolio /
+scripts/    150 个活跃入口（ingest / factors / pipelines / portfolio /
             evaluation / reporting / builders / common …；完整索引见
             scripts/README.md；退役入口在 scripts/archive/；本地 oneoff 另计、gitignored）
 config/     settings.yaml（参数真源）+ baselines.yaml（定版登记表）+ schedule.yaml（调度登记表）
