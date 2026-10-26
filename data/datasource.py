@@ -36,6 +36,39 @@ def _to_datetime_safe(s) -> pd.Series:
     return pd.to_datetime(s, errors="coerce")
 
 
+def _fund_long(raw, date_col: str, spec: dict[str, tuple[str, str]]) -> pd.DataFrame:
+    """把基金类 SDK 返回（``{code: DataFrame}`` 或 DataFrame）归一为长表。
+
+    spec: {SDK 列名: (输出列名, 类型)}，类型 ``date`` / ``float`` / ``str``。
+    返回 MultiIndex ``(date, code)`` 并按日期升序；缺列静默跳过（兼容 SDK 版本差异）。
+    """
+    frames = []
+    items = raw.items() if isinstance(raw, dict) else [(None, raw)]
+    for code, df in items:
+        if df is None or getattr(df, "empty", True):
+            continue
+        sub = df
+        if code is None:
+            code = str(sub["MARKET_CODE"].iloc[0]) if "MARKET_CODE" in sub.columns else ""
+        out = pd.DataFrame(index=sub.index)
+        for src, (dst, kind) in spec.items():
+            if src not in sub.columns:
+                out[dst] = pd.NaT if kind == "date" else (float("nan") if kind == "float" else "")
+            elif kind == "date":
+                out[dst] = _to_datetime_safe(sub[src])
+            elif kind == "float":
+                out[dst] = pd.to_numeric(sub[src], errors="coerce")
+            else:
+                out[dst] = sub[src].astype(str)
+        out["code"] = str(code)
+        frames.append(out)
+    cols = ["date", "code"] + [dst for dst, kind in spec.values() if kind != "date"]
+    if not frames:
+        return pd.DataFrame(columns=cols).set_index(["date", "code"])
+    res = pd.concat(frames, ignore_index=True).dropna(subset=["date"])
+    return res.set_index(["date", "code"]).sort_index()
+
+
 # 手册 4.1.7「数据周期 Period」支持的分钟档位（Period.minN）
 VALID_MINUTE_PERIODS = frozenset({1, 3, 5, 10, 15, 30, 60, 120})
 
@@ -115,6 +148,31 @@ class DataSource(ABC):
     def get_code_info(self, security_type: str = "EXTRA_STOCK_A") -> pd.DataFrame:
         """每日最新证券信息。index=code, 列含 symbol/status/pre_close/
         high_limited/low_limited/price_tick。"""
+
+    # ---- 基金份额 / 净值 / IOPV（ETF 轮动线，2026-10-26）----
+    def get_fund_share(self, code_list: Iterable[str]) -> pd.DataFrame:
+        """ETF 份额变动（长表，(date=CHANGE_DATE, code) 索引）。
+
+        列: ann_date / fund_share / total_share / float_share / change_reason。
+        PIT 使用 ``ann_date``（实测 ``ANN_DATE >= CHANGE_DATE`` 占比 1.000）。
+        默认不可用，具体数据源覆盖。
+        """
+        raise NotImplementedError("该数据源未实现 get_fund_share")
+
+    def get_fund_nav(self, code_list: Iterable[str]) -> pd.DataFrame:
+        """基金净值（长表，(date=PRICE_DATE, code) 索引）。
+
+        列: ann_date / unit_nav / accum_nav / adj_unit_nav / nav_adj_factor /
+        net_asset_value / total_net_asset_value。
+        """
+        raise NotImplementedError("该数据源未实现 get_fund_nav")
+
+    def get_fund_iopv(self, code_list: Iterable[str]) -> pd.DataFrame:
+        """ETF 参考净值 IOPV（长表，(date=PRICE_DATE, code) 索引）。
+
+        列: iopv_nav。**无公告时间戳** ⇒ 只能按 T+1 使用（折溢价特征需滞后一日）。
+        """
+        raise NotImplementedError("该数据源未实现 get_fund_iopv")
 
     # ---- 历史涨跌停/停牌/ST ----
     @abstractmethod
@@ -492,6 +550,44 @@ class AmazingDataSource(DataSource):
             if col in out.columns:
                 out[col] = pd.to_numeric(out[col], errors="coerce")
         return out[[c for c in empty_cols if c in out.columns]]
+
+    # ---- 基金份额 / 净值 / IOPV（ETF 轮动线，2026-10-26）----
+    def get_fund_share(self, code_list: Iterable[str]) -> pd.DataFrame:
+        raw = self._info.get_fund_share(
+            list(code_list), local_path=self._local_path, is_local=False
+        )
+        return _fund_long(raw, "CHANGE_DATE", {
+            "CHANGE_DATE": ("date", "date"),
+            "ANN_DATE": ("ann_date", "date"),
+            "FUND_SHARE": ("fund_share", "float"),
+            "TOTAL_SHARE": ("total_share", "float"),
+            "FLOAT_SHARE": ("float_share", "float"),
+            "CHANGE_REASON": ("change_reason", "str"),
+        })
+
+    def get_fund_nav(self, code_list: Iterable[str]) -> pd.DataFrame:
+        raw = self._info.get_fund_nav(
+            list(code_list), local_path=self._local_path, is_local=False
+        )
+        return _fund_long(raw, "PRICE_DATE", {
+            "PRICE_DATE": ("date", "date"),
+            "ANN_DATE": ("ann_date", "date"),
+            "UNIT_NAV": ("unit_nav", "float"),
+            "ACCUM_NAV": ("accum_nav", "float"),
+            "ADJ_UNIT_NAV": ("adj_unit_nav", "float"),
+            "NAV_ADJ_FACTOR": ("nav_adj_factor", "float"),
+            "NET_ASSET_VALUE": ("net_asset_value", "float"),
+            "TOTAL_NET_ASSET_VALUE": ("total_net_asset_value", "float"),
+        })
+
+    def get_fund_iopv(self, code_list: Iterable[str]) -> pd.DataFrame:
+        raw = self._info.get_fund_iopv(
+            list(code_list), local_path=self._local_path, is_local=False
+        )
+        return _fund_long(raw, "PRICE_DATE", {
+            "PRICE_DATE": ("date", "date"),
+            "IOPV_NAV": ("iopv_nav", "float"),
+        })
 
     # ---- 历史涨跌停/停牌/ST ----
     def get_history_stock_status(

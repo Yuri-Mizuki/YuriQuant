@@ -34,6 +34,39 @@ from data.etf_universe import ETF_CANDIDATES, ETF_TABLE  # noqa: E402
 log = setup_logging("update_etf")
 
 
+def _pool_audit(kline, codes: list[str], min_amount: float = 3e7,
+                min_years: float = 3.0) -> None:
+    """P0 入池体检：逐只打印覆盖年份 + 近 60 日均成交额，并标出未达标项。
+
+    只做**报告**不做剔除：剔除名单由人根据输出决定后改 ``ETF_CANDIDATES``，
+    避免脚本静默改变研究池（池变更必须留痕到代码与计划文档）。
+    """
+    if kline is None or kline.empty:
+        log.warning("日K线为空，跳过入池体检")
+        return
+    now = kline.index.get_level_values("date").max()
+    fail = []
+    for code in codes:
+        try:
+            sub = kline.xs(code, level="code")
+        except KeyError:
+            log.warning("  %s 无任何行情", code)
+            fail.append((code, "无行情"))
+            continue
+        first, last = sub.index.min(), sub.index.max()
+        years = (now - first).days / 365.25
+        amt60 = float(sub["amount"].tail(60).mean())
+        ok_hist = years >= min_years
+        ok_liq = amt60 >= min_amount
+        if not (ok_hist and ok_liq):
+            fail.append((code, f"years={years:.1f} amt60={amt60/1e8:.2f}亿"))
+        log.info("  %s %s -> %s (%.1f年) amt60=%.2f亿 %s",
+                 code, first.strftime("%Y-%m-%d"), last.strftime("%Y-%m-%d"),
+                 years, amt60 / 1e8, "OK" if (ok_hist and ok_liq) else "FAIL")
+    if fail:
+        log.warning("入池体检未通过 %d 只（需人工决定是否剔除）: %s", len(fail), fail)
+
+
 def main():
     parser = argparse.ArgumentParser(description="YuriQuant ETF 数据更新")
     parser.add_argument("--begin", type=int, default=None, help="起始日期 YYYYMMDD")
@@ -70,6 +103,7 @@ def main():
     kline = cache.get_daily_kline(codes, begin, end, pool=ETF_TABLE)
     n_code = len(kline.index.get_level_values("code").unique()) if len(kline) else 0
     log.info("日K线行数: %d, 代码数: %d", len(kline), n_code)
+    _pool_audit(kline, codes)
 
     log.info("拉取后复权因子 ...")
     backward = cache.get_backward_factor(codes)
