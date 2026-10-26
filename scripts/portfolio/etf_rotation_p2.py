@@ -199,8 +199,8 @@ def share_ic_table(close: pd.DataFrame, signals: dict[str, pd.DataFrame],
 
     判据（方案 §四）：|IC| ≥ 0.03、t ≥ 2、安慰剂 0/20 超越。
     安慰剂按**整条序列**重置（每期都在截面内独立打乱，重复 ``placebo`` 次），
-    比较的是「mean IC」而不是单期 |IC| —— 单期 |IC| 在 41 只截面上天然有
-    1/sqrt(41)≈0.16 的噪声，用它做门槛会把真实信号误判。
+    比较的是「mean IC」而不是单期 |IC| —— 单期 |IC| 在该截面上天然有
+    1/sqrt(N)≈0.14 的噪声（N≈50），用它做门槛会把真实信号误判。
     """
     rb = month_first_dates(close.index, begin, end)
     pairs = [(t, tn) for t, tn in zip(rb[:-1], rb[1:])]

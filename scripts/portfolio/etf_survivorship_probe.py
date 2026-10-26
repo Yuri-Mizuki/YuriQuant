@@ -381,7 +381,12 @@ def main(argv: list[str] | None = None) -> None:
     delisted = panels["delisted"]
     n_delisted = int(delisted.sum())
 
-    codes_a = [c for c in ETF_CANDIDATES if c in panels["close"].columns]
+    # A 臂是**历史口径**：固定为 2026-10-26 首次扩池时的 41 只，不随
+    # ETF_CANDIDATES 增长（二次扩池 41→50 的 9 只只在 P2 池扩展 A/B 中评估）。
+    pool_41 = [c for c in ETF_CANDIDATES if c not in {
+        "159516.SZ", "159992.SZ", "159755.SZ", "588200.SH", "562500.SH",
+        "159985.SZ", "159980.SZ", "159981.SZ", "513520.SH"}]
+    codes_a = [c for c in pool_41 if c in panels["close"].columns]
     codes_b = [c for c in panels["close"].columns if bool(panels["elig"][c].any())]
     delisted_in_b = [c for c in codes_b if bool(delisted.get(c, False))]
 
