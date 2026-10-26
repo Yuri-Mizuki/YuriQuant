@@ -1,6 +1,6 @@
 # scripts 入口索引
 
-> 自动生成（136 个活跃入口；archive/oneoff 不计）。改脚本 docstring 后运行 `python -m scripts.data_tools.gen_scripts_index` 更新；`--check` 校验是否过期。
+> 自动生成（146 个活跃入口；archive/oneoff 不计）。改脚本 docstring 后运行 `python -m scripts.data_tools.gen_scripts_index` 更新；`--check` 校验是否过期。
 
 约定：`python -m scripts.<目录>.<文件名>` 运行；退役入口在 `scripts/archive/`（仍可运行，但不再维护）。
 
@@ -67,9 +67,9 @@
 | `evaluation/cheap_lever_revalidate.py` | cheap_lever_scan 候选的多窗口复验（2026-10-14）。 |
 | `evaluation/cheap_lever_revalidate_920.py` | cheap_lever 胜者的 920 定版信号复验（好机器批次 11，2026-10-17）。 |
 | `evaluation/cost_penalty_probe.py` | 成本感知优化探针（P0-2，2026-10-13）。 |
-| `evaluation/cvar_arm_920.py` | 批次 12⑤：CVaR 约束组合臂 vs Top10% 等权 vs buffer（production 口径，2026-10-21）。 |
 | `evaluation/cpcv_eval.py` | CPCV 多路径评估 —— 挖因子方法选型决策工具。 |
 | `evaluation/cpcv_h1_eval.py` | h=1 模型 CPCV 无偏评估 |
+| `evaluation/cvar_arm_920.py` | 批次 12⑤：CVaR 约束组合臂 vs Top10% 等权 vs buffer 形态（production 口径）。 |
 | `evaluation/deliverable_portfolio.py` | 可交付组合：集中度 × 行业约束（P0 落地，2026-10-10 固化）。 |
 | `evaluation/factor_pool_composition.py` | 因子池构成体检：量价占比到底多少、口径在哪、哪些族是真被用上了。 |
 | `evaluation/freq_tune.py` | 调仓频率补充精修：horizon ∈ {1,5} × rebalance ∈ {D,W,M} |
@@ -78,17 +78,17 @@
 | `evaluation/galaxy_l1.py` | 银河 0608 复现 L1：三标签 GBDT + 验证集 RankIC 质量门槛（stage2 Phase 2 前置）。 |
 | `evaluation/gp_tune_budget.py` | GP 评估预算 × 多 seed 调参实验（三段式，test 段受保护） |
 | `evaluation/gtja_repro_eval.py` | 国君研报复现：因子回测评估与研报基准对比 |
-| `evaluation/horizon_cross_eval.py` | A1 同目标交叉评估（2×2 IC 矩阵 + 配对差）+ 组合层对照（2026-10-19）。 |
+| `evaluation/horizon_cross_eval.py` | A1 同目标交叉评估 + 组合层对照（2026-10-19）。 |
 | `evaluation/horizon_mix.py` | E1'' horizon 混合消融：把慢 horizon OOS 预测混入 ens_h1h5 的对照实验。 |
-| `evaluation/horizon_probe.py` | 主信号 IC 随 h1–h120 的衰减 / 非重叠样本 / 有效样本数（2026-10-19，A1 前置）。 |
+| `evaluation/horizon_probe.py` | Horizon 探针：主信号在 h1–h120 上的 IC 衰减与独立样本数（2026-10-19）。 |
 | `evaluation/hp_search_ic.py` | 超参 × 预测 IC 小规模对照（**滚动口径**，只比预测 IC，不跑组合回测）。 |
 | `evaluation/hp_sensitivity.py` | 模型层超参敏感度探针（P2）。 |
 | `evaluation/intraday_analysis.py` | 日内收益分解 + 时段效应分析 |
-| `evaluation/market_direction_probe.py` | 大盘预测双口径：月频方向准入（跨资产/波动率）+ `--valuation` 个人投资长周期估值分位 → 未来 1/3 年收益与定投规则对照（2026-10-26）。 |
+| `evaluation/market_direction_probe.py` | 大盘方向准入检验：**新信息集**能不能预测下月沪深300？ |
 | `evaluation/member_blend12.py` | 多模型×多标签预测合成对照（Task ⑥ / AI29·国金19 语义）。 |
 | `evaluation/mf10_t_scan.py` | 多因子10 T 扫描：合成权重回看窗 T 的参数敏感性实验（研报 §2.1 口径）。 |
 | `evaluation/model_objective_scan.py` | P2 —— 模型层「目标函数 / 样本权重」扫描。 |
-| `evaluation/model_state_probe.py` | 模型自诊断仓位探针：信号自身状态（滚动 IC / ICIR / 成员分歧 / 预测强度）→ 月频仓位乘数（2026-10-23）。 |
+| `evaluation/model_state_probe.py` | 模型自诊断仓位探针（"信号自身状态 → 仓位乘数"）。 |
 | `evaluation/multiyear_oos.py` | 多年度 OOS 稳健性实验：模型 × horizon × 调仓频率 × 年份 |
 | `evaluation/news_alpha_probe.py` | news 族独立建模 + 可交易口径验真伪 + 组合层融合（2026-10-10，P0 路径）。 |
 | `evaluation/pbo_report.py` | 实验产物接 PBO 出报告（TODO §二；华泰 AI19/22 方法论落地）。 |
@@ -97,18 +97,18 @@
 | `evaluation/prod_baseline_compare.py` | P1b —— 生产基线同口径复验：定版因子 gbdt vs alpha360 gbdt / GRU。 |
 | `evaluation/pv_marginal_curve.py` | 量价因子边际增益曲线 —— 阶段 B（DPP 组合口径）。 |
 | `evaluation/regime_probe.py` | Regime 条件化探针（Phase 0/2 前置诊断，2026-10-15）。 |
-| `evaluation/residual_ic_probe.py` | 残差目标探针：raw/resfac/restgt/both 四口径 + NW t + 逐年方向（2026-10-19，A2）。 |
-| `evaluation/residual_overlay_probe.py` | A2 负向残差因子 → 信号层低配/剔除 overlay（剂量臂 + 安慰剂，production 口径）。 |
-| `evaluation/residual_stack_probe.py` | A2 二阶 GBDT：残差收益目标 walk-forward + 融合组合层（特征池按早年列选，无选择前视；`--audit-dir` 指 920 榜，2026-10-21）。 |
-| `evaluation/views_arm_920.py` | 批次 12④：观点注入三臂（BL 优化层 / 特征复制 / 两段模型）对照（production 口径，2026-10-21）。 |
-| `evaluation/retrain_freq_ic.py` | 重训频率 × 预测 IC 小规模对照（只比预测 IC，**不跑组合回测**；`--save-pred` 可存 OOS pred 面板）。 |
-| `evaluation/select_horizon_features.py` | A1 长 horizon 特征清单选择器：h60 IC 质量窗 + DPP（fwd 不穿透选择窗）。 |
+| `evaluation/residual_ic_probe.py` | 残差目标探针：现有 920 因子池里还有没有「主模型漏掉」的正交信息（2026-10-19）。 |
+| `evaluation/residual_overlay_probe.py` | A2 残差负向因子 → 组合层剔除/低配 overlay 探针（2026-10-19）。 |
+| `evaluation/residual_stack_probe.py` | A2 二阶 GBDT：残差收益目标 walk-forward + 融合组合层（2026-10-19）。 |
+| `evaluation/retrain_freq_ic.py` | 重训频率 × 预测 IC 小规模对照（只比预测 IC，**不跑组合回测**）。 |
+| `evaluation/select_horizon_features.py` | A1 长 horizon 特征清单选择器：h60 IC 质量窗 + DPP 去冗余（2026-10-19）。 |
 | `evaluation/seq_predictor_compare.py` | P1 —— 时序预测器对照：序列归纳偏置 vs 截面/树归纳偏置。 |
 | `evaluation/stack_blend.py` | E6 stacking：滚动元学习器**学**融合权重（对齐 CFA ensemble / MSIF-OEM 两阶段 |
 | `evaluation/tabfm_rolling.py` | 批次 8：表格基础模型全量滚动对照（TabPFN-3 / TabICL V2 vs LightGBM）。 |
 | `evaluation/tabpfn_rolling_compare.py` | 批次 8：表格基础模型对照（TabPFN-3.5 / TabICL 2.2 vs LightGBM）滚动 runner |
 | `evaluation/text_factor_probe.py` | 论文族 `pap_*` / 情绪族 `txt_*` 的生产口径收尾评估（P0）。 |
 | `evaluation/timing_probe.py` | 大盘择时（市场状态 → 仓位乘数）探针。 |
+| `evaluation/views_arm_920.py` | 批次 12④：观点注入三臂对照（BL 优化层 vs 预测层 vs 不注入）。 |
 | `evaluation/walk_forward.py` | 三段样本外验证（walk-forward）：train 挖 → valid 选 → test 验 |
 | `evaluation/walk_forward_model.py` | 模型层滚动训练 —— Predictor 的 walk-forward 编排 |
 
