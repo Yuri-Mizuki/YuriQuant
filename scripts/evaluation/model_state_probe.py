@@ -24,7 +24,7 @@
 口径（🚨 与项目既有教训一致）
 ------------------------------
 - 基线 = **登记表 ``v1w-ortho882``**（882 ortho ens_h1h5 + buffer(15/40)，production
-  profile：固定 10bp / T+1 open / 1e6），由 ``caliber._run_once`` 现跑，锚点校验
+  profile：固定 10bp / T+1 open / 1e6），由 ``caliber.run_once`` 现跑，锚点校验
   ann/Sharpe 必须与登记值一致（16.39% / 0.681，容差 5bp/0.005）。
 - **所有状态量一律 ``shift(1)``**：t 日收盘才可知的 IC/分歧，只用于 t+1 及以后。
   月频 ω 取**上月末状态**作用于**当月**（``reindex(method="ffill")``），零前视。
@@ -396,9 +396,9 @@ def self_check() -> None:
 def run_probe() -> dict:
     from backtest.engine import VectorBacktest
     from scripts.evaluation.caliber import (
-        _run_once,
         cost_profile,
         load_context,
+        run_once,
     )
     from strategy.examples import BufferedTopFracLongOnly
 
@@ -406,7 +406,7 @@ def run_probe() -> dict:
     cost = cost_profile("production")
     bt = VectorBacktest(strategy=BufferedTopFracLongOnly(0.15, 0.40),
                         rebalance_freq="M", initial_capital=1e6, costs=cost)
-    res = _run_once(bt, ctx, "open")
+    res = run_once(bt, ctx, "open")
     base = res.daily_returns.dropna()
 
     anc_ann, anc_sh = annual_return(base), geo_sharpe(base)

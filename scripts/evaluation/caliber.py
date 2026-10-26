@@ -417,7 +417,7 @@ def next_day_rebalance(idx: pd.DatetimeIndex) -> set:
 
     2026-10-19 口径修复：本集合只用于 ``run(rebalance_days=...)``；
     ``build_execution_split`` 必须收**信号日 T**（:func:`rebalance_dates`），
-    否则 fill 会被写到 E+1、执行价失效（详见 :func:`_run_once`）。
+    否则 fill 会被写到 E+1、执行价失效（详见 :func:`run_once`）。
     """
     s = pd.Series(idx, index=idx)
     firsts = s.groupby(s.index.to_period("M")).first()
@@ -425,8 +425,8 @@ def next_day_rebalance(idx: pd.DatetimeIndex) -> set:
     return {idx[pos[t] + 1] for t in firsts if pos[t] + 1 < len(idx)}
 
 
-def _run_once(bt: VectorBacktest, ctx: CaliberContext, execution: str,
-              signal: pd.DataFrame | None = None):
+def run_once(bt: VectorBacktest, ctx: CaliberContext, execution: str,
+             signal: pd.DataFrame | None = None):
     """按成交价口径执行一次回测。
 
     ``close``：T 收盘成交（引擎默认路径，传 ``executable_mask``）。
@@ -473,7 +473,7 @@ def evaluate_strategy(strategy, ctx: CaliberContext, cost: TransactionCosts,
     ex = execution or ctx.execution
     bt = VectorBacktest(strategy=strategy, rebalance_freq="M",
                         initial_capital=float(capital), costs=cost)
-    res = _run_once(bt, ctx, ex, signal=signal)
+    res = run_once(bt, ctx, ex, signal=signal)
     out = _metrics(res, capital)
     if yearly:
         dr = res.daily_returns
@@ -501,7 +501,7 @@ def evaluate_weights(target_w: pd.DataFrame, ctx: CaliberContext,
     bt = VectorBacktest(strategy=PrecomputedWeightsStrategy(target_w),
                         rebalance_freq="M", initial_capital=float(capital),
                         costs=cost)
-    return _metrics(_run_once(bt, ctx, ex, signal=ctx.fwd), capital)
+    return _metrics(run_once(bt, ctx, ex, signal=ctx.fwd), capital)
 
 
 def get_profile(name: str | None = None) -> Profile:

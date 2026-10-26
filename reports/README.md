@@ -279,6 +279,14 @@ model层 / ML合成，其余已删、可重跑复现——结论见 §三.13~17�
 
 ## 四、清理记录
 
+- **2026-10-26（jq 成交金额族 A/B 两臂 `_base/`）**：`reports/alla_rolling_jq_base/_base/`
+  与 `.../jq_amt/_base/` 共 28 文件 / **903.1MB**，是 prep 的确定性产物，两臂逐字节
+  相同且不被任何分析产物引用（预测/回测用共享 `reports/alla_rolling/_base`；执行价面板
+  只在本臂 `--stage backtest` 内读，重跑 prep 65s 可重建）。快照清单（path+size+md5）
+  在 `%USERPROFILE%\_yq_backup\20261026_jq_amount_roll_base\manifest.csv`；引用扫描
+  `alla_rolling_jq|jq_base|jq_amt` 仅命中 `TODO.md`（描述性文字，无路径依赖）；
+  删除走 `_recycle_batch.py` 回收站（未另存副本，可再生）。
+
 - **2026-09-23（二）全项目缓存/暂存清理**：目标 `scripts/` 之外还有没有冗余，扫完全项目后执行。
   - **删 venv 外 16 个 `__pycache__/`**（222 个 `.pyc`）+ `.pytest_cache` + `.ruff_cache`
     （`tests/ factor/ factor\{gflownet,rl}/ research/ data/ data\{altdata,textmining}/ monitoring/

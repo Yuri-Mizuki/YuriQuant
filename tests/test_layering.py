@@ -372,6 +372,15 @@ _TESTS_ONLY_PRIVATE: set[tuple[str, str]] = {
     ("data.altdata.source_akshare", "_fetch_inner_trade_xq_direct"),
     ("scripts.common.task_scheduler", "_hhmm"),
     ("scripts.common.task_scheduler", "_norm_path"),
+    # 2026-10-26 聚宽看板探针：IC / 残差 IC / 秩面板 / 去重批处理是探针内部
+    # 实现细节，白盒单测直连做口径对拍（无生产消费者）。
+    ("scripts.evaluation.jq_factor_probe", "_cs_ic"),
+    ("scripts.evaluation.jq_factor_probe", "_rank_panel"),
+    ("scripts.evaluation.jq_factor_probe", "_resid_ic_np"),
+    ("scripts.evaluation.jq_factor_probe", "_dup_batch"),
+    # 2026-10-26 登记 master 存量红灯（非本次改动引入）：白盒单测直连
+    # （caliber._run_once 已改公开名为 caliber.run_once，条目已移除）。
+    ("scripts.evaluation.model_state_probe", "_apply_position_cost"),
 }
 
 #: 暂豁免的**被引用方**前缀：

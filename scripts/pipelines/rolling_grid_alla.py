@@ -132,6 +132,12 @@ EXCLUDE_FEATURES: set[str] = set()
 # CLI: --force-features e4_bp_x_mom_20,... [--out-tag e4force]
 FORCE_FEATURES: tuple[str, ...] = ()
 
+# 模型子集过滤（2026-10-26）：只跑指定模型（名字取自 _build_model_grid）。
+# 用于「特征增量 A/B」这类只需比一个模型（生产 = gbdt）的实验，避免为
+# 7 个 h1 变体各付一遍滚动训练成本。默认空元组 = 全网格，零回归。
+# CLI: --models gbdt [--out-tag jqamt]
+MODEL_FILTER: tuple[str, ...] = ()
+
 # 训练标签口径（2026-09-17 接入，P0 报告 §六 P1-a 的治本项）：
 #   False（默认）= 标签 = 全样本前瞻收益截面 rank —— 主实验现行口径，零回归；
 #   True         = 标签掩掉"买不进的样本"（T+1 成交口径 tradable_mask 为 False
@@ -516,7 +522,11 @@ def select_features_for_year(year: int, horizon: int, ic_cache: pd.DataFrame,
                      {n: int(quality.index.get_loc(n)) + 1 for n in _hit})
         quality = quality.drop(index=_hit)
 
-    cov_ok = registry.set_index("name")["coverage"]
+    # registry 偶发重名（2026-10-26 实测 152 个重名行/960 个唯一名）会让
+    # ``cov_ok[n]`` 返回 Series → 布尔判断直接崩。与 builders.common 的
+    # run_neutralization 同口径：保留最后一行（upsert 语义）。
+    cov_ok = (registry.drop_duplicates(subset="name", keep="last")
+              .set_index("name")["coverage"])
     cands = [n for n in quality.index
              if n in cov_ok.index and cov_ok[n] >= MIN_COVERAGE][:DEDUP_TOP_CANDIDATES]
     # 基本面慢变量族（A族股东结构 + B族财务报表）IC 弱于量价：先为其保留固定席位
@@ -710,8 +720,11 @@ def stage_predict(quick: bool = False, only_horizons: list[int] | None = None):
     all_days = close.index
     store = FeatureStore(PANELS_DIR or root / "panels", name_dir=NAME_DIR)
     models = _build_model_grid()
+    if MODEL_FILTER:
+        models = {k: v for k, v in models.items() if k in MODEL_FILTER}
+        log.info("+++ 模型子集：只跑 %s", sorted(models))
     if quick:
-        models = {"gbdt": models["gbdt"]}
+        models = {"gbdt": models.get("gbdt") or _build_model_grid()["gbdt"]}
         # quick 尊重 --horizons（ir/calmar 臂 h=1 无定义，冒烟需 h≥2）；
         # 不传时保持历史行为 [1]
         horizons = only_horizons or [1]
@@ -1021,6 +1034,9 @@ def _predict_fp(years: list[int]) -> str:
         # 快讯情绪特征臂（altf P1）：开关 + 面板清单 + 版本
         "news_features": (NEWS_FEATURES_ON, list(NEWS_FEATURE_PANELS),
                           NEWS_FEAT_VERSION),
+        # 模型子集（2026-10-26）：只在非空时入指纹，避免给既有全网格产物
+        # 平白制造指纹失配（空 = 历史口径逐字节不变）
+        **({"model_filter": list(MODEL_FILTER)} if MODEL_FILTER else {}),
     })
 
 
@@ -1084,6 +1100,9 @@ def stage_backtest(quick: bool = False, execution: str = "open"):
         log.info("执行价口径: %s（fill=%s）", execution, fp.name)
 
     pred_files = sorted((OUT / "pred").glob("*.parquet"))
+    if MODEL_FILTER:
+        pred_files = [p for p in pred_files
+                      if p.stem.split("__")[0] in MODEL_FILTER]
     if quick:
         pred_files = [p for p in pred_files if p.stem in ("gbdt__h1",)]
     rows_overall, rows_yearly = [], []
@@ -1502,6 +1521,10 @@ def main():
     ap.add_argument("--tradable-labels", action="store_true",
                     help="训练标签掩掉买不进的样本（T+1 成交口径可交易掩码）；"
                          "默认关闭 = 主实验现行口径。须配 --out-tag 防覆盖")
+    ap.add_argument("--models", default=None,
+                    help="只跑指定模型（逗号分隔，名字见 _build_model_grid，"
+                         "如 gbdt）；默认全网格。跑特征增量 A/B 时省训练成本；"
+                         "须配 --out-tag 防覆盖")
     ap.add_argument("--label-mode", default=None,
                     choices=["rank", "gauss_rank", "zscore", "raw"],
                     help="标签工程臂①（Label Alchemy 转译）：训练标签截面变换。"
@@ -1543,6 +1566,7 @@ def main():
     global USE_TRADABLE_LABELS, SC_MODEL, MARKET_FEATURES_ON, FORCE_FEATURES
     global LABEL_MODE, LABEL_WINDOW, LABEL_METHOD, MACRO_FEATURES_ON
     global NEWS_FEATURES_ON
+    global MODEL_FILTER
     if args.sc_model:
         SC_MODEL = args.sc_model
         log.info("+++ smallcap 信号模型 -> %s（产物加 __%s 后缀）",
@@ -1629,6 +1653,18 @@ def main():
         INCLUDE_FUNDAMENTAL = False
         OUT = Path("reports") / "alla_rolling_nofund"
         log.info("+++ 消融模式：关闭 A+B 基本面族，输出 -> %s", OUT)
+    if args.models:
+        if not args.out_tag:
+            ap.error("--models 须配 --out-tag：否则 pred/equity 产物与主实验"
+                     "同目录同名，exists-skip 不会重跑（静默混口径）")
+        _known = set(_build_model_grid())
+        MODEL_FILTER = tuple(n.strip() for n in args.models.split(",")
+                             if n.strip())
+        _bad = [n for n in MODEL_FILTER if n not in _known]
+        if _bad:
+            ap.error(f"--models 未知模型 {_bad}；可选 {sorted(_known)}")
+        log.info("+++ 模型子集：%s（跳过其余模型，省训练成本）",
+                 list(MODEL_FILTER))
     if args.preproc is None:
         args.preproc = "zscore"
         if args.stage == "prep":

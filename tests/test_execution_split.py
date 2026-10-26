@@ -122,7 +122,7 @@ def test_caliber_run_once_buys_at_next_open():
 
     回归背景：2026-10-19 审计发现 9 处调用把「执行日 E」同时传给
     ``build_execution_split``，fill 被写到 E+1，open 臂退化为 T+1 收盘成交。
-    本测试直接驱动 ``caliber._run_once``（白盒，见 test_layering 白名单），
+    本测试直接驱动 ``caliber.run_once``（白盒口径对拍），
     断言执行日净值 = Close(E)/Fill(E)，而不是 1.0 或 Close(E)/Close(T)。
     """
     import pandas as pd
@@ -148,7 +148,7 @@ def test_caliber_run_once_buys_at_next_open():
                                                stamp_duty=0.0,
                                                slippage_bp=0.0,
                                                commission_min=0.0))
-    eq = caliber._run_once(bt, ctx, "open").equity_curve
+    eq = caliber.run_once(bt, ctx, "open").equity_curve
     # 信号 T=01-02 → 执行日 E=01-03 以开盘 10.5 买入：净值 = 11/10.5
     assert eq.loc[days[0]] == pytest.approx(1.0)
     assert eq.loc[days[1]] == pytest.approx(11.0 / 10.5)
