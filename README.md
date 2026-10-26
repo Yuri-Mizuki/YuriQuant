@@ -77,6 +77,7 @@ AQR + JFE 复核）同向收口；LLM-MCTS 是唯一产出超门槛因子的挖�
 - **稳健统计**：Newey-West t、OLS+HAC、自动滞后阶、FDR 多重检验校正
 - **反过拟合三件套**：CSCV PBO 过拟合概率（12870 个组合秒级算完）、Deflated Sharpe Ratio、三段式训练纪律（train / valid / test 分段 + embargo，配置冻结）
 - **增量方向探针族（frontier，2026-10-19）**：h60 长 horizon 全链（`select_horizon_features.py` 清单 + `retrain_freq_ic --save-pred` 训练 + `horizon_cross_eval.py` 同目标交叉与组合层——h60 第二策略 Sharpe 1.028/换手 17.5%）；残差目标（`residual_ic_probe.py` 四口径 + `residual_overlay_probe.py` 负向低配 overlay + `residual_stack_probe.py` 二阶 GBDT 融合，均带安慰剂臂）。证据 `reports/frontier_audit_2026-10-19/`，920 复验挂批次 13
+- **指数增强探针（B1，2026-10-26）**：`scripts/evaluation/index_enhance_probe.py`——中证500 成分约束 + TE–超额曲线 + 安慰剂。结论：成分内 IC 有效（0.069/t=4.3），但 3–5% TE 净超额仅 +1.5~1.9%（t≈0.8）、2025 单年 −7% ⇒ 归档为风险偏好型替代，不立项为 α（`reports/index_enhance_probe/`）
 
 ### 🏭 生产化：研究系统的最后一公里
 
@@ -98,7 +99,7 @@ strategy/   因子值 → 组合权重
 research/   研究工具：IC/分层、归因、DPP、实验台账、报告渲染
 stats/      稳健统计与反过拟合（PBO / DSR）
 monitoring/ 生产监控：IC 台账、告警规则、账本
-scripts/    136 个活跃入口（ingest / factors / pipelines / portfolio /
+scripts/    147 个活跃入口（ingest / factors / pipelines / portfolio /
             evaluation / reporting / builders / common …；完整索引见
             scripts/README.md；退役入口在 scripts/archive/；本地 oneoff 另计、gitignored）
 config/     settings.yaml（参数真源）+ baselines.yaml（定版登记表）+ schedule.yaml（调度登记表）
