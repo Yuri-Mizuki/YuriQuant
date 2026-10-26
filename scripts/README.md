@@ -1,6 +1,6 @@
 # scripts 入口索引
 
-> 自动生成（151 个活跃入口；archive/oneoff 不计）。改脚本 docstring 后运行 `python -m scripts.data_tools.gen_scripts_index` 更新；`--check` 校验是否过期。
+> 自动生成（152 个活跃入口；archive/oneoff 不计）。改脚本 docstring 后运行 `python -m scripts.data_tools.gen_scripts_index` 更新；`--check` 校验是否过期。
 
 约定：`python -m scripts.<目录>.<文件名>` 运行；退役入口在 `scripts/archive/`（仍可运行，但不再维护）。
 
@@ -85,7 +85,7 @@
 | `evaluation/hp_sensitivity.py` | 模型层超参敏感度探针（P2）。 |
 | `evaluation/index_enhance_probe.py` | B1 探针：现有 α 能不能在**中证500 成分约束下**做出可投的指数增强？ |
 | `evaluation/intraday_analysis.py` | 日内收益分解 + 时段效应分析 |
-| `evaluation/jq_factor_probe.py` | 聚宽因子看板复核（20 口径）+ 27 个数据可得候选的本地复算：IC/残差 IC/950 面板去重/月度多空（2026-10-26）。 |
+| `evaluation/jq_factor_probe.py` | 聚宽因子看板候选探针（2026-10-26）。 |
 | `evaluation/market_direction_probe.py` | 大盘方向准入检验：**新信息集**能不能预测下月沪深300？ |
 | `evaluation/member_blend12.py` | 多模型×多标签预测合成对照（Task ⑥ / AI29·国金19 语义）。 |
 | `evaluation/mf10_t_scan.py` | 多因子10 T 扫描：合成权重回看窗 T 的参数敏感性实验（研报 §2.1 口径）。 |
