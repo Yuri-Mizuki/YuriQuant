@@ -83,6 +83,7 @@
 | `frontier_audit_920_reval/` | **批次 13 920 复验（2026-10-21，A1/A2 三臂全败线封）**：defv 定版信号面板（caliber 登记 `dingban_fundind`）+ 残差首轮两 CSV + overlay/stack/h60 三臂产物；结论真源其 README。 |
 | `cvar_arm_920/` / `views_arm_920/` | 批次 12⑤/12④（2026-10-21）：CVaR 组合臂（不升级）与观点注入三臂（零增量）负结果归档。 |
 | `alla_rolling_ortho920mf/` / `alla_rolling_ortho920fundind_lblco/` | 批次 12②/12③（2026-10-21/22）：市场状态特征（**唯一正结果 +1.44pp 建议采纳挂拍板**）与隔夜标签臂（判负）。 |
+| `mf_fundind_check/` | 批次 14（2026-10-26）：mf 干净单臂补测——不达验收（+0.49pp < +1pp），mf 线收口。 |
 | `sync/` | **产物远端同步捆绑**（`batch1213_products_20261022.zip` = 批次 12/13 全部 CSV/MD/JSON，304KB；大件 parquet 不入 zip、由 GOOD_MACHINE_TASKS 存档命令可重建）——reports 产物整体仍不进 git，仅此 zip 由用户指示 force-add 入库。 |
 | `frontier_audit_2026-10-19/` | **增量方向 frontier audit（2026-10-19，A1/A2）**：`horizon_probe` 主信号 IC h1–h120 衰减（h60 反而升到 0.161）+ `residual_ic_probe` 920 因子对主信号残差的四口径 IC；脚本 `scripts/evaluation/{horizon_probe,residual_ic_probe}.py`，结论回写 TODO §六。 |
 | `text_factor_probe/` | 论文族 `pap_*`(21) + 情绪族 `txt_*`(5) **生产口径收尾（2026-10-13，P0）**：口径修正——面板实体**存在**（哈希名在 `panels/`），缺的是未进 `panels_neu` ⇒ 从未中性化/竞争；`txt_*` 5 个自身可交易 IR **0.008~0.105 ≪ 0.3 门槛**、独立 Sharpe 0.47~0.57 < 主 0.631；**融合层「Sharpe +0.05~0.12」经安慰剂证伪**（值置换复现中位 71% ⇒ 覆盖率掩码/市值暴露，非 alpha）；`pap_*` 无一条过「正交+够强」；106 项 BH-FDR **仅 1 条存活且为负** → 脚本 `scripts/evaluation/text_factor_probe.py` + `fuse_placebo.py` |
