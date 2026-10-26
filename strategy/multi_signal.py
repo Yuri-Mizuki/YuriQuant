@@ -16,6 +16,7 @@ ETF 多信号合成（Multi-Signal Composition）
 - mom60   : 60 日动量（中期趋势）
 - trend   : 20/60 日均线多头状态（ma20/ma60 - 1，反映趋势阶段）
 - voladj  : 波动率调整动量（mom20 / 20 日收益 std，风险平价修正）
+- mom12_1 : 12-1 动量（剔除最近一个月，避免短期反转污染中期趋势）
 """
 from __future__ import annotations
 
@@ -42,6 +43,8 @@ def build_signals(close: pd.DataFrame) -> dict[str, pd.DataFrame]:
         "trend": close.rolling(20).mean() / close.rolling(60).mean() - 1.0,
         "voladj": close.pct_change(20, fill_method=None)
                   / ret.rolling(20).std().replace(0, float("nan")),
+        # 12-1 动量：t-252 → t-21 的收益（跳过最近 21 个交易日）
+        "mom12_1": close.shift(21) / close.shift(252) - 1.0,
     }
 
 
