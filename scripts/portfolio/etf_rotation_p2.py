@@ -77,6 +77,23 @@ HOLD: list[dict] = [
     {**P1_BASE, "name": "champ_hold", "signal": "mom_crowd_f20", "defense": "mix"},
 ]
 
+# S1 残余：Δshare(5/20/60d) 的资金流动量 vs 申赎反转两说。
+# 纯 Δshare 排序**不用绝对动量过滤**（否则会变成"要求净申购为正"，把两说混在一起）。
+SHARE: list[dict] = [
+    {**P1_BASE, "name": "p1_base"},
+    {**P1_BASE, "name": "share_d20", "signal": "dshare20", "absolute": False},
+    {**P1_BASE, "name": "share_d20_rev", "signal": "dshare20_rev", "absolute": False},
+    {**P1_BASE, "name": "share_d5", "signal": "dshare5", "absolute": False},
+    {**P1_BASE, "name": "share_d60", "signal": "dshare60", "absolute": False},
+    # 叠加用法：动量选标 + 剔除「申购最热」的 Δshare 截面分位（反转方向）
+    {**P1_BASE, "name": "mom_dsh_f80", "signal": "mom_dsh_f80"},
+    {**P1_BASE, "name": "mom_dsh_f67", "signal": "mom_dsh_f67"},
+    {**P1_BASE, "name": "mom_dsh_f90", "signal": "mom_dsh_f90"},
+    {**P1_BASE, "name": "champ_mom_dsh", "signal": "mom_dsh_f80_crowd", "defense": "mix"},
+    {**P1_BASE, "name": "champ_mom_dsh_f67", "signal": "mom_dsh_f67_crowd", "defense": "mix"},
+    {**P1_BASE, "name": "champ_mom_dsh_f90", "signal": "mom_dsh_f90_crowd", "defense": "mix"},
+]
+
 # 最优组合项（def_mix_crowd_f20）的邻域网格：防御腿类型 / 成本 / 目标波动 / 集中度。
 ROBUST: list[dict] = [
     {**P1_BASE, "name": "dm_mix_c20", "signal": "mom_crowd_f20", "defense": "mix"},
@@ -141,6 +158,98 @@ def build_r2(close: pd.DataFrame, win: int = 60) -> pd.DataFrame:
     return logp.rolling(win, min_periods=45).corr(t).pow(2)
 
 
+def build_share_signals(close: pd.DataFrame) -> dict[str, pd.DataFrame]:
+    """Δshare(5/20/60d) 面板：份额的 PIT 日频序列做 n 个交易日变化率。
+
+    份额按日公告（实测 510300 的 ``ann_date`` 间隔中位数 1 天），因此交易日窗口
+    有意义；``pit`` 已按 ``ANN_DATE <= t`` 前向填充，无前视。
+    """
+    pit = build_share_pit(close)
+    out: dict[str, pd.DataFrame] = {}
+    for n in (5, 20, 60):
+        chg = pit / pit.shift(n) - 1.0
+        out[f"dshare{n}"] = chg
+        out[f"dshare{n}_rev"] = -chg
+    return out
+
+
+def month_first_dates(idx: pd.DatetimeIndex, begin: int, end: int) -> pd.DatetimeIndex:
+    """[begin, end] 内每月第一个交易日（与引擎 ``freq="M"`` 的信号日对齐）。"""
+    sel = idx[(idx >= pd.Timestamp(str(begin))) & (idx <= pd.Timestamp(str(end)))]
+    if len(sel) == 0:
+        return pd.DatetimeIndex([])
+    s = pd.Series(sel, index=sel)
+    return pd.DatetimeIndex(s.groupby(s.index.to_period("M")).first().to_numpy())
+
+
+def _spearman(a: pd.Series, b: pd.Series, min_n: int = 8) -> float:
+    ok = a.notna() & b.notna()
+    if int(ok.sum()) < min_n:
+        return float("nan")
+    x, y = a[ok], b[ok]
+    if x.nunique() < 2 or y.nunique() < 2:
+        return float("nan")
+    return float(x.corr(y, method="spearman"))
+
+
+def share_ic_table(close: pd.DataFrame, signals: dict[str, pd.DataFrame],
+                   begin: int, end: int, placebo: int = 20,
+                   seed: int = 20261026) -> pd.DataFrame:
+    """月频 rank IC：t 日因子 vs 下一调仓日收益；附整条序列打乱的安慰剂。
+
+    判据（方案 §四）：|IC| ≥ 0.03、t ≥ 2、安慰剂 0/20 超越。
+    安慰剂按**整条序列**重置（每期都在截面内独立打乱，重复 ``placebo`` 次），
+    比较的是「mean IC」而不是单期 |IC| —— 单期 |IC| 在 41 只截面上天然有
+    1/sqrt(41)≈0.16 的噪声，用它做门槛会把真实信号误判。
+    """
+    rb = month_first_dates(close.index, begin, end)
+    pairs = [(t, tn) for t, tn in zip(rb[:-1], rb[1:])]
+    if len(pairs) < 10:
+        return pd.DataFrame()
+    rng = np.random.default_rng(seed)
+
+    def _mean_ic(sig: pd.DataFrame, shuffle: bool) -> float:
+        ics = []
+        for t, tn in pairs:
+            f = sig.loc[t].reindex(close.columns)
+            r = (close.loc[tn] / close.loc[t] - 1.0).reindex(close.columns)
+            ok = f.notna() & r.notna()
+            if int(ok.sum()) < 8:
+                continue
+            fv = f[ok].to_numpy()
+            if shuffle:
+                fv = rng.permutation(fv)
+            ic = _spearman(pd.Series(fv, index=r[ok].index), r[ok])
+            if not np.isnan(ic):
+                ics.append(ic)
+        return float(np.mean(ics)) if ics else float("nan")
+
+    rows = []
+    for name, sig in signals.items():
+        ics = []
+        for t, tn in pairs:
+            f = sig.loc[t].reindex(close.columns)
+            r = (close.loc[tn] / close.loc[t] - 1.0).reindex(close.columns)
+            ic = _spearman(f, r)
+            if not np.isnan(ic):
+                ics.append(ic)
+        s = pd.Series(ics, dtype=float)
+        n = int(s.notna().sum())
+        mean = float(s.mean()) if n else float("nan")
+        std = float(s.std(ddof=1)) if n > 1 else float("nan")
+        placebo_means = [abs(_mean_ic(sig, shuffle=True)) for _ in range(placebo)]
+        placebo_means = [x for x in placebo_means if not np.isnan(x)]
+        rows.append({
+            "signal": name, "n_periods": n, "mean_ic": mean,
+            "icir": (mean / std) if std and std > 0 else float("nan"),
+            "t_stat": (mean / (std / np.sqrt(n))) if std and std > 0 and n > 1 else float("nan"),
+            "pos_rate": float((s > 0).mean()) if n else float("nan"),
+            "placebo_max_abs_mean_ic": max(placebo_means) if placebo_means else float("nan"),
+            "n_placebo": len(placebo_means),
+        })
+    return pd.DataFrame(rows).sort_values("mean_ic", ascending=False)
+
+
 def _rebalance_days(close: pd.DataFrame, spec: dict,
                     w0: int | None, w1: int | None) -> set | None:
     """``every_n`` 型调仓日：窗口内每 n 个交易日调一次；其余变体返回 None（用引擎频率）。"""
@@ -154,7 +263,7 @@ def _rebalance_days(close: pd.DataFrame, spec: dict,
 
 
 def build_extra_panels(close: pd.DataFrame, panels: dict) -> dict:
-    """在 P1 面板上追加 P2 三个信号面板。"""
+    """在 P1 面板上追加 P2 三个信号面板 + S1 的 Δshare 面板。"""
     r2 = build_r2(close)
     crowd = build_crowding(close)
     mom = panels["mom12_1"]
@@ -162,6 +271,15 @@ def build_extra_panels(close: pd.DataFrame, panels: dict) -> dict:
     panels["mom_r2"] = mom * r2
     panels["mom_crowd_f20"] = mom.where(crowd <= 0.80)
     panels["mom_crowd_f10"] = mom.where(crowd <= 0.90)
+    panels.update(build_share_signals(close))
+    # Δshare 的反转用法：剔除「申购最热」的截面分位（资金流入 → 后续收益低）。
+    dsh_rank = panels["dshare20"].rank(axis=1, pct=True)
+    panels["mom_dsh_f80"] = mom.where(dsh_rank <= 0.80)
+    panels["mom_dsh_f67"] = mom.where(dsh_rank <= 2.0 / 3.0)
+    panels["mom_dsh_f90"] = mom.where(dsh_rank <= 0.90)
+    panels["mom_dsh_f80_crowd"] = panels["mom_dsh_f80"].where(crowd <= 0.80)
+    panels["mom_dsh_f67_crowd"] = panels["mom_dsh_f67"].where(crowd <= 0.80)
+    panels["mom_dsh_f90_crowd"] = panels["mom_dsh_f90"].where(crowd <= 0.80)
     return panels
 
 
@@ -172,7 +290,7 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--begin", type=int, default=20200102)
     ap.add_argument("--end", type=int, default=None)
     ap.add_argument("--out", default=str(OUT))
-    ap.add_argument("--variants", choices=("main", "robust", "freq", "cost", "hold"),
+    ap.add_argument("--variants", choices=("main", "robust", "freq", "cost", "hold", "share"),
                     default="main")
     args = ap.parse_args(argv)
     out = Path(args.out)
@@ -187,9 +305,18 @@ def main(argv: list[str] | None = None) -> None:
 
     rows, seg_rows, eq = [], [], {}
     variants = {"main": VARIANTS, "robust": ROBUST, "freq": FREQ,
-                "cost": COST, "hold": HOLD}[args.variants]
+                "cost": COST, "hold": HOLD, "share": SHARE}[args.variants]
     tag = {"main": "", "robust": "_robust", "freq": "_freq",
-           "cost": "_cost", "hold": "_hold"}[args.variants]
+           "cost": "_cost", "hold": "_hold", "share": "_share"}[args.variants]
+
+    if args.variants == "share":
+        ic_tab = share_ic_table(
+            close, {k: v for k, v in panels.items() if k.startswith("dshare")},
+            args.begin, args.end if args.end else int(close.index.max().strftime("%Y%m%d")))
+        ic_tab.to_csv(out / "share_ic.csv", index=False, encoding="utf-8-sig")
+        print("\n[S1 Δshare 月频 rank IC]\n" +
+              ic_tab.to_string(index=False, float_format=lambda x: f"{x:+.3f}"), flush=True)
+
     for spec in variants:
         extra = None
         if spec.get("defense"):
