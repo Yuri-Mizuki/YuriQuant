@@ -914,3 +914,16 @@ def test_attach_file_log_with_date_placeholder(tmp_path, monkeypatch):
                 m.log.removeHandler(h)
                 h.close()
 
+
+def test_market_features_requires_explicit_out_tag(monkeypatch):
+    """--market-features 必须显式配 --out-tag。
+
+    否则带市场特征的榜单会落进生产/预设目录（dingban 预设 out_tag=_defv）——
+    与定版口径同目录混淆，属本项目最贵的一类事故（口径错配无痕）。
+    """
+    from scripts.pipelines import alla_daily_rank as m
+
+    monkeypatch.setattr("sys.argv", ["alla_daily_rank", "--market-features"])
+    with pytest.raises(SystemExit):
+        m.main()
+

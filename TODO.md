@@ -359,6 +359,53 @@
     映射到当月，实际**整体滞后一个月**；修正前强度门安慰剂 p=0.002（假阳性），
     修正后 p=0.080。**一个月的错位足以把噪声变成"显著"。**
   - ⚠️ 882 口径；920 定版（`dingban_fundind`）本机缺 `defv_sig__h1.parquet`，未复验。
+- [x] **大盘方向准入检验（新信息集，10-26 立并完成）**：
+  `timing_probe`（价格/资金面/日历）、`regime_probe`、`model_state_probe` 三条线收口后，
+  换**不重叠的信息集**再测一次：`scripts/evaluation/market_direction_probe.py` →
+  `reports/market_direction_probe/README.md`。目标 = 下月沪深300（**次月首日收盘起算**，
+  不用月末收盘成交），状态全 PIT，判据先验固定（|t|≥2.5 + 五分位单调 + `oos_t>0`）。
+  - **本机可取的 3 个状态 0/3 过门**：`realvol60`（60 日已实现波动）IC −0.070 / t −0.71；
+    `stock_bond`（300 − 国债ETF 20 日动量差）IC +0.055 / t +0.57；
+    `mom20` 对照组 IC +0.062 / t +0.64 —— **对照组复现了 timing_probe 的已知结论**，
+    证明这个"零"不是取数/对齐 bug。
+  - **`stock_bond` 的陷阱已记录**：样本外命中率 59.6% 看似可用，但 `oos_t = −0.48`
+    （小跌月猜对、大涨月猜错）⇒ **命中率不能当信号，必须看符号×幅度的 edge**。
+  - **未测（数据不可得，非被证伪）**：期权隐含 QVIX / VRP（optbbs SSL 间歇）、
+    宏观 PMI/社融/M1-M2/10Y/SHIBOR（eastmoney 整段 ReadTimeout）。数据可得性表在 README §二；
+    拿到稳定离线缓存后，同一脚本补 4 个候选即可，判据不变。
+  - 工程坑：akshare 部分接口无超时挂死，`ThreadPoolExecutor` 兜底仍会因非 daemon 线程
+    导致进程退不出去；已改 **daemon 线程 + queue**。
+  - **[10-26 追加] 个人投资口径（`--valuation`）：换长周期估值，结论相反——有信息**。
+    PE-TTM **滚动 10 年分位**（PIT）→ 未来 1/3 年收益的极值条件检验
+    （legulegu 月度 PE：沪深300 2005-04+ / 全A 2005-01+，已缓存 `data/pe_*.csv`）：
+    沪深300 便宜 20% 分位后 1 年均值 **+15.4%**、贵 20% 分位后 **−7.3%**；3 年 **+39.0% / −28.6%**。
+    **但去重叠后独立"贵"样本只有 0~1 个**（即 2007/2015/2021 三次泡沫、2008/2018/2024 三次底部）
+    ⇒ **这是极值纪律，不是预测**。等本金定投对照（200 个月、同等总投入）：
+    恒定 1.21x / 1.15% vs 估值加权（便宜 2x、贵 0.5x）1.31x / **1.64%**（+0.49pp/年）。
+  - 口径坑：① 扩张分位在本序列最高只到 0.75（2008 低 PE 永久压低后续分位）⇒ "贵"桶为空，
+    已改滚动 10 年分位；② 定投必须**归一化到等本金**，否则"便宜加倍"只是多投 20% 钱。
+- [x] **市场状态特征（mf）采纳判定（10-26 复核，批次 12② 收尾）**：
+  证据 `reports/sync/batch1213_products_20261022.zip::mf/`（本机无 pred 副本）。
+  **判定：方向为正，但不直接切生产**，差一条干净单臂。
+  - **达线项**：同态配对 buffer(15/40) **17.74%/0.769/换手 21.0% vs 锚 16.31%/0.738/20.6%**
+    = +1.44pp、Sharpe +0.032、MDD −0.9pp；5/5 窗年化为正（+0.7~+2.3pp）、4/5 Sharpe 正；
+    单臂、无挑选偏差，过「>±1pp 才值得并入」线；单模型 h1 层 −0.04pp ⇒ 增量来自长 horizon。
+  - **不能直接切的两个硬问题**：① **对照不是单变量** —— mf 臂命令是 `--preproc ortho`
+    （`ortho920tl 同配置 + --market-features`），锚是定版 `--preproc ortho_fundind`，
+    +1.44pp 混着「去掉 fundind」一项（该项历史 +0.81pp）；**真正要上线的
+    `ortho_fundind + mf` 从未跑过**。② mf README「生产出榜链无需动」**是错的**：
+    生产链 `alla_daily_rank.py` 每日自 `compute_features()` + `fit()`，原本零 mf 接线。
+  - **10-26 已做（接线，默认关、零回归）**：`alla_daily_rank.py` 加 `--market-features`
+    （注入 18 个 `mkt_*` 面板、须显式配 `--out-tag`、`history.csv` 记
+    `n_market_features` / `market_feature_last_date`），锁 1 条 CLI 守卫测试；
+    指数缓存本机实测 18 面板、逐行同值广播可用（000001_SH/399317_SZ 均 2015+）。
+  - **待办**：好机器补 `--preproc ortho_fundind --market-features` 单臂 +
+    `buffer_arm_920 --variant defv`（命令已写进 `GOOD_MACHINE_TASKS.md` 批次 12②）；
+    过 ≥4/5 窗且全窗 ≥+1pp 才按三处联动切 `v1-mf`（旧条目不删、改 superseded）。
+  - **新增生产依赖**：`update_data` 只维护个股池，**指数日线无日更任务**——采用 mf
+    前必须补指数缓存更新，否则预测日整行 NaN（代码已告警留痕）。
+  - 幅度折扣：Sharpe 仅 +0.032（年化 +1.44pp 含波动 22.1%→23.1%）、2023+ 窗 ΔSharpe
+    −0.026、5 窗互相嵌套≈1 个样本、无存档权益序列算不出配对 t；v1w2 有 5/5→3/5 先例。
 - [x] **实验产物接 PBO 出报告**（09-23 固化 `scripts/evaluation/pbo_report.py`）：
   rolling_grid 三网格已出（`reports/pbo_rolling_ortho/`：M_raw 0.174 / M_neut 0.227 /
   W_raw 0.000，均远低于 0.5 红线）；后续各线已全部接齐——AI97 0.704（负结果主证）、

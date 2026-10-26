@@ -165,6 +165,10 @@ ORTHO_SELECTION_DIR = ROOT / "reports" / "alla_rolling_ortho" / "selection"
 #          --out-tag ortho920fundind --stage select
 FUNDIND_SELECTION_DIR = ROOT / "reports" / "alla_rolling_ortho920fundind" / "selection"
 OUT_DIR = ROOT / "reports" / "alla_daily"
+# 市场状态特征（`--market-features`）用的指数清单：上证指数 + 国证A指。
+# 与 `rolling_grid_alla.MARKET_FEATURE_INDICES` 同值 —— 实验侧已由批次 12②
+# 出数，两边必须指同一批指数，否则实验证据与生产出榜不同源。
+MARKET_FEATURE_INDICES: tuple[str, ...] = ("000001_SH", "399317_SZ")
 
 # `--preset`：把「某套口径」需要协同变动的多个参数一次配齐，避免手工漏配任一
 # 项而静默跑出混合口径（本项目历史上最贵的一类事故）。显式传参优先于预设。
@@ -1816,6 +1820,47 @@ def run(args) -> dict:
     feats_all = compute_features(names_all, tail, long_tables=long_tables)
     close_adj = tail["close_adj"]
 
+    # 市场状态特征（`--market-features`，批次 12② 国金19 转译）：指数点位派生的
+    # 日级广播特征**旁路并入**全部 horizon 的特征集 —— 与
+    # ``rolling_grid_alla::stage_predict`` 同一构造函数、同一注入点：
+    #   不过 select 漏斗（日级特征无逐股 IC）、不做截面 zscore（同日同值
+    #   std=0 ⇒ 整列 NaN）；并入后照旧一起进 existence_mask 与 gbdt 训练
+    #   （实验侧也是先 ``feats.update(mkt_feats)`` 再算掩码，此处不加偏离）。
+    # 指数缓存缺失时只跳过，但**记入 meta**（history.csv）——生产机上漏一份
+    # 缓存不能静默变成「特征少一半」的另一个口径。
+    mkt_meta: dict = {}
+    mkt_feats: dict[str, pd.DataFrame] = {}
+    if getattr(args, "market_features", False):
+        from data.cache_helpers import load_index_close_level
+        from model.market_features import build_market_state_features
+
+        closes: dict[str, pd.Series] = {}
+        for tag in MARKET_FEATURE_INDICES:
+            s = load_index_close_level(tag)
+            if s is None:
+                log.warning("市场状态特征：指数 %s 缓存缺失，跳过（其余照常）", tag)
+                continue
+            closes[tag] = s
+        if closes:
+            mkt_feats = build_market_state_features(
+                closes, close_adj.index, close_adj.columns)
+            log.info("+++ 市场状态特征：%d 指数 -> %d 面板旁路并入（不进 select、"
+                     "不做截面 zscore）", len(closes), len(mkt_feats))
+        else:
+            log.warning("--market-features 开启但无可用指数缓存 → 特征空集")
+        # 指数缓存没有日更任务（update_data 只维护个股池），陈旧缓存会让预测日
+        # 整行 NaN（模型按缺失处理）——**必须留痕**，否则等于静默换口径。
+        _last = max((s.index.max() for s in closes.values()), default=None)
+        if _last is not None and _last < pd.Timestamp(predict_date):
+            log.warning("市场状态特征：指数缓存最新 %s 落后预测日 %s → 当日这 %d 个"
+                        "特征全为 NaN（模型按缺失处理）；先补指数日线再跑",
+                        _last.date(), pd.Timestamp(predict_date).date(),
+                        len(mkt_feats))
+        mkt_meta = {"market_feature_indices": sorted(closes),
+                    "n_market_features": len(mkt_feats),
+                    "market_feature_last_date":
+                        str(_last.date()) if _last is not None else ""}
+
     # 训练标签口径（默认关闭）：可交易掩码在**尾部面板**上实时构建（T+1 成交口径），
     # 与实验侧 build_tradable_mask 同一函数、同一掩码语义（防两套口径漂移）。
     lab_mask = None
@@ -1833,6 +1878,10 @@ def run(args) -> dict:
         if missing_h:
             log.warning("h%d 有 %d 个特征未产出（构建失败），已忽略: %s",
                         h, len(missing_h), missing_h)
+        if mkt_feats:
+            # 市场状态特征旁路并入本 horizon（同日同值广播面板，已对齐
+            # tail 的日期×股票网格）——与实验侧 feats.update(mkt_feats) 同点。
+            feats_h.update(mkt_feats)
         pred_h, meta_h, mdl_h = train_and_predict(
             feats_h, close_adj, predict_date, args.window, horizon=h,
             tradable_mask=lab_mask)
@@ -1909,7 +1958,7 @@ def run(args) -> dict:
     predictor, feats = predictors[expl_h]
     train_meta = {"horizons": list(horizons), "excluded_features": list(exclude),
                   "ensemble": ens_tag, "explain_horizon": expl_h,
-                  "per_horizon": per_h_meta, **slow_meta}
+                  "per_horizon": per_h_meta, **slow_meta, **mkt_meta}
     n_raw = int(scores.notna().sum())
 
     tradable = signal_day_tradable(tail["close_raw"], predict_date)
@@ -2112,6 +2161,11 @@ def main() -> None:
                     help="训练标签掩掉买不进的样本（T+1 成交口径可交易掩码，"
                          "P0 §六 P1-a 治本项）；默认关闭 = 现行口径。"
                          "定版预设 dingban 会打开（定版臂跑法带此开关）")
+    ap.add_argument("--market-features", action="store_true",
+                    help="市场状态特征臂（批次 12② 国金19 转译）：上证指数 + 国证A指"
+                         "点位派生的日级广播特征旁路并入 GBDT 特征集"
+                         "（不过 select 漏斗、不做截面 zscore）。"
+                         "**须配 --out-tag**，防写进生产目录")
     ap.add_argument("--out-tag", default=None, metavar="TAG",
                     help="输出目录后缀（如 _h1h5 → reports/alla_daily_h1h5）；"
                          "默认空 = 写生产目录 reports/alla_daily，dingban 预设 = _defv")
@@ -2143,6 +2197,9 @@ def main() -> None:
                           if str(x).strip())
     if args.out_tag is None:
         args.out_tag = preset.get("out_tag", "")
+    if args.market_features and _explicit_out is None:
+        ap.error("--market-features 须显式配 --out-tag：否则带市场特征的榜单会写进"
+                 "生产/预设目录（dingban 预设的 out_tag=_defv），与定版口径混淆")
     if args.slow_blend is None:
         args.slow_blend = float(preset.get("slow_blend", 0.0) or 0.0)
     if args.slow_panels_subdir is None:

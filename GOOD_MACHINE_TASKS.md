@@ -319,6 +319,28 @@ python scripts/pipelines/rolling_grid_alla.py --preproc ortho --out-tag ortho920
 对照 = 既有 ortho920tl/fundind 同配置（不加 --market-features）；验收 =
 主口径年化/Sharpe 变化 >±1pp 才值得并入（基线数字见 baselines）。
 
+> ⚠️ **10-26 复核：上面那条臂不是单变量对照，别直接按 +1.44pp 切生产。**
+> `--preproc ortho` ≠ 定版 `ortho_fundind`，故「mf 17.74% vs 锚 16.31%」的
+> +1.44pp 里混着**去掉 fundind**一项（该项历史 +0.81pp）。**真正要上生产的是
+> `ortho_fundind + mf`，一次都没跑过**。补跑（唯一变量 = 市场特征开关）：
+
+```bash
+python scripts/pipelines/rolling_grid_alla.py --preproc ortho_fundind \
+    --out-tag ortho920fundind_mf --exclude-features limit_pos \
+    --tradable-labels --execution open --market-features
+python -m scripts.evaluation.buffer_arm_920 \
+    --pred-dir reports/alla_rolling_ortho920fundind_mf \
+    --out reports/mf_fundind_check --variant defv --entry 0.15 --exit 0.40
+```
+
+> 验收（不变）：全窗 ≥+1pp **且 ≥4/5 窗年化为正**，且须与
+> `reports/alla_rolling_ortho920fundind`（无 mf，同数据态）配对，不得再借用
+> 旧数据态的 tl 数字。顺带更正 mf README 第 3 点：生产出榜链是
+> `alla_daily_rank.py`（每日自 `compute_features` + `fit`，不是用既有 pred），
+> **必须接线**——10-26 已加 `--market-features`（默认关、须配 `--out-tag`、
+> meta 记 `n_market_features`/`market_feature_last_date`）。
+> 另：`update_data` 不维护指数日线，采用 mf 前须补指数缓存更新（代码已告警）。
+
 ### ③ 隔夜标签臂（需小工程接线，~半天）
 
 训练标签改 close→next open 收益、预测目标/执行不变（与 `--execution open`

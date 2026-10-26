@@ -84,9 +84,11 @@
 | `evaluation/hp_search_ic.py` | 超参 × 预测 IC 小规模对照（**滚动口径**，只比预测 IC，不跑组合回测）。 |
 | `evaluation/hp_sensitivity.py` | 模型层超参敏感度探针（P2）。 |
 | `evaluation/intraday_analysis.py` | 日内收益分解 + 时段效应分析 |
+| `evaluation/market_direction_probe.py` | 大盘预测双口径：月频方向准入（跨资产/波动率）+ `--valuation` 个人投资长周期估值分位 → 未来 1/3 年收益与定投规则对照（2026-10-26）。 |
 | `evaluation/member_blend12.py` | 多模型×多标签预测合成对照（Task ⑥ / AI29·国金19 语义）。 |
 | `evaluation/mf10_t_scan.py` | 多因子10 T 扫描：合成权重回看窗 T 的参数敏感性实验（研报 §2.1 口径）。 |
 | `evaluation/model_objective_scan.py` | P2 —— 模型层「目标函数 / 样本权重」扫描。 |
+| `evaluation/model_state_probe.py` | 模型自诊断仓位探针：信号自身状态（滚动 IC / ICIR / 成员分歧 / 预测强度）→ 月频仓位乘数（2026-10-23）。 |
 | `evaluation/multiyear_oos.py` | 多年度 OOS 稳健性实验：模型 × horizon × 调仓频率 × 年份 |
 | `evaluation/news_alpha_probe.py` | news 族独立建模 + 可交易口径验真伪 + 组合层融合（2026-10-10，P0 路径）。 |
 | `evaluation/pbo_report.py` | 实验产物接 PBO 出报告（TODO §二；华泰 AI19/22 方法论落地）。 |
