@@ -180,11 +180,13 @@ def run_variant(bundle, panels: dict, spec: dict, w0: int | None = None,
         cash_code=cash,
     )
     cx = float(spec.get("cost_x", 1.0))
+    commission_bp = float(spec.get("commission_bp", 5.0))
+    slippage_bp = float(spec.get("slippage_bp", 5.0))
     bt = VectorBacktest(strategy=strategy, rebalance_freq=spec.get("freq", "M"),
                         initial_capital=1_000_000.0,
-                        costs=EtfCosts(commission_rate=0.0005 * cx,
+                        costs=EtfCosts(commission_rate=commission_bp * 1e-4 * cx,
                                        commission_min=0.1 * cx,
-                                       slippage_bp=5.0 * cx))
+                                       slippage_bp=slippage_bp * cx))
     res = bt.run(factor_panel=factor, returns_panel=returns,
                  executable_mask=mask if spec.get("mask", True) else None,
                  horizon=1, rebalance_days=rebalance_days)
@@ -193,6 +195,8 @@ def run_variant(bundle, panels: dict, spec: dict, w0: int | None = None,
     live = w[w.abs().sum(axis=1) > 1e-9]
     held = [c for c in w.columns if c not in ("CASH", "DEF")]
     cash_w = live[cash] if cash in live.columns else pd.Series(0.0, index=live.index)
+    years = max(len(res.daily_returns) / 252.0, 1e-9)
+    cost_drag = float(res.cost_series.sum()) / 1_000_000.0 / years
     return {
         "annual_return": m["annual_return"],
         "sharpe": m["sharpe"],
@@ -202,6 +206,7 @@ def run_variant(bundle, panels: dict, spec: dict, w0: int | None = None,
         "n_rebalance": int(res.turnover_series.notna().sum()),
         "avg_holdings": float((live[held].abs() > 1e-9).sum(axis=1).mean()) if len(live) else 0.0,
         "avg_cash": float(cash_w.mean()) if len(cash_w) else 0.0,
+        "cost_drag": cost_drag,
         "equity": res.equity_curve,
     }
 

@@ -61,6 +61,17 @@ FREQ: list[dict] = [
     {**P1_BASE, "name": "champ_w", "signal": "mom_crowd_f20", "defense": "mix", "freq": "W"},
 ]
 
+# 成本对照：现行假设（佣金 5bp）vs 用户实际费率（万分之一 = 1bp）× 滑点档位。
+COST: list[dict] = [
+    {**P1_BASE, "name": "cost_c5_s5", "signal": "mom_crowd_f20", "defense": "mix"},
+    {**P1_BASE, "name": "cost_c1_s5", "signal": "mom_crowd_f20", "defense": "mix",
+     "commission_bp": 1.0},
+    {**P1_BASE, "name": "cost_c1_s2", "signal": "mom_crowd_f20", "defense": "mix",
+     "commission_bp": 1.0, "slippage_bp": 2.0},
+    {**P1_BASE, "name": "cost_c1_s10", "signal": "mom_crowd_f20", "defense": "mix",
+     "commission_bp": 1.0, "slippage_bp": 10.0},
+]
+
 # 最优组合项（def_mix_crowd_f20）的邻域网格：防御腿类型 / 成本 / 目标波动 / 集中度。
 ROBUST: list[dict] = [
     {**P1_BASE, "name": "dm_mix_c20", "signal": "mom_crowd_f20", "defense": "mix"},
@@ -156,7 +167,7 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--begin", type=int, default=20200102)
     ap.add_argument("--end", type=int, default=None)
     ap.add_argument("--out", default=str(OUT))
-    ap.add_argument("--variants", choices=("main", "robust", "freq"), default="main")
+    ap.add_argument("--variants", choices=("main", "robust", "freq", "cost"), default="main")
     args = ap.parse_args(argv)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -169,8 +180,8 @@ def main(argv: list[str] | None = None) -> None:
     print(f"份额 PIT 面板覆盖 {panels['mom_crowd_f20'].notna().sum().sum():,} 个有效格", flush=True)
 
     rows, seg_rows, eq = [], [], {}
-    variants = {"main": VARIANTS, "robust": ROBUST, "freq": FREQ}[args.variants]
-    tag = {"main": "", "robust": "_robust", "freq": "_freq"}[args.variants]
+    variants = {"main": VARIANTS, "robust": ROBUST, "freq": FREQ, "cost": COST}[args.variants]
+    tag = {"main": "", "robust": "_robust", "freq": "_freq", "cost": "_cost"}[args.variants]
     for spec in variants:
         extra = None
         if spec.get("defense"):
@@ -192,7 +203,8 @@ def main(argv: list[str] | None = None) -> None:
         print(f"{spec['name']:<22} ann={full['annual_return']:+.2%} "
               f"sh={full['sharpe']:.2f} mdd={full['max_drawdown']:.2%} "
               f"to={full['avg_turnover']:.2%} hold={full['avg_holdings']:.1f} "
-              f"cash={full['avg_cash']:.1%} seg={n_pos}/3", flush=True)
+              f"cash={full['avg_cash']:.1%} cost={full['cost_drag']:.2%}/yr "
+              f"seg={n_pos}/3", flush=True)
 
     summary = pd.DataFrame(rows)
     if (summary["name"] == "p1_base").any():
