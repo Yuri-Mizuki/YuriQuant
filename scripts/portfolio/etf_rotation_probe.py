@@ -169,6 +169,11 @@ def run_variant(bundle, panels: dict, spec: dict, w0: int | None = None,
     cash = spec.get("cash_code")
     if cash is None and spec.get("target_vol"):
         cash = "DEF" if spec.get("defense") else "CASH"
+    # 选标只在可交易集合内进行：不可执行标的的因子置 NaN。否则策略会先选中
+    # 它们，引擎再把权重清零并重新归一化多头腿 ⇒ 持仓只数被动缩水、
+    # 收益被"第 6 名"顶替，与「不许持有不达标标的」的真实约束不符。
+    if spec.get("mask", True):
+        factor = factor.where(mask)
     strategy = EtfRotationAdvanced(
         top_k=spec.get("top_k", 5),
         absolute_filter=spec.get("absolute", False),
