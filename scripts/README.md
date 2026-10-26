@@ -1,6 +1,6 @@
 # scripts 入口索引
 
-> 自动生成（150 个活跃入口；archive/oneoff 不计）。改脚本 docstring 后运行 `python -m scripts.data_tools.gen_scripts_index` 更新；`--check` 校验是否过期。
+> 自动生成（151 个活跃入口；archive/oneoff 不计）。改脚本 docstring 后运行 `python -m scripts.data_tools.gen_scripts_index` 更新；`--check` 校验是否过期。
 
 约定：`python -m scripts.<目录>.<文件名>` 运行；退役入口在 `scripts/archive/`（仍可运行，但不再维护）。
 
@@ -162,6 +162,7 @@
 | 脚本 | 说明 |
 |---|---|
 | `portfolio/compare_portfolio_methods.py` | 组合优化方法对比脚本（P2，2026-08-14） |
+| `portfolio/etf_rotation_p2.py` | ETF 轮动优化验证（P2 前置，2026-10-26） |
 | `portfolio/etf_rotation_probe.py` | ETF 轮动升级探针（P1） |
 | `portfolio/generate_signals.py` | 每日交易信号生成脚本（P3，2026-08-20） |
 | `portfolio/multi_period_backtest.py` | 多期组合执行回测脚本（P3，2026-08-20） |

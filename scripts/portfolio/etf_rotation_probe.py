@@ -140,9 +140,18 @@ def slice_bundle(bundle, panels: dict, w0: int | None, w1: int | None):
 
 
 def run_variant(bundle, panels: dict, spec: dict, w0: int | None = None,
-                w1: int | None = None) -> dict:
-    """在（可选）窗口上跑一个变体，返回指标与净值。"""
+                w1: int | None = None, extra_close: pd.DataFrame | None = None) -> dict:
+    """在（可选）窗口上跑一个变体，返回指标与净值。
+
+    ``extra_close`` 用于注入合成资产列（如防御腿 DEF：债+金的净值水平线）。
+    合成资产的因子/波动率为 NaN（不会被选中），掩码恒为 True。
+    """
     (uni, close, _amount, bench), p = slice_bundle(bundle, panels, w0, w1)
+    extra_cols: list[str] = []
+    if extra_close is not None:
+        extra_close = extra_close.reindex(close.index)
+        close = close.join(extra_close)
+        extra_cols = list(extra_close.columns)
     # 现金资产：常数 1（0 收益）。引擎在施加掩码后会把多头腿归一化到 1，
     # 波动率目标的「留现金」只能显式落在一个 0 收益列上。
     returns = close.assign(CASH=1.0).pct_change(fill_method=None)
@@ -152,6 +161,13 @@ def run_variant(bundle, panels: dict, spec: dict, w0: int | None = None,
     vol["CASH"] = np.nan
     mask = p["mask"].copy()
     mask["CASH"] = True
+    for c in extra_cols:
+        factor[c] = np.nan
+        vol[c] = np.nan
+        mask[c] = True
+    cash = spec.get("cash_code")
+    if cash is None and spec.get("target_vol"):
+        cash = "DEF" if spec.get("defense") else "CASH"
     strategy = EtfRotationAdvanced(
         top_k=spec.get("top_k", 5),
         absolute_filter=spec.get("absolute", False),
@@ -160,7 +176,7 @@ def run_variant(bundle, panels: dict, spec: dict, w0: int | None = None,
         target_vol=spec.get("target_vol"),
         enter_rank=spec.get("enter_rank"),
         exit_rank=spec.get("exit_rank"),
-        cash_code="CASH" if spec.get("target_vol") else None,
+        cash_code=cash,
     )
     cx = float(spec.get("cost_x", 1.0))
     bt = VectorBacktest(strategy=strategy, rebalance_freq=spec.get("freq", "M"),

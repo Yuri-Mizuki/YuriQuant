@@ -80,6 +80,7 @@ AQR + JFE 复核）同向收口；LLM-MCTS 是唯一产出超门槛因子的挖�
 - **增量方向探针族（frontier，2026-10-19）**：h60 长 horizon 全链（`select_horizon_features.py` 清单 + `retrain_freq_ic --save-pred` 训练 + `horizon_cross_eval.py` 同目标交叉与组合层——h60 第二策略 Sharpe 1.028/换手 17.5%）；残差目标（`residual_ic_probe.py` 四口径 + `residual_overlay_probe.py` 负向低配 overlay + `residual_stack_probe.py` 二阶 GBDT 融合，均带安慰剂臂）。证据 `reports/frontier_audit_2026-10-19/`，920 复验挂批次 13
 - **指数增强探针（B1，2026-10-26）**：`scripts/evaluation/index_enhance_probe.py`——中证500 成分约束 + TE–超额曲线 + 安慰剂。结论：成分内 IC 有效（0.069/t=4.3），但 3–5% TE 净超额仅 +1.5~1.9%（t≈0.8）、2025 单年 −7% ⇒ 归档为风险偏好型替代，不立项为 α（`reports/index_enhance_probe/`）
 - **ETF 轮动基线 P1（2026-10-26）**：`scripts/portfolio/etf_rotation_probe.py`——41 池 × PIT 流动性掩码下对照 12-1 动量 / Dual Momentum / 逆波动 / 波动率目标 / 缓冲区（13 变体 + 7 变体稳健网格）。结论：**波动率目标是唯一有效增量**，`dual_ivvt15_m5` 年化 7.14% / Sharpe 0.62 / MDD 19.01%（旧基线 0.26 / 38.4%）；稳健网格 7/7 过线（`reports/etf_rotation_probe/`）
+- **ETF 轮动 P2 前置（2026-10-26）**：`scripts/portfolio/etf_rotation_p2.py`——防御腿（风险关闭退到债/金，替代 0 收益现金）+ 份额 PIT 拥挤度（250 日分位 >0.80 剔除）+ 趋势 R² 三项对照。结论：防御腿 + 拥挤度叠加到 **年化 11.23% / Sharpe 0.85 / MDD 16.70%**（邻域 0.76–0.94、2× 成本 0.78）；趋势 R² 判负（`reports/etf_rotation_p2/`）
 
 ### 🏭 生产化：研究系统的最后一公里
 
@@ -101,7 +102,7 @@ strategy/   因子值 → 组合权重
 research/   研究工具：IC/分层、归因、DPP、实验台账、报告渲染
 stats/      稳健统计与反过拟合（PBO / DSR）
 monitoring/ 生产监控：IC 台账、告警规则、账本
-scripts/    150 个活跃入口（ingest / factors / pipelines / portfolio /
+scripts/    151 个活跃入口（ingest / factors / pipelines / portfolio /
             evaluation / reporting / builders / common …；完整索引见
             scripts/README.md；退役入口在 scripts/archive/；本地 oneoff 另计、gitignored）
 config/     settings.yaml（参数真源）+ baselines.yaml（定版登记表）+ schedule.yaml（调度登记表）
