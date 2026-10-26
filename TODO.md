@@ -400,8 +400,9 @@
     `n_market_features` / `market_feature_last_date`），锁 1 条 CLI 守卫测试；
     指数缓存本机实测 18 面板、逐行同值广播可用（000001_SH/399317_SZ 均 2015+）。
   - **待办**：好机器补 `--preproc ortho_fundind --market-features` 单臂 +
-    `buffer_arm_920 --variant defv`（命令已写进 `GOOD_MACHINE_TASKS.md` 批次 12②）；
-    过 ≥4/5 窗且全窗 ≥+1pp 才按三处联动切 `v1-mf`（旧条目不删、改 superseded）。
+    `buffer_arm_920 --variant defv`（已立项为 `GOOD_MACHINE_TASKS.md` **批次 14**，
+    命令见批次 12② ⚠️ 块）；过 ≥4/5 窗且全窗 ≥+1pp 才按三处联动切 `v1-mf`
+    （旧条目不删、改 superseded）。
   - **新增生产依赖**：`update_data` 只维护个股池，**指数日线无日更任务**——采用 mf
     前必须补指数缓存更新，否则预测日整行 NaN（代码已告警留痕）。
   - 幅度折扣：Sharpe 仅 +0.032（年化 +1.44pp 含波动 22.1%→23.1%）、2023+ 窗 ΔSharpe
