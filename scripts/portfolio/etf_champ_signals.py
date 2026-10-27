@@ -149,6 +149,9 @@ def main(argv: list[str] | None = None) -> None:
                          "contest5=正式赛合规版（≥5 只）；contest5h=合规版 + HRP 权重")
     ap.add_argument("--out", default=None,
                     help="输出目录（默认按 profile 落到 reports/etf_*）")
+    ap.add_argument("--exclude", default="",
+                    help="不可交易的代码（逗号分隔），如大赛指定池不含的品种："
+                         "排除后由排名下一位且通过去重的标的自然补位")
     args = ap.parse_args(argv)
     out = Path(args.out or (ROOT / "reports" / (
         {"champ": "etf_champ", "contest": "etf_contest",
@@ -166,6 +169,16 @@ def main(argv: list[str] | None = None) -> None:
     raw_close = (cache.read_daily("etf")["close"].unstack("code")
                  .reindex(index=close.index, columns=close.columns))
     panels = build_extra_panels(close, build_panels(close, amount), raw_close)
+    excluded = [c.strip() for c in args.exclude.split(",") if c.strip()]
+    if excluded:
+        # 只把 mask 置 False：run_variant 会把因子 where(mask)，等价于这些标的
+        # 在选标与建仓时不可交易（不影响已算好的因子历史，无前视）。
+        miss = [c for c in excluded if c not in panels["mask"].columns]
+        if miss:
+            raise SystemExit(f"--exclude 含池外代码：{miss}")
+        for c in excluded:
+            panels["mask"].loc[:, c] = False
+        print(f"[{args.profile}] 排除不可交易 {excluded}", flush=True)
     extra = (pd.DataFrame({"DEF": level_from_returns(build_defense(close)["mix"])})
              if spec.get("defense") else None)
 
