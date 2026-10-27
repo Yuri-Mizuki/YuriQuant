@@ -34,6 +34,7 @@ import pandas as pd
 from data.cache import DataCache
 from data.datasource import create_datasource
 from research.html_report import page
+from scripts.portfolio.etf_contest_spec import EXCLUDED_5, FINAL
 from scripts.portfolio.etf_rotation_p2 import (
     P1_BASE,
     build_defense,
@@ -71,18 +72,13 @@ CONTEST5 = {"name": "contest5_2m", "signal": "mom12_1", "freq": "W", "top_k": 5,
             # 绝对动量过滤后候选不足 5 只时（真实白名单下约 0.6% 的调仓日），
             # 用国债/黄金占位，满足「配置不少于 5 只产品」的硬约束。
             "fill_to": 5, "fill_codes": ["511010.SH", "511260.SH", "518880.SH"]}
-# 集中版（2026-10-27 规则口径修正）：规则里的「配置不少于 5 只产品」按**赛期内
-# 累计**买入过的不同产品计数，而不是每个调仓日同时持有 ≥5 只。因此 Top3 合法，
-# 可以用集中度换收益上限（执行建议：首次建仓先各买 5 只不同产品完成累计计数，
-# 之后按 Top3 集中）。依据真实白名单 80 个滚动 2 月窗口：均值 +4.44%、中位
-# +3.99%、p10 −8.2%、最差 −23.8%、胜率 66.3%、>10% 27.5%、<−10% 3.75%，
-# 全面优于 Top5 HRP（+3.85% / +2.41% / −5.9% / −13.8% / 65%）。
-# 信号用拥挤度软惩罚版：份额 250 日分位 >0.80 起线性扣动量（最多 10pp），
-# 把 Top3+HRP 的中位从 +2.78% 提到 +3.99%、<−10% 概率从 7.5% 砍到 3.75%。
-# 集中版不需要只数兜底，故去掉 fill_to/fill_codes。
-CONTEST3 = {k: v for k, v in CONTEST5.items() if k not in ("fill_to", "fill_codes")}
-CONTEST3.update({"name": "contest_2m_top3", "signal": "mom12_1_crowdsoft",
-                 "top_k": 3, "weighting": "hrp"})
+# 集中版（2026-10-27 定版）：规则里的「配置不少于 5 只产品」按**赛期内累计**
+# 买入过的不同产品计数，而不是每个调仓日同时持有 ≥5 只，因此 Top3 合法。
+# 参数真源见 ``scripts/portfolio/etf_contest_spec.py`` 的 FINAL（回测探针共用同一
+# 份字典，``tests/test_etf_contest_spec.py`` 断言两边一致）。
+# 依据：真实白名单 80 个滚动 2 月窗口，均值 +4.44% / 中位 +3.99% / 最差 −23.8%。
+# 执行建议：首次建仓先各买 5 只不同产品完成累计计数，之后按 Top3 集中。
+CONTEST3 = {**FINAL, "name": "contest_2m_top3"}
 PROFILES = {"champ": CHAMP, "contest": CONTEST, "contest5": CONTEST5,
             "contest3": CONTEST3,
             # 同一选标 + HRP 风险平价权重（60 日协方差）。
@@ -177,9 +173,9 @@ def main(argv: list[str] | None = None) -> None:
                          "contest3=累计口径集中版（Top3 + 拥挤软惩罚 + HRP）")
     ap.add_argument("--out", default=None,
                     help="输出目录（默认按 profile 落到 reports/etf_*）")
-    ap.add_argument("--exclude", default="",
-                    help="不可交易的代码（逗号分隔），如大赛指定池不含的品种："
-                         "排除后由排名下一位且通过去重的标的自然补位")
+    ap.add_argument("--exclude", default=None,
+                    help="不可交易的代码（逗号分隔）。比赛版默认自动排除 5 只非指定池"
+                         "品种（etf_contest_spec.EXCLUDED_5），传空串 '' 可关闭")
     ap.add_argument("--max-premium", type=float, default=None,
                     help="选标层折溢价闸门：|prem20| 超过该值（如 0.01）视为当日不可买。"
                          "PIT：prem20 只用当日及以前数据；避免补位时反复补进溢价品")
@@ -210,7 +206,9 @@ def main(argv: list[str] | None = None) -> None:
     raw_close = (cache.read_daily("etf")["close"].unstack("code")
                  .reindex(index=close.index, columns=close.columns))
     panels = build_extra_panels(close, build_panels(close, amount), raw_close)
-    excluded = [c.strip() for c in args.exclude.split(",") if c.strip()]
+    excluded = [c.strip() for c in (args.exclude or "").split(",") if c.strip()]
+    if not excluded and args.profile.startswith("contest"):
+        excluded = list(EXCLUDED_5)
     if excluded:
         # 只把 mask 置 False：run_variant 会把因子 where(mask)，等价于这些标的
         # 在选标与建仓时不可交易（不影响已算好的因子历史，无前视）。

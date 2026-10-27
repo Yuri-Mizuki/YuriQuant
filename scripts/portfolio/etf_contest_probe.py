@@ -30,6 +30,7 @@ import pandas as pd
 from config import Config
 from data.cache import DataCache
 from data.datasource import create_datasource
+from scripts.portfolio.etf_contest_spec import FINAL
 from scripts.portfolio.etf_rotation_p2 import (
     build_crowding,
     build_defense,
@@ -163,8 +164,7 @@ CONC_SPECS: list[dict] = [
     # 优化点2：拥挤度软惩罚（超出 0.80 的部分线性扣 10pp 动量）
     {**BASE, "name": "c3_m12_1_cs10_w_dd90", "signal": "mom12_1_crowdsoft",
      "top_k": 3, "dedup_corr": 0.90, "dedup_fill": True},
-    {**BASE, "name": "c3_m12_1_cs10_w_dd90_hrp", "signal": "mom12_1_crowdsoft",
-     "top_k": 3, "dedup_corr": 0.90, "dedup_fill": True, "weighting": "hrp"},
+    {**BASE, "name": "c3_m12_1_cs10_w_dd90_hrp", **FINAL},
     # 稳健性（2026-10-27 追问后补测）：去重窗口与协方差窗口对齐到 60 日
     # （120 日去重会漏掉近期相关性抬升的同质标的），以及单只 50% 上限。
     {**BASE, "name": "c3_m12_1_cs10_w_dd90_60_hrp", "signal": "mom12_1_crowdsoft",

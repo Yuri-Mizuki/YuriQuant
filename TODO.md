@@ -1151,7 +1151,12 @@
     **稳健性补测**（`reports/etf_contest5_opt/robust/`，17 变体）：去重窗口 120→60 日中位
     +3.81%（−0.18pp，噪声内）；单只上限 50% 中位 **+1.52%**（−2.5pp，代价大）⇒ 维持
     无上限 + 120 日去重，参数锁定不再改。
-    真源 `reports/etf_contest5/README.md` §十二。
+    **定版落地 `[x]`（10-27 整理）**：新增 `scripts/portfolio/etf_contest_spec.py` 作为定版参数
+    唯一真源（`FINAL` + `EXCLUDED_5`），回测探针与实盘信号板共同引用，`tests/
+    test_etf_contest_spec.py` 断言两侧一致（4 项全过）；比赛版 `--exclude` 改为自动排除 5 只
+    非池品种；旧 `contest` profile 仅留作归档复现。定版一页纸见
+    `reports/etf_contest5/README.md` §十三（参数表 / 代码组织 / 每周 SOP / 冻结声明）。
+    真源 `reports/etf_contest5/README.md` §十二–§十三。
 
 
 ---
