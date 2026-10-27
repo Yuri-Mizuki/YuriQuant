@@ -16,6 +16,8 @@
 | ``CONC_SPECS`` | 集中档 Top1/2/3/5 + 拥挤软惩罚 + 6-1 + 周五 + 扩池
   （证据见 ``reports/etf_contest5_opt/``） | 同上 |
 | ``LT_SPECS`` | 长线月频 champ 对照 | ``reports/etf_contest5/`` §九 |
+| ``NEXT_SPECS`` | 定版后的待验证项：双周调仓、拥挤硬过滤（2026-10-27 补测） |
+  ``reports/etf_contest5_opt/next2w/`` |
 | ``FINAL`` | **定版**：Top3 + 拥挤软惩罚 + 120 日去重 + HRP 无上限
   （证据见 ``reports/etf_contest5/`` §十二） | 同上 |
 

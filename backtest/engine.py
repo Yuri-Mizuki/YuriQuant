@@ -547,6 +547,12 @@ class VectorBacktest:
         elif self.rebalance_freq == "M":
             s = pd.Series(dates, index=dates)
             return set(s.groupby(s.index.to_period("M")).first())
+        elif self.rebalance_freq == "2W":
+            # 双周频：按 ISO 周分组后取隔周（自样本首周起算，锚点固定），
+            # 用于降低周频换手（比赛版成本拖累约 5%/年，双周理论减半）。
+            s = pd.Series(dates, index=dates)
+            wk = list(s.groupby(s.index.to_period("W")).first())
+            return set(wk[::2])
         else:
             return set(dates)
 

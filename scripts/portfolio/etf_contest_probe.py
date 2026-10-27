@@ -202,6 +202,19 @@ LT_SPECS: list[dict] = [
 ]
 
 
+# 定版后的待验证项（2026-10-27 夜）：换手/拥挤防御两个结构性杠杆。
+# ① 双周调仓：周频成本拖累约 5.2%/年，双周理论减半；
+# ② 拥挤**硬**过滤（磐石口径）：软惩罚不足以在 Top3 挡住"尖峰动量"品种。
+NEXT_SPECS: list[dict] = [
+    {**BASE, "name": "c3_2w_cs10_hrp", "signal": "mom12_1_crowdsoft", "top_k": 3,
+     "freq": "2W", "dedup_corr": 0.90, "dedup_fill": True, "weighting": "hrp"},
+    {**BASE, "name": "c3_w_hard_hrp", "signal": "mom_crowd_f20", "top_k": 3,
+     "dedup_corr": 0.90, "dedup_fill": True, "weighting": "hrp"},
+    {**BASE, "name": "c3_2w_hard_hrp", "signal": "mom_crowd_f20", "top_k": 3,
+     "freq": "2W", "dedup_corr": 0.90, "dedup_fill": True, "weighting": "hrp"},
+]
+
+
 def build_contest_panels(close: pd.DataFrame, amount: pd.DataFrame,
                          with_crowd: bool = True) -> dict:
     """在 P1 面板上加 20/60/6-1 日动量与拥挤度（过滤版 + 软惩罚版）。"""
@@ -293,9 +306,10 @@ def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description="ETF 两个月比赛方案探针")
     ap.add_argument("--out", default=str(OUT))
     ap.add_argument("--specs", default="base",
-                    choices=["base", "k5", "lt", "conc"],
+                    choices=["base", "k5", "lt", "conc", "next"],
                     help="base=TopK1/2/3 旧组；k5=合规组（≥5 只）；"
-                         "lt=长线 champ 对照；conc=累计口径下的集中版（Top1/2/3）")
+                         "lt=长线 champ 对照；conc=累计口径下的集中版（Top1/2/3）；"
+                         "next=定版后的双周/硬过滤补测")
     ap.add_argument("--universe", choices=["pool", "wl"], default="pool",
                     help="pool=现有 51 只池；wl=大赛白名单扩池（满 3 年+流动性）")
     ap.add_argument("--exclude", default="",
@@ -310,7 +324,7 @@ def main(argv: list[str] | None = None) -> None:
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     specs = {"base": SPECS, "k5": K5_SPECS, "lt": LT_SPECS,
-             "conc": CONC_SPECS}[args.specs]
+             "conc": CONC_SPECS, "next": NEXT_SPECS}[args.specs]
     if args.universe == "wl" and not args.wl_crowd:
         # 份额数据只覆盖现有 50 只池（白名单内 29 只），扩池上跑拥挤度会
         # 退化成「绝大多数标的 0 惩罚」，与基准无差别，故默认不跑含 crowd 的变体。
@@ -398,7 +412,8 @@ def main(argv: list[str] | None = None) -> None:
               f"持仓={rows[-1]['avg_holdings']:.1f}/最少{min_hold:.0f}", flush=True)
 
     summary = pd.DataFrame(rows).sort_values("median", ascending=False)
-    tag = {"base": "", "k5": "_k5", "lt": "_lt", "conc": "_conc"}[args.specs]
+    tag = {"base": "", "k5": "_k5", "lt": "_lt", "conc": "_conc",
+           "next": "_next"}[args.specs]
     if args.universe == "wl":
         tag += "_wl"
     summary.to_csv(out / f"contest{tag}_summary.csv", index=False, encoding="utf-8-sig")
