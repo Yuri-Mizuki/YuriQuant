@@ -69,9 +69,12 @@ CONTEST5 = {"name": "contest5_2m", "signal": "mom12_1", "freq": "W", "top_k": 5,
             "absolute": True, "weighting": "equal", "commission_bp": 1.0,
             "slippage_bp": 5.0, "dedup_corr": 0.90, "dedup_fill": True}
 PROFILES = {"champ": CHAMP, "contest": CONTEST, "contest5": CONTEST5,
-            # 同一选标 + HRP 风险平价权重（60 日协方差，单只 ≤30%），回测优于等权
-            "contest5h": {**CONTEST5, "name": "contest5_2m_hrp", "weighting": "hrp",
-                          "max_weight": 0.30}}
+            # 同一选标 + HRP 风险平价权重（60 日协方差）。
+            # 2026-10-27 定版：去掉单只 30% 上限（用户选择博上限）。依据是真实白名单
+            # 下 80 个 2 月窗口：无上限中位 +2.41% / Sharpe 0.89 / 最差 −13.8%，
+            # 优于带上限的 +2.05% / 0.79 / −15.3%；代价是今日煤炭单只约 52%。
+            # 想控集中度时用 --max-weight 0.30 临时加回。
+            "contest5h": {**CONTEST5, "name": "contest5_2m_hrp", "weighting": "hrp"}}
 DEF_PARTS = {"511010.SH": 0.5, "518880.SH": 0.5}
 PARTICIPATION = 0.05      # 单只单边下单 / 60 日均成交额
 PREMIUM_WARN = 0.01       # 20 日折溢价告警线
