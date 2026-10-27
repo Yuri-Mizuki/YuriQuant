@@ -152,6 +152,9 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--exclude", default="",
                     help="不可交易的代码（逗号分隔），如大赛指定池不含的品种："
                          "排除后由排名下一位且通过去重的标的自然补位")
+    ap.add_argument("--max-premium", type=float, default=None,
+                    help="选标层折溢价闸门：|prem20| 超过该值（如 0.01）视为当日不可买。"
+                         "PIT：prem20 只用当日及以前数据；避免补位时反复补进溢价品")
     args = ap.parse_args(argv)
     out = Path(args.out or (ROOT / "reports" / (
         {"champ": "etf_champ", "contest": "etf_contest",
@@ -179,6 +182,12 @@ def main(argv: list[str] | None = None) -> None:
         for c in excluded:
             panels["mask"].loc[:, c] = False
         print(f"[{args.profile}] 排除不可交易 {excluded}", flush=True)
+
+    if args.max_premium is not None:
+        prem20 = panels["prem20"]
+        ok = (prem20.abs() <= args.max_premium) | prem20.isna()
+        panels["mask"] = panels["mask"] & ok
+        print(f"[{args.profile}] 折溢价闸门 |prem20| <= {args.max_premium:.2%}", flush=True)
     extra = (pd.DataFrame({"DEF": level_from_returns(build_defense(close)["mix"])})
              if spec.get("defense") else None)
 
