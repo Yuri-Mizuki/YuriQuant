@@ -184,6 +184,9 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--specs", default="base", choices=["base", "k5", "lt"],
                     help="base=TopK1/2/3 旧组；k5=合规组（≥5 只）；"
                          "lt=长线 champ 对照（同一 2 月窗口口径）")
+    ap.add_argument("--exclude", default="",
+                    help="不可交易的代码（逗号分隔），如主办方指定池不含的品种；"
+                         "把 mask 置 False 后全部变体在同一可投集合内重跑")
     args = ap.parse_args(argv)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -193,6 +196,15 @@ def main(argv: list[str] | None = None) -> None:
     bundle = load_bundle(cache, WARMUP_BEGIN, None)
     close = bundle[1]
     panels = build_contest_panels(close, bundle[2])
+    excluded = [c.strip() for c in args.exclude.split(",") if c.strip()]
+    if excluded:
+        miss = [c for c in excluded if c not in panels["mask"].columns]
+        if miss:
+            raise SystemExit(f"--exclude 含池外代码：{miss}")
+        # 只改 mask：所有变体在同一可投集合内选标与建仓，因子历史不变（无前视）
+        for c in excluded:
+            panels["mask"].loc[:, c] = False
+        print(f"排除不可交易 {len(excluded)} 只：{excluded}", flush=True)
     bench = (1.0 + bundle[3].fillna(0.0)).cumprod()
     mfs = month_first_dates(close.index, 20200101,
                             int(close.index.max().strftime("%Y%m%d")))
