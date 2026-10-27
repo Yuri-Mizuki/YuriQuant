@@ -29,7 +29,12 @@ import pandas as pd
 
 from data.cache import DataCache
 from data.datasource import create_datasource
-from scripts.portfolio.etf_rotation_p2 import build_crowding, month_first_dates
+from scripts.portfolio.etf_rotation_p2 import (
+    build_crowding,
+    build_defense,
+    level_from_returns,
+    month_first_dates,
+)
 from scripts.portfolio.etf_rotation_probe import (
     BENCH,
     MIN_AMOUNT,
@@ -129,6 +134,16 @@ K5_SPECS: list[dict] = [
      "dedup_corr": 0.90, "weighting": "hrp", "max_weight": 0.30},
 ]
 
+# 长线定版 champ 放进同一 2 月窗口口径，用于「比赛方案 vs 长线方案」对照。
+# champ = 月频、Top5、逆波动、15% 年化波动目标、债金防御腿（DEF 合成列）、去重 0.90。
+LT_SPECS: list[dict] = [
+    {**BASE, "name": "lt_champ", "signal": "mom_crowd_f20", "top_k": 5, "freq": "M",
+     "weighting": "inverse_vol", "target_vol": 0.15, "defense": "mix",
+     "dedup_corr": 0.90},
+    {**BASE, "name": "lt_champ_nodd", "signal": "mom_crowd_f20", "top_k": 5, "freq": "M",
+     "weighting": "inverse_vol", "target_vol": 0.15, "defense": "mix"},
+]
+
 
 def build_contest_panels(close: pd.DataFrame, amount: pd.DataFrame) -> dict:
     """在 P1 面板上加 20/60 日动量与 20 日动量的拥挤度过滤版。"""
@@ -166,12 +181,13 @@ def two_month_table(eq: pd.Series, bench: pd.Series, mfs: pd.DatetimeIndex) -> p
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description="ETF 两个月比赛方案探针")
     ap.add_argument("--out", default=str(OUT))
-    ap.add_argument("--specs", default="base", choices=["base", "k5"],
-                    help="base=TopK1/2/3 旧组；k5=合规组（≥5 只）")
+    ap.add_argument("--specs", default="base", choices=["base", "k5", "lt"],
+                    help="base=TopK1/2/3 旧组；k5=合规组（≥5 只）；"
+                         "lt=长线 champ 对照（同一 2 月窗口口径）")
     args = ap.parse_args(argv)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
-    specs = SPECS if args.specs == "base" else K5_SPECS
+    specs = {"base": SPECS, "k5": K5_SPECS, "lt": LT_SPECS}[args.specs]
 
     cache = DataCache(create_datasource())
     bundle = load_bundle(cache, WARMUP_BEGIN, None)
@@ -187,7 +203,12 @@ def main(argv: list[str] | None = None) -> None:
         if spec.get("every_n"):
             idx = close.index[close.index >= pd.Timestamp("20200101")]
             rb = set(idx[:: int(spec["every_n"])])
-        r = run_variant(bundle, panels, spec, 20200101, None, rebalance_days=rb)
+        extra = None
+        if spec.get("defense"):
+            # 防御腿是合成资产（债+金 50/50），作为净值列注入回测
+            extra = pd.DataFrame({"DEF": level_from_returns(build_defense(close)["mix"])})
+        r = run_variant(bundle, panels, spec, 20200101, None,
+                        extra_close=extra, rebalance_days=rb)
         tab = two_month_table(r["equity"], bench, mfs)
         tab["name"] = spec["name"]
         per_window.append(tab)
@@ -228,7 +249,7 @@ def main(argv: list[str] | None = None) -> None:
               f"持仓={rows[-1]['avg_holdings']:.1f}/最少{min_hold:.0f}", flush=True)
 
     summary = pd.DataFrame(rows).sort_values("median", ascending=False)
-    tag = "" if args.specs == "base" else "_k5"
+    tag = {"base": "", "k5": "_k5", "lt": "_lt"}[args.specs]
     summary.to_csv(out / f"contest{tag}_summary.csv", index=False, encoding="utf-8-sig")
     pd.concat(per_window).to_csv(out / f"contest{tag}_windows.csv", index=False,
                                  encoding="utf-8-sig")

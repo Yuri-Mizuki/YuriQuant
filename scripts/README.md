@@ -166,7 +166,7 @@
 | `portfolio/etf_alpha_probe.py` | ETF 层 α 可行性探针（S2 持仓映射 α 的前置验证） |
 | `portfolio/etf_capacity_probe.py` | ETF 轮动容量表（单只下单 ≤ 60 日均额 5%，2026-10-27） |
 | `portfolio/etf_champ_signals.py` | ETF 轮动 champion 生产信号板（目标持仓/下单/容量与溢价检查；`--profile contest` 出两个月比赛版，`--profile contest5` 出正式赛合规版（≥5 只、等权），`--profile contest5h` 同一选标 + HRP 权重/单只 ≤30%，2026-10-27） |
-| `portfolio/etf_contest_probe.py` | ETF 两个月比赛方案探针（80 个滚动 2 月窗口的收益分布；`--specs k5` 跑正式赛合规组，2026-10-27） |
+| `portfolio/etf_contest_probe.py` | ETF 两个月比赛方案探针（80 个滚动 2 月窗口的收益分布；`--specs k5` 跑正式赛合规组，`--specs lt` 把长线 champ 放进同一口径对照，2026-10-27） |
 | `portfolio/etf_dedup_probe.py` | ETF 选标层动态去重 A/B（120 日相关阈值 0.85/0.90/0.95，2026-10-27） |
 | `portfolio/etf_pool_audit.py` | ETF 池合理性/充分性审计（合规、相关性冗余、PIT 可投数量、动量离散度，2026-10-27） |
 | `portfolio/etf_p4_probe.py` | ETF 轮动样本外验证（IS/OOS 切片 + 多起点，2026-10-27） |
