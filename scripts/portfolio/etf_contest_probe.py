@@ -108,6 +108,25 @@ K5_SPECS: list[dict] = [
      "every_n": 10, "weighting": "rank_decay"},
     {**BASE, "name": "k5_m12_1_w_dd95_rd", "signal": "mom12_1", "top_k": 5,
      "dedup_corr": 0.95, "weighting": "rank_decay"},
+    # 权重方案对比：同一选标（Top5 + 去重 0.90 + 周频），只换组合构造
+    {**BASE, "name": "k5_m12_1_w_dd90_iv", "signal": "mom12_1", "top_k": 5,
+     "dedup_corr": 0.90, "weighting": "inverse_vol"},
+    {**BASE, "name": "k5_m12_1_w_dd90_erc", "signal": "mom12_1", "top_k": 5,
+     "dedup_corr": 0.90, "weighting": "erc"},
+    {**BASE, "name": "k5_m12_1_w_dd90_hrp", "signal": "mom12_1", "top_k": 5,
+     "dedup_corr": 0.90, "weighting": "hrp"},
+    {**BASE, "name": "k5_champ_2w_dd90_iv", "signal": "mom_crowd_f20", "top_k": 5,
+     "every_n": 10, "dedup_corr": 0.90, "weighting": "inverse_vol"},
+    # HRP 的稳健性：协方差窗口 40/120 + 双周频，检验是不是"60 日窗口的尖峰"
+    {**BASE, "name": "k5_m12_1_w_dd90_hrp40", "signal": "mom12_1", "top_k": 5,
+     "dedup_corr": 0.90, "weighting": "hrp", "cov_window": 40},
+    {**BASE, "name": "k5_m12_1_w_dd90_hrp120", "signal": "mom12_1", "top_k": 5,
+     "dedup_corr": 0.90, "weighting": "hrp", "cov_window": 120},
+    {**BASE, "name": "k5_m12_1_2w_dd90_hrp", "signal": "mom12_1", "top_k": 5,
+     "every_n": 10, "dedup_corr": 0.90, "weighting": "hrp"},
+    # HRP 单只权重会飙到 49%（低波品种），加 30% 上限看是否保留优势
+    {**BASE, "name": "k5_m12_1_w_dd90_hrp_mw30", "signal": "mom12_1", "top_k": 5,
+     "dedup_corr": 0.90, "weighting": "hrp", "max_weight": 0.30},
 ]
 
 

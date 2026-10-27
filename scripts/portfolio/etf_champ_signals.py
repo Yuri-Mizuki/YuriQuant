@@ -64,7 +64,10 @@ CONTEST = {"name": "contest_2m", "signal": "mom_crowd_f20", "freq": "W", "top_k"
 CONTEST5 = {"name": "contest5_2m", "signal": "mom12_1", "freq": "W", "top_k": 5,
             "absolute": True, "weighting": "equal", "commission_bp": 1.0,
             "slippage_bp": 5.0, "dedup_corr": 0.90, "dedup_fill": True}
-PROFILES = {"champ": CHAMP, "contest": CONTEST, "contest5": CONTEST5}
+PROFILES = {"champ": CHAMP, "contest": CONTEST, "contest5": CONTEST5,
+            # 同一选标 + HRP 风险平价权重（60 日协方差，单只 ≤30%），回测优于等权
+            "contest5h": {**CONTEST5, "name": "contest5_2m_hrp", "weighting": "hrp",
+                          "max_weight": 0.30}}
 DEF_PARTS = {"511010.SH": 0.5, "518880.SH": 0.5}
 PARTICIPATION = 0.05      # 单只单边下单 / 60 日均成交额
 PREMIUM_WARN = 0.01       # 20 日折溢价告警线
@@ -139,18 +142,19 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--positions", default=None, help="当前持仓 CSV（code,weight）")
     ap.add_argument("--profile", choices=tuple(PROFILES), default="champ",
                     help="champ=长线定版；contest=两个月比赛版（Top3，不合规）；"
-                         "contest5=正式赛合规版（≥5 只）")
+                         "contest5=正式赛合规版（≥5 只）；contest5h=合规版 + HRP 权重")
     ap.add_argument("--out", default=None,
                     help="输出目录（默认按 profile 落到 reports/etf_*）")
     args = ap.parse_args(argv)
     out = Path(args.out or (ROOT / "reports" / (
         {"champ": "etf_champ", "contest": "etf_contest",
-         "contest5": "etf_contest5"}[args.profile])))
+         "contest5": "etf_contest5", "contest5h": "etf_contest5"}[args.profile])))
     out.mkdir(parents=True, exist_ok=True)
     spec = PROFILES[args.profile]
     label = {"champ": "长线定版 champ",
              "contest": "两个月比赛版（Top3/周频/满仓）",
-             "contest5": "正式赛合规版（Top5/周频/满仓/去重）"}[args.profile]
+             "contest5": "正式赛合规版（Top5/周频/满仓/去重）",
+             "contest5h": "正式赛合规版（Top5/周频/去重/HRP 风险平价）"}[args.profile]
 
     cache = DataCache(create_datasource())
     bundle = load_bundle(cache, WARMUP_BEGIN, None)
@@ -259,6 +263,8 @@ def main(argv: list[str] | None = None) -> None:
                     "（&gt; 0.80 剔除），仅作选标过滤"),
         "contest5": ("TopK=5（正式赛要求 ≥5 只）；12-1 动量 + 绝对动量过滤；"
                      "120 日相关 ≥0.90 同簇只留最强（去重）；等权；无波动目标"),
+        "contest5h": ("TopK=5（正式赛要求 ≥5 只）；12-1 动量 + 绝对动量过滤；"
+                      "120 日相关 ≥0.90 去重；HRP 风险平价（60 日协方差）；无波动目标"),
         "champ": "TopK=5；逆波动加权；15% 年化波动目标；防御腿 = 0.5·511010.SH + 0.5·518880.SH",
     }[args.profile]
     evidence_txt = {
@@ -267,6 +273,9 @@ def main(argv: list[str] | None = None) -> None:
         "contest5": ("正式赛合规版依据 <code>reports/etf_contest5/README.md</code>"
                      "（80 个滚动 2 月窗口：中位 +1.84%、均值 +3.11%、p10 −7.0%、"
                      "最差 −18.5%、胜率 65%）。"),
+        "contest5h": ("HRP + 单只 ≤30% 依据 <code>reports/etf_contest5/README.md</code> §七"
+                      "（80 个滚动 2 月窗口：中位 +2.99%、均值 +4.29%、p10 −7.6%、"
+                      "最差 −15.3%、胜率 73.8%；等权 +1.84% / −18.5% / 65%）。"),
         "champ": ("样本外结论见 <code>reports/etf_p4/README.md</code>："
                   "OOS Sharpe 1.02、MDD 16.1%（2025-01–2026-10）。"),
     }[args.profile]
