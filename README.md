@@ -119,7 +119,7 @@ reports/    实验产物、监控台账与设计文档
 ```bash
 git clone https://github.com/Yuri-Mizuki/YuriQuant.git
 cd YuriQuant
-pip install -e ".[dev]"        # 或 uv sync --frozen --extra dev 精确复现锁定环境
+pip install -e ".[dev]"        # 依赖按 pyproject.toml 功能域分组，缺失时优雅降级
 pytest tests/ -q              # 1333 个用例，无需任何数据凭证
 ```
 
@@ -143,8 +143,8 @@ python -m scripts.reporting.generate_report      # 一键端到端 HTML 报告
 ## 🧪 工程质量
 
 - **测试**：1333 个用例覆盖数据层、回测、因子挖掘、模型、优化、监控、报告全栈
-- **CI**：GH Actions 已于 2026-10-27 移除（原两层手动工作流，2026-09-10 起 push 即静音、实际不用）；守卫改本机跑 `python -m pytest -q`（数据齐全最完整）+ `uv lock --check`
-- **复现锁**：`uv.lock` 提交入库，本机 `uv lock --check` 自检（CI 移除后由 README 此条与依赖改动 SOP 承担）；可选依赖按功能域分组（ml / gp / solver / rl），缺失时优雅降级
+- **CI**：GH Actions 已于 2026-10-27 移除（原两层手动工作流，2026-09-10 起 push 即静音、实际不用）；守卫改本机跑 `python -m pytest -q`（数据齐全最完整）
+- **依赖锁**：`uv.lock` 已于 2026-10-27 移出跟踪（工作流全用系统解释器 + `pip install -e`，零消费方；本地保留并 gitignore，需要精确环境时 `uv lock` 随时重生成）；可选依赖按功能域分组（ml / gp / solver / rl），缺失时优雅降级
 - **Lint / 类型**：`ruff check .`（F 规则为门禁）；`mypy` 以 Python 3.12 配置运行，存量类型告警未清零
 
 ## 📜 免责声明

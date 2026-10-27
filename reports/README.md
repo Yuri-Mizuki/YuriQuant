@@ -421,3 +421,6 @@ model层 / ML合成，其余已删、可重跑复现——结论见 §三.13~17�
   「册 + 节名」锚点；两处行号级硬引用（`baselines.yaml:110`、
   `neutralize_vectorization/report.md:5`）改章节锚，不再依赖行号。
   全仓扫描旧文件名在 TODO_ARCHIVE 之外零残留。
+- **`uv.lock` 移出跟踪**（800KB，跟踪文件中最大）：工作流全用系统解释器 + pip install -e，
+  CI 删除后零消费方（schedule.yaml 亦明确"系统 Python 不受 uv sync 影响"）→
+  本地保留并 gitignore，README 工程质量节改写；需要精确环境时 `uv lock` 重生成。

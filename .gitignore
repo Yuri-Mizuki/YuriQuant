@@ -73,3 +73,6 @@ reports/.pytest_tmp*/
 # OS
 Thumbs.db
 .DS_Store
+
+# 依赖锁：本地保留、不入库（2026-10-27 移出跟踪，工作流用系统解释器）
+uv.lock
