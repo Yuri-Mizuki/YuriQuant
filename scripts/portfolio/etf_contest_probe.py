@@ -301,22 +301,32 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--exclude", default="",
                     help="不可交易的代码（逗号分隔），如主办方指定池不含的品种；"
                          "把 mask 置 False 后全部变体在同一可投集合内重跑")
+    ap.add_argument("--only", default="",
+                    help="只跑指定 spec（逗号分隔的 name），用于定点复核")
+    ap.add_argument("--wl-crowd", action="store_true",
+                    help="扩池上仍计算拥挤度（份额只覆盖 29/237 只，未覆盖按 0 惩罚；"
+                         "默认关闭以避免误读）")
     args = ap.parse_args(argv)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     specs = {"base": SPECS, "k5": K5_SPECS, "lt": LT_SPECS,
              "conc": CONC_SPECS}[args.specs]
-    if args.universe == "wl":
+    if args.universe == "wl" and not args.wl_crowd:
         # 份额数据只覆盖现有 50 只池（白名单内 29 只），扩池上跑拥挤度会
-        # 退化成「绝大多数标的 0 惩罚」，与基准无差别，故不跑含 crowd 的变体。
+        # 退化成「绝大多数标的 0 惩罚」，与基准无差别，故默认不跑含 crowd 的变体。
         specs = [s for s in specs if "crowd" not in s["signal"]]
+    only = [x.strip() for x in args.only.split(",") if x.strip()]
+    if only:
+        specs = [s for s in specs if s["name"] in only]
+        if not specs:
+            raise SystemExit(f"--only 未匹配任何 spec：{only}")
 
     cache = DataCache(create_datasource())
     bundle = (load_wl_bundle(cache) if args.universe == "wl"
               else load_bundle(cache, WARMUP_BEGIN, None))
     close = bundle[1]
     panels = build_contest_panels(close, bundle[2],
-                                  with_crowd=(args.universe == "pool"))
+                                  with_crowd=(args.universe == "pool" or args.wl_crowd))
     excluded = [c.strip() for c in args.exclude.split(",") if c.strip()]
     if excluded:
         miss = [c for c in excluded if c not in panels["mask"].columns]

@@ -280,6 +280,16 @@ model层 / ML合成，其余已删、可重跑复现——结论见 §三.13~17�
 
 ## 四、清理记录
 
+- **2026-10-27（作废的初赛方案目录 `reports/etf_contest/`）**：15 文件 / 0.5MB，
+  含 20 日动量 Top3 方案的回测产物（`contest_summary.csv`、`contest_k5_*`、`board.html`、
+  当日 `signals.csv`/`orders_*.csv`、`meta.json`、`run_config*.json`）。删除起因：该方案
+  （20 日动量、周频、Top3、等权）已作废，profile `contest` 同步从代码移除（提交 `77bccbf`）。
+  快照清单（path+size+md5）在 `%USERPROFILE%\etf_contest_archive_snapshot_20261027.md5`；
+  引用扫描命中 5 处（`reports/etf_contest5/README.md` §一 与开篇、`reports/etf_champ/README.md`、
+  设计文档 §P5、`scripts/portfolio/etf_contest_spec.py` docstring），已全部改为指向
+  `reports/etf_contest5*` 或标注"已删除"；目录走 `_recycle_batch.py` 回收站（可从回收站恢复）。
+  `etf_contest_probe.py --specs base|k5` 仍可复跑并重建同名目录。
+
 - **2026-10-26（jq 成交金额族 A/B 两臂 `_base/`）**：`reports/alla_rolling_jq_base/_base/`
   与 `.../jq_amt/_base/` 共 28 文件 / **903.1MB**，是 prep 的确定性产物，两臂逐字节
   相同且不被任何分析产物引用（预测/回测用共享 `reports/alla_rolling/_base`；执行价面板

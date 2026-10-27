@@ -9,8 +9,10 @@
 
 | 代码里的分组 | 用途 | 证据目录 |
 |---|---|---|
-| ``SPECS`` | 早期 51 池信号筛选（20/60/12-1、双周、拥挤硬过滤） | ``reports/etf_contest/`` |
-| ``SPECS[k5_*]`` | Top5 档：去重、fill、等权/逆波/ERC/HRP、上限 | ``reports/etf_contest/`` |
+| ``SPECS`` | 早期 51 池信号筛选（20/60/12-1、双周、拥挤硬过滤）
+  （2026-10-27 方案作废，产物目录已删） | 复跑 ``--specs base`` |
+| ``SPECS[k5_*]`` | Top5 档：去重、fill、等权/逆波/ERC/HRP、上限
+  （同上；最新 Top5 口径见 ``reports/etf_contest5_opt/``） | 复跑 ``--specs k5`` |
 | ``CONC_SPECS`` | 集中档 Top1/2/3/5 + 拥挤软惩罚 + 6-1 + 周五 + 扩池
   （证据见 ``reports/etf_contest5_opt/``） | 同上 |
 | ``LT_SPECS`` | 长线月频 champ 对照 | ``reports/etf_contest5/`` §九 |
