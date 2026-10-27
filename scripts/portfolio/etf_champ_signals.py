@@ -59,10 +59,6 @@ CHAMP = {**P1_BASE, "name": "champ", "signal": "mom_crowd_f20", "defense": "mix"
          # 两个缓冲区宽度都不 binding，规则退化为「已持有且仍在清单里就不卖」。
          # 月换手 39.8%→32.1%（−19%）、成本 1.01%→0.80%/年，Sharpe +0.019。
          "enter_rank": 15, "exit_rank": 40}
-# 两个月比赛版：TopK=3、周频、等权、满仓（去掉波动目标与防御腿）。
-CONTEST = {"name": "contest_2m", "signal": "mom_crowd_f20", "freq": "W", "top_k": 3,
-           "absolute": True, "weighting": "equal", "commission_bp": 1.0,
-           "slippage_bp": 5.0, "dedup_corr": 0.90}
 # 正式赛合规版（2026-10-27 规则确认后）：规则要求「配置不少于 5 只产品」，
 # Top3 不合规，故改为 Top5；信号用 12-1（带拥挤度过滤的 champ 信号在约 10%
 # 的调仓日会只剩 1-4 只，违反只数约束），周频、等权、满仓。
@@ -79,8 +75,7 @@ CONTEST5 = {"name": "contest5_2m", "signal": "mom12_1", "freq": "W", "top_k": 5,
 # 依据：真实白名单 80 个滚动 2 月窗口，均值 +4.44% / 中位 +3.99% / 最差 −23.8%。
 # 执行建议：首次建仓先各买 5 只不同产品完成累计计数，之后按 Top3 集中。
 CONTEST3 = {**FINAL, "name": "contest_2m_top3"}
-PROFILES = {"champ": CHAMP, "contest": CONTEST, "contest5": CONTEST5,
-            "contest3": CONTEST3,
+PROFILES = {"champ": CHAMP, "contest5": CONTEST5, "contest3": CONTEST3,
             # 同一选标 + HRP 风险平价权重（60 日协方差）。
             # 2026-10-27 定版：去掉单只 30% 上限（用户选择博上限）。依据是真实白名单
             # 下 80 个 2 月窗口：无上限中位 +2.41% / Sharpe 0.89 / 最差 −13.8%，
@@ -168,9 +163,9 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--capital", type=float, default=1e7, help="总资金（元）")
     ap.add_argument("--positions", default=None, help="当前持仓 CSV（code,weight）")
     ap.add_argument("--profile", choices=tuple(PROFILES), default="champ",
-                    help="champ=长线定版；contest=两个月比赛版（Top3，不合规）；"
-                         "contest5=正式赛合规版（≥5 只）；contest5h=合规版 + HRP 权重；"
-                         "contest3=累计口径集中版（Top3 + 拥挤软惩罚 + HRP）")
+                    help="champ=长线版「磐石」；contest5=合规版「五衡·等权」（≥5 只）；"
+                         "contest5h=稳健版「五衡」（Top5/HRP）；contest3=定版「三锋」"
+                         "（Top3 + 拥挤软惩罚 + HRP）")
     ap.add_argument("--out", default=None,
                     help="输出目录（默认按 profile 落到 reports/etf_*）")
     ap.add_argument("--exclude", default=None,
@@ -184,9 +179,8 @@ def main(argv: list[str] | None = None) -> None:
                          "用于观察 HRP 原始权重形状")
     args = ap.parse_args(argv)
     out = Path(args.out or (ROOT / "reports" / (
-        {"champ": "etf_champ", "contest": "etf_contest",
-         "contest5": "etf_contest5", "contest5h": "etf_contest5",
-         "contest3": "etf_contest5"}[args.profile])))
+        {"champ": "etf_champ", "contest5": "etf_contest5",
+         "contest5h": "etf_contest5", "contest3": "etf_contest5"}[args.profile])))
     out.mkdir(parents=True, exist_ok=True)
     spec = dict(PROFILES[args.profile])
     if args.max_weight is not None:
@@ -195,7 +189,6 @@ def main(argv: list[str] | None = None) -> None:
         else:
             spec["max_weight"] = args.max_weight
     label = {"champ": "长线版「磐石」（月度/波动目标/债金防御）",
-             "contest": "初赛版「疾风」（Top3/20日动量，已作废）",
              "contest5": "合规版「五衡·等权」（Top5/周频/去重）",
              "contest5h": "稳健版「五衡」（Top5/HRP 风险平价）",
              "contest3": "定版「三锋」（Top3/HRP/拥挤软惩罚）"}[args.profile]
@@ -330,8 +323,6 @@ def main(argv: list[str] | None = None) -> None:
              if spec.get("defense") else f"满仓 {risk_weight:.1%}（无防御腿）")
     freq_txt = "每周第一个交易日" if spec.get("freq") == "W" else "每月第一个交易日"
     rule_txt = {
-        "contest": ("TopK=3；等权；无波动目标；拥挤度 = 份额 PIT 的 250 日分位"
-                    "（&gt; 0.80 剔除），仅作选标过滤"),
         "contest5": ("TopK=5（正式赛要求 ≥5 只）；12-1 动量 + 绝对动量过滤；"
                      "120 日相关 ≥0.90 同簇只留最强（去重）；等权；无波动目标"),
         "contest5h": ("TopK=5（正式赛要求 ≥5 只）；12-1 动量 + 绝对动量过滤；"
@@ -342,8 +333,6 @@ def main(argv: list[str] | None = None) -> None:
         "champ": "TopK=5；逆波动加权；15% 年化波动目标；防御腿 = 0.5·511010.SH + 0.5·518880.SH",
     }[args.profile]
     evidence_txt = {
-        "contest": ("两个月比赛版依据 <code>reports/etf_contest/README.md</code>"
-                    "（80 个滚动 2 月窗口：中位 +2.35%、p10 −7.9%、最差 −15.1%）。"),
         "contest5": ("正式赛合规版依据 <code>reports/etf_contest5/README.md</code>"
                      "（80 个滚动 2 月窗口：中位 +1.84%、均值 +3.11%、p10 −7.0%、"
                      "最差 −18.5%、胜率 65%）。"),

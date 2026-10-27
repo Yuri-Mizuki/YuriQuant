@@ -1033,8 +1033,8 @@
   真源 `reports/etf_champ/README.md`。S1 未做项（Δshare/成交额、连续净申购天数）暂不推进。
 - **后续可选**：周更自动任务（schedule 每日/每周跑信号板并推送）、HRP 版信号板开关
   （P4 OOS 1.27，但全样本仅 +0.04，需再攒一段样本外再定）。
-- **两个月比赛方案 `[x]`（10-27）**：新增 `scripts/portfolio/etf_contest_probe.py` 与
-  `--profile contest` 信号板，真源 `reports/etf_contest/README.md`。80 个滚动 2 月窗口：
+- **两个月比赛方案 `[x]`（10-27）**：新增 `scripts/portfolio/etf_contest_probe.py` 与比赛信号板，
+  真源 `reports/etf_contest/README.md`。80 个滚动 2 月窗口：
   - A（推荐）：12-1 动量 + 拥挤度过滤、Top3、周频、等权满仓 —— 中位 **+2.44%**、
     p10 −8.1%、最差 −29.7%、>10% 概率 20%、>20% 7.5%；
   - B（进攻）：Top2、双周 —— 均值 +3.44%、>20% 概率 10%，左尾略厚；
@@ -1154,7 +1154,8 @@
     **定版落地 `[x]`（10-27 整理）**：新增 `scripts/portfolio/etf_contest_spec.py` 作为定版参数
     唯一真源（`FINAL` + `EXCLUDED_5`），回测探针与实盘信号板共同引用，`tests/
     test_etf_contest_spec.py` 断言两侧一致（4 项全过）；比赛版 `--exclude` 改为自动排除 5 只
-    非池品种；旧 `contest` profile 仅留作归档复现。定版一页纸见
+    非池品种；作废的初赛 profile（20 日动量/Top3）已从代码与文档删除，仅
+    `reports/etf_contest/` 保留历史数据存档。定版一页纸见
     `reports/etf_contest5/README.md` §十三（参数表 / 代码组织 / 每周 SOP / 冻结声明）。
     真源 `reports/etf_contest5/README.md` §十二–§十三。
 
