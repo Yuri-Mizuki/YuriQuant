@@ -194,11 +194,11 @@ def main(argv: list[str] | None = None) -> None:
             spec.pop("max_weight", None)
         else:
             spec["max_weight"] = args.max_weight
-    label = {"champ": "长线定版 champ",
-             "contest": "两个月比赛版（Top3/周频/满仓）",
-             "contest5": "正式赛合规版（Top5/周频/满仓/去重）",
-             "contest5h": "正式赛合规版（Top5/周频/去重/HRP 风险平价）",
-             "contest3": "正式赛集中版（Top3/周频/去重/HRP/拥挤软惩罚）"}[args.profile]
+    label = {"champ": "长线版「磐石」（月度/波动目标/债金防御）",
+             "contest": "初赛版「疾风」（Top3/20日动量，已作废）",
+             "contest5": "合规版「五衡·等权」（Top5/周频/去重）",
+             "contest5h": "稳健版「五衡」（Top5/HRP 风险平价）",
+             "contest3": "定版「三锋」（Top3/HRP/拥挤软惩罚）"}[args.profile]
 
     cache = DataCache(create_datasource())
     bundle = load_bundle(cache, WARMUP_BEGIN, None)
