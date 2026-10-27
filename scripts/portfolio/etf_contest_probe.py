@@ -59,6 +59,7 @@ SPECS: list[dict] = [
     {**BASE, "name": "champ_sig_k2_w", "signal": "mom_crowd_f20", "top_k": 2},
     {**BASE, "name": "champ_sig_k3_w", "signal": "mom_crowd_f20", "top_k": 3},
     {**BASE, "name": "champ_sig_k2_2w", "signal": "mom_crowd_f20", "top_k": 2, "every_n": 10},
+    {**BASE, "name": "champ_sig_k3_2w", "signal": "mom_crowd_f20", "top_k": 3, "every_n": 10},
     {**BASE, "name": "champ_sig_k3_m", "signal": "mom_crowd_f20", "top_k": 3, "freq": "M"},
     {**BASE, "name": "dual_k3_w", "signal": "mom_dual", "top_k": 3},
     {**BASE, "name": "m20_k2_w_nofilter", "signal": "mom20", "top_k": 2, "absolute": False},
