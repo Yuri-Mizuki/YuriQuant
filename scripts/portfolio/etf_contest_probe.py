@@ -165,6 +165,14 @@ CONC_SPECS: list[dict] = [
      "top_k": 3, "dedup_corr": 0.90, "dedup_fill": True},
     {**BASE, "name": "c3_m12_1_cs10_w_dd90_hrp", "signal": "mom12_1_crowdsoft",
      "top_k": 3, "dedup_corr": 0.90, "dedup_fill": True, "weighting": "hrp"},
+    # 稳健性（2026-10-27 追问后补测）：去重窗口与协方差窗口对齐到 60 日
+    # （120 日去重会漏掉近期相关性抬升的同质标的），以及单只 50% 上限。
+    {**BASE, "name": "c3_m12_1_cs10_w_dd90_60_hrp", "signal": "mom12_1_crowdsoft",
+     "top_k": 3, "dedup_corr": 0.90, "dedup_fill": True, "weighting": "hrp",
+     "dedup_window": 60},
+    {**BASE, "name": "c3_m12_1_cs10_w_dd90_hrp_mw50", "signal": "mom12_1_crowdsoft",
+     "top_k": 3, "dedup_corr": 0.90, "dedup_fill": True, "weighting": "hrp",
+     "max_weight": 0.50},
     # 软惩罚在更集中档位上的补充（k=1/2 只需在池内跑，扩池缺份额数据）
     {**BASE, "name": "c1_m12_1_cs10_w_dd90", "signal": "mom12_1_crowdsoft",
      "top_k": 1, "dedup_corr": 0.90, "dedup_fill": True},
