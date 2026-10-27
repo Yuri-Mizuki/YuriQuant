@@ -348,6 +348,10 @@ def build_extra_panels(close: pd.DataFrame, panels: dict,
     panels["mom_r2"] = mom * r2
     panels["mom_crowd_f20"] = mom.where(crowd <= 0.80)
     panels["mom_crowd_f10"] = mom.where(crowd <= 0.90)
+    # 软惩罚（2026-10-27）：拥挤度超出 0.80 的部分线性扣最多 10pp 动量，
+    # 不硬剔除，避免调仓日候选被砍到不足只数。缺份额数据的标的按 0 惩罚。
+    over = ((crowd - 0.80) / 0.20).clip(lower=0.0, upper=1.0).fillna(0.0)
+    panels["mom12_1_crowdsoft"] = mom - 0.10 * over
     panels.update(build_share_signals(close))
     # Δshare 的反转用法：剔除「申购最热」的截面分位（资金流入 → 后续收益低）。
     dsh_rank = panels["dshare20"].rank(axis=1, pct=True)

@@ -166,6 +166,11 @@ def run_variant(bundle, panels: dict, spec: dict, w0: int | None = None,
         factor[c] = np.nan
         vol[c] = np.nan
         mask[c] = True
+    # 占位腿（国债/黄金）必须可执行：引擎施加掩码后会把多头腿重新归一化，
+    # 若占位腿被掩掉，只数仍会不足。它们在真实账户中是流动的债券/黄金 ETF。
+    for c in spec.get("fill_codes") or []:
+        if c in mask.columns:
+            mask[c] = True
     cash = spec.get("cash_code")
     if cash is None and spec.get("target_vol"):
         cash = "DEF" if spec.get("defense") else "CASH"
@@ -190,6 +195,8 @@ def run_variant(bundle, panels: dict, spec: dict, w0: int | None = None,
         dedup_corr=spec.get("dedup_corr"),
         dedup_window=spec.get("dedup_window", 120),
         dedup_fill=spec.get("dedup_fill", False),
+        fill_to=spec.get("fill_to"),
+        fill_codes=spec.get("fill_codes"),
     )
     cx = float(spec.get("cost_x", 1.0))
     commission_bp = float(spec.get("commission_bp", 5.0))
@@ -226,6 +233,9 @@ def run_variant(bundle, panels: dict, spec: dict, w0: int | None = None,
         "rebalance_dates": rb_dates,
         "weights": w,
         "equity": res.equity_curve,
+        # 供信号板在「最新交易日 == 调仓日」时直接取当日权重：引擎不允许在最后
+        # 一根 bar 建仓（i < n-1），否则实盘指令会落后一周。
+        "strategy": strategy,
     }
 
 

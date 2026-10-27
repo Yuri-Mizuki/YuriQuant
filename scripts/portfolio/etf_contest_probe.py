@@ -27,6 +27,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from config import Config
 from data.cache import DataCache
 from data.datasource import create_datasource
 from scripts.portfolio.etf_rotation_p2 import (
@@ -46,6 +47,11 @@ from scripts.portfolio.etf_rotation_probe import (
 
 ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / "reports" / "etf_contest"
+CACHE_ROOT = Path(str(Config.cache()["root"]))
+ALL_ETF_FILE = "etf_all_kline.parquet"
+WL_CSV = ROOT / "reports" / "etf_contest5_wl" / "whitelist_ocr.csv"
+# 只数不足时的占位腿：国债 / 十年国债 / 黄金（均为白名单内、流动性充足）
+FILL_CODES = ["511010.SH", "511260.SH", "518880.SH"]
 
 BASE = {"freq": "W", "top_k": 3, "absolute": True, "weighting": "equal",
         "commission_bp": 1.0, "slippage_bp": 5.0}
@@ -134,6 +140,49 @@ K5_SPECS: list[dict] = [
      "dedup_corr": 0.90, "weighting": "hrp", "max_weight": 0.30},
 ]
 
+# 集中版（2026-10-27 晚）：用户确认「配置不少于 5 只产品」按**赛期内累计
+# 买入过 5 只不同产品**理解，不再要求每时点同时持有 ≥5 只。故放开 top_k=1/2/3，
+# 用 5 个产品名额只作「先买 5 只」的一次性合规动作（回测只多几笔成本，不入收益）。
+CONC_SPECS: list[dict] = [
+    {**BASE, "name": "c1_m12_1_w_dd90", "signal": "mom12_1", "top_k": 1,
+     "dedup_corr": 0.90, "dedup_fill": True},
+    {**BASE, "name": "c2_m12_1_w_dd90", "signal": "mom12_1", "top_k": 2,
+     "dedup_corr": 0.90, "dedup_fill": True},
+    {**BASE, "name": "c3_m12_1_w_dd90", "signal": "mom12_1", "top_k": 3,
+     "dedup_corr": 0.90, "dedup_fill": True},
+    # Top5 作参照（旧合规版）
+    {**BASE, "name": "c5_m12_1_w_dd90", "signal": "mom12_1", "top_k": 5,
+     "dedup_corr": 0.90, "dedup_fill": True},
+    {**BASE, "name": "c5_m12_1_w_dd90_hrp", "signal": "mom12_1", "top_k": 5,
+     "dedup_corr": 0.90, "dedup_fill": True, "weighting": "hrp"},
+    # 集中版 + HRP：k=2/3 时 HRP 仍有分散意义
+    {**BASE, "name": "c2_m12_1_w_dd90_hrp", "signal": "mom12_1", "top_k": 2,
+     "dedup_corr": 0.90, "dedup_fill": True, "weighting": "hrp"},
+    {**BASE, "name": "c3_m12_1_w_dd90_hrp", "signal": "mom12_1", "top_k": 3,
+     "dedup_corr": 0.90, "dedup_fill": True, "weighting": "hrp"},
+    # 优化点2：拥挤度软惩罚（超出 0.80 的部分线性扣 10pp 动量）
+    {**BASE, "name": "c3_m12_1_cs10_w_dd90", "signal": "mom12_1_crowdsoft",
+     "top_k": 3, "dedup_corr": 0.90, "dedup_fill": True},
+    {**BASE, "name": "c3_m12_1_cs10_w_dd90_hrp", "signal": "mom12_1_crowdsoft",
+     "top_k": 3, "dedup_corr": 0.90, "dedup_fill": True, "weighting": "hrp"},
+    # 软惩罚在更集中档位上的补充（k=1/2 只需在池内跑，扩池缺份额数据）
+    {**BASE, "name": "c1_m12_1_cs10_w_dd90", "signal": "mom12_1_crowdsoft",
+     "top_k": 1, "dedup_corr": 0.90, "dedup_fill": True},
+    {**BASE, "name": "c2_m12_1_cs10_w_dd90_hrp", "signal": "mom12_1_crowdsoft",
+     "top_k": 2, "dedup_corr": 0.90, "dedup_fill": True, "weighting": "hrp"},
+    # 优化点3：6-1 动量（跳最近一月、看半年）
+    {**BASE, "name": "c3_m6_1_w_dd90", "signal": "mom6_1", "top_k": 3,
+     "dedup_corr": 0.90, "dedup_fill": True},
+    {**BASE, "name": "c3_m6_1_w_dd90_hrp", "signal": "mom6_1", "top_k": 3,
+     "dedup_corr": 0.90, "dedup_fill": True, "weighting": "hrp"},
+    # 优化点5：周五调仓（引擎 freq="W" 默认取每周首个交易日 = 周一）
+    {**BASE, "name": "c3_m12_1_w_dd90_fri", "signal": "mom12_1", "top_k": 3,
+     "dedup_corr": 0.90, "dedup_fill": True, "rebal_weekday": "last"},
+    {**BASE, "name": "c5_m12_1_w_dd90_hrp_fri", "signal": "mom12_1", "top_k": 5,
+     "dedup_corr": 0.90, "dedup_fill": True, "weighting": "hrp",
+     "rebal_weekday": "last"},
+]
+
 # 长线定版 champ 放进同一 2 月窗口口径，用于「比赛方案 vs 长线方案」对照。
 # champ = 月频、Top5、逆波动、15% 年化波动目标、债金防御腿（DEF 合成列）、去重 0.90。
 LT_SPECS: list[dict] = [
@@ -145,18 +194,72 @@ LT_SPECS: list[dict] = [
 ]
 
 
-def build_contest_panels(close: pd.DataFrame, amount: pd.DataFrame) -> dict:
-    """在 P1 面板上加 20/60 日动量与 20 日动量的拥挤度过滤版。"""
+def build_contest_panels(close: pd.DataFrame, amount: pd.DataFrame,
+                         with_crowd: bool = True) -> dict:
+    """在 P1 面板上加 20/60/6-1 日动量与拥挤度（过滤版 + 软惩罚版）。"""
     p = build_panels(close, amount)
     p["mom20"] = close / close.shift(20) - 1.0
     p["mom60"] = close / close.shift(60) - 1.0
-    crowd = build_crowding(close)
-    p["crowd"] = crowd
-    p["mom20_crowd_f20"] = p["mom20"].where(crowd <= 0.80)
-    p["mom_crowd_f20"] = p["mom12_1"].where(crowd <= 0.80)
-    # 双周期确认：12-1 中期动量，且 20 日短期动量也为正。
-    p["mom_dual"] = p["mom12_1"].where(p["mom20"] > 0)
+    # 优化点3：6-1 动量 = 跳过最近一个月、看之前半年。
+    p["mom6_1"] = close.shift(21) / close.shift(126) - 1.0
+    if with_crowd:
+        crowd = build_crowding(close)
+        p["crowd"] = crowd
+        p["mom20_crowd_f20"] = p["mom20"].where(crowd <= 0.80)
+        p["mom_crowd_f20"] = p["mom12_1"].where(crowd <= 0.80)
+        # 优化点2：软惩罚——份额分位超出 0.80 的部分线性扣最多 10pp 动量，
+        # 不硬剔除，避免把可选标的砍到不足只数。缺份额数据的标的按 0 惩罚。
+        over = ((crowd - 0.80) / 0.20).clip(lower=0.0, upper=1.0).fillna(0.0)
+        p["mom12_1_crowdsoft"] = p["mom12_1"] - 0.10 * over
+        # 双周期确认：12-1 中期动量，且 20 日短期动量也为正。
+        p["mom_dual"] = p["mom12_1"].where(p["mom20"] > 0)
     return p
+
+
+def load_wl_bundle(cache, begin: int = WARMUP_BEGIN, end: int | None = None,
+                   min_years: float = 3.0, min_amount: float = MIN_AMOUNT):
+    """大赛白名单 ∩ 上市满 3 年 ∩ 流动性达标者，从 etf_all_kline 构建面板束。
+
+    返回与 ``load_bundle`` 同构的 ``(uni, close, amount, bench)``（uni 置 None，
+    下游只用于标签展示）。价格为 ``close × adj_factor``（后复权）。
+    """
+    w = pd.read_csv(WL_CSV, dtype={"code": str}).drop_duplicates("code")
+    codes = [s + (".SZ" if s.startswith("1") else ".SH") for s in w["code"]]
+    raw = pd.read_parquet(CACHE_ROOT / ALL_ETF_FILE)
+    raw = raw[raw.index.get_level_values("code").isin(codes)]
+    close_raw = raw["close"].unstack("code").sort_index()
+    adj = (raw["adj_factor"].unstack("code")
+           .reindex(index=close_raw.index, columns=close_raw.columns)
+           .ffill().fillna(1.0))
+    close = close_raw * adj
+    amount = raw["amount"].unstack("code").reindex(
+        index=close.index, columns=close.columns)
+
+    first = close_raw.apply(lambda s: s.first_valid_index())
+    last = close_raw.apply(lambda s: s.last_valid_index())
+    ready = first + pd.Timedelta(days=365.25 * min_years)
+    age_ok = pd.DataFrame(
+        np.greater_equal.outer(close.index.values, ready.values),
+        index=close.index, columns=close.columns)
+    liq = amount.rolling(60, min_periods=40).mean() >= min_amount
+    alive = last >= close.index.max() - pd.Timedelta(days=15)
+    keep = [c for c in close.columns
+            if bool(alive.get(c, False)) and bool((age_ok[c] & liq[c]).any())]
+    close, amount = close[keep], amount[keep]
+
+    hi = pd.Timestamp(str(end)) if end else close.index.max()
+    lo = pd.Timestamp(str(begin))
+    m = (close.index >= lo) & (close.index <= hi)
+    close, amount = close.loc[m], amount.loc[m]
+
+    idx = cache.get_index_daily(BENCH, begin, int(hi.strftime("%Y%m%d")))
+    bench_close = idx["close"].unstack("code")
+    bcol = [c for c in bench_close.columns if c == BENCH]
+    bench = (bench_close[bcol[0]].reindex(close.index).ffill()
+             .pct_change(fill_method=None) if bcol else pd.Series(dtype=float))
+    print(f"[wl] 白名单 {len(codes)} 只（源内 {raw.index.get_level_values('code').nunique()}）"
+          f" -> 满 {min_years:.0f} 年+流动+仍在交易 {len(keep)} 只", flush=True)
+    return None, close, amount, bench
 
 
 def two_month_table(eq: pd.Series, bench: pd.Series, mfs: pd.DatetimeIndex) -> pd.DataFrame:
@@ -181,21 +284,31 @@ def two_month_table(eq: pd.Series, bench: pd.Series, mfs: pd.DatetimeIndex) -> p
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description="ETF 两个月比赛方案探针")
     ap.add_argument("--out", default=str(OUT))
-    ap.add_argument("--specs", default="base", choices=["base", "k5", "lt"],
+    ap.add_argument("--specs", default="base",
+                    choices=["base", "k5", "lt", "conc"],
                     help="base=TopK1/2/3 旧组；k5=合规组（≥5 只）；"
-                         "lt=长线 champ 对照（同一 2 月窗口口径）")
+                         "lt=长线 champ 对照；conc=累计口径下的集中版（Top1/2/3）")
+    ap.add_argument("--universe", choices=["pool", "wl"], default="pool",
+                    help="pool=现有 51 只池；wl=大赛白名单扩池（满 3 年+流动性）")
     ap.add_argument("--exclude", default="",
                     help="不可交易的代码（逗号分隔），如主办方指定池不含的品种；"
                          "把 mask 置 False 后全部变体在同一可投集合内重跑")
     args = ap.parse_args(argv)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
-    specs = {"base": SPECS, "k5": K5_SPECS, "lt": LT_SPECS}[args.specs]
+    specs = {"base": SPECS, "k5": K5_SPECS, "lt": LT_SPECS,
+             "conc": CONC_SPECS}[args.specs]
+    if args.universe == "wl":
+        # 份额数据只覆盖现有 50 只池（白名单内 29 只），扩池上跑拥挤度会
+        # 退化成「绝大多数标的 0 惩罚」，与基准无差别，故不跑含 crowd 的变体。
+        specs = [s for s in specs if "crowd" not in s["signal"]]
 
     cache = DataCache(create_datasource())
-    bundle = load_bundle(cache, WARMUP_BEGIN, None)
+    bundle = (load_wl_bundle(cache) if args.universe == "wl"
+              else load_bundle(cache, WARMUP_BEGIN, None))
     close = bundle[1]
-    panels = build_contest_panels(close, bundle[2])
+    panels = build_contest_panels(close, bundle[2],
+                                  with_crowd=(args.universe == "pool"))
     excluded = [c.strip() for c in args.exclude.split(",") if c.strip()]
     if excluded:
         miss = [c for c in excluded if c not in panels["mask"].columns]
@@ -215,6 +328,11 @@ def main(argv: list[str] | None = None) -> None:
         if spec.get("every_n"):
             idx = close.index[close.index >= pd.Timestamp("20200101")]
             rb = set(idx[:: int(spec["every_n"])])
+        elif spec.get("rebal_weekday") == "last":
+            # 引擎 freq="W" 取每周首个交易日（周一）；这里改取每周最后一个交易日。
+            idx = close.index[close.index >= pd.Timestamp("20200101")]
+            s = pd.Series(idx, index=idx)
+            rb = set(s.groupby(s.index.to_period("W")).last())
         extra = None
         if spec.get("defense"):
             # 防御腿是合成资产（债+金 50/50），作为净值列注入回测
@@ -232,6 +350,7 @@ def main(argv: list[str] | None = None) -> None:
         lt5 = float((hc < 5).mean()) if len(hc) else np.nan
         rows.append({
             "name": spec["name"], "signal": spec["signal"], "top_k": spec["top_k"],
+            "universe": args.universe,
             "freq": "2W" if spec.get("every_n") else spec["freq"],
             "dedup": spec.get("dedup_corr", np.nan),
             "dedup_window": spec.get("dedup_window", np.nan),
@@ -261,7 +380,9 @@ def main(argv: list[str] | None = None) -> None:
               f"持仓={rows[-1]['avg_holdings']:.1f}/最少{min_hold:.0f}", flush=True)
 
     summary = pd.DataFrame(rows).sort_values("median", ascending=False)
-    tag = {"base": "", "k5": "_k5", "lt": "_lt"}[args.specs]
+    tag = {"base": "", "k5": "_k5", "lt": "_lt", "conc": "_conc"}[args.specs]
+    if args.universe == "wl":
+        tag += "_wl"
     summary.to_csv(out / f"contest{tag}_summary.csv", index=False, encoding="utf-8-sig")
     pd.concat(per_window).to_csv(out / f"contest{tag}_windows.csv", index=False,
                                  encoding="utf-8-sig")

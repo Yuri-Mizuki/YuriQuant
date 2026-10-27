@@ -164,6 +164,8 @@ class EtfRotationAdvanced(Strategy):
         dedup_corr: float | None = None,
         dedup_window: int = 120,
         dedup_fill: bool = False,
+        fill_to: int | None = None,
+        fill_codes: list[str] | None = None,
     ):
         self.top_k = int(top_k)
         self.absolute_filter = bool(absolute_filter)
@@ -181,6 +183,8 @@ class EtfRotationAdvanced(Strategy):
         self.dedup_corr = float(dedup_corr) if dedup_corr is not None else None
         self.dedup_window = int(dedup_window)
         self.dedup_fill = bool(dedup_fill)
+        self.fill_to = int(fill_to) if fill_to is not None else None
+        self.fill_codes = list(fill_codes) if fill_codes else []
         self._held: list[str] = []
         self.name = (
             f"etf_adv_topk{self.top_k}"
@@ -191,7 +195,8 @@ class EtfRotationAdvanced(Strategy):
             f"{'_vt' if self.target_vol else ''}"
             f"{'_buf' if self.enter_rank else ''}"
             f"{'_mw' if self.max_weight else ''}"
-            f"{f'_dd{int(self.dedup_corr * 100)}' if self.dedup_corr else ''}"
+            f"{'_dd' + str(int(self.dedup_corr * 100)) if self.dedup_corr else ''}"
+            f"{'_fill' if self.fill_to else ''}"
         )
 
     # ---- 选标 ----
@@ -295,12 +300,21 @@ class EtfRotationAdvanced(Strategy):
             self._held = []
             return pd.Series(dtype=float)
         sel = self._select(vals, date)
-        if not sel:
+        # 只数不足时的占位腿：用国债/黄金等低相关资产补足（如比赛要求 ≥5 只）。
+        # 占位标的可能不在动量候选内（绝对动量过滤后候选为空），因此从完整
+        # 截面索引取，不要求其因子非 NaN。
+        fill: list[str] = []
+        if self.fill_to and len(sel) < self.fill_to and self.fill_codes:
+            fill = [c for c in self.fill_codes if c not in sel]
+            fill = fill[: self.fill_to - len(sel)]
+        if not sel and not fill:
             self._held = []
             return pd.Series(dtype=float)
-        if self.cash_filter and float(vals.loc[sel].mean()) <= 0.0:
+        core = vals.reindex(sel).dropna()
+        if self.cash_filter and len(core) and float(core.mean()) <= 0.0 and not fill:
             self._held = []
             return pd.Series(dtype=float)
+        sel = sel + fill
 
         n = len(sel)
         w = pd.Series(1.0 / n, index=sel)

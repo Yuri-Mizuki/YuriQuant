@@ -67,8 +67,24 @@ CONTEST = {"name": "contest_2m", "signal": "mom_crowd_f20", "freq": "W", "top_k"
 # 的调仓日会只剩 1-4 只，违反只数约束），周频、等权、满仓。
 CONTEST5 = {"name": "contest5_2m", "signal": "mom12_1", "freq": "W", "top_k": 5,
             "absolute": True, "weighting": "equal", "commission_bp": 1.0,
-            "slippage_bp": 5.0, "dedup_corr": 0.90, "dedup_fill": True}
+            "slippage_bp": 5.0, "dedup_corr": 0.90, "dedup_fill": True,
+            # 绝对动量过滤后候选不足 5 只时（真实白名单下约 0.6% 的调仓日），
+            # 用国债/黄金占位，满足「配置不少于 5 只产品」的硬约束。
+            "fill_to": 5, "fill_codes": ["511010.SH", "511260.SH", "518880.SH"]}
+# 集中版（2026-10-27 规则口径修正）：规则里的「配置不少于 5 只产品」按**赛期内
+# 累计**买入过的不同产品计数，而不是每个调仓日同时持有 ≥5 只。因此 Top3 合法，
+# 可以用集中度换收益上限（执行建议：首次建仓先各买 5 只不同产品完成累计计数，
+# 之后按 Top3 集中）。依据真实白名单 80 个滚动 2 月窗口：均值 +4.44%、中位
+# +3.99%、p10 −8.2%、最差 −23.8%、胜率 66.3%、>10% 27.5%、<−10% 3.75%，
+# 全面优于 Top5 HRP（+3.85% / +2.41% / −5.9% / −13.8% / 65%）。
+# 信号用拥挤度软惩罚版：份额 250 日分位 >0.80 起线性扣动量（最多 10pp），
+# 把 Top3+HRP 的中位从 +2.78% 提到 +3.99%、<−10% 概率从 7.5% 砍到 3.75%。
+# 集中版不需要只数兜底，故去掉 fill_to/fill_codes。
+CONTEST3 = {k: v for k, v in CONTEST5.items() if k not in ("fill_to", "fill_codes")}
+CONTEST3.update({"name": "contest_2m_top3", "signal": "mom12_1_crowdsoft",
+                 "top_k": 3, "weighting": "hrp"})
 PROFILES = {"champ": CHAMP, "contest": CONTEST, "contest5": CONTEST5,
+            "contest3": CONTEST3,
             # 同一选标 + HRP 风险平价权重（60 日协方差）。
             # 2026-10-27 定版：去掉单只 30% 上限（用户选择博上限）。依据是真实白名单
             # 下 80 个 2 月窗口：无上限中位 +2.41% / Sharpe 0.89 / 最差 −13.8%，
@@ -126,6 +142,14 @@ def _next_rebalance(idx: pd.DatetimeIndex, asof: pd.Timestamp,
     return cand[0] if len(cand) else None
 
 
+def _is_rebalance_day(idx: pd.DatetimeIndex, freq: str = "M") -> bool:
+    """最新一根 bar 是否本身就是（周/月）首个交易日，即当日该调仓。"""
+    if len(idx) < 2:
+        return False
+    period = "W" if freq == "W" else "M"
+    return idx[-1].to_period(period) != idx[-2].to_period(period)
+
+
 def _load_positions(path: str | None) -> pd.Series:
     if not path:
         return pd.Series(dtype=float)
@@ -149,7 +173,8 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--positions", default=None, help="当前持仓 CSV（code,weight）")
     ap.add_argument("--profile", choices=tuple(PROFILES), default="champ",
                     help="champ=长线定版；contest=两个月比赛版（Top3，不合规）；"
-                         "contest5=正式赛合规版（≥5 只）；contest5h=合规版 + HRP 权重")
+                         "contest5=正式赛合规版（≥5 只）；contest5h=合规版 + HRP 权重；"
+                         "contest3=累计口径集中版（Top3 + 拥挤软惩罚 + HRP）")
     ap.add_argument("--out", default=None,
                     help="输出目录（默认按 profile 落到 reports/etf_*）")
     ap.add_argument("--exclude", default="",
@@ -164,7 +189,8 @@ def main(argv: list[str] | None = None) -> None:
     args = ap.parse_args(argv)
     out = Path(args.out or (ROOT / "reports" / (
         {"champ": "etf_champ", "contest": "etf_contest",
-         "contest5": "etf_contest5", "contest5h": "etf_contest5"}[args.profile])))
+         "contest5": "etf_contest5", "contest5h": "etf_contest5",
+         "contest3": "etf_contest5"}[args.profile])))
     out.mkdir(parents=True, exist_ok=True)
     spec = dict(PROFILES[args.profile])
     if args.max_weight is not None:
@@ -175,7 +201,8 @@ def main(argv: list[str] | None = None) -> None:
     label = {"champ": "长线定版 champ",
              "contest": "两个月比赛版（Top3/周频/满仓）",
              "contest5": "正式赛合规版（Top5/周频/满仓/去重）",
-             "contest5h": "正式赛合规版（Top5/周频/去重/HRP 风险平价）"}[args.profile]
+             "contest5h": "正式赛合规版（Top5/周频/去重/HRP 风险平价）",
+             "contest3": "正式赛集中版（Top3/周频/去重/HRP/拥挤软惩罚）"}[args.profile]
 
     cache = DataCache(create_datasource())
     bundle = load_bundle(cache, WARMUP_BEGIN, None)
@@ -205,8 +232,17 @@ def main(argv: list[str] | None = None) -> None:
     res = run_variant(bundle, panels, spec, None, None, extra_close=extra)
     rb = res["rebalance_dates"]
     asof = rb[-1]
-    target = _expand_defense(res["weights"].loc[asof])
     sig_date = close.index[-1]
+    if asof != sig_date and _is_rebalance_day(close.index, spec.get("freq", "M")):
+        # 最新交易日本身就是调仓日（周频=周一）时，引擎因「最后一根 bar 不能建仓」
+        # 还停留在上一周。这里直接用当日因子/掩码取权重，否则实盘指令会落后一周。
+        fac = panels[spec["signal"]].where(panels["mask"]).loc[sig_date].dropna()
+        target = _expand_defense(res["strategy"].get_weights_at(sig_date, fac))
+        print(f"[{args.profile}] 信号日 {sig_date.date()} 即调仓日，按当日权重出单",
+              flush=True)
+        asof = sig_date
+    else:
+        target = _expand_defense(res["weights"].loc[asof])
     amt60 = amount.rolling(60, min_periods=40).mean().loc[sig_date]
     crowd = panels["crowd"].loc[sig_date]
     prem = panels["prem20"].loc[sig_date] if "prem20" in panels else pd.Series(dtype=float)
@@ -302,6 +338,9 @@ def main(argv: list[str] | None = None) -> None:
                      "120 日相关 ≥0.90 同簇只留最强（去重）；等权；无波动目标"),
         "contest5h": ("TopK=5（正式赛要求 ≥5 只）；12-1 动量 + 绝对动量过滤；"
                       "120 日相关 ≥0.90 去重；HRP 风险平价（60 日协方差）；无波动目标"),
+        "contest3": ("TopK=3（累计口径：赛期内累计买入 ≥5 只不同产品即合规）；"
+                     "12-1 动量扣拥挤软惩罚（份额 250 日分位 >0.80 起线性扣，最多 10pp）"
+                     " + 绝对动量过滤；120 日相关 ≥0.90 去重；HRP 风险平价；无波动目标"),
         "champ": "TopK=5；逆波动加权；15% 年化波动目标；防御腿 = 0.5·511010.SH + 0.5·518880.SH",
     }[args.profile]
     evidence_txt = {
@@ -313,6 +352,10 @@ def main(argv: list[str] | None = None) -> None:
         "contest5h": ("HRP + 单只 ≤30% 依据 <code>reports/etf_contest5/README.md</code> §七"
                       "（80 个滚动 2 月窗口：中位 +2.99%、均值 +4.29%、p10 −7.6%、"
                       "最差 −15.3%、胜率 73.8%；等权 +1.84% / −18.5% / 65%）。"),
+        "contest3": ("集中版依据 <code>reports/etf_contest5/README.md</code> §十二"
+                     "（真实白名单 80 个滚动 2 月窗口：均值 +4.44%、中位 +3.99%、"
+                     "p10 −8.2%、最差 −23.8%、胜率 66.3%、>10% 27.5%；"
+                     "同族 Top5 HRP 为 +3.85% / +2.41% / −13.8%）。"),
         "champ": ("样本外结论见 <code>reports/etf_p4/README.md</code>："
                   "OOS Sharpe 1.02、MDD 16.1%（2025-01–2026-10）。"),
     }[args.profile]
