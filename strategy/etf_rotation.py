@@ -162,6 +162,7 @@ class EtfRotationAdvanced(Strategy):
         max_weight: float | None = None,
         dedup_corr: float | None = None,
         dedup_window: int = 120,
+        dedup_fill: bool = False,
     ):
         self.top_k = int(top_k)
         self.absolute_filter = bool(absolute_filter)
@@ -177,11 +178,13 @@ class EtfRotationAdvanced(Strategy):
         self.max_weight = float(max_weight) if max_weight is not None else None
         self.dedup_corr = float(dedup_corr) if dedup_corr is not None else None
         self.dedup_window = int(dedup_window)
+        self.dedup_fill = bool(dedup_fill)
         self._held: list[str] = []
         self.name = (
             f"etf_adv_topk{self.top_k}"
             f"{'_abs' if self.absolute_filter else ''}"
             f"{'_iv' if self.weighting == 'inverse_vol' else ''}"
+            f"{'_rd' if self.weighting == 'rank_decay' else ''}"
             f"_{self.weighting}" if self.weighting in ("erc", "hrp") else ""
             f"{'_vt' if self.target_vol else ''}"
             f"{'_buf' if self.enter_rank else ''}"
@@ -222,7 +225,12 @@ class EtfRotationAdvanced(Strategy):
         if vals.empty:
             return []
         ranked = vals.sort_values(ascending=False)
-        ranked = self._dedup(list(ranked.index), date)
+        raw = list(ranked.index)
+        ranked = self._dedup(raw, date)
+        if self.dedup_fill and len(ranked) < self.top_k:
+            # 硬性持仓只数约束（如比赛要求 ≥5 只）：去重后不足时，用原排名补回，
+            # 宁可持同质双胞胎也不降低只数。
+            ranked = ranked + [c for c in raw if c not in ranked]
         rank = {c: i for i, c in enumerate(ranked)}
         if not self.enter_rank:
             return list(ranked[: self.top_k])
@@ -304,6 +312,11 @@ class EtfRotationAdvanced(Strategy):
             inv = (1.0 / vol.replace(0.0, float("nan"))).dropna()
             if len(inv) == n:
                 w = inv / inv.sum()
+        if self.weighting == "rank_decay" and n > 1:
+            # 排名线性衰减：n, n-1, ..., 1 归一化。用于「必须持够 5 只、
+            # 但想保留前几名集中度」的规则约束（如比赛要求 ≥5 只产品）。
+            base = np.arange(n, 0, -1, dtype=float)
+            w = pd.Series(base / base.sum(), index=sel)
         if self.weighting in ("erc", "hrp") and self.ret_panel is not None and date is not None:
             w = self._risk_parity(sel, date, w)
         if self.max_weight is not None and n > 1:

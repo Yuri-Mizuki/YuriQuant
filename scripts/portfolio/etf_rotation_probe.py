@@ -188,6 +188,7 @@ def run_variant(bundle, panels: dict, spec: dict, w0: int | None = None,
         max_weight=spec.get("max_weight"),
         dedup_corr=spec.get("dedup_corr"),
         dedup_window=spec.get("dedup_window", 120),
+        dedup_fill=spec.get("dedup_fill", False),
     )
     cx = float(spec.get("cost_x", 1.0))
     commission_bp = float(spec.get("commission_bp", 5.0))

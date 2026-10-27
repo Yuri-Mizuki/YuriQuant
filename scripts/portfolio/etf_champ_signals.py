@@ -58,6 +58,13 @@ CHAMP = {**P1_BASE, "name": "champ", "signal": "mom_crowd_f20", "defense": "mix"
 CONTEST = {"name": "contest_2m", "signal": "mom_crowd_f20", "freq": "W", "top_k": 3,
            "absolute": True, "weighting": "equal", "commission_bp": 1.0,
            "slippage_bp": 5.0, "dedup_corr": 0.90}
+# 正式赛合规版（2026-10-27 规则确认后）：规则要求「配置不少于 5 只产品」，
+# Top3 不合规，故改为 Top5；信号用 12-1（带拥挤度过滤的 champ 信号在约 10%
+# 的调仓日会只剩 1-4 只，违反只数约束），周频、等权、满仓。
+CONTEST5 = {"name": "contest5_2m", "signal": "mom12_1", "freq": "W", "top_k": 5,
+            "absolute": True, "weighting": "equal", "commission_bp": 1.0,
+            "slippage_bp": 5.0, "dedup_corr": 0.90, "dedup_fill": True}
+PROFILES = {"champ": CHAMP, "contest": CONTEST, "contest5": CONTEST5}
 DEF_PARTS = {"511010.SH": 0.5, "518880.SH": 0.5}
 PARTICIPATION = 0.05      # 单只单边下单 / 60 日均成交额
 PREMIUM_WARN = 0.01       # 20 日折溢价告警线
@@ -130,17 +137,20 @@ def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description="ETF 轮动 champion 生产信号板（P5）")
     ap.add_argument("--capital", type=float, default=1e7, help="总资金（元）")
     ap.add_argument("--positions", default=None, help="当前持仓 CSV（code,weight）")
-    ap.add_argument("--profile", choices=("champ", "contest"), default="champ",
-                    help="champ=长线定版；contest=两个月比赛版（Top3/周频/满仓）")
+    ap.add_argument("--profile", choices=tuple(PROFILES), default="champ",
+                    help="champ=长线定版；contest=两个月比赛版（Top3，不合规）；"
+                         "contest5=正式赛合规版（≥5 只）")
     ap.add_argument("--out", default=None,
-                    help="输出目录（默认 champ→reports/etf_champ，contest→reports/etf_contest）")
+                    help="输出目录（默认按 profile 落到 reports/etf_*）")
     args = ap.parse_args(argv)
     out = Path(args.out or (ROOT / "reports" / (
-        "etf_contest" if args.profile == "contest" else "etf_champ")))
+        {"champ": "etf_champ", "contest": "etf_contest",
+         "contest5": "etf_contest5"}[args.profile])))
     out.mkdir(parents=True, exist_ok=True)
-    spec = CHAMP if args.profile == "champ" else CONTEST
-    label = ("长线定版 champ" if args.profile == "champ"
-             else "两个月比赛版（Top3/周频/满仓）")
+    spec = PROFILES[args.profile]
+    label = {"champ": "长线定版 champ",
+             "contest": "两个月比赛版（Top3/周频/满仓）",
+             "contest5": "正式赛合规版（Top5/周频/满仓/去重）"}[args.profile]
 
     cache = DataCache(create_datasource())
     bundle = load_bundle(cache, WARMUP_BEGIN, None)
@@ -196,11 +206,13 @@ def main(argv: list[str] | None = None) -> None:
     # 候选榜单：按原始 12-1 动量（仅可交易）排序，标注被哪条规则挡掉。
     raw_mom = panels["mom12_1"].loc[sig_date].where(mask)
     cand = raw_mom.dropna().sort_values(ascending=False).head(15)
+    uses_crowd = "crowd" in str(spec.get("signal", ""))
     board_rows = []
     for rank, (c, mom) in enumerate(cand.items(), start=1):
         if c in target.index:
             status = "选中"
-        elif np.isfinite(float(crowd.get(c, np.nan))) and float(crowd[c]) > 0.80:
+        elif uses_crowd and np.isfinite(float(crowd.get(c, np.nan))) \
+                and float(crowd[c]) > 0.80:
             status = "拥挤剔除"
         elif mom <= 0:
             status = "动量非正"
@@ -220,7 +232,9 @@ def main(argv: list[str] | None = None) -> None:
     sig_df.to_csv(out / "signals.csv", index=False, encoding="utf-8-sig")
     pd.DataFrame(board_rows).to_csv(out / "candidates.csv", index=False,
                                     encoding="utf-8-sig")
-    nxt = _next_rebalance(close.index, asof, spec.get("freq", "M"))
+    # 下一次调仓：从**信号日**（最新交易日）往后找，避免周频时把已过去的调仓日
+    # 当成"下次"。数据止于信号日时返回 None，由文案给出规则口径。
+    nxt = _next_rebalance(close.index, sig_date, spec.get("freq", "M"))
     nxt_txt = str(nxt.date()) if nxt is not None else (
         "下周首个交易日" if spec.get("freq") == "W" else "下月首个交易日")
     meta = {
@@ -240,9 +254,22 @@ def main(argv: list[str] | None = None) -> None:
     alloc = (f"风险腿 {risk_weight:.1%} + 防御腿 {1 - risk_weight:.1%}"
              if spec.get("defense") else f"满仓 {risk_weight:.1%}（无防御腿）")
     freq_txt = "每周第一个交易日" if spec.get("freq") == "W" else "每月第一个交易日"
-    rule_txt = ("TopK=3；等权；无波动目标；拥挤度 = 份额 PIT 的 250 日分位（&gt; 0.80 剔除），"
-                "仅作选标过滤" if args.profile == "contest" else
-                "TopK=5；逆波动加权；15% 年化波动目标；防御腿 = 0.5·511010.SH + 0.5·518880.SH")
+    rule_txt = {
+        "contest": ("TopK=3；等权；无波动目标；拥挤度 = 份额 PIT 的 250 日分位"
+                    "（&gt; 0.80 剔除），仅作选标过滤"),
+        "contest5": ("TopK=5（正式赛要求 ≥5 只）；12-1 动量 + 绝对动量过滤；"
+                     "120 日相关 ≥0.90 同簇只留最强（去重）；等权；无波动目标"),
+        "champ": "TopK=5；逆波动加权；15% 年化波动目标；防御腿 = 0.5·511010.SH + 0.5·518880.SH",
+    }[args.profile]
+    evidence_txt = {
+        "contest": ("两个月比赛版依据 <code>reports/etf_contest/README.md</code>"
+                    "（80 个滚动 2 月窗口：中位 +2.35%、p10 −7.9%、最差 −15.1%）。"),
+        "contest5": ("正式赛合规版依据 <code>reports/etf_contest5/README.md</code>"
+                     "（80 个滚动 2 月窗口：中位 +1.84%、均值 +3.11%、p10 −7.0%、"
+                     "最差 −18.5%、胜率 65%）。"),
+        "champ": ("样本外结论见 <code>reports/etf_p4/README.md</code>："
+                  "OOS Sharpe 1.02、MDD 16.1%（2025-01–2026-10）。"),
+    }[args.profile]
     body = f"""<div class="page">
 <header>
   <h1>ETF 轮动 · 目标持仓与执行清单</h1>
@@ -274,16 +301,13 @@ def main(argv: list[str] | None = None) -> None:
 动量非正=绝对动量过滤；备选=满足条件但排名在 TopK 之外。</div>
 
 <h2>口径</h2>
-<div class="note">{freq_txt}调仓；{rule_txt}。
-样本外结论见 <code>reports/etf_p4/README.md</code>：
-OOS Sharpe 1.02、MDD 16.1%（2025-01–2026-10）；两个月比赛版依据
-<code>reports/etf_contest/README.md</code>（80 个滚动 2 月窗口：中位 +2.44%、p10 −8.1%）。</div>
+<div class="note">{freq_txt}调仓；{rule_txt}。{evidence_txt}</div>
 </div>"""
 
     html_path = out / "board.html"
     html_path.write_text(page("ETF 轮动 · 目标持仓", body=body, css=_CSS), encoding="utf-8")
 
-    print(f"[champ] 调仓日 {asof.date()} · 信号日 {sig_date.date()} · "
+    print(f"[{args.profile}] 调仓日 {asof.date()} · 信号日 {sig_date.date()} · "
           f"下次 {nxt_txt} · 资金 {args.capital / 1e4:,.0f} 万")
     print(sig_df[["code", "name", "weight", "order_wan", "participation", "prem20", "flag"]]
           .to_string(index=False))

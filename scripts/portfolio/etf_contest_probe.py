@@ -66,6 +66,42 @@ SPECS: list[dict] = [
     {**BASE, "name": "m20_crowd_k2_w", "signal": "mom20_crowd_f20", "top_k": 2},
 ]
 
+# 正式赛规则要求「配置不少于 5 只产品」，故 TopK=1/2/3 全部不合规。以下为
+# 合规组（top_k ≥ 5），新增去重开关，检验分散到 5 只后收益下沿是否守住。
+K5_SPECS: list[dict] = [
+    {**BASE, "name": "k5_m20_w", "signal": "mom20", "top_k": 5},
+    {**BASE, "name": "k5_m20_2w", "signal": "mom20", "top_k": 5, "every_n": 10},
+    {**BASE, "name": "k5_m12_1_w", "signal": "mom12_1", "top_k": 5},
+    {**BASE, "name": "k5_champ_w", "signal": "mom_crowd_f20", "top_k": 5},
+    {**BASE, "name": "k5_champ_2w", "signal": "mom_crowd_f20", "top_k": 5, "every_n": 10},
+    {**BASE, "name": "k5_m20_w_dd90", "signal": "mom20", "top_k": 5, "dedup_corr": 0.90},
+    {**BASE, "name": "k5_m20_2w_dd90", "signal": "mom20", "top_k": 5, "every_n": 10,
+     "dedup_corr": 0.90},
+    {**BASE, "name": "k5_m12_1_w_dd90", "signal": "mom12_1", "top_k": 5,
+     "dedup_corr": 0.90},
+    {**BASE, "name": "k5_champ_w_dd90", "signal": "mom_crowd_f20", "top_k": 5,
+     "dedup_corr": 0.90},
+    {**BASE, "name": "k5_champ_2w_dd90", "signal": "mom_crowd_f20", "top_k": 5,
+     "every_n": 10, "dedup_corr": 0.90},
+    # 去重后若同簇不足 5 只，允许放宽到 0.95 以观察敏感度
+    {**BASE, "name": "k5_champ_w_dd95", "signal": "mom_crowd_f20", "top_k": 5,
+     "dedup_corr": 0.95},
+    # 硬性 ≥5 只：去重后不足时用原排名补回（否则部分调仓日只持 4 只，不合规）
+    {**BASE, "name": "k5_champ_w_dd90_fill", "signal": "mom_crowd_f20", "top_k": 5,
+     "dedup_corr": 0.90, "dedup_fill": True},
+    {**BASE, "name": "k5_champ_2w_dd90_fill", "signal": "mom_crowd_f20", "top_k": 5,
+     "every_n": 10, "dedup_corr": 0.90, "dedup_fill": True},
+    {**BASE, "name": "k5_m12_1_w_dd90_fill", "signal": "mom12_1", "top_k": 5,
+     "dedup_corr": 0.90, "dedup_fill": True},
+    # 核心-卫星：仍持 5 只，但权重按排名线性衰减（5:4:3:2:1），保留前几名集中度
+    {**BASE, "name": "k5_champ_2w_dd90_rd", "signal": "mom_crowd_f20", "top_k": 5,
+     "every_n": 10, "dedup_corr": 0.90, "weighting": "rank_decay"},
+    {**BASE, "name": "k5_champ_w_dd90_rd", "signal": "mom_crowd_f20", "top_k": 5,
+     "dedup_corr": 0.90, "weighting": "rank_decay"},
+    {**BASE, "name": "k5_m12_1_w_dd90_rd", "signal": "mom12_1", "top_k": 5,
+     "dedup_corr": 0.90, "weighting": "rank_decay"},
+]
+
 
 def build_contest_panels(close: pd.DataFrame, amount: pd.DataFrame) -> dict:
     """在 P1 面板上加 20/60 日动量与 20 日动量的拥挤度过滤版。"""
@@ -103,9 +139,12 @@ def two_month_table(eq: pd.Series, bench: pd.Series, mfs: pd.DatetimeIndex) -> p
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description="ETF 两个月比赛方案探针")
     ap.add_argument("--out", default=str(OUT))
+    ap.add_argument("--specs", default="base", choices=["base", "k5"],
+                    help="base=TopK1/2/3 旧组；k5=合规组（≥5 只）")
     args = ap.parse_args(argv)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
+    specs = SPECS if args.specs == "base" else K5_SPECS
 
     cache = DataCache(create_datasource())
     bundle = load_bundle(cache, WARMUP_BEGIN, None)
@@ -116,7 +155,7 @@ def main(argv: list[str] | None = None) -> None:
                             int(close.index.max().strftime("%Y%m%d")))
 
     rows, per_window = [], []
-    for spec in SPECS:
+    for spec in specs:
         rb = None
         if spec.get("every_n"):
             idx = close.index[close.index >= pd.Timestamp("20200101")]
@@ -125,10 +164,17 @@ def main(argv: list[str] | None = None) -> None:
         tab = two_month_table(r["equity"], bench, mfs)
         tab["name"] = spec["name"]
         per_window.append(tab)
+        # 正式赛窗口是 10 月中 → 12 月中，季节位置固定：单独统计 10 月起跑的窗口
+        oct_tab = tab[tab["start"].dt.month == 10]
         m = r
+        hc = r["hold_counts"]
+        min_hold = float(hc.min()) if len(hc) else np.nan
+        lt5 = float((hc < 5).mean()) if len(hc) else np.nan
         rows.append({
             "name": spec["name"], "signal": spec["signal"], "top_k": spec["top_k"],
             "freq": "2W" if spec.get("every_n") else spec["freq"],
+            "dedup": spec.get("dedup_corr", np.nan),
+            "dedup_window": spec.get("dedup_window", np.nan),
             "absolute": spec["absolute"],
             "n_windows": len(tab),
             "mean": tab["ret"].mean(), "median": tab["ret"].median(),
@@ -140,29 +186,37 @@ def main(argv: list[str] | None = None) -> None:
             "p_lt_m10": float((tab["ret"] < -0.10).mean()),
             "beat_bench": float((tab["excess"] > 0).mean()),
             "median_dd": tab["dd"].median(), "worst_dd": tab["dd"].min(),
+            "oct_n": len(oct_tab), "oct_mean": oct_tab["ret"].mean(),
+            "oct_min": oct_tab["ret"].min() if len(oct_tab) else np.nan,
             "ann": m["annual_return"], "sharpe": m["sharpe"],
             "full_mdd": m["max_drawdown"], "avg_turnover": m["avg_turnover"],
+            "avg_holdings": m["avg_holdings"],
+            "min_holdings": min_hold, "pct_days_lt5": lt5,
             "cost_drag": m["cost_drag"],
         })
         print(f"{spec['name']:<20} 2M均值={tab['ret'].mean():+.2%} "
               f"中位={tab['ret'].median():+.2%} p10={tab['ret'].quantile(0.10):+.2%} "
               f"最差={tab['ret'].min():+.2%} 胜率={rows[-1]['win_rate']:.0%} "
-              f"窗口回撤中位={tab['dd'].median():.2%}", flush=True)
+              f"10月起={rows[-1]['oct_mean']:+.2%} "
+              f"持仓={rows[-1]['avg_holdings']:.1f}/最少{min_hold:.0f}", flush=True)
 
     summary = pd.DataFrame(rows).sort_values("median", ascending=False)
-    summary.to_csv(out / "contest_summary.csv", index=False, encoding="utf-8-sig")
-    pd.concat(per_window).to_csv(out / "contest_windows.csv", index=False,
+    tag = "" if args.specs == "base" else "_k5"
+    summary.to_csv(out / f"contest{tag}_summary.csv", index=False, encoding="utf-8-sig")
+    pd.concat(per_window).to_csv(out / f"contest{tag}_windows.csv", index=False,
                                  encoding="utf-8-sig")
-    (out / "run_config.json").write_text(json.dumps({
-        "scenario": "2 个月收益排名赛，初始 100 万",
+    (out / f"run_config{tag}.json").write_text(json.dumps({
+        "scenario": "2 个月收益排名赛，初始 100 万，正式赛 2026-10-12 → 12-18",
+        "constraint": "配置不少于 5 只产品 + 至少 5 笔成交 + 普通交易（无两融/套利）",
         "begin": 20200101, "bench": BENCH, "min_amount": MIN_AMOUNT,
         "cost": "commission 1bp + slippage 5bp",
         "window": "自然月首日 t → t+2 个月",
-        "specs": SPECS,
+        "specs": specs,
     }, ensure_ascii=False, indent=2), encoding="utf-8")
-    print("\n[按中位数排序]\n" + summary[
-        ["name", "n_windows", "mean", "median", "p25", "p10", "worst", "win_rate",
-         "p_gt10", "p_gt20", "p_lt_m10", "median_dd", "worst_dd", "avg_turnover"]].to_string(
+    cols = ["name", "top_k", "freq", "dedup", "n_windows", "mean", "median", "p10",
+            "worst", "win_rate", "p_gt10", "p_gt20", "p_lt_m10", "worst_dd",
+            "oct_mean", "oct_min", "min_holdings", "pct_days_lt5"]
+    print("\n[按中位数排序]\n" + summary[cols].to_string(
         index=False, float_format=lambda x: f"{x:+.2%}"))
     print(f"\n写入 {out}")
 
