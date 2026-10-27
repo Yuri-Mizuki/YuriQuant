@@ -1,0 +1,170 @@
+"""
+ETF 轮动·两个月比赛方案探针（2026-10-27）
+=========================================
+
+场景：100 万初始资金、两个月按收益率排名。与长线定版 `champ` 的目标不同——
+比赛只在意**两个月窗口的收益分布**，不要求低回撤与容量，因此放开：
+
+  - 集中度：TopK = 1 / 2 / 3（长线是 5）；
+  - 信号：20 日 / 60 日 / 12-1 动量（短窗口用快信号）；
+  - 频率：周频 / 双周 / 月频；
+  - 去掉 15% 波动目标与债金防御腿（它们会留 40%+ 现金、压低上行）；
+  - 成本按实际费率（佣金 1bp + 滑点 5bp）。
+
+评价口径：对每个变体跑一次全样本回测，按**自然月首日**切出所有
+「t → t+2 个月」窗口，统计收益的均值/中位/25 分位/最差、窗口内最大回撤、
+以及相对沪深300 的胜率。排名是看单窗口收益，所以**分布下沿比均值更重要**。
+
+用法:
+    python -m scripts.portfolio.etf_contest_probe
+"""
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
+from data.cache import DataCache
+from data.datasource import create_datasource
+from scripts.portfolio.etf_rotation_p2 import build_crowding, month_first_dates
+from scripts.portfolio.etf_rotation_probe import (
+    BENCH,
+    MIN_AMOUNT,
+    WARMUP_BEGIN,
+    build_panels,
+    load_bundle,
+    run_variant,
+)
+
+ROOT = Path(__file__).resolve().parents[2]
+OUT = ROOT / "reports" / "etf_contest"
+
+BASE = {"freq": "W", "top_k": 3, "absolute": True, "weighting": "equal",
+        "commission_bp": 1.0, "slippage_bp": 5.0}
+
+SPECS: list[dict] = [
+    {**BASE, "name": "m20_k1_w", "signal": "mom20", "top_k": 1},
+    {**BASE, "name": "m20_k2_w", "signal": "mom20", "top_k": 2},
+    {**BASE, "name": "m20_k3_w", "signal": "mom20", "top_k": 3},
+    {**BASE, "name": "m20_k2_2w", "signal": "mom20", "top_k": 2, "every_n": 10},
+    {**BASE, "name": "m20_k2_m", "signal": "mom20", "top_k": 2, "freq": "M"},
+    {**BASE, "name": "m60_k2_w", "signal": "mom60", "top_k": 2},
+    {**BASE, "name": "m60_k3_w", "signal": "mom60", "top_k": 3},
+    {**BASE, "name": "m12_1_k2_w", "signal": "mom12_1", "top_k": 2},
+    {**BASE, "name": "m12_1_k3_w", "signal": "mom12_1", "top_k": 3},
+    {**BASE, "name": "m12_1_k2_2w", "signal": "mom12_1", "top_k": 2, "every_n": 10},
+    {**BASE, "name": "champ_sig_k2_w", "signal": "mom_crowd_f20", "top_k": 2},
+    {**BASE, "name": "champ_sig_k3_w", "signal": "mom_crowd_f20", "top_k": 3},
+    {**BASE, "name": "champ_sig_k2_2w", "signal": "mom_crowd_f20", "top_k": 2, "every_n": 10},
+    {**BASE, "name": "champ_sig_k3_m", "signal": "mom_crowd_f20", "top_k": 3, "freq": "M"},
+    {**BASE, "name": "dual_k3_w", "signal": "mom_dual", "top_k": 3},
+    {**BASE, "name": "m20_k2_w_nofilter", "signal": "mom20", "top_k": 2, "absolute": False},
+    {**BASE, "name": "m20_crowd_k2_w", "signal": "mom20_crowd_f20", "top_k": 2},
+]
+
+
+def build_contest_panels(close: pd.DataFrame, amount: pd.DataFrame) -> dict:
+    """在 P1 面板上加 20/60 日动量与 20 日动量的拥挤度过滤版。"""
+    p = build_panels(close, amount)
+    p["mom20"] = close / close.shift(20) - 1.0
+    p["mom60"] = close / close.shift(60) - 1.0
+    crowd = build_crowding(close)
+    p["crowd"] = crowd
+    p["mom20_crowd_f20"] = p["mom20"].where(crowd <= 0.80)
+    p["mom_crowd_f20"] = p["mom12_1"].where(crowd <= 0.80)
+    # 双周期确认：12-1 中期动量，且 20 日短期动量也为正。
+    p["mom_dual"] = p["mom12_1"].where(p["mom20"] > 0)
+    return p
+
+
+def two_month_table(eq: pd.Series, bench: pd.Series, mfs: pd.DatetimeIndex) -> pd.DataFrame:
+    """按自然月首日切 t → t+2 个月窗口，返回逐窗口收益与窗口内回撤。"""
+    rows = []
+    for i in range(len(mfs) - 2):
+        t0, t2 = mfs[i], mfs[i + 2]
+        if t0 not in eq.index or t2 not in eq.index:
+            continue
+        seg = eq.loc[t0:t2]
+        if len(seg) < 20:
+            continue
+        ret = float(eq.loc[t2] / eq.loc[t0] - 1.0)
+        dd = float((seg / seg.cummax() - 1.0).min())
+        b = (float(bench.loc[t2] / bench.loc[t0] - 1.0)
+             if t0 in bench.index and t2 in bench.index else np.nan)
+        rows.append({"start": t0, "end": t2, "ret": ret, "dd": dd,
+                     "bench": b, "excess": ret - b if np.isfinite(b) else np.nan})
+    return pd.DataFrame(rows)
+
+
+def main(argv: list[str] | None = None) -> None:
+    ap = argparse.ArgumentParser(description="ETF 两个月比赛方案探针")
+    ap.add_argument("--out", default=str(OUT))
+    args = ap.parse_args(argv)
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+
+    cache = DataCache(create_datasource())
+    bundle = load_bundle(cache, WARMUP_BEGIN, None)
+    close = bundle[1]
+    panels = build_contest_panels(close, bundle[2])
+    bench = (1.0 + bundle[3].fillna(0.0)).cumprod()
+    mfs = month_first_dates(close.index, 20200101,
+                            int(close.index.max().strftime("%Y%m%d")))
+
+    rows, per_window = [], []
+    for spec in SPECS:
+        rb = None
+        if spec.get("every_n"):
+            idx = close.index[close.index >= pd.Timestamp("20200101")]
+            rb = set(idx[:: int(spec["every_n"])])
+        r = run_variant(bundle, panels, spec, 20200101, None, rebalance_days=rb)
+        tab = two_month_table(r["equity"], bench, mfs)
+        tab["name"] = spec["name"]
+        per_window.append(tab)
+        m = r
+        rows.append({
+            "name": spec["name"], "signal": spec["signal"], "top_k": spec["top_k"],
+            "freq": "2W" if spec.get("every_n") else spec["freq"],
+            "absolute": spec["absolute"],
+            "n_windows": len(tab),
+            "mean": tab["ret"].mean(), "median": tab["ret"].median(),
+            "p25": tab["ret"].quantile(0.25), "p10": tab["ret"].quantile(0.10),
+            "worst": tab["ret"].min(), "best": tab["ret"].max(),
+            "win_rate": float((tab["ret"] > 0).mean()),
+            "p_gt10": float((tab["ret"] > 0.10).mean()),
+            "p_gt20": float((tab["ret"] > 0.20).mean()),
+            "p_lt_m10": float((tab["ret"] < -0.10).mean()),
+            "beat_bench": float((tab["excess"] > 0).mean()),
+            "median_dd": tab["dd"].median(), "worst_dd": tab["dd"].min(),
+            "ann": m["annual_return"], "sharpe": m["sharpe"],
+            "full_mdd": m["max_drawdown"], "avg_turnover": m["avg_turnover"],
+            "cost_drag": m["cost_drag"],
+        })
+        print(f"{spec['name']:<20} 2M均值={tab['ret'].mean():+.2%} "
+              f"中位={tab['ret'].median():+.2%} p10={tab['ret'].quantile(0.10):+.2%} "
+              f"最差={tab['ret'].min():+.2%} 胜率={rows[-1]['win_rate']:.0%} "
+              f"窗口回撤中位={tab['dd'].median():.2%}", flush=True)
+
+    summary = pd.DataFrame(rows).sort_values("median", ascending=False)
+    summary.to_csv(out / "contest_summary.csv", index=False, encoding="utf-8-sig")
+    pd.concat(per_window).to_csv(out / "contest_windows.csv", index=False,
+                                 encoding="utf-8-sig")
+    (out / "run_config.json").write_text(json.dumps({
+        "scenario": "2 个月收益排名赛，初始 100 万",
+        "begin": 20200101, "bench": BENCH, "min_amount": MIN_AMOUNT,
+        "cost": "commission 1bp + slippage 5bp",
+        "window": "自然月首日 t → t+2 个月",
+        "specs": SPECS,
+    }, ensure_ascii=False, indent=2), encoding="utf-8")
+    print("\n[按中位数排序]\n" + summary[
+        ["name", "n_windows", "mean", "median", "p25", "p10", "worst", "win_rate",
+         "p_gt10", "p_gt20", "p_lt_m10", "median_dd", "worst_dd", "avg_turnover"]].to_string(
+        index=False, float_format=lambda x: f"{x:+.2%}"))
+    print(f"\n写入 {out}")
+
+
+if __name__ == "__main__":
+    main()

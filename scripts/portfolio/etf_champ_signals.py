@@ -53,6 +53,10 @@ ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / "reports" / "etf_champ"
 
 CHAMP = {**P1_BASE, "name": "champ", "signal": "mom_crowd_f20", "defense": "mix"}
+# 两个月比赛版：TopK=3、周频、等权、满仓（去掉波动目标与防御腿）。
+CONTEST = {"name": "contest_2m", "signal": "mom_crowd_f20", "freq": "W", "top_k": 3,
+           "absolute": True, "weighting": "equal", "commission_bp": 1.0,
+           "slippage_bp": 5.0}
 DEF_PARTS = {"511010.SH": 0.5, "518880.SH": 0.5}
 PARTICIPATION = 0.05      # 单只单边下单 / 60 日均成交额
 PREMIUM_WARN = 0.01       # 20 日折溢价告警线
@@ -90,10 +94,17 @@ def _expand_defense(tw: pd.Series) -> pd.Series:
     return out[out > 1e-9].sort_values(ascending=False)
 
 
-def _next_rebalance(idx: pd.DatetimeIndex, asof: pd.Timestamp) -> pd.Timestamp | None:
-    """月频：asof 之后第一个「月份变化」的交易日。"""
+def _next_rebalance(idx: pd.DatetimeIndex, asof: pd.Timestamp,
+                    freq: str = "M") -> pd.Timestamp | None:
+    """freq="M"：asof 之后第一个「月份变化」的交易日；"W"：第一个「ISO 周变化」的交易日。"""
     later = idx[idx > asof]
-    cand = later[later.month != asof.month]
+    if len(later) == 0:
+        return None
+    if freq == "W":
+        cand = later[later.isocalendar().week.to_numpy()
+                     != asof.isocalendar().week]
+    else:
+        cand = later[later.month != asof.month]
     return cand[0] if len(cand) else None
 
 
@@ -118,10 +129,17 @@ def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description="ETF 轮动 champion 生产信号板（P5）")
     ap.add_argument("--capital", type=float, default=1e7, help="总资金（元）")
     ap.add_argument("--positions", default=None, help="当前持仓 CSV（code,weight）")
-    ap.add_argument("--out", default=str(OUT))
+    ap.add_argument("--profile", choices=("champ", "contest"), default="champ",
+                    help="champ=长线定版；contest=两个月比赛版（Top3/周频/满仓）")
+    ap.add_argument("--out", default=None,
+                    help="输出目录（默认 champ→reports/etf_champ，contest→reports/etf_contest）")
     args = ap.parse_args(argv)
-    out = Path(args.out)
+    out = Path(args.out or (ROOT / "reports" / (
+        "etf_contest" if args.profile == "contest" else "etf_champ")))
     out.mkdir(parents=True, exist_ok=True)
+    spec = CHAMP if args.profile == "champ" else CONTEST
+    label = ("长线定版 champ" if args.profile == "champ"
+             else "两个月比赛版（Top3/周频/满仓）")
 
     cache = DataCache(create_datasource())
     bundle = load_bundle(cache, WARMUP_BEGIN, None)
@@ -129,9 +147,10 @@ def main(argv: list[str] | None = None) -> None:
     raw_close = (cache.read_daily("etf")["close"].unstack("code")
                  .reindex(index=close.index, columns=close.columns))
     panels = build_extra_panels(close, build_panels(close, amount), raw_close)
-    extra = pd.DataFrame({"DEF": level_from_returns(build_defense(close)["mix"])})
+    extra = (pd.DataFrame({"DEF": level_from_returns(build_defense(close)["mix"])})
+             if spec.get("defense") else None)
 
-    res = run_variant(bundle, panels, CHAMP, None, None, extra_close=extra)
+    res = run_variant(bundle, panels, spec, None, None, extra_close=extra)
     rb = res["rebalance_dates"]
     asof = rb[-1]
     target = _expand_defense(res["weights"].loc[asof])
@@ -200,26 +219,34 @@ def main(argv: list[str] | None = None) -> None:
     sig_df.to_csv(out / "signals.csv", index=False, encoding="utf-8-sig")
     pd.DataFrame(board_rows).to_csv(out / "candidates.csv", index=False,
                                     encoding="utf-8-sig")
-    nxt = _next_rebalance(close.index, asof)
-    nxt_txt = str(nxt.date()) if nxt is not None else "下月首个交易日"
+    nxt = _next_rebalance(close.index, asof, spec.get("freq", "M"))
+    nxt_txt = str(nxt.date()) if nxt is not None else (
+        "下周首个交易日" if spec.get("freq") == "W" else "下月首个交易日")
     meta = {
-        "asof_rebalance": str(asof.date()), "signal_date": str(sig_date.date()),
+        "profile": args.profile, "asof_rebalance": str(asof.date()),
+        "signal_date": str(sig_date.date()),
         "next_rebalance": str(nxt.date()) if nxt is not None else None,
         "capital": args.capital, "pool_size": len(close.columns),
         "min_amount": MIN_AMOUNT, "participation_limit": PARTICIPATION,
         "premium_warn": PREMIUM_WARN, "warnings": warn_n,
-        "strategy": CHAMP, "bench": BENCH,
+        "strategy": spec, "bench": BENCH,
     }
     (out / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2),
                                    encoding="utf-8")
 
     risk_weight = float(target.drop(index=[c for c in DEF_PARTS if c in target.index],
                                     errors="ignore").sum())
+    alloc = (f"风险腿 {risk_weight:.1%} + 防御腿 {1 - risk_weight:.1%}"
+             if spec.get("defense") else f"满仓 {risk_weight:.1%}（无防御腿）")
+    freq_txt = "每周第一个交易日" if spec.get("freq") == "W" else "每月第一个交易日"
+    rule_txt = ("TopK=3；等权；无波动目标；拥挤度 = 份额 PIT 的 250 日分位（&gt; 0.80 剔除），"
+                "仅作选标过滤" if args.profile == "contest" else
+                "TopK=5；逆波动加权；15% 年化波动目标；防御腿 = 0.5·511010.SH + 0.5·518880.SH")
     body = f"""<div class="page">
 <header>
   <h1>ETF 轮动 · 目标持仓与执行清单</h1>
   <div class="meta">
-    <span>策略 champ（def_mix_crowd_f20）</span>
+    <span>策略 {label}</span>
     <span>调仓日 {asof.date()}</span>
     <span>信号日 {sig_date.date()}</span>
     <span>下次调仓 {nxt_txt}</span>
@@ -227,7 +254,7 @@ def main(argv: list[str] | None = None) -> None:
   </div>
 </header>
 
-<h2>目标持仓（风险腿 {risk_weight:.1%} + 防御腿 {1 - risk_weight:.1%}）</h2>
+<h2>目标持仓（{alloc}）</h2>
 {_table(sig_rows, [("code", "代码"), ("name", "名称"), ("category", "类别"),
                     ("weight", "目标权重"), ("amount_wan", "目标金额(万)"),
                     ("order_wan", "下单(万)"), ("amt60_yi", "60日均额(亿)"),
@@ -246,10 +273,10 @@ def main(argv: list[str] | None = None) -> None:
 动量非正=绝对动量过滤；备选=满足条件但排名在 TopK 之外。</div>
 
 <h2>口径</h2>
-<div class="note">月频（每月第一个交易日）；TopK=5；逆波动加权；15% 年化波动目标；
-防御腿 = 0.5·511010.SH + 0.5·518880.SH；拥挤度 = 份额 PIT 的 250 日分位（&gt; 0.80 剔除）。
+<div class="note">{freq_txt}调仓；{rule_txt}。
 样本外结论见 <code>reports/etf_p4/README.md</code>：
-OOS Sharpe 1.02、MDD 16.1%（2025-01–2026-10）。</div>
+OOS Sharpe 1.02、MDD 16.1%（2025-01–2026-10）；两个月比赛版依据
+<code>reports/etf_contest/README.md</code>（80 个滚动 2 月窗口：中位 +2.44%、p10 −8.1%）。</div>
 </div>"""
 
     html_path = out / "board.html"

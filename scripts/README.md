@@ -165,7 +165,8 @@
 | `portfolio/compare_portfolio_methods.py` | 组合优化方法对比脚本（P2，2026-08-14） |
 | `portfolio/etf_alpha_probe.py` | ETF 层 α 可行性探针（S2 持仓映射 α 的前置验证） |
 | `portfolio/etf_capacity_probe.py` | ETF 轮动容量表（单只下单 ≤ 60 日均额 5%，2026-10-27） |
-| `portfolio/etf_champ_signals.py` | ETF 轮动 champion 生产信号板（目标持仓/下单/容量与溢价检查，2026-10-27） |
+| `portfolio/etf_champ_signals.py` | ETF 轮动 champion 生产信号板（目标持仓/下单/容量与溢价检查；`--profile contest` 出两个月比赛版，2026-10-27） |
+| `portfolio/etf_contest_probe.py` | ETF 两个月比赛方案探针（80 个滚动 2 月窗口的收益分布，2026-10-27） |
 | `portfolio/etf_p4_probe.py` | ETF 轮动样本外验证（IS/OOS 切片 + 多起点，2026-10-27） |
 | `portfolio/etf_rotation_p2.py` | ETF 轮动优化验证（P2/P3 前置，2026-10-26） |
 | `portfolio/etf_rotation_probe.py` | ETF 轮动升级探针（P1） |
