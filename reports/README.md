@@ -39,6 +39,7 @@
 | `etf_rotation/` | ⚠️ legacy ETF 轮动报告（2026-08-26，15 只池 + 周频合成动量，无 PIT 掩码）；仅历史追溯，**被 `etf_rotation_probe/` 取代** |
 | `etf_rotation_probe/` | **ETF 轮动 P1 探针（2026-10-26，现行）**：41 只跨资产池 + PIT 流动性掩码，13 变体主表 + 7 变体稳健网格；基线 `dual_ivvt15_m5` 年化 7.14% / Sharpe 0.62 / MDD 19.01%（结论真源其 README）；脚本 `scripts/portfolio/etf_rotation_probe.py` |
 | `etf_rotation_p2/` | **ETF 轮动 P2 前置（2026-10-26）**：防御腿 + 份额 PIT 拥挤度 + 趋势 R² 三项对照；新基线候选 `def_mix_crowd_f20` 年化 11.23% / Sharpe 0.85 / MDD 16.70%，邻域 0.76–0.94（脚本 `scripts/portfolio/etf_rotation_p2.py`） |
+| `etf_{champ,contest5,contest5_opt,contest5_wl,contest_wl,contest_wl2,p4,dedup,capacity,pool_expand,survivorship_probe,alpha_probe}/` | **ETF 轮动赛事与长线定版全家桶（2026-10-26~27）**：比赛定版「三锋 v2」一页纸真源 = `etf_contest5/README.md` §十三（参数真源 `etf_contest_spec.py`）；长线「磐石」= `etf_champ/`；`contest5_opt/` 含定版对照/稳健/反转三档/v2 采纳证据，`contest_wl*/` 白名单复核，`p4/` 样本外，`dedup/capacity/pool_expand/survivorship_probe/alpha_probe/` 各专项探针；作废的初赛目录 `etf_contest/` 已回收（§四 10-27） |
 | `risk_decomposition/` | 组合风险分解报告（Euler 分解 / 因子方差贡献 / VaR 成分） |
 | `ml_synthesis_h1/` | ⚠️ 虽属归档时代，但 `monitor_performance.py` 读其预测面板，删除会破坏监控 |
 | `investment_report/` | HS300 时代投资收益报告（最终交付物存档；数字有 ~3% 年化口径偏移待重跑，TODO_ARCHIVE 册Ⅰ §一第 3 条；归档脚本 `diagnose_factor_vs_model` 以其为输入） |
@@ -84,7 +85,7 @@
 | `cvar_arm_920/` / `views_arm_920/` | 批次 12⑤/12④（2026-10-21）：CVaR 组合臂（不升级）与观点注入三臂（零增量）负结果归档。 |
 | `alla_rolling_ortho920mf/` / `alla_rolling_ortho920fundind_lblco/` | 批次 12②/12③（2026-10-21/22）：市场状态特征（**唯一正结果 +1.44pp 建议采纳挂拍板**）与隔夜标签臂（判负）。 |
 | `mf_fundind_check/` | 批次 14（2026-10-26）：mf 干净单臂补测——不达验收（+0.49pp < +1pp），mf 线收口。 |
-| `sync/` | **产物远端同步捆绑**（`batch1213_products_20261022.zip` = 批次 12/13 全部 CSV/MD/JSON，304KB；大件 parquet 不入 zip、由 TODO_ARCHIVE 册Ⅲ 存档命令可重建）——reports 产物整体仍不进 git，仅此 zip 由用户指示 force-add 入库。 |
+| `sync/` | **产物远端同步捆绑**（`batch1213_products_20261022.zip` / `batch14_products_20261026.zip`；大件 parquet 不入 zip、由 TODO_ARCHIVE 册Ⅲ 存档命令可重建）——曾由用户指示 force-add 入库，**2026-10-27 应"尽量精简"要求移出跟踪**（本地保留，§四 有记录）。 |
 | `frontier_audit_2026-10-19/` | **增量方向 frontier audit（2026-10-19，A1/A2）**：`horizon_probe` 主信号 IC h1–h120 衰减（h60 反而升到 0.161）+ `residual_ic_probe` 920 因子对主信号残差的四口径 IC；脚本 `scripts/evaluation/{horizon_probe,residual_ic_probe}.py`，结论回写 TODO_ARCHIVE 册Ⅰ §六。 |
 | `text_factor_probe/` | 论文族 `pap_*`(21) + 情绪族 `txt_*`(5) **生产口径收尾（2026-10-13，P0）**：口径修正——面板实体**存在**（哈希名在 `panels/`），缺的是未进 `panels_neu` ⇒ 从未中性化/竞争；`txt_*` 5 个自身可交易 IR **0.008~0.105 ≪ 0.3 门槛**、独立 Sharpe 0.47~0.57 < 主 0.631；**融合层「Sharpe +0.05~0.12」经安慰剂证伪**（值置换复现中位 71% ⇒ 覆盖率掩码/市值暴露，非 alpha）；`pap_*` 无一条过「正交+够强」；106 项 BH-FDR **仅 1 条存活且为负** → 脚本 `scripts/evaluation/text_factor_probe.py` + `fuse_placebo.py` |
 
@@ -424,3 +425,6 @@ model层 / ML合成，其余已删、可重跑复现——结论见 §三.13~17�
 - **`uv.lock` 移出跟踪**（800KB，跟踪文件中最大）：工作流全用系统解释器 + pip install -e，
   CI 删除后零消费方（schedule.yaml 亦明确"系统 Python 不受 uv sync 影响"）→
   本地保留并 gitignore，README 工程质量节改写；需要精确环境时 `uv lock` 重生成。
+- **`reports/sync/` 两个 zip 移出跟踪**（batch1213 304KB / batch14）：曾由用户指示
+  force-add，2026-10-27 应"尽量精简"要求 `git rm --cached`（本地保留、可由
+  TODO_ARCHIVE 册Ⅲ 存档命令重建）；reports/ 下跟踪项仅剩本 README。

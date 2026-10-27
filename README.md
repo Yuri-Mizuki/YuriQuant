@@ -81,7 +81,7 @@ AQR + JFE 复核）同向收口；LLM-MCTS 是唯一产出超门槛因子的挖�
 - **指数增强探针（B1，2026-10-26）**：`scripts/evaluation/index_enhance_probe.py`——中证500 成分约束 + TE–超额曲线 + 安慰剂。结论：成分内 IC 有效（0.069/t=4.3），但 3–5% TE 净超额仅 +1.5~1.9%（t≈0.8）、2025 单年 −7% ⇒ 归档为风险偏好型替代，不立项为 α（`reports/index_enhance_probe/`）
 - **ETF 轮动基线 P1（2026-10-26）**：`scripts/portfolio/etf_rotation_probe.py`——41 池 × PIT 流动性掩码下对照 12-1 动量 / Dual Momentum / 逆波动 / 波动率目标 / 缓冲区（13 变体 + 7 变体稳健网格）。结论：**波动率目标是唯一有效增量**，`dual_ivvt15_m5` 年化 7.14% / Sharpe 0.62 / MDD 19.01%（旧基线 0.26 / 38.4%）；稳健网格 7/7 过线（`reports/etf_rotation_probe/`）
 - **ETF 轮动 P2 前置（2026-10-26）**：`scripts/portfolio/etf_rotation_p2.py`——防御腿（风险关闭退到债/金，替代 0 收益现金）+ 份额 PIT 拥挤度（250 日分位 >0.80 剔除）+ 趋势 R² 三项对照。结论：防御腿 + 拥挤度叠加到 **年化 11.23% / Sharpe 0.85 / MDD 16.70%**（邻域 0.76–0.94、2× 成本 0.78）；趋势 R² 判负（`reports/etf_rotation_p2/`）
-- **ETF 轮动比赛定版（P5，2026-10-27）**：`scripts/portfolio/etf_champ_signals.py`（实盘信号板）+ `scripts/portfolio/etf_contest_spec.py`（**定版参数唯一真源 `FINAL`**）+ `scripts/portfolio/etf_contest_probe.py`（80 个滚动 2 月窗口）。定版 `contest3` = Top3 + 12-1 动量扣拥挤软惩罚 + 120 日 0.90 去重 + HRP 无上限 + 周频；真实白名单 80 窗口中位 **+3.99%** / 胜率 66.3% / <−10% 仅 3.75%；6-1 动量、周五调仓、扩池、单只上限均判否（`reports/etf_contest5/` §十二–§十三）
+- **ETF 轮动比赛定版（P5，2026-10-27；v2 同夜升级）**：`scripts/portfolio/etf_champ_signals.py`（实盘信号板）+ `scripts/portfolio/etf_contest_spec.py`（**定版参数唯一真源 `FINAL`**）+ `scripts/portfolio/etf_contest_probe.py`（80 个滚动 2 月窗口）。定版 `contest3` = Top3 + 12-1 动量扣拥挤软惩罚 + **剔除 20 日涨幅 >10% 过热（v2，三档单调采纳）** + 120 日 0.90 去重 + HRP 无上限 + 周频；80 窗口均值 **+5.59%** / 中位 +3.76% / 最差 −12.34% / 胜率 72.5% / <−10% 2.50%；6-1 动量、周五调仓、扩池、单只上限均判否（`reports/etf_contest5/` §十二–§十三）
 
 ### 🏭 生产化：研究系统的最后一公里
 
@@ -142,7 +142,7 @@ python -m scripts.reporting.generate_report      # 一键端到端 HTML 报告
 
 ## 🧪 工程质量
 
-- **测试**：1333 个用例覆盖数据层、回测、因子挖掘、模型、优化、监控、报告全栈
+- **测试**：1379 个用例覆盖数据层、回测、因子挖掘、模型、优化、监控、报告全栈
 - **CI**：GH Actions 已于 2026-10-27 移除（原两层手动工作流，2026-09-10 起 push 即静音、实际不用）；守卫改本机跑 `python -m pytest -q`（数据齐全最完整）
 - **依赖锁**：`uv.lock` 已于 2026-10-27 移出跟踪（工作流全用系统解释器 + `pip install -e`，零消费方；本地保留并 gitignore，需要精确环境时 `uv lock` 随时重生成）；可选依赖按功能域分组（ml / gp / solver / rl），缺失时优雅降级
 - **Lint / 类型**：`ruff check .`（F 规则为门禁）；`mypy` 以 Python 3.12 配置运行，存量类型告警未清零
