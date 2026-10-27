@@ -183,6 +183,9 @@ def run_variant(bundle, panels: dict, spec: dict, w0: int | None = None,
         enter_rank=spec.get("enter_rank"),
         exit_rank=spec.get("exit_rank"),
         cash_code=cash,
+        ret_panel=returns,
+        cov_window=spec.get("cov_window", 60),
+        max_weight=spec.get("max_weight"),
     )
     cx = float(spec.get("cost_x", 1.0))
     commission_bp = float(spec.get("commission_bp", 5.0))

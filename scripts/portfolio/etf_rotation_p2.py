@@ -81,6 +81,23 @@ PREMIUM: list[dict] = [
     {**P1_BASE, "name": "champ_mom_prem", "signal": "mom_prem_f80_crowd", "defense": "mix"},
 ]
 
+# P3 组合层：风险预算（ERC / HRP）与权重上限。控制项 p1_base 的 inverse-vol
+# 是「对角协方差」的近似，ERC/HRP 引入完整协方差（含相关结构）。
+P3: list[dict] = [
+    {**P1_BASE, "name": "p1_base"},
+    {**P1_BASE, "name": "erc", "weighting": "erc"},
+    {**P1_BASE, "name": "hrp", "weighting": "hrp"},
+    {**P1_BASE, "name": "maxw25", "max_weight": 0.25},
+    {**P1_BASE, "name": "maxw20", "max_weight": 0.20},
+    {**P1_BASE, "name": "champ", "signal": "mom_crowd_f20", "defense": "mix"},
+    {**P1_BASE, "name": "champ_erc", "signal": "mom_crowd_f20", "defense": "mix",
+     "weighting": "erc"},
+    {**P1_BASE, "name": "champ_hrp", "signal": "mom_crowd_f20", "defense": "mix",
+     "weighting": "hrp"},
+    {**P1_BASE, "name": "champ_maxw25", "signal": "mom_crowd_f20", "defense": "mix",
+     "max_weight": 0.25},
+]
+
 # 持仓只数分布（单变体诊断）。
 HOLD: list[dict] = [
     {**P1_BASE, "name": "champ_hold", "signal": "mom_crowd_f20", "defense": "mix"},
@@ -323,7 +340,7 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--end", type=int, default=None)
     ap.add_argument("--out", default=str(OUT))
     ap.add_argument("--variants", choices=("main", "robust", "freq", "cost", "hold",
-                                           "share", "premium"),
+                                           "share", "premium", "p3"),
                     default="main")
     args = ap.parse_args(argv)
     out = Path(args.out)
@@ -341,10 +358,10 @@ def main(argv: list[str] | None = None) -> None:
     rows, seg_rows, eq = [], [], {}
     variants = {"main": VARIANTS, "robust": ROBUST, "freq": FREQ,
                 "cost": COST, "hold": HOLD, "share": SHARE,
-                "premium": PREMIUM}[args.variants]
+                "premium": PREMIUM, "p3": P3}[args.variants]
     tag = {"main": "", "robust": "_robust", "freq": "_freq",
            "cost": "_cost", "hold": "_hold", "share": "_share",
-           "premium": "_premium"}[args.variants]
+           "premium": "_premium", "p3": "_p3"}[args.variants]
 
     if args.variants == "share":
         ic_tab = share_ic_table(

@@ -10,9 +10,93 @@ ETF 轮动策略
 """
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 
 from strategy.base import Strategy
+
+
+def _erc_weights(cov: np.ndarray) -> np.ndarray:
+    """等风险贡献（ERC）权重：最小化各资产风险贡献的平方偏差。"""
+    n = cov.shape[0]
+    if n == 1:
+        return np.ones(1)
+    var = np.diag(cov).copy()
+    if np.any(var <= 0):
+        return np.ones(n) / n
+    x0 = (1.0 / np.sqrt(var)) / (1.0 / np.sqrt(var)).sum()
+
+    def _obj(w: np.ndarray) -> float:
+        port = float(w @ cov @ w)
+        if port <= 0:
+            return 1e6
+        rc = w * (cov @ w) / port
+        return float(np.sum((rc - 1.0 / n) ** 2)) * 1e4
+
+    from scipy.optimize import minimize
+
+    res = minimize(_obj, x0, method="SLSQP",
+                   bounds=[(1e-4, 1.0)] * n,
+                   constraints=[{"type": "eq", "fun": lambda w: w.sum() - 1.0}],
+                   options={"maxiter": 200, "ftol": 1e-10})
+    w = res.x if res.success else x0
+    w = np.clip(w, 0, None)
+    return w / w.sum()
+
+
+def _quasi_diag(link: np.ndarray) -> list[int]:
+    """把 scipy linkage 矩阵转成 HRP 需要的叶子顺序。"""
+    link = link.astype(int)
+    sort_ix = pd.Series([link[-1, 0], link[-1, 1]])
+    num_items = link[-1, 3]
+    while sort_ix.max() >= num_items:
+        sort_ix.index = range(0, sort_ix.shape[0] * 2, 2)
+        df0 = sort_ix[sort_ix >= num_items]
+        i = df0.index
+        j = df0.values - num_items
+        sort_ix[i] = link[j, 0]
+        df0 = pd.Series(link[j, 1], index=i + 1)
+        sort_ix = pd.concat([sort_ix, df0]).sort_index()
+        sort_ix.index = range(sort_ix.shape[0])
+    return sort_ix.tolist()
+
+
+def _hrp_weights(cov: np.ndarray) -> np.ndarray:
+    """层次风险平价（HRP，López de Prado 2016）：单链接聚类 + 递归二分。"""
+    n = cov.shape[0]
+    if n == 1:
+        return np.ones(1)
+    sd = np.sqrt(np.diag(cov))
+    if np.any(sd <= 0):
+        return np.ones(n) / n
+    corr = cov / np.outer(sd, sd)
+    corr = np.nan_to_num(corr, nan=0.0)
+    np.fill_diagonal(corr, 1.0)
+    dist = np.sqrt(np.clip((1.0 - corr) / 2.0, 0.0, 1.0))
+    np.fill_diagonal(dist, 0.0)
+    from scipy.cluster.hierarchy import linkage
+    from scipy.spatial.distance import squareform
+
+    link = linkage(squareform(dist, checks=False), method="single")
+    order = _quasi_diag(link)
+    w = pd.Series(1.0, index=order)
+    clusters = [order]
+    while clusters:
+        new: list[list[int]] = []
+        for c in clusters:
+            if len(c) <= 1:
+                continue
+            half = len(c) // 2
+            c0, c1 = c[:half], c[half:]
+            v0 = float(cov[np.ix_(c0, c0)].sum())
+            v1 = float(cov[np.ix_(c1, c1)].sum())
+            alpha = 1.0 - v0 / (v0 + v1) if (v0 + v1) > 0 else 0.5
+            w[c0] *= alpha
+            w[c1] *= 1.0 - alpha
+            new += [c0, c1]
+        clusters = new
+    out = w.sort_index().to_numpy()
+    return out / out.sum()
 
 
 class EtfRotation(Strategy):
@@ -73,6 +157,9 @@ class EtfRotationAdvanced(Strategy):
         enter_rank: int | None = None,
         exit_rank: int | None = None,
         cash_code: str | None = None,
+        ret_panel: pd.DataFrame | None = None,
+        cov_window: int = 60,
+        max_weight: float | None = None,
     ):
         self.top_k = int(top_k)
         self.absolute_filter = bool(absolute_filter)
@@ -83,13 +170,18 @@ class EtfRotationAdvanced(Strategy):
         self.enter_rank = int(enter_rank) if enter_rank is not None else None
         self.exit_rank = int(exit_rank) if exit_rank is not None else None
         self.cash_code = cash_code
+        self.ret_panel = ret_panel
+        self.cov_window = int(cov_window)
+        self.max_weight = float(max_weight) if max_weight is not None else None
         self._held: list[str] = []
         self.name = (
             f"etf_adv_topk{self.top_k}"
             f"{'_abs' if self.absolute_filter else ''}"
             f"{'_iv' if self.weighting == 'inverse_vol' else ''}"
+            f"_{self.weighting}" if self.weighting in ("erc", "hrp") else ""
             f"{'_vt' if self.target_vol else ''}"
             f"{'_buf' if self.enter_rank else ''}"
+            f"{'_mw' if self.max_weight else ''}"
         )
 
     # ---- 选标 ----
@@ -117,6 +209,44 @@ class EtfRotationAdvanced(Strategy):
     def get_weights_at(self, date: pd.Timestamp, factor_values: pd.Series) -> pd.Series:
         return self._weights(factor_values, date)
 
+    # ---- 组合构造 ----
+    def _risk_parity(self, sel: list[str], date: pd.Timestamp,
+                     fallback: pd.Series) -> pd.Series:
+        """在``sel``上按协方差矩阵做 ERC / HRP 加权；样本不足时退回``fallback``。
+
+        协方差取``ret_panel``截至``date``（含）最近 ``cov_window`` 个交易日，
+        年化（×252）。要求至少 20 个有效交易日，否则不改变原权重。
+        """
+        sub = self.ret_panel.loc[:date].tail(self.cov_window).reindex(columns=sel)
+        sub = sub.dropna(how="all").dropna(axis=1, how="all")
+        if len(sub) < 20 or sub.shape[1] != len(sel):
+            return fallback
+        cov = sub.cov().to_numpy() * 252.0
+        w = _erc_weights(cov) if self.weighting == "erc" else _hrp_weights(cov)
+        return pd.Series(w, index=sel)
+
+    def _cap_weight(self, w: pd.Series) -> pd.Series:
+        """逐项截断到 ``max_weight`` 并把超额按比例回补，直到全部满足。"""
+        w = w.clip(lower=0.0)
+        total = float(w.sum())
+        if total <= 0:
+            return w
+        w = w / total
+        cap = float(self.max_weight)
+        if cap <= 0 or cap * len(w) < 1.0:
+            return w
+        for _ in range(50):
+            over = w > cap
+            if not over.any():
+                break
+            excess = float((w[over] - cap).sum())
+            w[over] = cap
+            free = ~over
+            if not free.any():
+                break
+            w[free] = w[free] + excess * w[free] / float(w[free].sum())
+        return w / float(w.sum())
+
     def _weights(self, factor_values: pd.Series, date: pd.Timestamp | None) -> pd.Series:
         vals = factor_values.dropna()
         if vals.empty:
@@ -142,6 +272,10 @@ class EtfRotationAdvanced(Strategy):
             inv = (1.0 / vol.replace(0.0, float("nan"))).dropna()
             if len(inv) == n:
                 w = inv / inv.sum()
+        if self.weighting in ("erc", "hrp") and self.ret_panel is not None and date is not None:
+            w = self._risk_parity(sel, date, w)
+        if self.max_weight is not None and n > 1:
+            w = self._cap_weight(w)
         if vol is not None and self.target_vol is not None:
             v = vol.replace(0.0, float("nan")).dropna()
             if len(v):
