@@ -309,6 +309,7 @@ def build_extra_panels(close: pd.DataFrame, panels: dict,
     crowd = build_crowding(close)
     mom = panels["mom12_1"]
     panels = dict(panels)
+    panels["crowd"] = crowd
     panels["mom_r2"] = mom * r2
     panels["mom_crowd_f20"] = mom.where(crowd <= 0.80)
     panels["mom_crowd_f10"] = mom.where(crowd <= 0.90)
