@@ -155,12 +155,20 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--max-premium", type=float, default=None,
                     help="选标层折溢价闸门：|prem20| 超过该值（如 0.01）视为当日不可买。"
                          "PIT：prem20 只用当日及以前数据；避免补位时反复补进溢价品")
+    ap.add_argument("--max-weight", type=float, default=None,
+                    help="覆盖 profile 的单只权重上限（如 0.30）；传 0 表示不设上限，"
+                         "用于观察 HRP 原始权重形状")
     args = ap.parse_args(argv)
     out = Path(args.out or (ROOT / "reports" / (
         {"champ": "etf_champ", "contest": "etf_contest",
          "contest5": "etf_contest5", "contest5h": "etf_contest5"}[args.profile])))
     out.mkdir(parents=True, exist_ok=True)
-    spec = PROFILES[args.profile]
+    spec = dict(PROFILES[args.profile])
+    if args.max_weight is not None:
+        if args.max_weight <= 0:
+            spec.pop("max_weight", None)
+        else:
+            spec["max_weight"] = args.max_weight
     label = {"champ": "长线定版 champ",
              "contest": "两个月比赛版（Top3/周频/满仓）",
              "contest5": "正式赛合规版（Top5/周频/满仓/去重）",
