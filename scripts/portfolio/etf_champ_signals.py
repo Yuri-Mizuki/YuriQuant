@@ -81,6 +81,10 @@ PROFILES = {"champ": CHAMP, "contest5": CONTEST5, "contest3": CONTEST3,
             # 下 80 个 2 月窗口：无上限中位 +2.41% / Sharpe 0.89 / 最差 −13.8%，
             # 优于带上限的 +2.05% / 0.79 / −15.3%；代价是今日煤炭单只约 52%。
             # 想控集中度时用 --max-weight 0.30 临时加回。
+            # 降档预案「五衡」：同选标、Top5 + HRP 风险平价（60 日协方差）。
+            # 定版为「三锋」（Top3 + 拥挤软惩罚）。五衡不参与选型、不再调参，
+            # 只在三锋组合回撤触及 −15% 时临时启用，用来收窄尾部（最差窗口
+            # −13.8% 对 −23.8%），见 reports/etf_contest5/README.md §13.6。
             "contest5h": {**CONTEST5, "name": "contest5_2m_hrp", "weighting": "hrp"}}
 DEF_PARTS = {"511010.SH": 0.5, "518880.SH": 0.5}
 PARTICIPATION = 0.05      # 单只单边下单 / 60 日均成交额
@@ -164,7 +168,7 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--positions", default=None, help="当前持仓 CSV（code,weight）")
     ap.add_argument("--profile", choices=tuple(PROFILES), default="champ",
                     help="champ=长线版「磐石」；contest5=合规版「五衡·等权」（≥5 只）；"
-                         "contest5h=稳健版「五衡」（Top5/HRP）；contest3=定版「三锋」"
+                         "contest5h=预案「五衡」（Top5/HRP，仅降档用）；contest3=定版「三锋」"
                          "（Top3 + 拥挤软惩罚 + HRP）")
     ap.add_argument("--out", default=None,
                     help="输出目录（默认按 profile 落到 reports/etf_*）")
@@ -190,7 +194,7 @@ def main(argv: list[str] | None = None) -> None:
             spec["max_weight"] = args.max_weight
     label = {"champ": "长线版「磐石」（月度/波动目标/债金防御）",
              "contest5": "合规版「五衡·等权」（Top5/周频/去重）",
-             "contest5h": "稳健版「五衡」（Top5/HRP 风险平价）",
+             "contest5h": "预案「五衡」（Top5/HRP，回撤触线降档用）",
              "contest3": "定版「三锋」（Top3/HRP/拥挤软惩罚）"}[args.profile]
 
     cache = DataCache(create_datasource())
