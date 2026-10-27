@@ -53,7 +53,11 @@ ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / "reports" / "etf_champ"
 
 CHAMP = {**P1_BASE, "name": "champ", "signal": "mom_crowd_f20", "defense": "mix",
-         "dedup_corr": 0.90}
+         "dedup_corr": 0.90,
+         # A3（2026-10-27 邻域检验）：去重后每个调仓日的有效候选清单很短，
+         # 两个缓冲区宽度都不 binding，规则退化为「已持有且仍在清单里就不卖」。
+         # 月换手 39.8%→32.1%（−19%）、成本 1.01%→0.80%/年，Sharpe +0.019。
+         "enter_rank": 15, "exit_rank": 40}
 # 两个月比赛版：TopK=3、周频、等权、满仓（去掉波动目标与防御腿）。
 CONTEST = {"name": "contest_2m", "signal": "mom_crowd_f20", "freq": "W", "top_k": 3,
            "absolute": True, "weighting": "equal", "commission_bp": 1.0,
