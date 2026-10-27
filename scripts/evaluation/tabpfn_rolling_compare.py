@@ -1,7 +1,7 @@
 """批次 8：表格基础模型对照（TabPFN-3.5 / TabICL 2.2 vs LightGBM）滚动 runner
 ========================================================================
 
-立项与版本口径真源：``GOOD_MACHINE_TASKS.md`` 批次 8（tabpfn==9.0.0 默认模型
+立项与版本口径真源：``TODO_ARCHIVE.md 册Ⅲ`` 批次 8（tabpfn==9.0.0 默认模型
 = TabPFN-3.5；tabicl==2.2.0；载荷包 pandas 2.x 钉版警告见彼处）。
 冒烟校准（09-22/23，``reports/tabpfn3_smoke/``）：CPU 上 tabpfn3 pred
 ≈ 27.7min/窗口 → **全A 全量是 GPU 硬前置**（``--device cuda``，单卡 ≥8GB）；

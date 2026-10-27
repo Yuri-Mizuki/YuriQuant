@@ -6,7 +6,7 @@
 （见 ``factor.synthesis.synthesize_ic_ir_max`` docstring 复现边界第 3 条），
 本脚本就是那个调用方：对每个 T 切训练窗 → 合成 → **测试段**评估 OOS RankIC。
 
-用法（全量跑，成本与 e2e 同量级，预算见 RESEARCH_TODO 待办）::
+用法（全量跑，成本与 e2e 同量级，预算见 TODO_ARCHIVE 册Ⅱ 待办）::
 
     python -m scripts.evaluation.mf10_t_scan --dataset hs300_2022_2025 --top 8
     python -m scripts.evaluation.mf10_t_scan --dataset hs300_2022_2025 \\

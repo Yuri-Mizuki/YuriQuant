@@ -1,6 +1,6 @@
 """批次 8：表格基础模型全量滚动对照（TabPFN-3 / TabICL V2 vs LightGBM）。
 
-GOOD_MACHINE_TASKS.md 批次 8 的好机器全量 runner（v1 结论只作方向假设来源，
+TODO_ARCHIVE.md 册Ⅲ 批次 8 的好机器全量 runner（v1 结论只作方向假设来源，
 全部臂用最新版：tabicl 2.2.0（V2 权重 tabicl-regressor-v2-20260212）+
 tabpfn 8.4.0（v3 权重 Prior-Labs/tabpfn_3）。v1 遗留局限直接在本 runner 修复：
 test_step=1 全量测试日（v1 每步 3 天抽样高估 IR）、滚动 W 月窗口扫描、

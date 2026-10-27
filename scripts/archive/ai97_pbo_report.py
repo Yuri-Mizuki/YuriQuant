@@ -1,4 +1,4 @@
-"""AI97 三臂 ×3 seed 的策略级过拟合检验（GOOD_MACHINE_TASKS 批次 2 收尾）。
+"""AI97 三臂 ×3 seed 的策略级过拟合检验（TODO_ARCHIVE 册Ⅲ 批次 2 收尾）。
 
 读取 9 个 ``reports/alphapool_ppo_real_mlp_{arm}_seed{seed}.json`` 的评估段
 （evaluation.test）逐因子日 IC 序列合成的**期间收益代理**不可得时，退化用

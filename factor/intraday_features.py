@@ -30,7 +30,7 @@ shape_crossing_cnt；longest_strike_above_mean → shape_longest_pos_run（变�
 ret_rms。量价类（ret_vol_corr 等）为 Alpha掘金 22 的量价维度，tsfresh 无
 直接对应。
 2026-10-14 增：时段切片矩阵族（20 分钟窗 × 动量/波动/量，`*_segNN_*` 36 个，
-见 ``_segment_slices``）——「分钟频挖掘第三层扩原料」第一项（TODO §二）。
+见 ``_segment_slices``）——「分钟频挖掘第三层扩原料」第一项（TODO.md §二 资源墙后置）。
 2026-10-23 增：成交量占比自相关族 3 个（`pv_volshare_*`）+ 量价相关方向拆分 2 个
 （`pv_ret_vol_corr_{up,dn}`）——「高频数据低频化：为什么量比价更重要」P0 落点，
 见 `reports/docs/research_notes/短板匹配与微信文章研读_2026-09-22.md` §2b；同批再加

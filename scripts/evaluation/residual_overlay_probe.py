@@ -2,7 +2,7 @@
 
 ## 定位
 
-`TODO.md` §六 A2 下一步的第二臂。残差 IC 首轮（`residual_ic_probe.py`，
+TODO_ARCHIVE.md 册Ⅰ §六 A2 下一步的第二臂。残差 IC 首轮（`residual_ic_probe.py`，
 `reports/frontier_audit_2026-10-19/`）发现非量价残差信息集中在**负向**
 （融资/两融/SUE/资产增长等 risk/quality 因子，`both` t≤−3 且 9 年方向稳定），
 读数是「主模型多头里该回避的股票」。本脚本在**组合层**检验这个读数：

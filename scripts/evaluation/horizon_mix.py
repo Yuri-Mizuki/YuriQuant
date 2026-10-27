@@ -1,6 +1,6 @@
 """E1'' horizon 混合消融：把慢 horizon OOS 预测混入 ens_h1h5 的对照实验。
 
-背景（RESEARCH_TODO §一 基本面诊断，2026-09-22）：分族 IC-horizon 弹性证明
+背景（TODO_ARCHIVE 册Ⅱ §一 基本面诊断，2026-09-22）：分族 IC-horizon 弹性证明
 基本面/股东族 |IC| 随 horizon 上升（×1.14）而量价族全负；月频调仓组合下
 把 gbdt__h10/h20 混入集成，年化 +1.2~1.4pp、换手 −4~15pp（882 口径实测，
 产物 reports/horizon_mix/）。本脚本即该实验的固化版：920 口径基线重跑后

@@ -1,6 +1,6 @@
 """批次 12④：观点注入三臂对照（BL 优化层 vs 预测层 vs 不注入）。
 
-GOOD_MACHINE_TASKS 批次 12④：同一观点因子（默认 ``bp`` 价值观点，须披露
+TODO_ARCHIVE 册Ⅲ 批次 12④：同一观点因子（默认 ``bp`` 价值观点，须披露
 单因子 IC——观点可能是错的）下三臂对照，``model/views.py`` /
 ``optimize.solver.bl_views_from_factor`` 已入库。基座 = 920 定版信号 defv
 （h1020 秩平均 ⊕ 慢信号 s0.5）。

@@ -107,7 +107,7 @@ baselines:
     data_state:
       registered: "income 财报数据补齐（4383 只）**之前**的 v2 数据态"
       current_equivalent: "同配置在当前数据态重跑 ≈ 17.0–17.2%（v3/v4 双证）"
-      source: "README.md:24-26 / GOOD_MACHINE_TASKS.md:34-36"
+      source: "README.md:24-26 / TODO_ARCHIVE.md 册Ⅲ §〇 当前结论快照"
       caveat: >
         🚨 18.07% 属**旧数据态**，**不可**当作当前数据态的对照目标；引用须注明
         「income 4383 前后」。当前数据态请用 ≈17.0–17.2%（本机由 `v1w-ortho882` 代理）。

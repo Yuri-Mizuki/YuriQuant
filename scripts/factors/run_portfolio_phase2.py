@@ -1,6 +1,6 @@
 """stage2 Phase 2：zz1000 主实验（信号管线 + PPO 滚动集成 / 银河口径 QP / 基准）。
 
-设计依据（RESEARCH_TODO stage2 条目）：
+设计依据（TODO_ARCHIVE 册Ⅱ stage2 条目）：
 - 信号 = L1 产出：三标签 GBDT 滚动预测（alpha_22/sharpe_22/mdd_66）+
   验证集 RankIC>0.05 质量门槛 + 回退（f=alpha_z+sharpe_z 按门槛逐年择用、
   全败回退零信号；z=mdd 预测，值越大风险越低，L1 已验证稳定）。
@@ -17,7 +17,7 @@
         --ppo-seeds 2 --ppo-retries 1 --ppo-timesteps 2048 \\
         --arms ppo,qp,ew --out reports/portfolio_phase2_smoke
 
-生产（好机器，命令见 RESEARCH_TODO）：默认全量参数。
+生产（好机器，命令见 TODO_ARCHIVE 册Ⅱ）：默认全量参数。
 """
 from __future__ import annotations
 
@@ -219,7 +219,7 @@ def make_env(px, mask, codes, f, z, decision_dates, reward_kw, seed):
                                    if d in close.index]]
     bw = mask.reindex(index=decision_dates, columns=codes).fillna(False)
     # 可交易掩码 = 指数成分 ∩ T 日可交易（封板/停牌/ST，决策日收盘调仓 →
-    # execution_lag=0 取 T 日状态；TODO §三 工程债 2026-09-24 落地——
+    # execution_lag=0 取 T 日状态；TODO_ARCHIVE 册Ⅰ §三 工程债 2026-09-24 落地——
     # 此前只剔非成分，zz1000 的 ST/停牌量会放大"买不进"边界）
     trad = _tradability_cached(px).reindex(
         index=decision_dates, columns=codes).fillna(True)

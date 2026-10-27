@@ -1,6 +1,6 @@
 """批次 12⑤：CVaR 约束组合臂 vs Top10% 等权 vs buffer 形态（production 口径）。
 
-GOOD_MACHINE_TASKS 批次 12⑤：``solve_portfolio`` 的 CVaR_α 约束
+TODO_ARCHIVE 册Ⅲ 批次 12⑤：``solve_portfolio`` 的 CVaR_α 约束
 （RU 线性化 / OSQP max_iter=200k / eps 1e-8，``optimize/solver.py`` 已入库带
 6 测试）对照 Top10% 等权与 buffer 形态，production 口径对拍（T+1 open、
 固定 10bp、1e6 资金、buffer_arm_920 同 harness）。基座 = 920 定版信号

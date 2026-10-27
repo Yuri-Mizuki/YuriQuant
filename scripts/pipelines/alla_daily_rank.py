@@ -197,7 +197,7 @@ PRESETS: dict[str, dict] = {
         "buffer_entry": 0.15,
         "buffer_exit": 0.40,
         # 训练标签口径：批次 1 / 批次 6（E5）的定版臂命令均带 `--tradable-labels`
-        # （GOOD_MACHINE_TASKS.md §1.1 实测命令 + build_alla_factor_neutralized_fundind
+        # （TODO_ARCHIVE.md 册Ⅲ §1.1 实测命令 + build_alla_factor_neutralized_fundind
         # 的 docstring 配套命令），故定版复现必须同开关；出榜链自身默认 False。
         # ✅ 已由莉酱拍板确认（2026-10-15）：定版口径采用 True。
         "tradable_labels": True,

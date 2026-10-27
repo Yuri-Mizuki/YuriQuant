@@ -1,4 +1,4 @@
-"""stage2 Phase 2 可交易掩码注入的单元测试（TODO §三 工程债，2026-09-24）。
+"""stage2 Phase 2 可交易掩码注入的单元测试（TODO_ARCHIVE 册Ⅰ §三 工程债，2026-09-24）。
 
 覆盖：
 - ``build_tradable_mask`` 的 ``execution_lag=0`` 分支（T 日状态口径：

@@ -111,8 +111,8 @@ tests/      96 个文件 / 1333 个用例
 reports/    实验产物、监控台账与设计文档
 ```
 
-> 深入细节：任务与缺口看 [`TODO.md`](TODO.md)，研报复现线看
-> [`RESEARCH_TODO.md`](RESEARCH_TODO.md)，实验产物与设计文档在 `reports/`。
+> 深入细节：活跃任务与缺口看 [`TODO.md`](TODO.md)，已收口归档（工程线/研读复现线/好机器队列三册）看
+> [`TODO_ARCHIVE.md`](TODO_ARCHIVE.md)，实验产物与设计文档在 `reports/`。
 
 ## 🚀 快速开始
 
@@ -143,8 +143,8 @@ python -m scripts.reporting.generate_report      # 一键端到端 HTML 报告
 ## 🧪 工程质量
 
 - **测试**：1333 个用例覆盖数据层、回测、因子挖掘、模型、优化、监控、报告全栈
-- **CI 两层**：手动触发（`workflow_dispatch`）——快检查（ruff 真 bug 规则 + 分层守卫，约 1 分钟）+ 全量测试
-- **复现锁**：`uv.lock` 提交入库，`uv lock --check` 守卫；可选依赖按功能域分组（ml / gp / solver / rl），缺失时优雅降级
+- **CI**：GH Actions 已于 2026-10-27 移除（原两层手动工作流，2026-09-10 起 push 即静音、实际不用）；守卫改本机跑 `python -m pytest -q`（数据齐全最完整）+ `uv lock --check`
+- **复现锁**：`uv.lock` 提交入库，本机 `uv lock --check` 自检（CI 移除后由 README 此条与依赖改动 SOP 承担）；可选依赖按功能域分组（ml / gp / solver / rl），缺失时优雅降级
 - **Lint / 类型**：`ruff check .`（F 规则为门禁）；`mypy` 以 Python 3.12 配置运行，存量类型告警未清零
 
 ## 📜 免责声明

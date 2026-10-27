@@ -1,7 +1,7 @@
 """银河 0608 复现 L1：三标签 GBDT + 验证集 RankIC 质量门槛（stage2 Phase 2 前置）。
 
 研读依据：``reports/docs/research_notes/银河0608_研读_时序截面三层预测与QP口径.md``；
-分层定稿见 RESEARCH_TODO（L1 = Phase 2 信号设计本身）。
+分层定稿见 TODO_ARCHIVE 册Ⅱ（L1 = Phase 2 信号设计本身）。
 
 做什么：经典 12 因子 + 银河特征族 ~36 个 → 三标签（alpha_22 / sharpe_22 /
 mdd_66）→ 按研报口径滚动训练（3 年窗、前 80% 训练后 20% 验证、年更）→

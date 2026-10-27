@@ -1,7 +1,7 @@
 # reports/ — 产出物索引与报告结论速览
 
 > 本目录整体被 gitignore（`.gitignore:23`），**任何删除都无法经 git 恢复**。
-> 研究结论的唯一真源是根目录 [`TODO.md`](../TODO.md)，本文件不重复其内容，只做三件事：
+> 研究结论的唯一真源是根目录 [`TODO.md`](../TODO.md)（已收口结论归档于 [`TODO_ARCHIVE.md`](../TODO_ARCHIVE.md) 三册），本文件不重复其内容，只做三件事：
 >
 > ① **目录地图**——每个目录是什么、谁产出、为什么保留；
 > ② **已清理目录的结论备份**——2026-09-11 清理时删除的原文，其结论提炼在 §三；
@@ -20,8 +20,8 @@
 | `alla_daily_defv/` | 全A每日选股排名、候选、解释（**现行**，Windows 计划任务 `YuriQuant AllaDailyRank --preset dingban`，2026-10-08 起） | `scripts/pipelines/alla_daily_rank.py` |
 | `alla_daily/` | ⚠️ legacy 口径产物（旧 h1+h5 ortho），停于 2026-09-22；仅历史追溯 | `scripts/pipelines/alla_daily_rank.py --preset legacy` |
 | `alla_rolling/` | 全A滚动实验**主数据枢纽**（zscore 臂）：`_base/` 喂因子构建器、`pred/` 喂归因、`selection/` 喂生产日排名，8+ 组件读取 | `scripts/pipelines/rolling_grid_alla.py`（默认臂）+ `rolling_grid_report.py` + `jq_style_report.py` |
-| `alla_rolling_ortho/` | 正交化口径臂——**全A管线默认**（TODO §附录：全正交 +1.6pp/年 > 不正交），ens_h1h5 集成年化 +13.3% | `scripts/pipelines/rolling_grid_alla.py --preproc ortho` |
-| `alla_attribution/` | 主策略 α/β 分解 + Brinson 归因（结论录于 TODO §一） | `scripts/pipelines/alla_excess_attribution.py` |
+| `alla_rolling_ortho/` | 正交化口径臂——**全A管线默认**（TODO_ARCHIVE 册Ⅰ 附录：全正交 +1.6pp/年 > 不正交），ens_h1h5 集成年化 +13.3% | `scripts/pipelines/rolling_grid_alla.py --preproc ortho` |
+| `alla_attribution/` | 主策略 α/β 分解 + Brinson 归因（结论录于 TODO_ARCHIVE 册Ⅰ §一） | `scripts/pipelines/alla_excess_attribution.py` |
 | `model_portfolio/` | 固化组合交付物（`pipeline=alla_ortho`；legacy 对照，非现行生产） | `scripts/pipelines/run_model_portfolio.py` |
 | `monitoring/` | 因子库/模型预测监控台账 + 报告。**⚠️ 旧链 2026-09-21 退休、计划任务已 `/delete`**（数据集行情源 08-26 停更）：`snapshots.csv`/`alerts.csv`/`monitor_report.html` 停在 hs300 时代；`production_ic_daily.csv` 是**现役**生产口径每日 IC 台账。停用决策证据留档：`legacy_monitor_hs300_run_20260921.log`（旧链直跑）/ `legacy_monitor_alla_probe_20260921.log`（改指全A 试跑，920 因子被跳过）/ `legacy_task_xml_20260921.xml`（任务条件 XML） | `scripts/reporting/monitor_performance.py`（退休，手动可跑）+ `scripts/reporting/monitor_production_ic.py`（现役） |
 | `models/` | 模型注册台账（旧监控链读取；现役链不依赖） | `scripts/evaluation/walk_forward_model.py` |
@@ -41,7 +41,7 @@
 | `etf_rotation_p2/` | **ETF 轮动 P2 前置（2026-10-26）**：防御腿 + 份额 PIT 拥挤度 + 趋势 R² 三项对照；新基线候选 `def_mix_crowd_f20` 年化 11.23% / Sharpe 0.85 / MDD 16.70%，邻域 0.76–0.94（脚本 `scripts/portfolio/etf_rotation_p2.py`） |
 | `risk_decomposition/` | 组合风险分解报告（Euler 分解 / 因子方差贡献 / VaR 成分） |
 | `ml_synthesis_h1/` | ⚠️ 虽属归档时代，但 `monitor_performance.py` 读其预测面板，删除会破坏监控 |
-| `investment_report/` | HS300 时代投资收益报告（最终交付物存档；数字有 ~3% 年化口径偏移待重跑，TODO §一第 3 条；归档脚本 `diagnose_factor_vs_model` 以其为输入） |
+| `investment_report/` | HS300 时代投资收益报告（最终交付物存档；数字有 ~3% 年化口径偏移待重跑，TODO_ARCHIVE 册Ⅰ §一第 3 条；归档脚本 `diagnose_factor_vs_model` 以其为输入） |
 | `walk_forward/`、`two_periods/` | 早期回测产物；`research/report_pipeline.py`（generate_report）读取其 `summary.csv` |
 | `_htai_gp/` | 华泰 GP 挖掘对照数据 + 手写方法论总结（`scripts/archive/compare_ml_synthesis.py` 读取） |
 | `neutralize_vectorization/` | neutralize 逐日循环向量化的等价性证据与计时（2026-09-20；`factor/preprocessing.py` 的 `neutralize_batch` / `neutralize_grouped`，默认已切 2.96x 逐位一致版） |
@@ -54,10 +54,10 @@
 | `stack_blend/` | stacking 融合权重实验（`scripts/evaluation/stack_blend.py`，复用 fundamental_blend 的 ICIR 慢速面板） |
 | `alla_arms/` | 四臂（`alt/` `base/` `rre_0.3/` `rre_0.5/`）特征集对比；各臂仅存 `arm_config.json`（口径配置），pred 中间产物 2026-09-23 清理 |
 | `alla_daily_ortho/`、`alla_daily_h1h5/`、`alla_daily_det_c/`、`alla_daily_ortho_check/` | 09-16 出榜链定版的四个候选臂快照（history/leaders/explain/feature_importance；定版口径见 `alla_daily/`） |
-| `panels_neu_backfill/` | panels_neu 882→920 补齐 38 缺的证据（build.log + selection_diff.log；派生 TODO §一 P0 重跑项） |
+| `panels_neu_backfill/` | panels_neu 882→920 补齐 38 缺的证据（build.log + selection_diff.log；派生 TODO_ARCHIVE 册Ⅰ §一 P0 重跑项） |
 | `pbo_rolling_ortho/` | ortho 臂 PBO（策略过拟合概率）检验（M/W 频率 × neut/raw 口径） |
 | `horizon_mix/` | horizon 混选（h1+h5 集成 vs 纯 h1）+ close 口径对照 |
-| `prod_pipeline_gap/` | 生产管线 vs 回测管线 2×2 缺口诊断（结论推进 TODO §一 P0 项） |
+| `prod_pipeline_gap/` | 生产管线 vs 回测管线 2×2 缺口诊断（结论推进 TODO_ARCHIVE 册Ⅰ §一 P0 项） |
 | `daily_review/` | 每日复盘（09-18 review、09-20 四源 Phase0 探针日志、事件驱动数据接入评估） |
 | `daily_determinism/` | 出榜链「同天两跑结果不同」判定：链路本身严格确定，偏差来自用重构未定稿的代码跑 |
 | `altdata_cls_audit/` | 财联社电报全量回补审计（119.2 万条；推翻另类数据 P0 计划「新闻快讯流无历史可回补」前提） |
@@ -68,7 +68,7 @@
 | `structured_evidence_recalc/` | qcut 分箱坍缩扫描 |
 | `kronos_smoke/`、`tabpfn3_smoke/` | Kronos / TabPFN3 模型冒烟结论 |
 | `portfolio_phase2_smoke/` | 组合优化 Phase 2 冒烟（`signals/`） |
-| `llm_mcts_phase0/` | 东吴 LLM-MCTS Phase 0 四臂冒烟（2026-09-24：mcts/gp/gflownet/llm_oneshot 各留最终一轮 + `*_realsmoke` 真实 hs300 离线缓存轮；全量产物将来落本目录，命令见 GOOD_MACHINE_TASKS 9.2） |
+| `llm_mcts_phase0/` | 东吴 LLM-MCTS Phase 0 四臂冒烟（2026-09-24：mcts/gp/gflownet/llm_oneshot 各留最终一轮 + `*_realsmoke` 真实 hs300 离线缓存轮；全量产物将来落本目录，命令见 TODO_ARCHIVE 册Ⅲ 批次 9.2） |
 | `tabpfn_rolling_compare_smoke/` | 批次 8 表格基础模型对照 runner 的 gbdt 臂 hs300 冒烟（2026-09-24；tabpfn/tabicl 臂全量待 GPU） |
 | `portfolio_phase2_mask_smoke/` | 批次 5 前置掩码注入验证冒烟（2026-09-24，ppo/qp/ew 全臂 + `run.log`） |
 | `size_neut_strength/` | 市值中性化强度曲线（2026-10-09，P0）：α 0→1 年化单调递减（15.52%→13.80%），无内部最优 ⇒ 市值暴露是收益来源不是旋钮 |
@@ -84,8 +84,8 @@
 | `cvar_arm_920/` / `views_arm_920/` | 批次 12⑤/12④（2026-10-21）：CVaR 组合臂（不升级）与观点注入三臂（零增量）负结果归档。 |
 | `alla_rolling_ortho920mf/` / `alla_rolling_ortho920fundind_lblco/` | 批次 12②/12③（2026-10-21/22）：市场状态特征（**唯一正结果 +1.44pp 建议采纳挂拍板**）与隔夜标签臂（判负）。 |
 | `mf_fundind_check/` | 批次 14（2026-10-26）：mf 干净单臂补测——不达验收（+0.49pp < +1pp），mf 线收口。 |
-| `sync/` | **产物远端同步捆绑**（`batch1213_products_20261022.zip` = 批次 12/13 全部 CSV/MD/JSON，304KB；大件 parquet 不入 zip、由 GOOD_MACHINE_TASKS 存档命令可重建）——reports 产物整体仍不进 git，仅此 zip 由用户指示 force-add 入库。 |
-| `frontier_audit_2026-10-19/` | **增量方向 frontier audit（2026-10-19，A1/A2）**：`horizon_probe` 主信号 IC h1–h120 衰减（h60 反而升到 0.161）+ `residual_ic_probe` 920 因子对主信号残差的四口径 IC；脚本 `scripts/evaluation/{horizon_probe,residual_ic_probe}.py`，结论回写 TODO §六。 |
+| `sync/` | **产物远端同步捆绑**（`batch1213_products_20261022.zip` = 批次 12/13 全部 CSV/MD/JSON，304KB；大件 parquet 不入 zip、由 TODO_ARCHIVE 册Ⅲ 存档命令可重建）——reports 产物整体仍不进 git，仅此 zip 由用户指示 force-add 入库。 |
+| `frontier_audit_2026-10-19/` | **增量方向 frontier audit（2026-10-19，A1/A2）**：`horizon_probe` 主信号 IC h1–h120 衰减（h60 反而升到 0.161）+ `residual_ic_probe` 920 因子对主信号残差的四口径 IC；脚本 `scripts/evaluation/{horizon_probe,residual_ic_probe}.py`，结论回写 TODO_ARCHIVE 册Ⅰ §六。 |
 | `text_factor_probe/` | 论文族 `pap_*`(21) + 情绪族 `txt_*`(5) **生产口径收尾（2026-10-13，P0）**：口径修正——面板实体**存在**（哈希名在 `panels/`），缺的是未进 `panels_neu` ⇒ 从未中性化/竞争；`txt_*` 5 个自身可交易 IR **0.008~0.105 ≪ 0.3 门槛**、独立 Sharpe 0.47~0.57 < 主 0.631；**融合层「Sharpe +0.05~0.12」经安慰剂证伪**（值置换复现中位 71% ⇒ 覆盖率掩码/市值暴露，非 alpha）；`pap_*` 无一条过「正交+够强」；106 项 BH-FDR **仅 1 条存活且为负** → 脚本 `scripts/evaluation/text_factor_probe.py` + `fuse_placebo.py` |
 
 > ⚠️ **`alla_rolling_mixed/` 与 `alla_rolling_nofund/` 已彻底移除（2026-09-16）**。
@@ -113,7 +113,7 @@
 | `docs/另类数据管道_数据源说明.md` | 另类数据管道 7 源落地实况 + PIT 对齐规则（§四，TODO 引用） |
 | `docs/research_notes/另类数据调研三部曲_2026-09-20.md` | 另类数据调研合并册（方向 → 全景分类 → 现成源实测；2026-09-24 由 3 篇合并，原文件快照见 §四） |
 | `docs/research_notes/短板匹配与微信文章研读_2026-09-22.md` | 短板盘点×前沿方案匹配 + 微信文章逐篇研读合并册（2026-09-24 由 2 篇合并） |
-| `docs/research_notes/`（其余 12 篇） | 研报研读笔记（一篇一报，被 RESEARCH_TODO 指针引用，**不做合并**）+ P1 速读批/CNEquity 调研 |
+| `docs/research_notes/`（其余 12 篇） | 研报研读笔记（一篇一报，被 TODO_ARCHIVE 册Ⅱ 指针引用，**不做合并**）+ P1 速读批/CNEquity 调研 |
 | `docs/consistency_checks/` | **研报口径核对 & 公平性核对报告**（2026-09-16 新建）：`AI97_预算与复现一致性核对.md`、`口径核对_AI39_多因子10.md`、`gflownet_im_faircheck.md` + 对应三臂原始日志 |
 | `archive/ml-synthesis-hs300-report/` | 已归档的 ML 合成交付报告（根 README 能力表引用） |
 
@@ -131,7 +131,7 @@
 |---|---|---|
 | `experiments.csv` | 实验台账 | `research/experiments.py:35`（`DEFAULT_PATH`）、`research/report_pipeline.py:141,341` |
 | `all_a_pit_union_2019.json` | 全A PIT 池代码清单 | textmining `build_*_samples.py` 按 `reports/{pool}_pit_union_2019.json` 路径约定读取 |
-| `intraday_stat_checkup.csv` | 分钟统计因子体检报告（结论录于 TODO §一） | `scripts/common/e2e_common.py:163`、`scripts/factors/build_intraday_stat_factors.py:271` |
+| `intraday_stat_checkup.csv` | 分钟统计因子体检报告（结论录于 TODO_ARCHIVE 册Ⅰ §一） | `scripts/common/e2e_common.py:163`、`scripts/factors/build_intraday_stat_factors.py:271` |
 | `mine_im_combos.csv` | 分钟特征 GP 组合挖掘结果 | `scripts/factors/mine_im_combos.py:124` |
 
 ### 1.5 日志与内部工作区
@@ -220,11 +220,11 @@ model层 / ML合成，其余已删、可重跑复现——结论见 §三.13~17�
 ## 三、已清理目录的结论备份（2026-09-11 删除，原文不可恢复）
 
 1. **`alla_rolling_mixed/`**（约 1.2GB）——三臂对比的 mixed 臂（仅基本面族中性化）。
-   结论已录 TODO §附录：全正交 +1.6pp/年 > 混合 +0.1pp ≈ 不正交；正交化增量几乎全部
+   结论已录 TODO_ARCHIVE 册Ⅰ 附录：全正交 +1.6pp/年 > 混合 +0.1pp ≈ 不正交；正交化增量几乎全部
    来自量价因子，40/42 个 h1 配置全正交占优。重生成：`rolling_grid_alla.py --preproc mixed`。
    *（2026-09-16 补：残留的 `_base/`（446MB）亦已移除，见 §1.2 注。）*
 2. **`alla_rolling_nofund/`**（约 1.2GB）——排除基本面族的消融对照。
-   结论已录 TODO §附录：基本面/股东族带来 ~+0.7pp/年一致增量（含族 +10.2% vs
+   结论已录 TODO_ARCHIVE 册Ⅰ 附录：基本面/股东族带来 ~+0.7pp/年一致增量（含族 +10.2% vs
    纯量价 +9.5%）。重生成：`rolling_grid_alla.py --ablation`。
    *（2026-09-16 补：残留的 `_base/`（446MB）亦已移除。）*
 3. **`alla_rolling_mixed_run.log`** —— mixed 臂手动重定向日志，随臂删除。
@@ -244,7 +244,7 @@ model层 / ML合成，其余已删、可重跑复现——结论见 §三.13~17�
    超额 −1.0% vs −5.1%），但整体超额为负、样本仅约 2 年，**未采纳进固化配置**。
 9. **`timing_vs_crosssection/`** —— 目标波动 / 状态机择时叠加均不优于纯截面
    （Sharpe 0.57 / 0.54 / 0.29，2025 年段）；与后续 `position_overlay_grid` 结论
-   （TODO §附录：择时 overlay 不提升 Sharpe、只压回撤）一致。
+   （TODO_ARCHIVE 册Ⅰ 附录：择时 overlay 不提升 Sharpe、只压回撤）一致。
 10. **`select_hs300_2025/`** —— HS300 时代选股演示（2026-08-05，幸存者偏差修复前，
     数字虚高不可引用：rev_growth_yoy top30 年化 48%、Sharpe 2.54）。
     `scripts/archive/select_stocks.py` 随时可重生成。
@@ -253,7 +253,7 @@ model层 / ML合成，其余已删、可重跑复现——结论见 §三.13~17�
 12. **`models_mock/`** —— `walk_forward_model.py --mock` 的 mock 模型台账，按需重生成。
 13. **`diagnose/`** —— 单因子 vs 模型同口径诊断：range20 / alpha191_159 / vol60 等
     负 IC 单因子月频 top50 超额 +20%~+36%，实为高波动/高 beta 风格暴露、非预测力
-    （结论已录 TODO §附录）。重跑 `scripts/archive/diagnose_factor_vs_model.py` 可复现。
+    （结论已录 TODO_ARCHIVE 册Ⅰ 附录）。重跑 `scripts/archive/diagnose_factor_vs_model.py` 可复现。
 14. **`diagnose_neu/`** —— 中性化前后对照：模型预测中性化后 IC 0.059→0.015 但
     超额 −17.8%→−8.9%——剥离风格暴露后模型趋近纯 alpha（与 investment_report
     「中性化是变现关键」结论同源）。重跑 `scripts/archive/diagnose_neutralized_compare.py`。
@@ -263,8 +263,8 @@ model层 / ML合成，其余已删、可重跑复现——结论见 §三.13~17�
     （NW t=5.8）> ridge 0.044（t=4.1）> TabICL 0.029（t=3.2）——**gbdt 系最优，
     表格基础模型（TabICL）无优势**。重跑 `scripts/archive/ml_algorithm_compare.py`。
 17. **`e2e_backtest/`、`e2e_picks/`、`optimize_e2e/`、`signals/`、`multi_period/`**
-    —— HS300 时代 e2e 链路与演示产物，历史数字带 ~3% 年化口径偏移（TODO §一
-    第 3 条待重跑项）。核心结论已录 TODO §附录：等权 top50 +16.2% 跑输全池等权
+    —— HS300 时代 e2e 链路与演示产物，历史数字带 ~3% 年化口径偏移（TODO_ARCHIVE 册Ⅰ §一
+    第 3 条待重跑项）。核心结论已录 TODO_ARCHIVE 册Ⅰ 附录：等权 top50 +16.2% 跑输全池等权
     +30.8%；风格中性化 16.2%→27.0%（Sharpe 0.41→0.66）；周频调仓被证伪；
     最优=月频+中性化，已并入 investment_report。分别重跑 `e2e_backtest.py` /
     `scripts/archive/e2e_stock_picks.py` / `optimize_e2e.py` / `generate_signals.py` /
@@ -335,7 +335,7 @@ model层 / ML合成，其余已删、可重跑复现——结论见 §三.13~17�
   - **research_notes 17 → 14 篇**：两组同主题合并——`另类数据调研三部曲_2026-09-20.md`
     （方向调研/全景分类/现成源实测对照三篇，演进链同日成册）与
     `短板匹配与微信文章研读_2026-09-22.md`（短板盘点为锚 + 微信文章逐篇为应用）。
-    内容**逐字保留**仅加分隔导航；9 篇研报研读一篇一报被 RESEARCH_TODO 指针引用，
+    内容**逐字保留**仅加分隔导航；9 篇研报研读一篇一报被 TODO_ARCHIVE 册Ⅱ 指针引用，
     **刻意不合**。引用同步：CNEquity 调研、design/另类数据P0_实施计划、管道_数据源说明
     共 3 文件改指合并后文件名。
   - **冒烟去重**：`llm_mcts_phase0/` 删 3 个调试中途轮（断链修复前/中的 superseded 运行），
@@ -401,3 +401,23 @@ model层 / ML合成，其余已删、可重跑复现——结论见 §三.13~17�
     `pytest tests/test_experiments.py tests/test_report_pipeline.py -q` → **17 passed**
     （与 09-16 治理后一致，确认目录移动未破坏引用）。
   - **结果**：约 1764 → **1725 个文件**；总量约 5.9GB → **4.75 GiB**（净减约 1GB，精确删除量以 manifest 的 1026.9MB 为准）。
+
+### 2026-10-27 待办三文件整合 + 仓库跟踪清理（记录）
+
+- **退役两个待办文件**：`RESEARCH_TODO.md` / `GOOD_MACHINE_TASKS.md` 内容逐字
+  归档进根目录 `TODO_ARCHIVE.md`（册Ⅱ/册Ⅲ；册Ⅰ = 原 TODO.md 已收口部分），
+  原文件 `git rm`。快照（路径+md5）存仓库外
+  `~/yuriquant_snapshots/2026-10-27_todo_consolidation/`：
+  `TODO.md e7321f3f…`、`RESEARCH_TODO.md e9f1f70e…`、
+  `GOOD_MACHINE_TASKS.md 8a51949c…`。
+- **`ai97_100k.json` 移出 git**（62KB，AI97 100k 步归因 dump，全库零引用，
+  属漏入库的实验产物）→ 物理移至 `reports/ai97_100k.json`（本目录 gitignore，
+  md5 `d5051d74…` 见上快照），`git rm --cached`。
+- **删除 `.github/workflows/`**（ci.yml + full-tests.yml，均手动触发、2026-09-10
+  起 push 静音）：用户拍板 CI 能力归零；`uv.lock` 同步守卫改本机
+  `uv lock --check`（README 工程质量节已改写）。
+- **引用同步**：全仓 54+ 文件（代码 docstring / config/baselines.yaml 的行号级
+  引用 / README / AGENTS / reports 内 20+ md）统一改指 `TODO_ARCHIVE.md`
+  「册 + 节名」锚点；两处行号级硬引用（`baselines.yaml:110`、
+  `neutralize_vectorization/report.md:5`）改章节锚，不再依赖行号。
+  全仓扫描旧文件名在 TODO_ARCHIVE 之外零残留。

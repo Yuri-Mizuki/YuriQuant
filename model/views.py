@@ -18,7 +18,7 @@ AI43 原文改 sklearn 随机森林源码（Cython），新增 ``speci_features`
 **与优化层注入的关系**：项目已有观点注入优化器（``bl_views_from_factor``
 → :func:`optimize.solver.solve_portfolio` method="bl"）。预测层注入（本模块）
 与 BL 注入是两个不同注入点，互补而非重复；对照实验形态 = 同一观点下
-BL 注入 vs 预测层注入 vs 不注入三臂（RESEARCH_TODO §一）。
+BL 注入 vs 预测层注入 vs 不注入三臂（TODO_ARCHIVE 册Ⅱ §一）。
 
 **评价口径**：注入后的模型**不再是"无观点"模型**——对比实验必须三臂同框
 （观点因子相同、训练窗口/折切分/标签全一致），只看注入臂与基线臂的

@@ -14,7 +14,7 @@
 
 ⚠️ HS300 口径：数据走 ``e2e_common.load_daily_data`` → 缓存 ``daily_hs300.parquet``
 （2026-08-26 起停更）、``DATASET=hs300_2022_2025``。产品报告 ``reports/e2e_backtest/``
-已在 2026-09-16 清理中移除，结论录于 TODO §附录；重跑本脚本可复现。
+已在 2026-09-16 清理中移除，结论录于 TODO_ARCHIVE 册Ⅰ 附录；重跑本脚本可复现。
 
 协议（防前视纪律）：
 1. 特征：经典量价 12 + 因子库 significant（排除 model:*）

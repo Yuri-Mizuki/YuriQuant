@@ -1,6 +1,6 @@
 """批次 1.4：定版信号（h1020）的 buffer(20/30) 臂 vs naive top20。
 
-GOOD_MACHINE_TASKS 批次 1.4：对 1.3 胜出信号加 ``BufferedTopFracLongOnly``
+TODO_ARCHIVE 册Ⅲ 批次 1.4：对 1.3 胜出信号加 ``BufferedTopFracLongOnly``
 (entry 0.20 / exit 0.30) 对照（882 口径实测 buffer 年化 25.32%/换手 53.9% 优于
 naive 24.50%/66.1%）。信号构造与执行口径逐行对齐 ``horizon_mix.py``
 （ens_h1h5h10h20 秩平均、T+1 open 可执行、mask 预掩码）。

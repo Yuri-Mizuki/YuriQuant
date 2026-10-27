@@ -180,7 +180,7 @@ def run_multi_period_backtest(
     if cfg.method in CLOSED_METHODS:
         warnings.warn(
             f"method={cfg.method!r} 属项目已书面关闭的优化家族（QP/HRP/risk_parity/BL，"
-            "见 TODO §一/ RESEARCH_TODO 链路优化线）；生产基线是 "
+            "见 TODO_ARCHIVE 册Ⅰ §一/ TODO_ARCHIVE 册Ⅱ 链路优化线）；生产基线是 "
             "strategy.constraints + buffer，不传 method 时默认 mvo 会静默走进否决路径。"
             "本次仅作研究对照。",
             RuntimeWarning, stacklevel=2)

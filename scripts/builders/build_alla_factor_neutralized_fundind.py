@@ -1,4 +1,4 @@
-"""E5 变体：基本面族「只对行业中性化」的面板变体（GOOD_MACHINE_TASKS 批次 6）。
+"""E5 变体：基本面族「只对行业中性化」的面板变体（TODO_ARCHIVE 册Ⅲ 批次 6）。
 
 对照 build_alla_factor_neutralized（标准三步：去极值 → 行业+市值中性化 → zscore），
 本变体对**基本面/股东族**（``scripts.common.alla_common.FUNDAMENTAL_FAMILY_SETS``，

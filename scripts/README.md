@@ -19,7 +19,7 @@
 | `builders/build_alla_disc_holder_dyn.py` | 大宗折价率 + 股东明细动态因子 → 并入 all_a_2018_2026 数据集。 |
 | `builders/build_alla_event_factors.py` | 全A事件驱动短周期因子面板（evt 族）→ 并入 all_a_2018_2026 数据集。 |
 | `builders/build_alla_factor_neutralized.py` | 预计算全注册因子的因子层中性化面板（#3 优化）。 |
-| `builders/build_alla_factor_neutralized_fundind.py` | E5 变体：基本面族「只对行业中性化」的面板变体（GOOD_MACHINE_TASKS 批次 6）。 |
+| `builders/build_alla_factor_neutralized_fundind.py` | E5 变体：基本面族「只对行业中性化」的面板变体（TODO_ARCHIVE 册Ⅲ 批次 6）。 |
 | `builders/build_alla_fundamental_factors.py` | 全A财务报表基本面因子面板（B族）→ 并入 all_a_2018_2026 数据集。 |
 | `builders/build_alla_holder_dyn_factors.py` | 全A 股东/内部人**动态持股**因子面板（holder_dyn 族）→ 并入 all_a_2018_2026。 |
 | `builders/build_alla_holder_factors.py` | 全A股东结构行为因子面板 → 并入 all_a_2018_2026 数据集。 |
@@ -93,7 +93,7 @@
 | `evaluation/model_state_probe.py` | 模型自诊断仓位探针（"信号自身状态 → 仓位乘数"）。 |
 | `evaluation/multiyear_oos.py` | 多年度 OOS 稳健性实验：模型 × horizon × 调仓频率 × 年份 |
 | `evaluation/news_alpha_probe.py` | news 族独立建模 + 可交易口径验真伪 + 组合层融合（2026-10-10，P0 路径）。 |
-| `evaluation/pbo_report.py` | 实验产物接 PBO 出报告（TODO §二；华泰 AI19/22 方法论落地）。 |
+| `evaluation/pbo_report.py` | 实验产物接 PBO 出报告（TODO_ARCHIVE 册Ⅰ §二；华泰 AI19/22 方法论落地）。 |
 | `evaluation/pead_alpha_probe.py` | 业绩预告 / 快报事件因子探针（P0 新信息源：PEAD / SUE 口径）。 |
 | `evaluation/portfolio_weighting.py` | 组合层权重对照（P1）：等权 vs 波动率倒数加权 vs 风险平价。 |
 | `evaluation/prod_baseline_compare.py` | P1b —— 生产基线同口径复验：定版因子 gbdt vs alpha360 gbdt / GRU。 |

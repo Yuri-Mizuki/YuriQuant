@@ -1,6 +1,6 @@
 """B2 一次性审计：SDK 未用表（ETF 份额 / 指数日权重 / 可转债 / 期权 / 国债）。
 
-对应 `TODO.md` §六 B2 与 `reports/frontier_audit_2026-10-19/sdk_field_audit.md`。
+对应 TODO_ARCHIVE.md 册Ⅰ §六 B2 与 `reports/frontier_audit_2026-10-19/sdk_field_audit.md`。
 本脚本只做**字段级实测**（字段清单 / 覆盖与历史 / PIT / 频率），不做策略探针。
 
 口径：

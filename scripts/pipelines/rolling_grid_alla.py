@@ -148,7 +148,7 @@ MODEL_FILTER: tuple[str, ...] = ()
 # CLI: --tradable-labels（须配 --out-tag 防覆盖主实验产物）
 USE_TRADABLE_LABELS: bool = False
 
-# 标签工程三臂（2026-10-04 立项，RESEARCH_TODO §二 标签工程双论文转译）：
+# 标签工程三臂（2026-10-04 立项，TODO_ARCHIVE 册Ⅱ §二 标签工程双论文转译）：
 #   LABEL_MODE   rank（默认，主实验口径）/ gauss_rank（Label Alchemy SSRN 7494298：
 #                截面正态得分，其 15 标签中最佳形态 1.74 vs raw 0.68）/ zscore / raw
 #   LABEL_WINDOW cc（默认，close→close）/ co（Label Horizon Paradox arXiv 2602.03395：
