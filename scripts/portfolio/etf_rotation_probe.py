@@ -177,6 +177,7 @@ def run_variant(bundle, panels: dict, spec: dict, w0: int | None = None,
     strategy = EtfRotationAdvanced(
         top_k=spec.get("top_k", 5),
         absolute_filter=spec.get("absolute", False),
+        abs_threshold=spec.get("abs_threshold", 0.0),
         weighting=spec.get("weighting", "equal"),
         vol_panel=vol,
         target_vol=spec.get("target_vol"),

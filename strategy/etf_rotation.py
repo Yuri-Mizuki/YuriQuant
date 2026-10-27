@@ -150,6 +150,7 @@ class EtfRotationAdvanced(Strategy):
         self,
         top_k: int = 5,
         absolute_filter: bool = False,
+        abs_threshold: float = 0.0,
         cash_filter: bool = True,
         weighting: str = "equal",
         vol_panel: pd.DataFrame | None = None,
@@ -166,6 +167,7 @@ class EtfRotationAdvanced(Strategy):
     ):
         self.top_k = int(top_k)
         self.absolute_filter = bool(absolute_filter)
+        self.abs_threshold = float(abs_threshold)
         self.cash_filter = bool(cash_filter)
         self.weighting = str(weighting)
         self.vol_panel = vol_panel
@@ -221,7 +223,7 @@ class EtfRotationAdvanced(Strategy):
 
     def _select(self, vals: pd.Series, date: pd.Timestamp | None = None) -> list[str]:
         if self.absolute_filter:
-            vals = vals[vals > 0]
+            vals = vals[vals > self.abs_threshold]
         if vals.empty:
             return []
         ranked = vals.sort_values(ascending=False)

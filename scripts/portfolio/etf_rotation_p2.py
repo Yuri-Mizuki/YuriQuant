@@ -136,6 +136,40 @@ ROBUST: list[dict] = [
      "top_k": 8},
 ]
 
+# 长线定版（champ + 动态去重 0.90/120）的剩余优化点 A1–A3、B4–B5（10-27）。
+# 成本统一为实际费率 1bp + 5bp，与已发布的 champ 13.75% / 1.08 / −13.97% 对齐。
+CHAMP = {**P1_BASE, "signal": "mom_crowd_f20", "defense": "mix",
+         "commission_bp": 1.0}
+OPT: list[dict] = [
+    {**CHAMP, "name": "champ_dd90", "dedup_corr": 0.90},
+    {**CHAMP, "name": "champ_nodd"},
+    # A1 去重阈值 0.85/0.90/0.95 × 相关窗口 60/120/250（看邻域是否成片，不看单点）
+    {**CHAMP, "name": "dd85_w120", "dedup_corr": 0.85},
+    {**CHAMP, "name": "dd95_w120", "dedup_corr": 0.95},
+    {**CHAMP, "name": "dd90_w60", "dedup_corr": 0.90, "dedup_window": 60},
+    {**CHAMP, "name": "dd90_w250", "dedup_corr": 0.90, "dedup_window": 250},
+    {**CHAMP, "name": "dd85_w60", "dedup_corr": 0.85, "dedup_window": 60},
+    {**CHAMP, "name": "dd85_w250", "dedup_corr": 0.85, "dedup_window": 250},
+    {**CHAMP, "name": "dd95_w60", "dedup_corr": 0.95, "dedup_window": 60},
+    {**CHAMP, "name": "dd95_w250", "dedup_corr": 0.95, "dedup_window": 250},
+    # A2 Δshare 过滤与去重是否重复（去重可能已吃掉「拥挤/同质」的信息）
+    {**CHAMP, "name": "dd90_dsh67", "signal": "mom_dsh_f67_crowd", "dedup_corr": 0.90},
+    {**CHAMP, "name": "dd90_dsh80", "signal": "mom_dsh_f80_crowd", "dedup_corr": 0.90},
+    {**CHAMP, "name": "dd90_dsh90", "signal": "mom_dsh_f90_crowd", "dedup_corr": 0.90},
+    # A3 缓冲区在去重之后复测（去重缩小候选池，滞后成本可能变便宜）
+    {**CHAMP, "name": "dd90_buf1540", "dedup_corr": 0.90, "enter_rank": 15, "exit_rank": 40},
+    {**CHAMP, "name": "dd90_buf1030", "dedup_corr": 0.90, "enter_rank": 10, "exit_rank": 30},
+    # B4 权重：HRP（60 日协方差）与 30% 单只上限
+    {**CHAMP, "name": "dd90_hrp", "dedup_corr": 0.90, "weighting": "hrp"},
+    {**CHAMP, "name": "dd90_hrp_mw30", "dedup_corr": 0.90, "weighting": "hrp",
+     "max_weight": 0.30},
+    # B5 防御腿内部配比（金 70% / 债 70%）与绝对动量阈值（−5% / +5%）
+    {**CHAMP, "name": "dd90_def_b30g70", "dedup_corr": 0.90, "defense": "mix30"},
+    {**CHAMP, "name": "dd90_def_b70g30", "dedup_corr": 0.90, "defense": "mix70"},
+    {**CHAMP, "name": "dd90_abs_m5", "dedup_corr": 0.90, "abs_threshold": -0.05},
+    {**CHAMP, "name": "dd90_abs_p5", "dedup_corr": 0.90, "abs_threshold": 0.05},
+]
+
 
 def level_from_returns(ret: pd.Series) -> pd.Series:
     """把日收益串成净值水平线（末尾乘以 100，量纲无关）。"""
@@ -143,10 +177,11 @@ def level_from_returns(ret: pd.Series) -> pd.Series:
 
 
 def build_defense(close: pd.DataFrame) -> dict[str, pd.Series]:
-    """防御腿净值水平线：债 / 金 / 债金等权。"""
+    """防御腿净值水平线：债 / 金 / 债金等权 / 偏股性(金 70%) / 偏防守(债 70%)。"""
     ret = close.pct_change(fill_method=None)
     bond, gold = ret[BOND], ret[GOLD]
-    return {"bond": bond, "gold": gold, "mix": 0.5 * bond + 0.5 * gold}
+    return {"bond": bond, "gold": gold, "mix": 0.5 * bond + 0.5 * gold,
+            "mix30": 0.3 * bond + 0.7 * gold, "mix70": 0.7 * bond + 0.3 * gold}
 
 
 def build_share_pit(close: pd.DataFrame) -> pd.DataFrame:
@@ -341,7 +376,7 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--end", type=int, default=None)
     ap.add_argument("--out", default=str(OUT))
     ap.add_argument("--variants", choices=("main", "robust", "freq", "cost", "hold",
-                                           "share", "premium", "p3"),
+                                           "share", "premium", "p3", "opt"),
                     default="main")
     args = ap.parse_args(argv)
     out = Path(args.out)
@@ -359,10 +394,10 @@ def main(argv: list[str] | None = None) -> None:
     rows, seg_rows, eq = [], [], {}
     variants = {"main": VARIANTS, "robust": ROBUST, "freq": FREQ,
                 "cost": COST, "hold": HOLD, "share": SHARE,
-                "premium": PREMIUM, "p3": P3}[args.variants]
+                "premium": PREMIUM, "p3": P3, "opt": OPT}[args.variants]
     tag = {"main": "", "robust": "_robust", "freq": "_freq",
            "cost": "_cost", "hold": "_hold", "share": "_share",
-           "premium": "_premium", "p3": "_p3"}[args.variants]
+           "premium": "_premium", "p3": "_p3", "opt": "_opt"}[args.variants]
 
     if args.variants == "share":
         ic_tab = share_ic_table(
