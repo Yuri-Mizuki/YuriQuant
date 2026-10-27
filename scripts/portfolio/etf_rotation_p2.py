@@ -72,6 +72,15 @@ COST: list[dict] = [
      "commission_bp": 1.0, "slippage_bp": 10.0},
 ]
 
+# S3：折溢价（price / IOPV - 1）。IOPV 覆盖 49/50（511090.SH 无）。
+PREMIUM: list[dict] = [
+    {**P1_BASE, "name": "p1_base"},
+    {**P1_BASE, "name": "mom_prem_f80", "signal": "mom_prem_f80"},
+    {**P1_BASE, "name": "mom_prem_f90", "signal": "mom_prem_f90"},
+    {**P1_BASE, "name": "mom_prem_f67", "signal": "mom_prem_f67"},
+    {**P1_BASE, "name": "champ_mom_prem", "signal": "mom_prem_f80_crowd", "defense": "mix"},
+]
+
 # 持仓只数分布（单变体诊断）。
 HOLD: list[dict] = [
     {**P1_BASE, "name": "champ_hold", "signal": "mom_crowd_f20", "defense": "mix"},
@@ -262,8 +271,23 @@ def _rebalance_days(close: pd.DataFrame, spec: dict,
     return set(idx[:: int(n)])
 
 
-def build_extra_panels(close: pd.DataFrame, panels: dict) -> dict:
-    """在 P1 面板上追加 P2 三个信号面板 + S1 的 Δshare 面板。"""
+def build_premium(raw_close: pd.DataFrame, columns: pd.Index) -> dict[str, pd.DataFrame]:
+    """折溢价面板：原始收盘价 / IOPV - 1，及 20 日均值。
+
+    只用一级市场 IOPV 与二级市场收盘价，天然 PIT（都是当日数据）。
+    ``|prem| > 50%`` 视为数据错误置 NaN（IOPV 缺失/错误时会出现）。
+    """
+    d = pd.read_parquet(CACHE_ROOT / "fund_iopv.parquet")
+    iopv = d["iopv_nav"].unstack("code").reindex(
+        index=raw_close.index, columns=columns)
+    prem = raw_close.reindex(columns=columns) / iopv - 1.0
+    prem = prem.where(prem.abs() <= 0.5)
+    return {"prem": prem, "prem20": prem.rolling(20, min_periods=10).mean()}
+
+
+def build_extra_panels(close: pd.DataFrame, panels: dict,
+                       raw_close: pd.DataFrame | None = None) -> dict:
+    """在 P1 面板上追加 P2 三个信号面板 + S1 Δshare + S3 折溢价。"""
     r2 = build_r2(close)
     crowd = build_crowding(close)
     mom = panels["mom12_1"]
@@ -280,6 +304,14 @@ def build_extra_panels(close: pd.DataFrame, panels: dict) -> dict:
     panels["mom_dsh_f80_crowd"] = panels["mom_dsh_f80"].where(crowd <= 0.80)
     panels["mom_dsh_f67_crowd"] = panels["mom_dsh_f67"].where(crowd <= 0.80)
     panels["mom_dsh_f90_crowd"] = panels["mom_dsh_f90"].where(crowd <= 0.80)
+    if raw_close is not None:
+        prem = build_premium(raw_close, close.columns)
+        panels.update(prem)
+        pr = prem["prem20"].rank(axis=1, pct=True)
+        panels["mom_prem_f80"] = mom.where(pr <= 0.80)
+        panels["mom_prem_f67"] = mom.where(pr <= 2.0 / 3.0)
+        panels["mom_prem_f90"] = mom.where(pr <= 0.90)
+        panels["mom_prem_f80_crowd"] = panels["mom_prem_f80"].where(crowd <= 0.80)
     return panels
 
 
@@ -290,7 +322,8 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--begin", type=int, default=20200102)
     ap.add_argument("--end", type=int, default=None)
     ap.add_argument("--out", default=str(OUT))
-    ap.add_argument("--variants", choices=("main", "robust", "freq", "cost", "hold", "share"),
+    ap.add_argument("--variants", choices=("main", "robust", "freq", "cost", "hold",
+                                           "share", "premium"),
                     default="main")
     args = ap.parse_args(argv)
     out = Path(args.out)
@@ -299,15 +332,19 @@ def main(argv: list[str] | None = None) -> None:
     cache = DataCache(create_datasource())
     bundle = load_bundle(cache, WARMUP_BEGIN, args.end)
     close = bundle[1]
-    panels = build_extra_panels(close, build_panels(close, bundle[2]))
+    raw_close = (cache.read_daily("etf")["close"].unstack("code")
+                 .reindex(index=close.index, columns=close.columns))
+    panels = build_extra_panels(close, build_panels(close, bundle[2]), raw_close)
     def_levels = {k: level_from_returns(v) for k, v in build_defense(close).items()}
     print(f"份额 PIT 面板覆盖 {panels['mom_crowd_f20'].notna().sum().sum():,} 个有效格", flush=True)
 
     rows, seg_rows, eq = [], [], {}
     variants = {"main": VARIANTS, "robust": ROBUST, "freq": FREQ,
-                "cost": COST, "hold": HOLD, "share": SHARE}[args.variants]
+                "cost": COST, "hold": HOLD, "share": SHARE,
+                "premium": PREMIUM}[args.variants]
     tag = {"main": "", "robust": "_robust", "freq": "_freq",
-           "cost": "_cost", "hold": "_hold", "share": "_share"}[args.variants]
+           "cost": "_cost", "hold": "_hold", "share": "_share",
+           "premium": "_premium"}[args.variants]
 
     if args.variants == "share":
         ic_tab = share_ic_table(
@@ -315,6 +352,14 @@ def main(argv: list[str] | None = None) -> None:
             args.begin, args.end if args.end else int(close.index.max().strftime("%Y%m%d")))
         ic_tab.to_csv(out / "share_ic.csv", index=False, encoding="utf-8-sig")
         print("\n[S1 Δshare 月频 rank IC]\n" +
+              ic_tab.to_string(index=False, float_format=lambda x: f"{x:+.3f}"), flush=True)
+
+    if args.variants == "premium":
+        ic_tab = share_ic_table(
+            close, {k: panels[k] for k in ("prem", "prem20")},
+            args.begin, args.end if args.end else int(close.index.max().strftime("%Y%m%d")))
+        ic_tab.to_csv(out / "premium_ic.csv", index=False, encoding="utf-8-sig")
+        print("\n[S3 折溢价月频 rank IC]\n" +
               ic_tab.to_string(index=False, float_format=lambda x: f"{x:+.3f}"), flush=True)
 
     for spec in variants:
@@ -331,7 +376,8 @@ def main(argv: list[str] | None = None) -> None:
             segs.append(r["annual_return"])
         n_pos = int(sum(s > 0 for s in segs))
         rows.append({**spec, **{k: v for k, v in full.items()
-                                 if k not in ("equity", "hold_counts")},
+                                 if k not in ("equity", "hold_counts", "weights",
+                                              "rebalance_dates")},
                      "seg_pos": n_pos,
                      **{f"seg_{i + 1}": s for i, s in enumerate(segs)}})
         seg_rows.append({"name": spec["name"], **{f"seg_{i + 1}": s for i, s in enumerate(segs)}})

@@ -216,6 +216,8 @@ def run_variant(bundle, panels: dict, spec: dict, w0: int | None = None,
         "avg_cash": float(cash_w.mean()) if len(cash_w) else 0.0,
         "cost_drag": cost_drag,
         "hold_counts": hold_counts,
+        "rebalance_dates": rb_dates,
+        "weights": w,
         "equity": res.equity_curve,
     }
 
