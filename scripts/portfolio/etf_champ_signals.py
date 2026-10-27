@@ -72,7 +72,7 @@ CONTEST5 = {"name": "contest5_2m", "signal": "mom12_1", "freq": "W", "top_k": 5,
 # 买入过的不同产品计数，而不是每个调仓日同时持有 ≥5 只，因此 Top3 合法。
 # 参数真源见 ``scripts/portfolio/etf_contest_spec.py`` 的 FINAL（回测探针共用同一
 # 份字典，``tests/test_etf_contest_spec.py`` 断言两边一致）。
-# 依据：真实白名单 80 个滚动 2 月窗口，均值 +4.44% / 中位 +3.99% / 最差 −23.8%。
+# 依据：46 只比赛池 80 个滚动 2 月窗口（v2）：均值 +5.59% / 中位 +3.76% / 最差 −12.3%。
 # 执行建议：首次建仓先各买 5 只不同产品完成累计计数，之后按 Top3 集中。
 CONTEST3 = {**FINAL, "name": "contest_2m_top3"}
 PROFILES = {"champ": CHAMP, "contest5": CONTEST5, "contest3": CONTEST3,
@@ -195,7 +195,7 @@ def main(argv: list[str] | None = None) -> None:
     label = {"champ": "长线版「磐石」（月度/波动目标/债金防御）",
              "contest5": "合规版「五衡·等权」（Top5/周频/去重）",
              "contest5h": "预案「五衡」（Top5/HRP，回撤触线降档用）",
-             "contest3": "定版「三锋」（Top3/HRP/拥挤软惩罚）"}[args.profile]
+             "contest3": "定版「三锋」v2（Top3/HRP/拥挤软惩罚/剔除 20 日过热）"}[args.profile]
 
     cache = DataCache(create_datasource())
     bundle = load_bundle(cache, WARMUP_BEGIN, None)
@@ -333,6 +333,7 @@ def main(argv: list[str] | None = None) -> None:
                       "120 日相关 ≥0.90 去重；HRP 风险平价（60 日协方差）；无波动目标"),
         "contest3": ("TopK=3（累计口径：赛期内累计买入 ≥5 只不同产品即合规）；"
                      "12-1 动量扣拥挤软惩罚（份额 250 日分位 >0.80 起线性扣，最多 10pp）"
+                     " 并剔除最近 20 日涨幅 >10% 的过热标的"
                      " + 绝对动量过滤；120 日相关 ≥0.90 去重；HRP 风险平价；无波动目标"),
         "champ": "TopK=5；逆波动加权；15% 年化波动目标；防御腿 = 0.5·511010.SH + 0.5·518880.SH",
     }[args.profile]
@@ -343,10 +344,10 @@ def main(argv: list[str] | None = None) -> None:
         "contest5h": ("HRP + 单只 ≤30% 依据 <code>reports/etf_contest5/README.md</code> §七"
                       "（80 个滚动 2 月窗口：中位 +2.99%、均值 +4.29%、p10 −7.6%、"
                       "最差 −15.3%、胜率 73.8%；等权 +1.84% / −18.5% / 65%）。"),
-        "contest3": ("集中版依据 <code>reports/etf_contest5/README.md</code> §十二"
-                     "（真实白名单 80 个滚动 2 月窗口：均值 +4.44%、中位 +3.99%、"
-                     "p10 −8.2%、最差 −23.8%、胜率 66.3%、>10% 27.5%；"
-                     "同族 Top5 HRP 为 +3.85% / +2.41% / −13.8%）。"),
+        "contest3": ("定版 v2 依据 <code>reports/etf_contest5/README.md</code> §13.9"
+                     "（46 只比赛池 80 个滚动 2 月窗口：均值 +5.59%、中位 +3.76%、"
+                     "p10 −3.6%、最差 −12.3%、胜率 72.5%、>10% 31.3%、Sharpe 1.28；"
+                     "v1 无反转剔除为 +4.44% / +3.99% / −23.8% / 66.3%）。"),
         "champ": ("样本外结论见 <code>reports/etf_p4/README.md</code>："
                   "OOS Sharpe 1.02、MDD 16.1%（2025-01–2026-10）。"),
     }[args.profile]

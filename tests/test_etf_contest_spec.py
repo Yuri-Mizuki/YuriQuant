@@ -10,7 +10,7 @@ from scripts.portfolio.etf_champ_signals import PROFILES
 from scripts.portfolio.etf_contest_probe import CONC_SPECS, SPECS
 from scripts.portfolio.etf_contest_spec import EXCLUDED_5, FINAL
 
-FINAL_NAME = "c3_m12_1_cs10_w_dd90_hrp"
+FINAL_NAME = "c3_final"
 
 
 def _strip_name(d: dict) -> dict:

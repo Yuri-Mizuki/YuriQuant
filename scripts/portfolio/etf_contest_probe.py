@@ -164,7 +164,9 @@ CONC_SPECS: list[dict] = [
     # 优化点2：拥挤度软惩罚（超出 0.80 的部分线性扣 10pp 动量）
     {**BASE, "name": "c3_m12_1_cs10_w_dd90", "signal": "mom12_1_crowdsoft",
      "top_k": 3, "dedup_corr": 0.90, "dedup_fill": True},
-    {**BASE, "name": "c3_m12_1_cs10_w_dd90_hrp", **FINAL},
+    # 定版（v2, 2026-10-27 夜）：FINAL 单源。v1（无 pre10 反转剔除）的同名变体
+    # 结果保留在 ``reports/etf_contest5_opt/contest_conc_summary.csv``。
+    {**BASE, "name": "c3_final", **FINAL},
     # 稳健性（2026-10-27 追问后补测）：去重窗口与协方差窗口对齐到 60 日
     # （120 日去重会漏掉近期相关性抬升的同质标的），以及单只 50% 上限。
     {**BASE, "name": "c3_m12_1_cs10_w_dd90_60_hrp", "signal": "mom12_1_crowdsoft",
@@ -215,6 +217,19 @@ NEXT_SPECS: list[dict] = [
 ]
 
 
+# 反转双筛（2026-10-27 补测）：纯动量在 ETF 上成立、个股级短期反转不成立，
+# 但"最近 20 日涨幅过热"是尖峰动量的典型特征。这里在定版信号上叠一层减法：
+# 剔除 mom20 超过阈值的标的（10%/15%/20% 三档），其余不变（Top3/HRP/120 日去重）。
+REV_SPECS: list[dict] = [
+    {**BASE, "name": "c3_cs10_pre10_hrp", "signal": "mom12_1_crowdsoft_pre10",
+     "top_k": 3, "dedup_corr": 0.90, "dedup_fill": True, "weighting": "hrp"},
+    {**BASE, "name": "c3_cs10_pre15_hrp", "signal": "mom12_1_crowdsoft_pre15",
+     "top_k": 3, "dedup_corr": 0.90, "dedup_fill": True, "weighting": "hrp"},
+    {**BASE, "name": "c3_cs10_pre20_hrp", "signal": "mom12_1_crowdsoft_pre20",
+     "top_k": 3, "dedup_corr": 0.90, "dedup_fill": True, "weighting": "hrp"},
+]
+
+
 def build_contest_panels(close: pd.DataFrame, amount: pd.DataFrame,
                          with_crowd: bool = True) -> dict:
     """在 P1 面板上加 20/60/6-1 日动量与拥挤度（过滤版 + 软惩罚版）。"""
@@ -234,6 +249,11 @@ def build_contest_panels(close: pd.DataFrame, amount: pd.DataFrame,
         p["mom12_1_crowdsoft"] = p["mom12_1"] - 0.10 * over
         # 双周期确认：12-1 中期动量，且 20 日短期动量也为正。
         p["mom_dual"] = p["mom12_1"].where(p["mom20"] > 0)
+        # 反转双筛（2026-10-27 补测）：动量候选里剔除最近 20 日涨幅"过热"的标的，
+        # 专治"尖峰动量"形态（豆粕/能源化工那类涨一波就冲榜、随后均值回归）。
+        # 与"买跌得多的"相反：这里只用短期信息做减法，不用它选标。
+        for thr, tag in ((0.10, "pre10"), (0.15, "pre15"), (0.20, "pre20")):
+            p[f"mom12_1_crowdsoft_{tag}"] = p["mom12_1_crowdsoft"].where(p["mom20"] <= thr)
     return p
 
 
@@ -306,10 +326,10 @@ def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description="ETF 两个月比赛方案探针")
     ap.add_argument("--out", default=str(OUT))
     ap.add_argument("--specs", default="base",
-                    choices=["base", "k5", "lt", "conc", "next"],
+                    choices=["base", "k5", "lt", "conc", "next", "rev"],
                     help="base=TopK1/2/3 旧组；k5=合规组（≥5 只）；"
                          "lt=长线 champ 对照；conc=累计口径下的集中版（Top1/2/3）；"
-                         "next=定版后的双周/硬过滤补测")
+                         "next=定版后的双周/硬过滤补测；rev=反转双筛补测")
     ap.add_argument("--universe", choices=["pool", "wl"], default="pool",
                     help="pool=现有 51 只池；wl=大赛白名单扩池（满 3 年+流动性）")
     ap.add_argument("--exclude", default="",
@@ -324,7 +344,7 @@ def main(argv: list[str] | None = None) -> None:
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     specs = {"base": SPECS, "k5": K5_SPECS, "lt": LT_SPECS,
-             "conc": CONC_SPECS, "next": NEXT_SPECS}[args.specs]
+             "conc": CONC_SPECS, "next": NEXT_SPECS, "rev": REV_SPECS}[args.specs]
     if args.universe == "wl" and not args.wl_crowd:
         # 份额数据只覆盖现有 50 只池（白名单内 29 只），扩池上跑拥挤度会
         # 退化成「绝大多数标的 0 惩罚」，与基准无差别，故默认不跑含 crowd 的变体。
@@ -413,7 +433,7 @@ def main(argv: list[str] | None = None) -> None:
 
     summary = pd.DataFrame(rows).sort_values("median", ascending=False)
     tag = {"base": "", "k5": "_k5", "lt": "_lt", "conc": "_conc",
-           "next": "_next"}[args.specs]
+           "next": "_next", "rev": "_rev"}[args.specs]
     if args.universe == "wl":
         tag += "_wl"
     summary.to_csv(out / f"contest{tag}_summary.csv", index=False, encoding="utf-8-sig")

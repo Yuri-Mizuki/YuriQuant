@@ -352,6 +352,11 @@ def build_extra_panels(close: pd.DataFrame, panels: dict,
     # 不硬剔除，避免调仓日候选被砍到不足只数。缺份额数据的标的按 0 惩罚。
     over = ((crowd - 0.80) / 0.20).clip(lower=0.0, upper=1.0).fillna(0.0)
     panels["mom12_1_crowdsoft"] = mom - 0.10 * over
+    # 反转双筛（2026-10-27 定版 v2）：剔除最近 20 日涨幅 >10% 的"过热/尖峰动量"
+    # 标的。只用短期信息做减法（不拿它选标），专治急涨冲榜后均值回归的形态。
+    mom20 = close / close.shift(20) - 1.0
+    panels["mom20"] = mom20
+    panels["mom12_1_crowdsoft_pre10"] = panels["mom12_1_crowdsoft"].where(mom20 <= 0.10)
     panels.update(build_share_signals(close))
     # Δshare 的反转用法：剔除「申购最热」的截面分位（资金流入 → 后续收益低）。
     dsh_rank = panels["dshare20"].rank(axis=1, pct=True)
