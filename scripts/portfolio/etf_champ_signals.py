@@ -52,11 +52,12 @@ from scripts.portfolio.etf_rotation_probe import (
 ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / "reports" / "etf_champ"
 
-CHAMP = {**P1_BASE, "name": "champ", "signal": "mom_crowd_f20", "defense": "mix"}
+CHAMP = {**P1_BASE, "name": "champ", "signal": "mom_crowd_f20", "defense": "mix",
+         "dedup_corr": 0.90}
 # 两个月比赛版：TopK=3、周频、等权、满仓（去掉波动目标与防御腿）。
 CONTEST = {"name": "contest_2m", "signal": "mom_crowd_f20", "freq": "W", "top_k": 3,
            "absolute": True, "weighting": "equal", "commission_bp": 1.0,
-           "slippage_bp": 5.0}
+           "slippage_bp": 5.0, "dedup_corr": 0.90}
 DEF_PARTS = {"511010.SH": 0.5, "518880.SH": 0.5}
 PARTICIPATION = 0.05      # 单只单边下单 / 60 日均成交额
 PREMIUM_WARN = 0.01       # 20 日折溢价告警线

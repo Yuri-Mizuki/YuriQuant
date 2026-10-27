@@ -160,6 +160,8 @@ class EtfRotationAdvanced(Strategy):
         ret_panel: pd.DataFrame | None = None,
         cov_window: int = 60,
         max_weight: float | None = None,
+        dedup_corr: float | None = None,
+        dedup_window: int = 120,
     ):
         self.top_k = int(top_k)
         self.absolute_filter = bool(absolute_filter)
@@ -173,6 +175,8 @@ class EtfRotationAdvanced(Strategy):
         self.ret_panel = ret_panel
         self.cov_window = int(cov_window)
         self.max_weight = float(max_weight) if max_weight is not None else None
+        self.dedup_corr = float(dedup_corr) if dedup_corr is not None else None
+        self.dedup_window = int(dedup_window)
         self._held: list[str] = []
         self.name = (
             f"etf_adv_topk{self.top_k}"
@@ -182,25 +186,53 @@ class EtfRotationAdvanced(Strategy):
             f"{'_vt' if self.target_vol else ''}"
             f"{'_buf' if self.enter_rank else ''}"
             f"{'_mw' if self.max_weight else ''}"
+            f"{f'_dd{int(self.dedup_corr * 100)}' if self.dedup_corr else ''}"
         )
 
     # ---- 选标 ----
-    def _select(self, vals: pd.Series) -> list[str]:
+    def _dedup(self, ranked: list[str], date: pd.Timestamp | None) -> list[str]:
+        """按动量从高到低贪心去重：与已选标的的 120 日相关 ≥ 阈值则跳过。
+
+        没有前视——只用 ``date`` 及之前的收益；历史不足 ``dedup_window/2`` 的
+        标的相关系数缺失，按不重复处理（保留）。
+        """
+        if self.dedup_corr is None or self.ret_panel is None or date is None:
+            return ranked
+        win = self.ret_panel.loc[:date].tail(self.dedup_window)
+        win = win.reindex(columns=[c for c in ranked if c in win.columns])
+        if len(win) < max(40, self.dedup_window // 2) or win.shape[1] < 2:
+            return ranked
+        corr = win.corr(min_periods=40)
+        keep: list[str] = []
+        for c in ranked:
+            dup = False
+            for k in keep:
+                if c in corr.index and k in corr.columns:
+                    v = corr.at[c, k]
+                    if pd.notna(v) and v >= self.dedup_corr:
+                        dup = True
+                        break
+            if not dup:
+                keep.append(c)
+        return keep
+
+    def _select(self, vals: pd.Series, date: pd.Timestamp | None = None) -> list[str]:
         if self.absolute_filter:
             vals = vals[vals > 0]
         if vals.empty:
             return []
         ranked = vals.sort_values(ascending=False)
-        rank = {c: i for i, c in enumerate(ranked.index)}
+        ranked = self._dedup(list(ranked.index), date)
+        rank = {c: i for i, c in enumerate(ranked)}
         if not self.enter_rank:
-            return list(ranked.index[: self.top_k])
+            return list(ranked[: self.top_k])
 
         held = [c for c in self._held if c in rank]
         keep = [c for c in held if rank[c] < self.exit_rank]
-        add = [c for c in ranked.index if c not in keep and rank[c] < self.enter_rank]
+        add = [c for c in ranked if c not in keep and rank[c] < self.enter_rank]
         sel = keep + [c for c in add if c not in keep]
         if len(sel) < self.top_k:
-            sel += [c for c in ranked.index if c not in sel]
+            sel += [c for c in ranked if c not in sel]
         return sel[: self.top_k]
 
     def get_weights(self, factor_values: pd.Series) -> pd.Series:
@@ -252,7 +284,7 @@ class EtfRotationAdvanced(Strategy):
         if vals.empty:
             self._held = []
             return pd.Series(dtype=float)
-        sel = self._select(vals)
+        sel = self._select(vals, date)
         if not sel:
             self._held = []
             return pd.Series(dtype=float)
