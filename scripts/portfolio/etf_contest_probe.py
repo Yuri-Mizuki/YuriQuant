@@ -100,6 +100,14 @@ K5_SPECS: list[dict] = [
      "dedup_corr": 0.90, "weighting": "rank_decay"},
     {**BASE, "name": "k5_m12_1_w_dd90_rd", "signal": "mom12_1", "top_k": 5,
      "dedup_corr": 0.90, "weighting": "rank_decay"},
+    # 「凑满 5 只但集中在一个方向」：不做去重，允许同主题双胞胎占多个名额，
+    # 再用排名衰减把权重压到前 2–3 只。用 5 个产品名额表达 1–2 个观点。
+    {**BASE, "name": "k5_m12_1_w_nodd_rd", "signal": "mom12_1", "top_k": 5,
+     "weighting": "rank_decay"},
+    {**BASE, "name": "k5_m12_1_2w_nodd_rd", "signal": "mom12_1", "top_k": 5,
+     "every_n": 10, "weighting": "rank_decay"},
+    {**BASE, "name": "k5_m12_1_w_dd95_rd", "signal": "mom12_1", "top_k": 5,
+     "dedup_corr": 0.95, "weighting": "rank_decay"},
 ]
 
 
