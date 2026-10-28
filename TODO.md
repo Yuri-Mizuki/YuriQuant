@@ -91,6 +91,20 @@
 
 ## 三、生产化 / 长期（可选）
 
+- [x] **文档规范落地 + 校验守卫（2026-10-28 收口）**：审计发现「骨架对、细则空、没人管」
+  ——126 个实验目录 42 个有 README，四要素（结论/口径/复现/边界）全齐仅 15 份，
+  `reports/README.md` §1.3 索引过期（写「其余 12 篇」实际 18 篇、6 个 `design/*.md` 漏登、
+  22 个目录从未登记、10 篇孤儿文档）。已落地：① `reports/docs/TEMPLATE_实验README.md`
+  固定四段骨架；② `scripts/data_tools/docs_lint.py` 四条规则（目录登记 / 四要素 /
+  标题日期 / 孤儿文档），**规则 2/3 只审新写或刚改的文档**（mtime 基线 = 模板文件），
+  存量自动豁免、避免「为过检查加空标题」；③ `tests/test_docs_lint.py` 接入 pytest；
+  ④ `AGENTS.md` §2 加收尾校验；⑤ 建 `reports/docs/README.md` 做 32 篇导航（消孤儿 +
+  补索引）并补登 22 个目录到 `reports/README.md` §1.2.1。清理旧待办副本 6 份 +
+  被取代的冒烟报告 2 份 + 旧会话计划 2 份（记录见 `reports/README.md` §四）。
+  ✅ `docs_lint --check` 违规 0 · `test_docs_lint` 2 passed · `gen_scripts_index --check` 通过。
+  **遗留待拍板**：`cheap_lever_scan/README_prefix_execfix_20261019.md`（旧版 README，
+  与现行版差 6 行 exec-fix 警示块，删了有信息损失）；14 个目录缺 README（属建议项，
+  多为纯产物目录，已在 `docs_lint --verbose` 列出）。
 - [ ] **生产级执行**：实盘下单对接、实时行情驱动（当前日频盘后信号，
   "信号→次日执行"滑点假设未经真实成交验证）。
 - [ ] **文本挖掘合规化**：同花顺/巨潮爬虫依赖（页面变更即断），生产化需
