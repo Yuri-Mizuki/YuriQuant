@@ -142,6 +142,31 @@
 | `frontier_audit_2026-10-19/` | frontier audit（2026-10-19）：主信号 IC 到 h60 反升至 0.161；残差四口径无正交信息（详见其 README） |
 | `text_factor_probe/` | 论文族 + 情绪族生产口径收尾（2026-10-13）：`txt_*` IR 0.008~0.105 ≪ 0.3 门槛；融合增益经安慰剂证伪；FDR 106 项仅 1 条存活且为负 |
 
+### 1.2.1 臂目录与探针产物（2026-10-28 补登，之前靠通配符扫过 ⇒ 等于没登记）
+
+> 本节由 `scripts/data_tools/docs_lint.py` 规则 1 逼出来：上表用 `etf_contest5*`、
+> `alla_rolling_macrof*/` 这类**通配写法**，新臂建目录时不加行也不会被发现，
+> 于是 22 个目录长期处于「索引里查不到、只能靠 ls」的状态。此后**每臂一行**。
+> 判定列口径同 §一 速查表（这些目录无独立 README，结论挂在其父实验的 README）。
+
+| 目录 | 是什么 | 判定 |
+|---|---|---|
+| `alla_rolling_jq_base` / `alla_rolling_jq_amt` | 成交金额族 A/B 两臂（50 vs 52 特征），结论真源 `jq_amount_roll/README.md` | 判负 |
+| `alla_rolling_jqs_base` / `alla_rolling_jqs_amt` | 同上两臂的 **M 频单轨快照**（只留月频，写作本章节前无任何文档提及，`jqs` 后缀在代码里零命中 ⇒ 由同批手工重跑产生） | 判负（随父实验） |
+| `alla_rolling_macrof_base` / `alla_rolling_macrof_h20` | altf P1 宏观族臂（`_base` 已清，剩 pred/equity/metrics） | 判负 |
+| `alla_rolling_newsf_h20` | altf P1 新闻族 h20 臂 | 判负 |
+| `etf_contest5_nocap` / `etf_contest5_nofuel` / `etf_contest5_wl` | 定版信号的三个变体臂（无单只上限 / 无燃料项 / 白名单池）的信号板产物 | 工具保留 |
+| `capacity_table` | 集中度 × AUM 二维容量表（`scripts/evaluation/capacity_table.py`） | 工具保留 |
+| `barra_cne6` | CNE6 风格回归产物（因子收益 / t / 残差面板 / sigma 诊断） | 工具保留 |
+| `chip_behavior_probe_2026-10-27` | 行为金融「筹码/换手」廉价探针（全 A 面板 + 三口径 IC） | 判负 |
+| `network_probe_2026-10-27` | 跨股票网络中心度 P1 探针 | 判负 |
+| `cohort_mom_probe` | 建仓后分组动量探针（`group_ic*` / `gate.parquet`） | 判负 |
+| `hp_search_ic` | 超参扫描（**只比可交易 IC** 的收口证据，`scripts/evaluation/hp_search_ic.py`） | 采纳 |
+| `retrain_freq_ic` | 重训频率对照（逐日/周/月/季） | 采纳 |
+| `intraday_half_life_probe` | 日内因子半衰期单表探针 | 归档 |
+| `member_blend12` | stacking 成员 12 选融合的指标快照 | 判负 |
+| `text_factor_probe_smoke` | `text_factor_probe` 的冒烟子集 | 判负（随父实验） |
+
 > ⚠️ `alla_rolling_mixed/` `alla_rolling_nofund/` 已移除（2026-09-16，结论见 §三.1/§三.2）。
 > 其 `_base/` 会因 `rolling_grid_alla.py --stage all` 重算而"复活"（四臂字节相同，各 446MB）；
 > 无生产代码读取，重跑约 1 分钟/臂。
@@ -303,6 +328,31 @@ model层 / ML合成，其余已删、可重跑复现——结论见 §三.13~17�
 ---
 
 ## 四、清理记录
+
+- **2026-10-28（文档规范化的第一批清理：旧待办副本 + 被取代的冒烟报告）**：
+  8 + 2 文件 / 约 350KB，全部走 `scripts/oneoff/_recycle_batch.py` 回收站。
+  快照（路径 + md5 + 原件副本）在 `~/yuriquant_snapshots/2026-10-28_docs_cleanup/`。
+  - **旧待办 6 份**：`_tmp/split169/{TODO,RESEARCH_TODO,GOOD_MACHINE_TASKS,TODO_merged,
+    RESEARCH_TODO_merged}.md` 与 `_tmp/TODO.staged.md`（10-13 中间稿）。起因：09-23
+    拆分待办时的中间副本、10-27 三文件整合后已全部逐字并进 `TODO_ARCHIVE.md` 三册，
+    官方快照另存 `2026-10-27_todo_consolidation/`；这 6 份是**同一批内容的更早版本**，
+    留着会让「待办唯一真源」这条失效。空目录 `_tmp/split169/` 一并移除。
+  - **旧会话计划 2 份**：`.zcode/plans/plan-sess_{0b2456f9,96502b56}*.md`（09-11 的
+    「三项任务实施方案」与「每日选股排名实现计划」）。两份计划均已落地（前者对应
+    指标 t 统计量与年限，后者对应 `alla_daily_rank.py`），保留那份 10-27 的
+    `plan-session_0fb6435e*.md`（当次整合的唯一记录）。
+  - **被取代的冒烟报告 2 份**：`galaxy_l1/smoke_report.md` 与
+    `portfolio_ppo_phase1/smoke_report.md`。判定依据 = **同目录正式报告已含其全部信息
+    且数字更新**：`galaxy_l1/report.md` 覆盖 2024+2025 两年（smoke 只有 2024 单年，
+    判定段结论方向相同但数值是旧的）；`portfolio_ppo_phase1/report.md` 是四臂全量
+    （smoke 只有 ppo 单臂 12 个决策日）。两者都零引用、无脚本生成、README 未提及。
+  - **刻意未动**：`cheap_lever_scan/README_prefix_execfix_20261019.md`（执行价修复前
+    旧版 README，与现行版仅差 6 行 exec-fix 警示块 ⇒ 属**存在信息损失**，等你拍板）；
+    `model_portfolio/equity_ens_h1h5_pre_{open,vwap}.csv`（pre=税前 / net=税后，
+    是**口径对照**不是版本过旧）；`reports/daily_determinism/report.md` 与
+    `report_BC.md`（分别记 A vs B、B vs C 两轮，非重复）；`reports/etf_rotation/`
+    （被 4 处引用，含设计文档「现状基线」）。
+
 
 - **2026-10-27（作废的初赛方案目录 `reports/etf_contest/`）**：15 文件 / 0.5MB，
   含 20 日动量 Top3 方案的回测产物（`contest_summary.csv`、`contest_k5_*`、`board.html`、
