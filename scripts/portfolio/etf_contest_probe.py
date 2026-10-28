@@ -17,6 +17,12 @@ ETF 轮动·两个月比赛方案探针（2026-10-27）
 
 用法:
     python -m scripts.portfolio.etf_contest_probe
+    python -m scripts.portfolio.etf_contest_probe --specs rev      # 定版三档 / 稳健性
+    python -m scripts.portfolio.etf_contest_probe --specs entrylow  # 赛后探针组：深跌不入场
+    python -m scripts.portfolio.etf_contest_probe --specs exit      # 赛后探针组：出场加速
+    python -m scripts.portfolio.etf_contest_probe --specs explore   # 高位钝化 / 波动缩放 / trail
+    python -m scripts.portfolio.etf_contest_probe --specs explore2  # 参数邻域（左尾优先）
+    python -m scripts.portfolio.etf_contest_probe --specs volpre    # 波动率缩放阈值
 """
 from __future__ import annotations
 
@@ -41,9 +47,11 @@ from scripts.portfolio.etf_rotation_probe import (
     BENCH,
     MIN_AMOUNT,
     WARMUP_BEGIN,
+    build_exit_schedule,
     build_panels,
     load_bundle,
     run_variant,
+    whip_audit,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -229,6 +237,76 @@ REV_SPECS: list[dict] = [
      "top_k": 3, "dedup_corr": 0.90, "dedup_fill": True, "weighting": "hrp"},
 ]
 
+# A 组：入场闸门（2026-10-27 预注册，TODO §一「盲区下半边」）。
+# 12-1 动量分子锚定 P(t−21)，最近 21 日不进排序；v2 的 pre10 只挡了「过热」上半边，
+# 这里补「深跌」下半边：mom20 < −10/−15/−20% 不入场。三档单调协议照抄 v2。
+ENTRYLOW_SPECS: list[dict] = [
+    {**BASE, **FINAL, "name": "c3_low10", "signal": "mom12_1_crowdsoft_pre10_low10"},
+    {**BASE, **FINAL, "name": "c3_low15", "signal": "mom12_1_crowdsoft_pre10_low15"},
+    {**BASE, **FINAL, "name": "c3_low20", "signal": "mom12_1_crowdsoft_pre10_low20"},
+]
+
+# B+C 组：出场加速（2026-10-27 预注册）。周频选标不变，新增日级持仓检查，
+# 触发即离场，资金留现金至下个调仓日（不设再入场规则）。合计 10 变体。
+EXIT_SPECS: list[dict] = [
+    {**BASE, **FINAL, "name": "c3_x_anchor100", "exit": {"rule": "anchor", "mult": 1.00}},
+    {**BASE, **FINAL, "name": "c3_x_anchor95", "exit": {"rule": "anchor", "mult": 0.95}},
+    {**BASE, **FINAL, "name": "c3_x_anchor90", "exit": {"rule": "anchor", "mult": 0.90}},
+    {**BASE, **FINAL, "name": "c3_x_rank5", "exit": {"rule": "mom12_0_rank", "max_rank": 5}},
+    {**BASE, **FINAL, "name": "c3_x_ma60", "exit": {"rule": "ma60"}},
+    {**BASE, **FINAL, "name": "c3_x_trail05", "exit": {"rule": "trail", "dd": 0.05}},
+    {**BASE, **FINAL, "name": "c3_x_trail08", "exit": {"rule": "trail", "dd": 0.08}},
+    {**BASE, **FINAL, "name": "c3_x_trail10", "exit": {"rule": "trail", "dd": 0.10}},
+    {**BASE, **FINAL, "name": "c3_x_trail15", "exit": {"rule": "trail", "dd": 0.15}},
+    {**BASE, **FINAL, "name": "c3_x_trail20", "exit": {"rule": "trail", "dd": 0.20}},
+]
+
+# 探索组（2026-10-27，**另立预算**，不复用上面 13 变体额度；不进预注册判据，
+# 只看方向）：针对 §13.11 交互诊断里最差的一格（前期强 × 近月无回调）与
+# 组合层风险，共 4 条。跑出来的数字只作"哪条值得立项"的筛选依据。
+EXPLORE_SPECS: list[dict] = [
+    {**BASE, **FINAL, "name": "c3_x_exh_pen10",
+     "signal": "mom12_1_crowdsoft_pre10_exh_pen", "overlay": "exhaustion_pen10"},
+    {**BASE, **FINAL, "name": "c3_x_exh_excl",
+     "signal": "mom12_1_crowdsoft_pre10_exh_excl", "overlay": "exhaustion_excl"},
+    {**BASE, **FINAL, "name": "c3_x_volscale50", "exposure": "half",
+     "overlay": "volscale50"},
+    {**BASE, **FINAL, "name": "c3_x_condtrail10", "gated": True,
+     "exit": {"rule": "trail", "dd": 0.10}, "overlay": "cond_trail10"},
+]
+
+# 第二轮探索（2026-10-27，用户定靶「左尾优先」）：上一轮 4 条都没改善 p10 /
+# 最差窗口，这里只挪参数邻域，不换思路——高位钝化放宽触发面（前 5%、回撤阈
+# −5%）与减半惩罚各一档，波动缩放由 0.5 抬到 0.7，另加 20% 年化波动目标，
+# 条件 trail 由 10% 放宽到 15%。同属另立预算，不进预注册判据。
+EXPLORE2_SPECS: list[dict] = [
+    {**BASE, **FINAL, "name": "c3_e_exh5_pen10",
+     "signal": "mom12_1_crowdsoft_pre10_exh5_pen", "overlay": "exh5_pen10"},
+    {**BASE, **FINAL, "name": "c3_e_exh10p5_pen5",
+     "signal": "mom12_1_crowdsoft_pre10_exh10p5_pen5", "overlay": "exh10p5_pen5"},
+    {**BASE, **FINAL, "name": "c3_e_volscale70", "exposure": "half07",
+     "overlay": "volscale70"},
+    {**BASE, **FINAL, "name": "c3_e_voltarget20", "exposure": "vt20",
+     "overlay": "voltarget20"},
+    {**BASE, **FINAL, "name": "c3_e_condtrail15", "gated": True,
+     "exit": {"rule": "trail", "dd": 0.15}, "overlay": "cond_trail15"},
+]
+
+# 波动率缩放阈词组（2026-10-28，另立预算 3 条）。假设：固定 10% 对高波动品种
+# 过严（其 20 日正常波动就有 20–30%），阈值改为 max(10%, k × 20 日年化波动) 后，
+# 应能在不牺牲左尾的前提下收回强趋势年被误踢的收益。
+# 预注册判据（先写死，跑完不改）：① 均值或中位至少一项改善 ≥0.5pp，且 p10 不差于
+# −4.14%、最差窗口不差于 −14.34%（对照 −3.64% / −12.34% 各放宽 0.5pp / 2pp）；
+# ② k 三档随宽松度单调（k 越大越接近 v1）；③ 两条同时满足才算通过。
+VOLPRE_SPECS: list[dict] = [
+    {**BASE, **FINAL, "name": "c3_v_k50", "signal": "mom12_1_crowdsoft_volk50",
+     "overlay": "volk50"},
+    {**BASE, **FINAL, "name": "c3_v_k75", "signal": "mom12_1_crowdsoft_volk75",
+     "overlay": "volk75"},
+    {**BASE, **FINAL, "name": "c3_v_k100", "signal": "mom12_1_crowdsoft_volk100",
+     "overlay": "volk100"},
+]
+
 
 def build_contest_panels(close: pd.DataFrame, amount: pd.DataFrame,
                          with_crowd: bool = True) -> dict:
@@ -254,6 +332,36 @@ def build_contest_panels(close: pd.DataFrame, amount: pd.DataFrame,
         # 与"买跌得多的"相反：这里只用短期信息做减法，不用它选标。
         for thr, tag in ((0.10, "pre10"), (0.15, "pre15"), (0.20, "pre20")):
             p[f"mom12_1_crowdsoft_{tag}"] = p["mom12_1_crowdsoft"].where(p["mom20"] <= thr)
+        # 波动率缩放阈值（2026-10-28，追问「10% 是否踢太多」）：高波动品种的正常
+        # 20 日波动本身就有 20–30%，固定 10% 会把整段趋势误踢。这里把阈值抬到
+        # ``k × 20 日年化波动``，下限仍取 10%——低波动品种行为与 pre10 完全一致，
+        # 只有高波动品种的容忍度被放宽。k 越大越松（k=0 即 pre10）。
+        vol20 = (close.pct_change(fill_method=None)
+                 .rolling(20, min_periods=15).std() * np.sqrt(252.0))
+        p["vol20"] = vol20
+        for k, tag in ((0.50, "volk50"), (0.75, "volk75"), (1.00, "volk100")):
+            thr_v = np.maximum(0.10, k * vol20)
+            p[f"mom12_1_crowdsoft_{tag}"] = p["mom12_1_crowdsoft"].where(
+                p["mom20"] <= thr_v)
+        # A 组镜像（2026-10-27 预注册）：深跌也不入场。与 pre10 同构、方向相反——
+        # 只用最近 20 日做减法，不回到排序层。
+        for thr, tag in ((0.10, "low10"), (0.15, "low15"), (0.20, "low20")):
+            p[f"mom12_1_crowdsoft_pre10_{tag}"] = p["mom12_1_crowdsoft_pre10"].where(
+                p["mom20"] >= -thr)
+        # 高位钝化（2026-10-27 探索，§13.11）：12-1 动量当日截面最前 N%、且距 60 日
+        # 高点回撤小于阈值（强动量但近一月"没回调过"）——诊断里 fwd42 中位最差的一格。
+        # 软惩罚版扣若干 pp（与拥挤软惩罚同构），硬版直接剔除。
+        dd60 = close / close.rolling(60, min_periods=20).max() - 1.0
+        pct = p["mom12_1"].rank(axis=1, pct=True)
+        sig = p["mom12_1_crowdsoft_pre10"]
+        for top, ddg, pen, tag in (
+                (0.10, -0.10, 0.10, "exh_pen"),
+                (0.05, -0.05, 0.10, "exh5_pen"),
+                (0.10, -0.05, 0.05, "exh10p5_pen5"),
+                (0.10, -0.10, None, "exh_excl")):
+            exh = (pct >= 1.0 - top) & (dd60 > ddg)
+            p[f"mom12_1_crowdsoft_pre10_{tag}"] = (
+                sig.where(~exh) if pen is None else sig.where(~exh, sig - pen))
     return p
 
 
@@ -326,10 +434,16 @@ def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description="ETF 两个月比赛方案探针")
     ap.add_argument("--out", default=str(OUT))
     ap.add_argument("--specs", default="base",
-                    choices=["base", "k5", "lt", "conc", "next", "rev"],
+                    choices=["base", "k5", "lt", "conc", "next", "rev",
+                             "entrylow", "exit", "explore", "explore2", "volpre"],
                     help="base=TopK1/2/3 旧组；k5=合规组（≥5 只）；"
                          "lt=长线 champ 对照；conc=累计口径下的集中版（Top1/2/3）；"
-                         "next=定版后的双周/硬过滤补测；rev=反转双筛补测")
+                         "next=定版后的双周/硬过滤补测；rev=反转双筛补测；"
+                         "entrylow=A 组入场闸门（深跌不入场）；"
+                         "exit=B+C 组出场加速（日级持仓检查）；"
+                         "explore=探索组（高位钝化 / 波动缩放 / 条件 trail，另立预算）；"
+                         "explore2=探索组第二轮（参数邻域，左尾优先，另立预算）；"
+                         "volpre=波动率缩放阈值（max(10%, k×20 日年化波动)，另立预算）")
     ap.add_argument("--universe", choices=["pool", "wl"], default="pool",
                     help="pool=现有 51 只池；wl=大赛白名单扩池（满 3 年+流动性）")
     ap.add_argument("--exclude", default="",
@@ -344,11 +458,17 @@ def main(argv: list[str] | None = None) -> None:
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     specs = {"base": SPECS, "k5": K5_SPECS, "lt": LT_SPECS,
-             "conc": CONC_SPECS, "next": NEXT_SPECS, "rev": REV_SPECS}[args.specs]
+             "conc": CONC_SPECS, "next": NEXT_SPECS, "rev": REV_SPECS,
+             "entrylow": ENTRYLOW_SPECS, "exit": EXIT_SPECS,
+             "explore": EXPLORE_SPECS, "explore2": EXPLORE2_SPECS,
+             "volpre": VOLPRE_SPECS}[args.specs]
     if args.universe == "wl" and not args.wl_crowd:
         # 份额数据只覆盖现有 50 只池（白名单内 29 只），扩池上跑拥挤度会
         # 退化成「绝大多数标的 0 惩罚」，与基准无差别，故默认不跑含 crowd 的变体。
         specs = [s for s in specs if "crowd" not in s["signal"]]
+    if args.specs in ("entrylow", "exit", "explore", "explore2", "volpre"):
+        # 对照组（不计变体预算）：定版 v2 本体，同一口径同表呈现
+        specs = [{**BASE, **FINAL, "name": "c3_final"}] + specs
     only = [x.strip() for x in args.only.split(",") if x.strip()]
     if only:
         specs = [s for s in specs if s["name"] in only]
@@ -374,7 +494,31 @@ def main(argv: list[str] | None = None) -> None:
     mfs = month_first_dates(close.index, 20200101,
                             int(close.index.max().strftime("%Y%m%d")))
 
+    # 探索组的组合层 regime（无前视：只用当日及之前的收盘价）
+    high_vol = exposure_map = None
+    if args.specs in ("explore", "explore2"):
+        rv = (close.pct_change(fill_method=None).mean(axis=1)
+              .rolling(60, min_periods=40).std() * np.sqrt(252.0))
+        med = rv.rolling(250, min_periods=120).median()
+        high_vol = (rv > med).fillna(False)
+        exposure_map = {
+            "half": pd.Series(np.where(high_vol, 0.5, 1.0), index=close.index),
+            "half07": pd.Series(np.where(high_vol, 0.7, 1.0), index=close.index),
+            # 20% 年化波动目标：等权池实现波动高于目标就降仓，下限 30%
+            "vt20": (0.20 / rv).clip(lower=0.3, upper=1.0).fillna(1.0),
+        }
+        print(f"[{args.specs}] 等权池 60 日波动 > 250 日中位的天数占比 "
+              f"{float(high_vol.mean()):.1%}；波动目标平均仓位 "
+              f"{float(exposure_map['vt20'].mean()):.1%}", flush=True)
+
     rows, per_window = [], []
+    exit_events: list[pd.DataFrame] = []
+    base_cache: dict = {}
+    mom_rank = None
+    if any(s.get("exit") for s in specs):
+        # B2 的 mom12_0（不跳月）截面排名：只在可交易集合内排（0 = 最强）
+        mom12_0 = close / close.shift(252) - 1.0
+        mom_rank = mom12_0.where(panels["mask"]).rank(axis=1, ascending=False) - 1.0
     for spec in specs:
         rb = None
         if spec.get("every_n"):
@@ -389,8 +533,31 @@ def main(argv: list[str] | None = None) -> None:
         if spec.get("defense"):
             # 防御腿是合成资产（债+金 50/50），作为净值列注入回测
             extra = pd.DataFrame({"DEF": level_from_returns(build_defense(close)["mix"])})
+        exit_plan = None
+        if spec.get("exit"):
+            # 出场不改变周频选标（FINAL 无缓冲区），故基线选标可先跑一次复用
+            if "sel" not in base_cache:
+                b = run_variant(bundle, panels, {**BASE, "name": "c3_final", **FINAL},
+                                20200101, None)
+                wb = b["weights"]
+                weekly = sorted(b["rebalance_dates"])
+                sel = {d: [c for c in wb.columns
+                           if c not in ("CASH", "DEF") and abs(wb.at[d, c]) > 1e-9]
+                       for d in weekly}
+                base_cache["sel"] = (weekly, sel)
+                print(f"[exit] 基线周频 {len(weekly)} 个调仓日，选标已缓存", flush=True)
+            weekly, sel = base_cache["sel"]
+            gate = high_vol if spec.get("gated") else None
+            exit_plan = build_exit_schedule(close, weekly, sel, spec["exit"], mom_rank,
+                                            gate=gate)
+            print(f"[exit] {spec['name']}: 触发 {len(exit_plan['events'])} 笔 / "
+                  f"{len(exit_plan['exits'])} 个触发日", flush=True)
+        exp = spec.get("exposure")
+        exp_series = (exposure_map.get(exp) if isinstance(exp, str) and exposure_map
+                      else None)
         r = run_variant(bundle, panels, spec, 20200101, None,
-                        extra_close=extra, rebalance_days=rb)
+                        extra_close=extra, rebalance_days=rb, exit_plan=exit_plan,
+                        exposure=exp_series)
         tab = two_month_table(r["equity"], bench, mfs)
         tab["name"] = spec["name"]
         per_window.append(tab)
@@ -400,9 +567,20 @@ def main(argv: list[str] | None = None) -> None:
         hc = r["hold_counts"]
         min_hold = float(hc.min()) if len(hc) else np.nan
         lt5 = float((hc < 5).mean()) if len(hc) else np.nan
+        wh = {"n_exits": np.nan, "whip_recover": np.nan, "whip_fwd": np.nan}
+        if exit_plan is not None:
+            wa = whip_audit(exit_plan["events"], close, spec["exit"])
+            wh = {"n_exits": wa["n"], "whip_recover": wa["recover"],
+                  "whip_fwd": wa["med_fwd"]}
+            if len(exit_plan["events"]):
+                ev = exit_plan["events"].copy()
+                ev["name"] = spec["name"]
+                exit_events.append(ev)
         rows.append({
             "name": spec["name"], "signal": spec["signal"], "top_k": spec["top_k"],
             "universe": args.universe,
+            "exit_rule": spec.get("exit", {}).get("rule", ""),
+            "overlay": spec.get("overlay", ""),
             "freq": "2W" if spec.get("every_n") else spec["freq"],
             "dedup": spec.get("dedup_corr", np.nan),
             "dedup_window": spec.get("dedup_window", np.nan),
@@ -423,7 +601,7 @@ def main(argv: list[str] | None = None) -> None:
             "full_mdd": m["max_drawdown"], "avg_turnover": m["avg_turnover"],
             "avg_holdings": m["avg_holdings"],
             "min_holdings": min_hold, "pct_days_lt5": lt5,
-            "cost_drag": m["cost_drag"],
+            "cost_drag": m["cost_drag"], **wh,
         })
         print(f"{spec['name']:<20} 2M均值={tab['ret'].mean():+.2%} "
               f"中位={tab['ret'].median():+.2%} p10={tab['ret'].quantile(0.10):+.2%} "
@@ -433,12 +611,17 @@ def main(argv: list[str] | None = None) -> None:
 
     summary = pd.DataFrame(rows).sort_values("median", ascending=False)
     tag = {"base": "", "k5": "_k5", "lt": "_lt", "conc": "_conc",
-           "next": "_next", "rev": "_rev"}[args.specs]
+           "next": "_next", "rev": "_rev",
+           "entrylow": "_entrylow", "exit": "_exit", "explore": "_explore",
+           "explore2": "_explore2", "volpre": "_volpre"}[args.specs]
     if args.universe == "wl":
         tag += "_wl"
     summary.to_csv(out / f"contest{tag}_summary.csv", index=False, encoding="utf-8-sig")
     pd.concat(per_window).to_csv(out / f"contest{tag}_windows.csv", index=False,
                                  encoding="utf-8-sig")
+    if exit_events:
+        pd.concat(exit_events).to_csv(out / f"contest{tag}_exit_events.csv",
+                                      index=False, encoding="utf-8-sig")
     (out / f"run_config{tag}.json").write_text(json.dumps({
         "scenario": "2 个月收益排名赛，初始 100 万，正式赛 2026-10-12 → 12-18",
         "constraint": "配置不少于 5 只产品 + 至少 5 笔成交 + 普通交易（无两融/套利）",
