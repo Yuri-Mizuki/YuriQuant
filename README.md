@@ -121,10 +121,17 @@ reports/    实验产物、监控台账与设计文档
 | 门面 | `README.md`（本文件） | 系统是什么、能力边界、怎么跑起来 | 新增/退休能力时同步 |
 | 任务 | [`TODO.md`](TODO.md) / [`TODO_ARCHIVE.md`](TODO_ARCHIVE.md) | 现在做什么、哪些已收口（三册：工程线 / 研读复现线 / 好机器队列） | 每个任务收尾回写 |
 | 产物治理 | [`reports/README.md`](reports/README.md) | 产物放哪（§1.6 落盘判定表）、清理记录、**§一「结论速查」43 份实验一行一条** | 新产出必须登记 |
+| 文档区 | [`reports/docs/README.md`](reports/docs/README.md) | 32 篇设计/核对/研读文档的导航（各带一句话定位） | 新增 `.md` 同步加行 |
 | 入口索引 | [`scripts/README.md`](scripts/README.md) | 每个脚本干什么、有哪些参数、哪些已归档 | 新增/退役入口同步 |
 
 `reports/*` 与 `scripts/oneoff/` 不进 git：前者是本地证据库（126 个目录），后者是本地一次性脚本。
 跨会话硬约定（合并优先、分类落盘、删除前快照）见 [`AGENTS.md`](AGENTS.md)。
+
+**文档模板与校验**（2026-10-28 起）：新建实验 README 复制
+[`reports/docs/TEMPLATE_实验README.md`](reports/docs/TEMPLATE_实验README.md)（固定四段：结论先行 /
+口径与判据 / 证据 / 复现与边界）；落盘后跑
+`python -m scripts.data_tools.docs_lint --check` 校验目录登记、四要素、标题日期、
+孤儿文档四项，`--verbose` 看完整清单。它只审**新写或刚改**的文档，存量按 mtime 基线豁免。
 
 ## 🚀 快速开始
 
@@ -156,6 +163,8 @@ python -m scripts.reporting.generate_report      # 一键端到端 HTML 报告
 
 - **测试**：1394 个用例覆盖数据层、回测、因子挖掘、模型、优化、监控、报告全栈
 - **CI**：GH Actions 已移除（2026-10-27，原工作流早已静音）；守卫 = 本机 `python -m pytest -q`
+- **文档守卫**：`python -m scripts.data_tools.docs_lint --check`（四条规则，见上「文档模板与校验」），
+  与 `gen_scripts_index --check` 同级；两者都可独立跑，不依赖数据凭证
 - **依赖锁**：`uv.lock` 已移出跟踪（零消费方，本地保留 + gitignore，需要时 `uv lock` 重建）；可选依赖按域分组（ml / gp / solver / rl），缺失优雅降级
 - **Lint / 类型**：`ruff check .`（F 规则为门禁）；`mypy` 以 Python 3.12 配置运行，存量类型告警未清零
 
