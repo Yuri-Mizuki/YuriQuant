@@ -74,18 +74,19 @@ AQR + JFE 复核）同向收口；LLM-MCTS 是唯一产出超门槛因子的挖�
 - **向量化回测引擎**：交易成本、涨跌停 / 停牌过滤、**T+1 开盘可执行口径为全链默认**（收盘价成交的乐观数字只作上限对照）；逐股冲击成本模型 `η·σ·√(Q/ADV)`（`ImpactCostModel`，AUM 敏感）与整手约束可启用
 - **统一评估口径（唯一真源）**：`scripts/evaluation/caliber.py` + `config/baselines.yaml`——production / fair 双 profile 把一次评估的全部口径要素（基线形态 / 窗口 / Sharpe / 成本 / 成交价 / 资金）收敛到一处，锚点臂必须逐位复现登记基线（Δ≠0 作废），杜绝跨口径并列
 - **执行层容量与摩擦**：集中度 × AUM 二维容量表（`capacity_table.py`，buffer 形态容量 >1e9）；成本感知对照（`cost_penalty_probe.py`）；实测 1e8 资金下冲击 ≈ 固定 10bp、成本是 AUM 的强函数——固定滑点口径回答不了容量问题
-- **仓位层 overlay 先过「信息上界测试」**：任何总仓位乘数类改造（波动率目标化 / 趋势 / 择时 / 回撤状态机）先算「信息完美且可实现」口径的收益上界（收盘知当日、次日执行），再实测靶子可预测性，最后才跑规则 —— `scripts/evaluation/timing_probe.py`。本项目实测：大盘日收益自相关仅 +0.048（昨日信息对明日≈零预测力）、月度方向因子 0/7 显著 ⇒ 可实现择时上界 ≈ 满仓，择时线收口（见 `reports/timing_probe/`）
+- **仓位层 overlay 先过「信息上界测试」**：波动率目标 / 趋势 / 择时 / 回撤状态机等总仓位改造，先算「信息完美且可实现」收益上界（收盘知当日、次日执行），再测靶子可预测性，最后跑规则（`timing_probe.py`）。实测日收益自相关仅 +0.048、月度方向 0/7 显著 ⇒ 择时上界 ≈ 满仓，该线已收口（`reports/timing_probe/`）
 - **稳健统计**：Newey-West t、OLS+HAC、自动滞后阶、FDR 多重检验校正
 - **反过拟合三件套**：CSCV PBO 过拟合概率（12870 个组合秒级算完）、Deflated Sharpe Ratio、三段式训练纪律（train / valid / test 分段 + embargo，配置冻结）
-- **增量方向探针族（frontier，2026-10-19）**：h60 长 horizon 全链（`select_horizon_features.py` 清单 + `retrain_freq_ic --save-pred` 训练 + `horizon_cross_eval.py` 同目标交叉与组合层——h60 第二策略 Sharpe 1.028/换手 17.5%）；残差目标（`residual_ic_probe.py` 四口径 + `residual_overlay_probe.py` 负向低配 overlay + `residual_stack_probe.py` 二阶 GBDT 融合，均带安慰剂臂）。证据 `reports/frontier_audit_2026-10-19/`，920 复验挂批次 13
-- **指数增强探针（B1，2026-10-26）**：`scripts/evaluation/index_enhance_probe.py`——中证500 成分约束 + TE–超额曲线 + 安慰剂。结论：成分内 IC 有效（0.069/t=4.3），但 3–5% TE 净超额仅 +1.5~1.9%（t≈0.8）、2025 单年 −7% ⇒ 归档为风险偏好型替代，不立项为 α（`reports/index_enhance_probe/`）
-- **ETF 轮动基线 P1（2026-10-26）**：`scripts/portfolio/etf_rotation_probe.py`——41 池 × PIT 流动性掩码下对照 12-1 动量 / Dual Momentum / 逆波动 / 波动率目标 / 缓冲区（13 变体 + 7 变体稳健网格）。结论：**波动率目标是唯一有效增量**，`dual_ivvt15_m5` 年化 7.14% / Sharpe 0.62 / MDD 19.01%（旧基线 0.26 / 38.4%）；稳健网格 7/7 过线（`reports/etf_rotation_probe/`）
-- **ETF 轮动 P2 前置（2026-10-26）**：`scripts/portfolio/etf_rotation_p2.py`——防御腿（风险关闭退到债/金，替代 0 收益现金）+ 份额 PIT 拥挤度（250 日分位 >0.80 剔除）+ 趋势 R² 三项对照。结论：防御腿 + 拥挤度叠加到 **年化 11.23% / Sharpe 0.85 / MDD 16.70%**（邻域 0.76–0.94、2× 成本 0.78）；趋势 R² 判负（`reports/etf_rotation_p2/`）
-- **ETF 轮动比赛定版（P5，2026-10-27；v2 同夜升级）**：`scripts/portfolio/etf_champ_signals.py`（实盘信号板）+ `scripts/portfolio/etf_contest_spec.py`（**定版参数唯一真源 `FINAL`**）+ `scripts/portfolio/etf_contest_probe.py`（80 个滚动 2 月窗口）。定版 `contest3` = Top3 + 12-1 动量扣拥挤软惩罚 + **剔除 20 日涨幅 >10% 过热（v2，三档单调采纳）** + 120 日 0.90 去重 + HRP 无上限 + 周频；80 窗口均值 **+5.59%** / 中位 +3.76% / 最差 −12.34% / 胜率 72.5% / <−10% 2.50%；6-1 动量、周五调仓、扩池、单只上限均判否（`reports/etf_contest5/` §十二–§十三）
+- **增量方向探针（frontier，2026-10-19）**：h60 长 horizon 全链 + 残差目标三探针（均带安慰剂臂）。判定：h60 预测力存活（IC 0.161）但组合层无增量、残差无正交信息 ⇒ 判负归档（`reports/frontier_audit_2026-10-19/`）
+- **指数增强探针（B1，2026-10-26）**：中证500 成分内 IC 0.069 / t=4.3，但 3–5% TE 净超额仅 +1.5~1.9%（t≈0.8）、2025 −7% ⇒ 不立项为 α（`reports/index_enhance_probe/`）
+- **ETF 轮动基线 P1（2026-10-26）**：`etf_rotation_probe.py`——41 池 × PIT 掩码对照 13 变体；**波动率目标是唯一有效增量**，`dual_ivvt15_m5` 年化 7.14% / Sharpe 0.62 / MDD 19.01%（`reports/etf_rotation_probe/`）
+- **ETF 轮动 P2 前置（2026-10-26）**：`etf_rotation_p2.py`——防御腿 + 份额 PIT 拥挤度（250 日分位 >0.80 剔除）+ 趋势 R² 对照；前两项叠加到 **年化 11.23% / Sharpe 0.85 / MDD 16.70%**，趋势 R² 判负（`reports/etf_rotation_p2/`）
+- **ETF 轮动比赛定版（P5，2026-10-27；v2 同夜升级）**：`etf_champ_signals.py`（实盘信号板）+ `etf_contest_spec.py`（**定版参数唯一真源 `FINAL`**）+ `etf_contest_probe.py`（80 个滚动 2 月窗口）。定版 `contest3` = Top3 + 12-1 动量扣拥挤软惩罚 + 剔除 20 日涨幅 >10% + 120 日 0.90 去重 + HRP 无上限 + 周频，80 窗口均值 +5.59% / 最差 −12.34% / 胜率 72.5%；6-1 动量、周五调仓、扩池、单只上限均判否（`reports/etf_contest5/` §十二–§十三）
+- **ETF 轮动「盲区 / 出场加速」探针组（2026-10-27/28，22 变体全判负）**：`--specs entrylow|exit|explore|explore2|volpre` + `ExitOverlay`/`ExposureOverlay`/`whip_audit`。盲区结构真实（建仓后 21 日收益与信号同期变化相关仅 +0.12）但经济不成立（深跌建仓 fwd42 +5.36% vs 其余 +0.30%）；从入场下限、出场加速到高位钝化、波动缩放四族 22 条全部未改善左尾，`pre10` 维持固定阈值（`reports/etf_contest5/` §13.10–§13.14）
 
 ### 🏭 生产化：研究系统的最后一公里
 
-- **每日盘后自动推理**：计划任务增量更新数据 → 尾部重算 → 重训 → 全 A 排名 + Top10% 可交易候选；`--preset` 口径预设一次配齐协同参数（`dingban` = 现行定版；`v1w2-cheap` = 定版微调候选 buffer(8/40)+h1 份额 0.125，批次 11 复验环境分歧后**切换搁置**，待批次 12 终裁）
+- **每日盘后自动推理**：计划任务增量更新数据 → 尾部重算 → 重训 → 全 A 排名 + Top10% 可交易候选；`--preset` 一次配齐协同参数（`dingban` = 现行定版；`v1w2-cheap` = buffer(8/40)+h1 0.125 候选，已**搁置**，待批次 12 终裁）
 - **因子库面板月度重建**：定版口径的慢信号读**离线**面板（`panels_neu` / `panels_neu_fundind`，批处理产物、不随新数据更新）⇒ 守卫式月度重建（`scripts/pipelines/rebuild_panel_library.py`：已覆盖上月即空转，并避开 16:00–20:00 出榜窗口）
 - **生产口径 IC 台账**：每日 IC / 中性化 IC / 风格暴露持续记录，信号衰减一眼可见；历史种子由 `scripts/reporting/build_monitor_seed.py` 现场构造（与出榜同口径，含慢信号）
 - **报告自动化**：自包含 HTML（Chart.js，A 股红涨绿跌）+ XLSX + 邮件日报，一键端到端汇总
@@ -103,16 +104,27 @@ strategy/   因子值 → 组合权重
 research/   研究工具：IC/分层、归因、DPP、实验台账、报告渲染
 stats/      稳健统计与反过拟合（PBO / DSR）
 monitoring/ 生产监控：IC 台账、告警规则、账本
-scripts/    151 个活跃入口（ingest / factors / pipelines / portfolio /
-            evaluation / reporting / builders / common …；完整索引见
+scripts/    161 个活跃入口（ingest / factors / pipelines / portfolio /
+            evaluation / reporting / builders / common …；索引自动生成于
             scripts/README.md；退役入口在 scripts/archive/；本地 oneoff 另计、gitignored）
 config/     settings.yaml（参数真源）+ baselines.yaml（定版登记表）+ schedule.yaml（调度登记表）
-tests/      96 个文件 / 1333 个用例
+tests/      104 个文件 / 1394 个用例
 reports/    实验产物、监控台账与设计文档
 ```
 
-> 深入细节：活跃任务与缺口看 [`TODO.md`](TODO.md)，已收口归档（工程线/研读复现线/好机器队列三册）看
-> [`TODO_ARCHIVE.md`](TODO_ARCHIVE.md)，实验产物与设计文档在 `reports/`。
+## 🧭 文档分工（先看这里）
+
+本仓库的文档按「一件事只有一处真源」分四层，互相只放指针、不复述结论：
+
+| 层 | 文件 | 回答什么问题 | 更新时机 |
+|---|---|---|---|
+| 门面 | `README.md`（本文件） | 系统是什么、能力边界、怎么跑起来 | 新增/退休能力时同步 |
+| 任务 | [`TODO.md`](TODO.md) / [`TODO_ARCHIVE.md`](TODO_ARCHIVE.md) | 现在做什么、哪些已收口（三册：工程线 / 研读复现线 / 好机器队列） | 每个任务收尾回写 |
+| 产物治理 | [`reports/README.md`](reports/README.md) | 产物放哪（§1.6 落盘判定表）、清理记录、**§一「结论速查」43 份实验一行一条** | 新产出必须登记 |
+| 入口索引 | [`scripts/README.md`](scripts/README.md) | 每个脚本干什么、有哪些参数、哪些已归档 | 新增/退役入口同步 |
+
+`reports/*` 与 `scripts/oneoff/` 不进 git：前者是本地证据库（126 个目录），后者是本地一次性脚本。
+跨会话硬约定（合并优先、分类落盘、删除前快照）见 [`AGENTS.md`](AGENTS.md)。
 
 ## 🚀 快速开始
 
@@ -120,7 +132,7 @@ reports/    实验产物、监控台账与设计文档
 git clone https://github.com/Yuri-Mizuki/YuriQuant.git
 cd YuriQuant
 pip install -e ".[dev]"        # 依赖按 pyproject.toml 功能域分组，缺失时优雅降级
-pytest tests/ -q              # 1333 个用例，无需任何数据凭证
+pytest tests/ -q              # 1394 个用例，无需任何数据凭证
 ```
 
 **没有商业数据源也能开发**：`config/settings.yaml` 把 `datasource.type` 切成
@@ -142,9 +154,9 @@ python -m scripts.reporting.generate_report      # 一键端到端 HTML 报告
 
 ## 🧪 工程质量
 
-- **测试**：1379 个用例覆盖数据层、回测、因子挖掘、模型、优化、监控、报告全栈
-- **CI**：GH Actions 已于 2026-10-27 移除（原两层手动工作流，2026-09-10 起 push 即静音、实际不用）；守卫改本机跑 `python -m pytest -q`（数据齐全最完整）
-- **依赖锁**：`uv.lock` 已于 2026-10-27 移出跟踪（工作流全用系统解释器 + `pip install -e`，零消费方；本地保留并 gitignore，需要精确环境时 `uv lock` 随时重生成）；可选依赖按功能域分组（ml / gp / solver / rl），缺失时优雅降级
+- **测试**：1394 个用例覆盖数据层、回测、因子挖掘、模型、优化、监控、报告全栈
+- **CI**：GH Actions 已移除（2026-10-27，原工作流早已静音）；守卫 = 本机 `python -m pytest -q`
+- **依赖锁**：`uv.lock` 已移出跟踪（零消费方，本地保留 + gitignore，需要时 `uv lock` 重建）；可选依赖按域分组（ml / gp / solver / rl），缺失优雅降级
 - **Lint / 类型**：`ruff check .`（F 规则为门禁）；`mypy` 以 Python 3.12 配置运行，存量类型告警未清零
 
 ## 📜 免责声明

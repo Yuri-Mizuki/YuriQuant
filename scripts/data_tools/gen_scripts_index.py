@@ -92,7 +92,8 @@ def render() -> str:
         "`--check` 校验是否过期。",
         "",
         "约定：`python -m scripts.<目录>.<文件名>` 运行；"
-        "退役入口在 `scripts/archive/`（仍可运行，但不再维护）。",
+        "退役入口在 `scripts/archive/`（仍可运行，但不再维护）；"
+        "实验结论查 `reports/README.md` §一「结论速查」，产物落盘规则见其 §1.6。",
         "",
     ]
     for g in sorted(groups):
