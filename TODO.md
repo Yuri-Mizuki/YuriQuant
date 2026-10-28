@@ -102,9 +102,13 @@
   补索引）并补登 22 个目录到 `reports/README.md` §1.2.1。清理旧待办副本 6 份 +
   被取代的冒烟报告 2 份 + 旧会话计划 2 份（记录见 `reports/README.md` §四）。
   ✅ `docs_lint --check` 违规 0 · `test_docs_lint` 2 passed · `gen_scripts_index --check` 通过。
-  **遗留待拍板**：`cheap_lever_scan/README_prefix_execfix_20261019.md`（旧版 README，
-  与现行版差 6 行 exec-fix 警示块，删了有信息损失）；14 个目录缺 README（属建议项，
-  多为纯产物目录，已在 `docs_lint --verbose` 列出）。
+  **同日收尾（16:30 拍板后执行）**：① 删 `cheap_lever_scan/README_prefix_execfix_20261019.md`
+  ——🚨 **上一轮判定写错**：实为 `6a7,12`，现行版是旧版的严格超集（正文逐字相同，只多
+  exec-fix 警示块）⇒ 删旧版零信息损失；`results_prefix_execfix_20261019.csv` 保留。
+  ② `design/` 三套 `_shared` 合并为一份物理共享：5 个文件 md5 **全部**逐位相同（不只
+  echarts，上一轮低估了范围），12MB → 4.3MB，三个 HTML 的 14 处引用改 `../_shared/`，
+  改后 14/14 目标命中。两项记录见 `reports/README.md` §四 第三批。
+  **仍待观察**：11 个目录缺 README（建议项，非违规，`docs_lint --verbose` 可列）。
 - [ ] **生产级执行**：实盘下单对接、实时行情驱动（当前日频盘后信号，
   "信号→次日执行"滑点假设未经真实成交验证）。
 - [ ] **文本挖掘合规化**：同花顺/巨潮爬虫依赖（页面变更即断），生产化需

@@ -346,12 +346,30 @@ model层 / ML合成，其余已删、可重跑复现——结论见 §三.13~17�
     且数字更新**：`galaxy_l1/report.md` 覆盖 2024+2025 两年（smoke 只有 2024 单年，
     判定段结论方向相同但数值是旧的）；`portfolio_ppo_phase1/report.md` 是四臂全量
     （smoke 只有 ppo 单臂 12 个决策日）。两者都零引用、无脚本生成、README 未提及。
-  - **刻意未动**：`cheap_lever_scan/README_prefix_execfix_20261019.md`（执行价修复前
-    旧版 README，与现行版仅差 6 行 exec-fix 警示块 ⇒ 属**存在信息损失**，等你拍板）；
-    `model_portfolio/equity_ens_h1h5_pre_{open,vwap}.csv`（pre=税前 / net=税后，
-    是**口径对照**不是版本过旧）；`reports/daily_determinism/report.md` 与
+  - **刻意未动**：`model_portfolio/equity_ens_h1h5_pre_{open,vwap}.csv`（pre=税前 /
+    net=税后，是**口径对照**不是版本过旧）；`reports/daily_determinism/report.md` 与
     `report_BC.md`（分别记 A vs B、B vs C 两轮，非重复）；`reports/etf_rotation/`
     （被 4 处引用，含设计文档「现状基线」）。
+
+- **2026-10-28（第三批：`cheap_lever_scan` 旧版 README + `design/` 三套重复 `_shared`）**：
+  1 文件 + 3 目录 / 15 文件，**净省 7.8MB**（`design/` 12MB → 4.3MB）。快照在
+  `~/yuriquant_snapshots/2026-10-28_p1p2_cleanup/`（含 md5 清单 + 原件，因 `reports/`
+  gitignored ⇒ 快照是唯一保险）。
+  - **`cheap_lever_scan/README_prefix_execfix_20261019.md`（3.5KB）**：🚨 **上一轮判定写错了**——
+    当时记作「仅差 6 行 ⇒ 存在信息损失」。实测 `diff` 输出是 `6a7,12`（不是 `6c6`）：
+    现行版是旧版的**严格超集**（只多 exec-fix 警示块），正文逐字相同 ⇒ 删旧版**零信息损失**。
+    保留 `results_prefix_execfix_20261019.csv`（现行 README 明确指向它作 pre-fix 备份）。
+  - **`design/{三个设计目录}/_shared/` 合并为 `design/_shared/`**：三套共 5 个文件
+    （`fonts/GeistMono-Regular.ttf`、`WorkSans-{Bold,Regular}.ttf`、`js/echarts.min.js`、
+    `js/mermaid.min.js`）**md5 全部逐位相同**——不只 echarts（上一轮只查了 echarts，
+    **低估了范围：5 个文件重复 ≠ 1 个文件重复**）。
+    三个 HTML 的 14 处引用由 `./_shared/...` 改为 `../_shared/...`。
+    **验证（三层，不是只看路径）**：① 14/14 引用目标 `is_file()` 命中；
+    ② 起本地 http 服务逐个 GET，三 HTML + 5 资源 + `assets/charts.js` 全 200；
+    ③ 服务器返回字节的 md5 与**删除前快照记录的值完全一致**（echarts `ef12c5c6…`、
+    mermaid `def493e9…`、三个 ttf 同）⇒ 资源链路真的可用，不是"路径看起来对"。
+    ⚠️ 用法约束：HTML 必须从 `design/<子目录>/` 打开（相对路径 `../_shared/` 依赖层级），
+    从别处打开会丢样式与图表。各目录自己的 `assets/charts.js` 未动、不含 `_shared` 引用。
 
 
 - **2026-10-27（作废的初赛方案目录 `reports/etf_contest/`）**：15 文件 / 0.5MB，
