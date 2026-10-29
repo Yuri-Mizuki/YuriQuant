@@ -510,7 +510,7 @@ def main() -> int:
         steps = steps[args.from_step - 1:]
     t0 = time.time()
     with keep_system_awake() as _awake:
-        log.info("防待机：keep_system_awake 生效=%s", _awake)
+        log.info("防待机：唤醒请求已提交=%s（S0 连接待机下无效，别当保险）", _awake)
         rc = _run_steps(steps, dry_run=args.dry_run, log_path=log_path,
                         start=args.from_step)
     log.info("重建%s结束（%.0fs）", "演练" if args.dry_run else "执行", time.time() - t0)

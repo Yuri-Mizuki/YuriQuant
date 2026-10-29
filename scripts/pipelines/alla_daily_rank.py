@@ -2252,10 +2252,11 @@ def main() -> None:
         return
     if args.log_file:
         attach_file_log(args.log_file)
-    # 傍晚 18:30–19:43 本机会进 S0 现代待机（2026-10-10 事故根因）——
-    # 运行期间请求保持唤醒，防进程被挂起/强杀（0xC000013A）。
+    # 傍晚本机会进 S0 现代待机（2026-10-10 事故根因）——运行期间请求保持唤醒。
+    # 🚨 2026-10-29 实证：本机只有 S0 连接待机，SetThreadExecutionState **压不住**，
+    # 该请求仅"已提交"，不代表待机被阻止（详见 scripts/common/power.py 头部）。
     with keep_system_awake() as _awake:
-        log.info("防待机：keep_system_awake 生效=%s", _awake)
+        log.info("防待机：唤醒请求已提交=%s（S0 连接待机下无效，别当保险）", _awake)
         run(args)
 
 
