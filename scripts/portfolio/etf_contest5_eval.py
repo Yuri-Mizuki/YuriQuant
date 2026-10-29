@@ -11,7 +11,7 @@
   - 单次连续回测 ``20200101 → 末日``，**事后**按月首切 2 月窗口（80 个，相邻重叠 1 月）
     —— 不要逐窗独立回测，否则 dedup/HRP 会冷启动失效（见 ``run_variant`` docstring）；
   - T+1 open 的 ``execution_split`` 由**该变体自身**的 ``rebalance_dates``（信号日 T）构造，
-    与 §零 的 26.11% 同源。若改用「全索引周分组的第一个交易日」，contest3 会得 26.17%
+    与 §零 的 30.63% 同源。若改用「全索引周分组的第一个交易日」，contest3 曾得 26.17%
     （差 0.06pp，来自首/末各一个调仓日），两者不可混用。
 
 用法::
@@ -35,7 +35,11 @@ from data.cache import DataCache
 from data.datasource import create_datasource
 from scripts.portfolio.etf_champ_signals import PROFILES
 from scripts.portfolio.etf_contest_spec import EXCLUDED_5
-from scripts.portfolio.etf_rotation_panels import build_extra_panels
+from scripts.portfolio.etf_rotation_panels import (
+    build_defense,
+    build_extra_panels,
+    level_from_returns,
+)
 from scripts.portfolio.etf_rotation_probe import (
     WARMUP_BEGIN,
     build_panels,
@@ -54,9 +58,16 @@ _BASE = dict(PROFILES["contest3"])
 VARIANTS: dict[str, dict] = {
     "contest3": _BASE,
     "contest5h": dict(PROFILES["contest5h"]),
+    "c3_buffer10": {**_BASE, "enter_rank": 5, "exit_rank": 10},
     "c3_buffer15_40": {**_BASE, "enter_rank": 15, "exit_rank": 40},
     "c3_buffer5_20": {**_BASE, "enter_rank": 5, "exit_rank": 20},
+    "c3_buffer30": {**_BASE, "enter_rank": 5, "exit_rank": 30},
+    "champ": dict(PROFILES["champ"]),
 }
+#: 带合成腿的档位：`champ`（磐石）有 DEF 防御腿。🚨 它的 open 口径必须把 DEF 补进
+#: **执行价面板**，否则 `build_execution_split` 拿到的 fill 面板缺 DEF 列 ⇒ 该腿拿不到
+#: 执行价、权重被吞，年化会从 13.2% 掉到 9.5%（2026-10-29 查明的复现失败根因）。
+DEF_VARIANTS = {"champ"}
 
 
 def two_month_windows(eq: pd.Series, mfs: pd.DatetimeIndex) -> pd.Series:
@@ -100,11 +111,44 @@ def paired(a: pd.Series, b: pd.Series) -> dict:
             "win_rate": float((d > 0).mean())}
 
 
+def exec_ladder(bundle, panels, spec: dict, close: pd.DataFrame,
+                open_adj: pd.DataFrame, mfs: pd.DatetimeIndex) -> pd.DataFrame:
+    """三个成交价位的实测对照（README §9.1）。fill=None ⇒ T 日收盘成交。
+
+    ① `T 日收盘` 是**不 shift** 的口径（收盘出信号、收盘成交），语义上等价于
+    「信号与成交同一时点」，只作理论参照；②③ 才是「T 收盘出信号 + 次日成交」。
+    """
+    r0 = run_variant(bundle, panels, spec, BEGIN, None)
+    rb = set(pd.DatetimeIndex(r0["rebalance_dates"]))
+    rows = []
+    for tag, fill in (("① T 日收盘", None), ("② T+1 开盘", open_adj),
+                      ("③ T+1 收盘", close)):
+        if fill is None:
+            r = r0
+        else:
+            r = run_variant(bundle, panels, spec, BEGIN, None,
+                            execution_split=build_execution_split(fill, close, rb),
+                            execution_shift=True)
+        w = two_month_windows(r["equity"], mfs)
+        rows.append({"caliber": tag, "ann": r["annual_return"], "sharpe": r["sharpe"],
+                     "mean": float(w.mean()), "p10": float(w.quantile(0.10)),
+                     "worst": float(w.min()), "mdd": r["max_drawdown"]})
+    return pd.DataFrame(rows).set_index("caliber")
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="ETF 轮动档位评测（80 个 2 月窗口）")
     ap.add_argument("--only", default=None, help="只跑指定档位（逗号分隔）")
     ap.add_argument("--csv", default=None, help="窗口收益落盘路径")
+    ap.add_argument("--exec-ladder", action="store_true",
+                    help="只跑 §9.1 三个成交价位（① T收盘 / ② T+1开盘 / ③ T+1收盘）")
+    ap.add_argument("--legacy-no-pit", action="store_true",
+                    help="关掉权重层 PIT 修正，复现 2026-10-29 之前的历史数字（不外引用）")
     args = ap.parse_args(argv)
+    if args.legacy_no_pit:
+        import scripts.portfolio.etf_rotation_probe as _RP
+        _RP._pit_shift = lambda df: df
+        print("⚠️ --legacy-no-pit：权重层 PIT 修正已关闭，结果仅为历史对照", flush=True)
     names = list(VARIANTS) if not args.only else [s.strip() for s in args.only.split(",")]
 
     cache = DataCache(create_datasource())
@@ -121,14 +165,36 @@ def main(argv: list[str] | None = None) -> int:
     mfs = pd.DatetimeIndex(
         pd.Series(close.index, index=close.index)
         .groupby(close.index.to_period("M")).first().to_numpy())
+    # 合成防御腿（仅 champ 用）。DEF 是净值水平线，其「执行价」就是当日净值。
+    extra_def = (pd.DataFrame({"DEF": level_from_returns(build_defense(close)["mix"])})
+                 if any(n in DEF_VARIANTS for n in names) else None)
+    close_def = close.join(extra_def) if extra_def is not None else close
+    open_def = open_adj.join(extra_def) if extra_def is not None else open_adj
+
+    if args.exec_ladder:
+        d = exec_ladder(bundle, panels, VARIANTS[names[0]], close, open_adj, mfs)
+        print("\n== 成交价位实测（§9.1，同一批信号）==")
+        print(f"{'口径':<14}{'2月均值':>9}{'p10':>9}{'最差':>9}{'Sharpe':>9}{'年化':>9}{'MDD':>9}")
+        for k, r in d.iterrows():
+            print(f"{k:<14}{r['mean']:>+9.2%}{r['p10']:>+9.2%}{r['worst']:>+9.2%}"
+                  f"{r['sharpe']:>9.2f}{r['ann']:>9.2%}{r['mdd']:>9.2%}")
+        if args.csv:
+            out = Path(args.csv)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            d.to_csv(out, encoding="utf-8-sig")
+            print(f"\n落盘 → {out}")
+        return 0
 
     rows, wins, anos, eqs = [], {}, {}, {}
     for name in names:
         spec = VARIANTS[name]
-        r0 = run_variant(bundle, panels, spec, BEGIN, None)
-        spl = build_execution_split(open_adj, close,
+        ex = extra_def if name in DEF_VARIANTS else None
+        cl = close_def if ex is not None else close
+        od = open_def if ex is not None else open_adj
+        r0 = run_variant(bundle, panels, spec, BEGIN, None, extra_close=ex)
+        spl = build_execution_split(od, cl,
                                     set(pd.DatetimeIndex(r0["rebalance_dates"])))
-        r1 = run_variant(bundle, panels, spec, BEGIN, None,
+        r1 = run_variant(bundle, panels, spec, BEGIN, None, extra_close=ex,
                          execution_split=spl, execution_shift=True)
         w = r1["weights"]
         live = w[w.abs().sum(axis=1) > 1e-9]
@@ -140,6 +206,7 @@ def main(argv: list[str] | None = None) -> int:
         eqs[name] = r1["equity"]
         rows.append({"variant": name,
                      "ann_close": r0["annual_return"], "ann_open": r1["annual_return"],
+                     "sharpe_close": r0["sharpe"],
                      "sharpe": r1["sharpe"], "mdd": r1["max_drawdown"],
                      "turnover": r1["avg_turnover"], "maxw": maxw,
                      # ⚠️ 引擎的 cost_drag = 成本金额 / **初始**资金 / 年数。因为资本在
@@ -162,6 +229,13 @@ def main(argv: list[str] | None = None) -> int:
               f"{r.w2m_mean:>+8.2%}{r.w2m_median:>+8.2%}{r.w2m_p10:>+8.2%}"
               f"{r.w2m_worst:>+8.2%}{r.w2m_win_rate:>7.1%}{r.turnover:>7.1%}"
               f"{r.maxw:>9.1%}{r.cost_init:>9.2%}")
+
+    print("\n== close → open 执行税（同一变体两口径，符号可跨档翻转）==")
+    print(f"{'档位':<16}{'close年化':>10}{'open年化':>10}{'差值':>9}{'closeSR':>9}{'openSR':>9}")
+    for k, r in d.iterrows():
+        print(f"{k:<16}{r.ann_close:>10.2%}{r.ann_open:>10.2%}"
+              f"{r.ann_open - r.ann_close:>+9.2%}"
+              f"{r.sharpe_close:>9.2f}{r.sharpe:>9.2f}")
 
     base = "contest3"
     if base in wins:

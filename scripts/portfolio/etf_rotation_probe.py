@@ -34,6 +34,19 @@ MIN_AMOUNT = 3e7        # 近 60 日均成交额下限（元）
 SEGMENTS = [(2020, 2021), (2022, 2023), (2024, 2026)]
 WARMUP_BEGIN = 20180101  # 12-1 动量需要 ~273 个交易日暖机
 
+
+def _pit_shift(df: pd.DataFrame) -> pd.DataFrame:
+    """把宽表整体下移一行（第 i 行 = 第 i−1 行的值，首行 NaN）。
+
+    用于修正「面板按调用日切片」造成的信息渗漏：策略内部一律写
+    ``ret_panel.loc[:date]`` / ``vol_panel.loc[date]``，而 ``execution_shift``
+    模式下 ``date`` 是**执行日 E**（开盘下单那天），该日的收益与波动在撮合时
+    尚未发生。下移一行后 ``loc[:E]`` 的最后一根变成 E−1 = 信号日 T，与真实
+    可得信息一致。见 ``scripts/portfolio/etf_leak_probe.py``。
+    """
+    return df.shift(1)
+
+
 def load_bundle(cache, begin: int = WARMUP_BEGIN, end: int | None = None):
     """构建全样本面板束（含暖机），后续按窗口切片复用。"""
     uni = EtfUniverse(cache)
@@ -290,6 +303,13 @@ def run_variant(bundle, panels: dict, spec: dict, w0: int | None = None,
     可表达的相位（如「周内第 k 个交易日」）必须走这条路径，否则会被 ``freq``
     分支覆盖、静默退回周一调仓。
 
+    🚨 **PIT 修正（2026-10-29）**：``execution_shift=True`` 时**策略侧**的
+    ``ret_panel`` / ``vol_panel`` 会额外整体 ``shift(1)``。原因是引擎在执行日 E 调
+    ``get_weights_at(E)``，而策略内部按 ``loc[:date]`` 取窗口 —— 不修正就会读到
+    E 日当天收益（开盘下单时尚未发生）。**引擎结算的 ``returns`` 不 shift**
+    （它按「第 i 行是 i−1→i 收益」对齐）。影响量级：三锋 +4.5pp、五衡 −4.0pp
+    （方向都不同 ⇒ 不是"保守偏差"），详见 ``reports/etf_contest5/README.md`` §4.3。
+
     ⚠️ **窗口口径陷阱（2026-10-29 实测）**：`ret_panel` 由**切片后的** close 重算，
     逐窗独立调用时它只有窗口内 ~40 个交易日 ⇒ `_dedup` 的生效门槛
     ``max(40, dedup_window // 2) = 60`` 与 `_risk_parity` 的 ``len(sub) >= 20``
@@ -334,17 +354,27 @@ def run_variant(bundle, panels: dict, spec: dict, w0: int | None = None,
     # 收益被"第 6 名"顶替，与「不许持有不达标标的」的真实约束不符。
     if spec.get("mask", True):
         factor = factor.where(mask)
+    # 🚨 PIT 修正（2026-10-29，由莉酱发现）：`execution_shift` 下引擎在**执行日 E**
+    # 调 `get_weights_at(E)`，而策略内部按 `ret_panel.loc[:date]` / `vol_panel.loc[date]`
+    # 取窗口 ⇒ 会读到 E 日当天的收益与波动，而 E 日开盘下单时它们尚未发生。
+    # 三条实际路径：`_risk_parity` 的 60 日协方差、`_dedup` 的 120 日相关、
+    # `_weights` 的 `vol_panel.loc[date]`（`inverse_vol` / `target_vol`，磐石走这条）。
+    # 修正 = 策略侧面板整体下移一行，使 E 日只看到 ≤E−1 = 信号日 T。
+    # **引擎结算用的 `returns` 绝不能 shift**：它按行对齐「第 i 行是 i−1→i 收益」，
+    # 移动会直接改写收益标签。探针与量级见 `scripts/portfolio/etf_leak_probe.py`。
+    ret_for_strategy = _pit_shift(returns) if execution_shift else returns
+    vol_for_strategy = _pit_shift(vol) if execution_shift else vol
     strategy = EtfRotationAdvanced(
         top_k=spec.get("top_k", 5),
         absolute_filter=spec.get("absolute", False),
         abs_threshold=spec.get("abs_threshold", 0.0),
         weighting=spec.get("weighting", "equal"),
-        vol_panel=vol,
+        vol_panel=vol_for_strategy,
         target_vol=spec.get("target_vol"),
         enter_rank=spec.get("enter_rank"),
         exit_rank=spec.get("exit_rank"),
         cash_code=cash,
-        ret_panel=returns,
+        ret_panel=ret_for_strategy,
         cov_window=spec.get("cov_window", 60),
         max_weight=spec.get("max_weight"),
         dedup_corr=spec.get("dedup_corr"),

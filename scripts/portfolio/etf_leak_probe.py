@@ -1,34 +1,35 @@
-"""ETF 轮动 · 权重层 PIT（信息渗漏）探针。
+"""ETF 轮动 · 权重层 PIT（信息渗漏）验证与回归探针。
 
-## 待验证的指控
+## 背景（已修复，本脚本作为回归守卫）
 
-``execution_shift`` 模式下引擎在执行日 E 调 ``strategy.get_weights_at(E, …)``
-（``backtest/engine.py``），而 ``run_variant`` 把 **未 shift** 的
-``close.pct_change()`` 当作 ``ret_panel`` 交给策略 ⇒ ``_risk_parity`` 的
-``ret_panel.loc[:E].tail(60)`` 与 ``_dedup`` 的 ``loc[:E].tail(120)`` 都**包含 E 日
-当天的收益**。真实流程在 E 开盘下单时只有 ≤T（=E−1 收盘）的信息。
+``execution_shift`` 模式下引擎在**执行日 E** 调 ``strategy.get_weights_at(E, …)``
+（``backtest/engine.py``），而策略内部一律按 ``ret_panel.loc[:date]`` /
+``vol_panel.loc[date]`` 取窗口 ⇒ 若不修正就会读到 **E 日当天**的收益与波动，
+而 E 日开盘下单时它们尚未发生。三条实际路径：
 
-同一族还有两条同类路径：
-  - ``_weights`` 的 ``self.vol_panel.loc[date]``（``inverse_vol`` / ``target_vol`` 用；
-    磐石 ``champ`` 走这条）；
-  - ``_dedup`` 的 120 日相关矩阵（所有 ``dedup_corr`` 档位）。
+  - ``_risk_parity``：60 日协方差（三锋 / 五衡）；
+  - ``_dedup``：120 日相关（所有 ``dedup_corr`` 档位）；
+  - ``_weights``：``vol_panel.loc[date]``（``inverse_vol`` / ``target_vol``，磐石走这条）。
+
+2026-10-29 由莉酱发现，当日修复：``run_variant`` 在 ``execution_shift=True`` 时
+把**策略侧**面板整体 ``shift(1)``（``etf_rotation_probe._pit_shift``），
+引擎结算用的 ``returns`` 不动。
 
 ## 本脚本做三件事
 
-1. **直接取证**：包住 ``_risk_parity``，打印每次调用传入的 ``date`` 与
-   实际用到的最后一根收益日期。二者相等 ⇒ 渗漏成立（不需要推断）。
-2. **无渗漏对照**：只把*策略内部*面板 ``shift(1)``（引擎结算panel 不动），
-   即「E 日只看到 T 及之前」。等价于 ``loc[< date]``。
-3. 量化差异：年化/Sharpe/80 个 2 月窗口 + 非重叠 2 月期 + 选标改变率 +
-   权重 L1 差 + 日收益相关 —— 判断「渗漏是虚高还是噪声」。
+1. **取证**：包住 ``_risk_parity``，打印每次调用传入的 ``date`` 与**实际用到的
+   最后一根收益日期**。修复后二者应相差 1 个交易日；相等 ⇒ 修复失效。
+2. **对照**：``--compare`` 时关掉修复（把 ``_pit_shift`` 还原成 identity）跑一遍，
+   与修复后逐项对比 —— 这正是历史数字（26.11% / 24.61%）的复现通道。
+3. **量化**：年化 / Sharpe / 80 个重叠 2 月窗 / 选标改变数 / 逐日权重 L1 / 日收益相关。
 
 用法::
 
-    python -m scripts.portfolio.etf_leak_probe                    # contest3（定版）
-    python -m scripts.portfolio.etf_leak_probe --profile contest5h,champ
-    python -m scripts.portfolio.etf_leak_probe --csv out.csv
+    python -m scripts.portfolio.etf_leak_probe                    # contest3，只验修复生效
+    python -m scripts.portfolio.etf_leak_probe --compare --csv out.csv
+    python -m scripts.portfolio.etf_leak_probe --profile contest3,contest5h --compare
 
-⚠️ 本脚本**不改生产代码**，只用 ``__init__`` 包装做局部替换。
+⚠️ ``--compare`` 会 monkeypatch 回修复前的行为，**仅供复现历史数字**，不要用于出成绩。
 """
 from __future__ import annotations
 
@@ -38,6 +39,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+import scripts.portfolio.etf_rotation_probe as RP
 from backtest.engine import build_execution_split
 from data.cache import DataCache
 from data.datasource import create_datasource
@@ -59,35 +61,37 @@ from strategy.etf_rotation import EtfRotationAdvanced
 BEGIN = 20200101
 ROOT = Path(__file__).resolve().parents[2]
 
-#: 渡让开关：True = 策略内部面板额外 shift(1)（模拟真实流程）
-_NOLEAK = {"ret": False, "vol": False}
+_ORIG_PIT_SHIFT = RP._pit_shift
+_IDENTITY = lambda df: df  # noqa: E731  —— 关掉修复 = 还原 2026-10-29 前的行为
 #: 取证记录：(调用日 date, 实际用到的最后一根收益行)
 _TRACE: list[tuple[str, str]] = []
 _TRACE_MAX = 6
 
-_ORIG_INIT = EtfRotationAdvanced.__init__
 _ORIG_RP = EtfRotationAdvanced._risk_parity
+#: 未 shift 的原始收益面板，取证时作参照（main 里注入）
+_RAW_RET: dict[str, pd.DataFrame] = {}
 
 
 def _rp_trace(self, sel, date, fallback):
-    """原样调用，附带记录「传入的 date」vs「实际最后一根收益」。"""
+    """原样调用，附带判定「策略实际用到的最后一行收益是哪一天的」。
+
+    🚨 判据必须看**值**、不能看索引：``_pit_shift`` 只移动值不改索引，修复后
+    ``loc[:E]`` 最后一行的 index 仍然是 E，但装的是 E−1 的收益。故与原始面板的
+    E 行、E−1 行分别求 L1 距离，取更近的那个。
+    """
     if len(_TRACE) < _TRACE_MAX and self.ret_panel is not None:
         sub = self.ret_panel.loc[:date].tail(self.cov_window)
-        if len(sub):
-            _TRACE.append((pd.Timestamp(date).strftime("%Y-%m-%d"),
-                           pd.Timestamp(sub.index[-1]).strftime("%Y-%m-%d")))
+        raw = _RAW_RET.get("df")
+        if len(sub) and raw is not None and date in raw.index:
+            used = sub.iloc[-1].reindex(raw.columns)
+            pos = raw.index.get_loc(date)
+            d_e = float((used - raw.loc[date].reindex(raw.columns)).abs().sum())
+            d_prev = (float((used - raw.loc[raw.index[pos - 1]].reindex(raw.columns)).abs().sum())
+                      if pos >= 1 else float("nan"))
+            _TRACE.append((pd.Timestamp(date).strftime("%Y-%m-%d"), d_e, d_prev))
     return _ORIG_RP(self, sel, date, fallback)
 
 
-def _init(inst, *a, **k):
-    _ORIG_INIT(inst, *a, **k)
-    if _NOLEAK["ret"] and inst.ret_panel is not None:
-        inst.ret_panel = inst.ret_panel.shift(1)
-    if _NOLEAK["vol"] and getattr(inst, "vol_panel", None) is not None:
-        inst.vol_panel = inst.vol_panel.shift(1)
-
-
-EtfRotationAdvanced.__init__ = _init
 EtfRotationAdvanced._risk_parity = _rp_trace
 
 
@@ -115,25 +119,33 @@ def _sel_sets(w: pd.DataFrame, days) -> dict[pd.Timestamp, frozenset]:
     return out
 
 
-def run_one(bundle, panels, spec: dict, extra_close, noleak: bool) -> dict:
-    """跑一次 T+1 open 口径（与 etf_contest5_eval 同源）。"""
-    _NOLEAK["ret"] = noleak
-    _NOLEAK["vol"] = noleak
-    r0 = run_variant(bundle, panels, spec, BEGIN, None, extra_close=extra_close)
-    open_adj = panels["_open_adj"]
-    spl = build_execution_split(open_adj, bundle[1],
-                                set(pd.DatetimeIndex(r0["rebalance_dates"])))
-    r1 = run_variant(bundle, panels, spec, BEGIN, None, extra_close=extra_close,
-                     execution_split=spl, execution_shift=True)
-    _NOLEAK["ret"] = False
-    _NOLEAK["vol"] = False
-    return r1
+def run_one(bundle, panels, spec: dict, extra_close, pit: bool = True,
+            trace: bool = False) -> dict:
+    """跑一次 T+1 open 口径（与 etf_contest5_eval 同源）。
+
+    ``pit=False`` 会把 ``_pit_shift`` 还原成 identity，等价于修复前的历史行为。
+    ``trace=True`` 只对**第二次**（``execution_shift=True``）回测做取证 ——
+    第一次是「T 收盘成交」的辅助跑，不 shift 是**正确**的，不能当证据。
+    """
+    RP._pit_shift = _ORIG_PIT_SHIFT if pit else _IDENTITY
+    try:
+        r0 = run_variant(bundle, panels, spec, BEGIN, None, extra_close=extra_close)
+        spl = build_execution_split(panels["_open_adj"], bundle[1],
+                                    set(pd.DatetimeIndex(r0["rebalance_dates"])))
+        if trace:
+            _TRACE.clear()
+        return run_variant(bundle, panels, spec, BEGIN, None, extra_close=extra_close,
+                           execution_split=spl, execution_shift=True)
+    finally:
+        RP._pit_shift = _ORIG_PIT_SHIFT
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description="ETF 权重层 PIT 渗漏探针")
+    ap = argparse.ArgumentParser(description="ETF 权重层 PIT 验证/回归探针")
     ap.add_argument("--profile", default="contest3", help="逗号分隔，见 PROFILES")
-    ap.add_argument("--csv", default=None, help="窗口对照落盘")
+    ap.add_argument("--compare", action="store_true",
+                    help="额外跑一遍关闭修复的版本（复现历史数字）")
+    ap.add_argument("--csv", default=None, help="对照结果落盘")
     args = ap.parse_args(argv)
     names = [s.strip() for s in args.profile.split(",")]
 
@@ -155,65 +167,78 @@ def main(argv: list[str] | None = None) -> int:
         pd.Series(close.index, index=close.index)
         .groupby(close.index.to_period("M")).first().to_numpy())
 
-    print("== ① 直接取证：_risk_parity 用到的最后一根收益 vs 调用日 ==", flush=True)
-    run_one(bundle, panels, PROFILES[names[0]], extra, noleak=False)
-    for d_call, d_last in _TRACE:
-        flag = "🚨 含当日" if d_call == d_last else "ok"
-        print(f"  调用日 {d_call} → 最后一根收益 {d_last}   {flag}", flush=True)
+    print("== ① 取证：策略实际用到的最后一行收益是哪一天 ==", flush=True)
+    _RAW_RET["df"] = close.assign(CASH=1.0).pct_change(fill_method=None)
+    run_one(bundle, panels, PROFILES[names[0]], extra, pit=True, trace=True)
+    for d_call, d_e, d_prev in _TRACE:
+        if d_e == 0.0 and d_prev == 0.0:
+            # shift 后首行必为 NaN ⇒ 距离算成 0 的假象，不是证据
+            flag = "⚠️ 该行整行为 NaN（窗口未满），不可判定"
+        elif d_prev <= d_e:
+            flag = "✅ 已 PIT（只到信号日）"
+        else:
+            flag = "🚨 仍含当日，修复失效"
+        print(f"  调用日 {d_call} → 距 E {d_e:.3e} / 距 E−1 {d_prev:.3e}   {flag}",
+              flush=True)
 
     rows = []
     for name in names:
         spec = PROFILES[name]
-        b = run_one(bundle, panels, spec, extra, noleak=False)
-        n = run_one(bundle, panels, spec, extra, noleak=True)
-        wl = two_month_windows(b["equity"], mfs)
-        ln = two_month_windows(n["equity"], mfs)
-        idx = wl.index.intersection(ln.index)
+        fixed = run_one(bundle, panels, spec, extra, pit=True)
+        if not args.compare:
+            continue
+        legacy = run_one(bundle, panels, spec, extra, pit=False)
+        wf = two_month_windows(fixed["equity"], mfs)
+        wl = two_month_windows(legacy["equity"], mfs)
+        idx = wf.index.intersection(wl.index)
 
         # 选标 / 权重差异（只在调仓日比较）
-        rb = sorted(set(pd.DatetimeIndex(b["rebalance_dates"]))
-                    & set(pd.DatetimeIndex(n["rebalance_dates"])))
-        sb, sn = _sel_sets(b["weights"], rb), _sel_sets(n["weights"], rb)
-        sel_diff = sum(1 for d in rb if d in sb and d in sn and sb[d] != sn[d])
+        rb = sorted(set(pd.DatetimeIndex(fixed["rebalance_dates"]))
+                    & set(pd.DatetimeIndex(legacy["rebalance_dates"])))
+        sf, sl = _sel_sets(fixed["weights"], rb), _sel_sets(legacy["weights"], rb)
+        sel_diff = sum(1 for d in rb if d in sf and d in sl and sf[d] != sl[d])
         # 逐日权重 L1 差（去掉 252 日暖机）
-        wb, wn = b["weights"], n["weights"]
-        common = wb.index.intersection(wn.index)
+        wfx, wlg = fixed["weights"], legacy["weights"]
+        common = wfx.index.intersection(wlg.index)
         common = common[common >= close.index[min(252, len(close.index) - 1)]]
-        l1 = (wb.loc[common] - wn.loc[common]).abs().sum(axis=1)
-        dr_b = b["equity"].pct_change().reindex(common)
-        dr_n = n["equity"].pct_change().reindex(common)
+        l1 = (wfx.loc[common] - wlg.loc[common]).abs().sum(axis=1)
+        dr_f = fixed["equity"].pct_change().reindex(common)
+        dr_l = legacy["equity"].pct_change().reindex(common)
 
         rows.append({
             "profile": name,
-            "ann_leak": b["annual_return"], "ann_noleak": n["annual_return"],
-            "sh_leak": b["sharpe"], "sh_noleak": n["sharpe"],
-            "mdd_leak": b["max_drawdown"], "mdd_noleak": n["max_drawdown"],
-            "w2m_leak": float(wl[idx].mean()), "w2m_noleak": float(ln[idx].mean()),
-            "w2m_med_leak": float(wl[idx].median()), "w2m_med_noleak": float(ln[idx].median()),
-            "worst_leak": float(wl[idx].min()), "worst_noleak": float(ln[idx].min()),
+            "ann_fixed": fixed["annual_return"], "ann_legacy": legacy["annual_return"],
+            "sh_fixed": fixed["sharpe"], "sh_legacy": legacy["sharpe"],
+            "mdd_fixed": fixed["max_drawdown"], "mdd_legacy": legacy["max_drawdown"],
+            "w2m_fixed": float(wf[idx].mean()), "w2m_legacy": float(wl[idx].mean()),
+            "w2m_med_fixed": float(wf[idx].median()), "w2m_med_legacy": float(wl[idx].median()),
+            "worst_fixed": float(wf[idx].min()), "worst_legacy": float(wl[idx].min()),
             "n_rb": len(rb), "sel_diff": sel_diff,
             "l1_med": float(l1.median()), "l1_p90": float(l1.quantile(0.90)),
-            "r_corr": float(dr_b.corr(dr_n)),
+            "r_corr": float(dr_f.corr(dr_l)),
         })
         print(f"[done] {name}", flush=True)
 
+    if not rows:
+        return 0
+
     d = pd.DataFrame(rows).set_index("profile")
-    print("\n== ② 对照（T+1 open，80 个重叠 2 月窗 / 非重叠期另算）==")
-    print(f"{'档位':<12}{'':>10}{'年化':>9}{'Sharpe':>9}{'2月均值':>9}{'2月中位':>9}{'最差':>9}")
+    print("\n== ② 对照（T+1 open，80 个重叠 2 月窗）==")
+    print(f"{'档位':<12}{'':>12}{'年化':>9}{'Sharpe':>9}{'2月均值':>9}{'2月中位':>9}{'最差':>9}")
     for k, r in d.iterrows():
-        print(f"{k:<12}{'现行(含E日)':>10}{r.ann_leak:>9.2%}{r.sh_leak:>9.2f}"
-              f"{r.w2m_leak:>+9.2%}{r.w2m_med_leak:>+9.2%}{r.worst_leak:>+9.2%}")
-        print(f"{'':<12}{'无渗漏(真实)':>10}{r.ann_noleak:>9.2%}{r.sh_noleak:>9.2f}"
-              f"{r.w2m_noleak:>+9.2%}{r.w2m_med_noleak:>+9.2%}{r.worst_noleak:>+9.2%}")
-        print(f"{'':<12}{'Δ':>10}{r.ann_noleak - r.ann_leak:>+9.2%}"
-              f"{r.sh_noleak - r.sh_leak:>+9.2f}"
-              f"{r.w2m_noleak - r.w2m_leak:>+9.2%}"
-              f"{r.w2m_med_noleak - r.w2m_med_leak:>+9.2%}"
-              f"{r.worst_noleak - r.worst_leak:>+9.2%}")
+        print(f"{k:<12}{'旧(含E日)':>12}{r.ann_legacy:>9.2%}{r.sh_legacy:>9.2f}"
+              f"{r.w2m_legacy:>+9.2%}{r.w2m_med_legacy:>+9.2%}{r.worst_legacy:>+9.2%}")
+        print(f"{'':<12}{'修复后(PIT)':>12}{r.ann_fixed:>9.2%}{r.sh_fixed:>9.2f}"
+              f"{r.w2m_fixed:>+9.2%}{r.w2m_med_fixed:>+9.2%}{r.worst_fixed:>+9.2%}")
+        print(f"{'':<12}{'Δ':>12}{r.ann_fixed - r.ann_legacy:>+9.2%}"
+              f"{r.sh_fixed - r.sh_legacy:>+9.2f}"
+              f"{r.w2m_fixed - r.w2m_legacy:>+9.2%}"
+              f"{r.w2m_med_fixed - r.w2m_med_legacy:>+9.2%}"
+              f"{r.worst_fixed - r.worst_legacy:>+9.2%}")
 
     print("\n== ③ 机制诊断 ==")
     for k, r in d.iterrows():
-        print(f"  {k}: 调仓日 {int(r.n_rb)} 个，选标改变 {int(r.sel_diff)} 个；"
+        print(f"  {k}: 调仓日 {int(r.n_rb)} 个，持仓集合差异 {int(r.sel_diff)} 个；"
               f"逐日权重 L1 中位 {r.l1_med:.2%} / p90 {r.l1_p90:.2%}；"
               f"日收益相关 {r.r_corr:.4f}")
 
