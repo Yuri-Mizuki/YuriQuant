@@ -1,6 +1,6 @@
 # scripts 入口索引
 
-> 自动生成（161 个活跃入口；archive/oneoff 不计）。改脚本 docstring 后运行 `python -m scripts.data_tools.gen_scripts_index` 更新；`--check` 校验是否过期。
+> 自动生成（157 个活跃入口；archive/oneoff 不计）。改脚本 docstring 后运行 `python -m scripts.data_tools.gen_scripts_index` 更新；`--check` 校验是否过期。
 
 约定：`python -m scripts.<目录>.<文件名>` 运行；退役入口在 `scripts/archive/`（仍可运行，但不再维护）；实验结论查 `reports/README.md` §一「结论速查」，产物落盘规则见其 §1.6。
 
@@ -44,13 +44,14 @@
 | `common/cli_common.py` | 脚本层公共 CLI 骨架 |
 | `common/fundamental_common.py` | 财报长表的 TTM / 单季拆解公共函数（2026-09-11 收敛）。 |
 | `common/portfolio_common.py` | 跨实验脚本共享的组合 / 模型编排组件（无 CLI 入口） |
-| `common/power.py` | 任务运行期间保持系统唤醒，防止被「现代待机」中断。 |
+| `common/power.py` | 任务运行期间请求系统保持唤醒（**在本机 S0 连接待机下无效，见下**）。 |
 | `common/task_scheduler.py` | Windows 计划任务注册收口 + 调度体检（单一真源）。 |
 
 ## data_tools
 
 | 脚本 | 说明 |
 |---|---|
+| `data_tools/docs_lint.py` | 文档规范校验（docs 治理 P0，2026-10-28）。 |
 | `data_tools/dump_pdf_text.py` | 把研报 PDF 抽成带页码标记的纯文本，便于按关键词定位口径参数。 |
 | `data_tools/fix_meta.py` | 修复 e:/data/parquet/_meta.json：对齐实际日期 + 补文本表 + 加 pool 口径。 |
 | `data_tools/gen_scripts_index.py` | 生成 ``scripts/README.md`` 入口索引（2026-10-19 审计 ③）。 |
@@ -163,17 +164,12 @@
 | 脚本 | 说明 |
 |---|---|
 | `portfolio/compare_portfolio_methods.py` | 组合优化方法对比脚本（P2，2026-08-14） |
-| `portfolio/etf_alpha_probe.py` | ETF 层 α 可行性探针（S2 持仓映射 α 的前置验证） |
-| `portfolio/etf_capacity_probe.py` | ETF 轮动容量表（P3 组合层前置） |
-| `portfolio/etf_champ_signals.py` | ETF 轮动 champion 生产信号板（P5，2026-10-27） |
-| `portfolio/etf_contest_probe.py` | ETF 轮动·两个月比赛方案探针（2026-10-27） |
+| `portfolio/etf_champ_signals.py` | ETF 轮动生产信号板（三锋 / 五衡 / 磐石） |
+| `portfolio/etf_contest5_buffer_oos.py` | buffer 档位选择验证（网格 + 样本外 + 权重稳健性） |
+| `portfolio/etf_contest5_eval.py` | ETF 轮动 · 档位评测（80 个滚动 2 月窗口，口径统一 T+1 open） |
 | `portfolio/etf_contest_spec.py` | 正式赛定版参数（单一真源，2026-10-27 锁定） |
-| `portfolio/etf_dedup_probe.py` | ETF 轮动·选标层动态去重 A/B（2026-10-27） |
-| `portfolio/etf_p4_probe.py` | ETF 轮动样本外验证（P4，2026-10-26） |
-| `portfolio/etf_pool_audit.py` | ETF 池合理性 / 充分性审计（2026-10-27） |
-| `portfolio/etf_rotation_p2.py` | ETF 轮动优化验证（P2 前置，2026-10-26） |
-| `portfolio/etf_rotation_probe.py` | ETF 轮动升级探针（P1） |
-| `portfolio/etf_survivorship_probe.py` | ETF 轮动幸存者偏差一次性探针 |
+| `portfolio/etf_rotation_panels.py` | ETF 轮动扩展面板（生产组件） |
+| `portfolio/etf_rotation_probe.py` | ETF 轮动回测引擎（数据装载 / 面板 / 回测 / 出场调度） |
 | `portfolio/generate_signals.py` | 每日交易信号生成脚本（P3，2026-08-20） |
 | `portfolio/multi_period_backtest.py` | 多期组合执行回测脚本（P3，2026-08-20） |
 | `portfolio/run_etf_rotation.py` | ETF 轮动最小闭环回测脚本 |

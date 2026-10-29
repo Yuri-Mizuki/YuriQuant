@@ -79,10 +79,8 @@ AQR + JFE 复核）同向收口；LLM-MCTS 是唯一产出超门槛因子的挖�
 - **反过拟合三件套**：CSCV PBO 过拟合概率（12870 个组合秒级算完）、Deflated Sharpe Ratio、三段式训练纪律（train / valid / test 分段 + embargo，配置冻结）
 - **增量方向探针（frontier，2026-10-19）**：h60 长 horizon 全链 + 残差目标三探针（均带安慰剂臂）。判定：h60 预测力存活（IC 0.161）但组合层无增量、残差无正交信息 ⇒ 判负归档（`reports/frontier_audit_2026-10-19/`）
 - **指数增强探针（B1，2026-10-26）**：中证500 成分内 IC 0.069 / t=4.3，但 3–5% TE 净超额仅 +1.5~1.9%（t≈0.8）、2025 −7% ⇒ 不立项为 α（`reports/index_enhance_probe/`）
-- **ETF 轮动基线 P1（2026-10-26）**：`etf_rotation_probe.py`——41 池 × PIT 掩码对照 13 变体；**波动率目标是唯一有效增量**，`dual_ivvt15_m5` 年化 7.14% / Sharpe 0.62 / MDD 19.01%（`reports/etf_rotation_probe/`）
-- **ETF 轮动 P2 前置（2026-10-26）**：`etf_rotation_p2.py`——防御腿 + 份额 PIT 拥挤度（250 日分位 >0.80 剔除）+ 趋势 R² 对照；前两项叠加到 **年化 11.23% / Sharpe 0.85 / MDD 16.70%**，趋势 R² 判负（`reports/etf_rotation_p2/`）
-- **ETF 轮动比赛定版（P5，2026-10-27；v2 同夜升级）**：`etf_champ_signals.py`（实盘信号板）+ `etf_contest_spec.py`（**定版参数唯一真源 `FINAL`**）+ `etf_contest_probe.py`（80 个滚动 2 月窗口）。定版 `contest3` = Top3 + 12-1 动量扣拥挤软惩罚 + 剔除 20 日涨幅 >10% + 120 日 0.90 去重 + HRP 无上限 + 周频，80 窗口均值 +5.59% / 最差 −12.34% / 胜率 72.5%；6-1 动量、周五调仓、扩池、单只上限均判否（`reports/etf_contest5/` §十二–§十三）
-- **ETF 轮动「盲区 / 出场加速」探针组（2026-10-27/28，22 变体全判负）**：`--specs entrylow|exit|explore|explore2|volpre` + `ExitOverlay`/`ExposureOverlay`/`whip_audit`。盲区结构真实（建仓后 21 日收益与信号同期变化相关仅 +0.12）但经济不成立（深跌建仓 fwd42 +5.36% vs 其余 +0.30%）；从入场下限、出场加速到高位钝化、波动缩放四族 22 条全部未改善左尾，`pre10` 维持固定阈值（`reports/etf_contest5/` §13.10–§13.14）
+- **ETF 轮动定版（2026-10-29 收口）**：`etf_contest_spec.py`（**参数唯一真源 `FINAL`**）+ `etf_champ_signals.py`（信号板）+ `etf_rotation_probe.py`（回测引擎）/ `etf_rotation_panels.py`（扩展面板）。三方案：**三锋**（定版，Top3 周频）**26.11% / Sharpe 1.00 / MDD 26.4%**、**五衡**（降档预案，Top5）24.61% / 1.07、**磐石**（长线月频 + 防御腿）13.17% / 1.05 —— **对外口径统一 T+1 开盘成交**，文档真源 `reports/etf_contest5/README.md`
+- **ETF 轮动实验收口（2026-10-29）**：**25 条判否**（信号层 8 变体 / 去重阈值 / 单只上限 / 条件执行 / 降频 / 相位 / 22 个出场变体 / 扩池）；唯一剩余杠杆 = 模式 B（盘中 14:55 出信号 + 收盘集合竞价，可回收 7.4pp 流程税，未改造）。5 个一次性探针脚本、18 个临时脚本与 12 个实验产物目录已回收，结论全在 `reports/etf_contest5/README.md` §七
 
 ### 🏭 生产化：研究系统的最后一公里
 

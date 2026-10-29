@@ -972,6 +972,16 @@
 
 ### D1. ETF 轮动（2026-10-26 立项，P0+P1 已收口，P2 待开）
 
+> 2026-10-29 二次清理：本节引用的 `etf_rotation_probe/`、`etf_rotation_p2/`、`etf_p4/`、
+> `etf_dedup/`、`etf_capacity/`、`etf_pool_expand/`、`etf_alpha_probe/`、
+> `etf_survivorship_probe/` 产物目录与 5 个对应探针脚本、18 个 `_tmp/_etf_*.py`
+> 已全部送回收站。**现行结论与全部数字见 `reports/etf_contest5/README.md`**（三方案 +
+> 25 条判否清单，口径统一 T+1 开盘成交）；本节保留立项/收口过程作为研究路径留档。
+>
+> 2026-10-28 清理：本节引用的 `etf_contest_probe.py` / `etf_dedup_probe.py` 与
+> `reports/etf_contest5_opt/`、`reports/etf_contest_wl{,2}/` 已送回收站；采纳/判否
+> 结论与关键数字保留在 `reports/etf_contest5/README.md`。
+
 - **方案真源**：`reports/docs/design/ETF轮动_研究与实施计划_2026-10-26.md`；
   结论真源 `reports/etf_rotation_probe/README.md`。
 - **P0 `[x]`（10-26）**：池扩到 **41 只**（宽基 8 / 行业 14 / 主题 8 / 债券 4 / 商品 1 /
@@ -1896,6 +1906,10 @@ MASTER/HIST/Transformer 系与轻量滚动架构不匹配，暂缓。
 - [ ] **P6**：DoubleEnsemble 式特征×样本重加权（若 P1–P3 后基本面贡献仍低）
 
 ### 🥈 ETF 轮动「盲区 / 出场加速」探针组（2026-10-27 立项；赛后执行，判据已预注册）
+
+> 2026-10-28 清理：`etf_contest_probe.py`、诊断脚本 `probe_etf_blindspot_diag.py` 与
+> `reports/etf_contest5_opt/{entrylow,exit,blindspot,explore,explore2,volpre,freq}/`
+> 已送回收站；结论保留在 `reports/etf_contest5/README.md` §13.10–§13.15。
 
 > **背景与冻结纪律**：12-1 动量分子锚定 `P(t−21)`——入场时最近 21 日价格对排序不可见
 > （本线实测：最近月信息作**排序**是负资产，20/60/6-1 动量全负，只配做减法），且持仓后

@@ -44,16 +44,8 @@
 | `cost_penalty_probe` | 成本感知 QP 自救 +11.7pp 后仍输简单 buffer；本目录两版旧结论已作废 | 判负 | 2026-10-13 |
 | `data_root_incident` | 数据根切到残缺副本致出榜停摆，已按选项 A 修复并留痕 | 事故记录 | 2026-10-14 |
 | `deliverable_portfolio` | 可交付组合甜点 35–45 只（+1.9~2.3pp）；行业硬只数上限 −2.64pp | 采纳 | 2026-10-09/10 |
-| `etf_alpha_probe` | 个股 α 按 ETF 成分权重聚合到 ETF 层，无截面预测力 | 判负 | 2026-10-26 |
-| `etf_capacity` | 100–500 万无压力（0% 超限）、1000 万拆两笔可执行 | 工具保留 | 2026-10-27 |
-| `etf_champ` | 长线「磐石」信号板；接入动态去重后年化 13.75% / Sharpe 1.08 / MDD 14.0% | 采纳 | 2026-10-27 |
-| `etf_contest5` | 比赛定版「三锋 v2」：80 窗均值 +5.59% / 最差 −12.34% / 胜率 72.5% | 采纳 | 2026-10-27 |
-| `etf_dedup` | 选标层动态去重（13 对双胞胎）：champ 年化 12.37→13.75%、MDD 16.1→14.0% | 采纳 | 2026-10-27 |
-| `etf_p4` | 样本外 champ_hrp 年化 20.60% / Sharpe 1.27 PASS；P1 基线 OOS 失效 | 采纳 | 2026-10-26 |
-| `etf_pool_expand` | 41→50 扩容：基线 +0.03、champ +0.09 Sharpe，方向正确幅度有限 | 采纳 | 2026-10-26 |
-| `etf_rotation_p2` | 防御腿 + 拥挤度叠加到年化 11.23% / Sharpe 0.85 / MDD 16.70%；趋势 R² 判负 | 采纳 | 2026-10-26 |
-| `etf_rotation_probe` | P1：波动率目标是唯一有效增量，年化 7.14% / Sharpe 0.62 / MDD 19.01% | 采纳 | 2026-10-26 |
-| `etf_survivorship_probe` | 退市偏差结构性可忽略（不可能进池）；池选择偏差已量化 | 归档 | 2026-10-26 |
+| `etf_contest5` | ETF 轮动**唯一文档真源**：三锋 26.11%/1.00、五衡 24.61%/1.07、磐石 13.17%/1.05（T+1 open）+ 25 条判否清单 | 采纳 | 2026-10-29 |
+| `etf_champ` | 长线「磐石」信号板运行产物（方案与口径见 `etf_contest5/README.md` §五） | 采纳 | 2026-10-29 |
 | `factor_pool_composition` | 量价占比 86.0%（入选 84% → gain 90.5%）；非量价 28% 席位只贡献 9.5% | 归档 | 2026-10-10 |
 | `four_paths` | 四条提升路径全收口，无一过门槛（新信息源 / 新归纳偏置均空） | 判负 | 2026-10-10 |
 | `frontier_audit_2026-10-19` | h60 预测力存活（IC 0.161）但组合层无增量；残差无正交信息 | 判负 | 2026-10-19 |
@@ -89,10 +81,8 @@
 | `multiyear/` | 多年度 OOS 稳健性（2026-09-01 修复后重跑） |
 | `buffer_tune/` | 换手缓冲带调参 |
 | `gtja_repro/` | 国金因子复现对照（读自身 `baseline.csv`） |
-| `etf_rotation/` | ⚠️ legacy（2026-08-26，15 只池、无 PIT 掩码）；已被 `etf_rotation_probe/` 取代 |
-| `etf_rotation_probe/` | **ETF 轮动 P1（2026-10-26，现行）**：41 池 + PIT 掩码；基线 `dual_ivvt15_m5` 年化 7.14% / Sharpe 0.62 / MDD 19.01%（结论真源其 README） |
-| `etf_rotation_p2/` | **ETF 轮动 P2 前置（2026-10-26）**：防御腿 + 拥挤度 + 趋势 R² 三对照；`def_mix_crowd_f20` 年化 11.23% / Sharpe 0.85 / MDD 16.70% |
-| `etf_{champ,contest5,contest5_opt,contest5_wl,contest_wl,contest_wl2,p4,dedup,capacity,pool_expand,survivorship_probe,alpha_probe}/` | **ETF 赛事 / 长线全家桶（2026-10-26~27）**：三锋 v2 真源 = `etf_contest5/README.md` §十三（参数 `etf_contest_spec.FINAL`）；长线「磐石」= `etf_champ/`；`contest5_opt/` 定版证据、`contest_wl*/` 白名单复核、`p4/` 样本外、其余专项探针；作废初赛目录已回收（§四） |
+| `etf_contest5/` | **ETF 轮动定版（2026-10-29）**：三锋/五衡/磐石三方案 + 判否清单 + 白名单 OCR，**唯一文档真源**；参数真源 `etf_contest_spec.FINAL` |
+| `etf_champ/` | 长线「磐石」信号板运行产物（`signals.csv` / `board.html` / `meta.json`），方案见 `etf_contest5/README.md` §五 |
 | `risk_decomposition/` | 组合风险分解报告（Euler 分解 / 因子方差贡献 / VaR 成分） |
 | `ml_synthesis_h1/` | ⚠️ 归档时代产物，但 `monitor_performance.py` 读其预测面板 ⇒ **不可删** |
 | `investment_report/` | HS300 时代交付物存档（年化口径 ~3% 偏移待重跑）；归档脚本以其为输入 |
@@ -155,7 +145,6 @@
 | `alla_rolling_jqs_base` / `alla_rolling_jqs_amt` | 同上两臂的 **M 频单轨快照**（只留月频，写作本章节前无任何文档提及，`jqs` 后缀在代码里零命中 ⇒ 由同批手工重跑产生） | 判负（随父实验） |
 | `alla_rolling_macrof_base` / `alla_rolling_macrof_h20` | altf P1 宏观族臂（`_base` 已清，剩 pred/equity/metrics） | 判负 |
 | `alla_rolling_newsf_h20` | altf P1 新闻族 h20 臂 | 判负 |
-| `etf_contest5_nocap` / `etf_contest5_nofuel` / `etf_contest5_wl` | 定版信号的三个变体臂（无单只上限 / 无燃料项 / 白名单池）的信号板产物 | 工具保留 |
 | `capacity_table` | 集中度 × AUM 二维容量表（`scripts/evaluation/capacity_table.py`） | 工具保留 |
 | `barra_cne6` | CNE6 风格回归产物（因子收益 / t / 残差面板 / sigma 诊断） | 工具保留 |
 | `chip_behavior_probe_2026-10-27` | 行为金融「筹码/换手」廉价探针（全 A 面板 + 三口径 IC） | 判负 |
@@ -329,6 +318,45 @@ model层 / ML合成，其余已删、可重跑复现——结论见 §三.13~17�
 
 ## 四、清理记录
 
+- **2026-10-29（ETF 实验记录收口：探针脚本 + 临时脚本 + 12 个产物目录）**：
+  5 脚本 + 18 临时脚本 + 12 目录，全部走 `scripts/oneoff/_recycle_batch.py` 回收站。
+  快照（全量原件 71MB）在 `E:/backup_yuriquant_etf_cleanup_20261029`
+  （`reports/` gitignored ⇒ 快照是唯一保险）。
+  - **探针脚本 5 个**：`etf_alpha_probe` / `etf_capacity_probe` / `etf_p4_probe` /
+    `etf_pool_audit` / `etf_survivorship_probe`——均一次性验证，结论已压进
+    `reports/etf_contest5/README.md` §七 判否清单（容量与白名单结论进 §九/§十）。
+  - **临时脚本 18 个**：`_tmp/_etf_*.py`（信号 IC / 去重 / 执行价 / 相位 / 口径切换）。
+  - **产物目录 12 个**：`etf_{alpha_probe,capacity,dedup,p4,pool_expand,rotation,
+    rotation_p2,rotation_probe,survivorship_probe}` 与 `etf_contest5_{nocap,nofuel,wl}`；
+    `etf_contest5_wl` 的 `whitelist_ocr.csv` / `pool_map.csv` 先迁入 `etf_contest5/`。
+    `etf_contest5/` 内的 `equity_compare.*`（收盘口径旧对照）与 `orders_2026-10-27.csv`
+    （已作废清单）一并回收。
+  - **归并**：`etf_contest5/README.md` 1273 → ~330 行，口径统一到 T+1 open，
+    实验记录压成「三方案对照 + 25 条判否清单」；`etf_champ/README.md` 改为指针页，
+    不再维护第二份数字。
+  - **代码**：`etf_rotation_p2.py` → `etf_rotation_panels.py`（生产面板组件），删掉
+    实验变体清单与主循环（479 → 240 行）；`etf_contest_spec.py` / `etf_champ_signals.py`
+    的章节指针同步到新编号。
+
+- **2026-10-28（第二批：ETF 比赛赛后探针链路 + 全部变体产物）**：3 脚本 1046 行 +
+  3 目录 71 文件 / 1.84MB，全部走 `scripts/oneoff/_recycle_batch.py` 回收站。
+  快照（路径 + md5）在 `~/yuriquant_snapshots/2026-10-28_contest_probe_cleanup/manifest.md5`。
+  - **脚本**：`scripts/portfolio/etf_contest_probe.py`（661 行，赛后 12 组变体探针）、
+    `scripts/portfolio/etf_dedup_probe.py`（123 行，依赖前者的 `two_month_table`）、
+    `scripts/oneoff/probe_etf_blindspot_diag.py`（262 行，盲区诊断）。判定依据：全部
+    变体已判否、`FINAL` 冻结，探针只剩"复跑历史"价值；结论与关键数字已逐条压进
+    `reports/etf_contest5/README.md` §一–§十三（12 行/节的结论 + §13.5/§13.9 完整对照）。
+  - **产物**：`reports/etf_contest5_opt/`（65 文件 / 1.28MB / 17 子臂：`blindspot`
+    `entrylow` `exit` `explore` `explore2` `volpre` `freq` `rev` `next2w` `robust`
+    `pool51` `wl_crowd` `alt_cap50` `cmp_contest5h` `five_diag` `lt46` `lt_compare`
+    + 根部 `contest_conc_*.csv`）、`reports/etf_contest_wl{,2}/`（各 3 文件，初赛
+    Top5 白名单复核，方案已废）。**保留** `etf_contest5/`（结论真源）、
+    `etf_contest5_wl/`（白名单 OCR 与池映射）、`etf_contest5_nocap/nofuel`。
+  - **引用同步**：`README.md`、`scripts/README.md`（索引重生成）、
+    `etf_contest_spec.py` docstring、`tests/test_etf_contest_spec.py`（收缩为
+    `FINAL` ↔ 信号板 + 出场调度两组断言）、`TODO.md` §一、`TODO_ARCHIVE.md` 册Ⅰ §D1
+    与册Ⅱ「盲区/出场加速」节（各加一行回收注记）、本文件 §1.2 / §1.2.1。
+
 - **2026-10-28（文档规范化的第一批清理：旧待办副本 + 被取代的冒烟报告）**：
   8 + 2 文件 / 约 350KB，全部走 `scripts/oneoff/_recycle_batch.py` 回收站。
   快照（路径 + md5 + 原件副本）在 `~/yuriquant_snapshots/2026-10-28_docs_cleanup/`。
@@ -371,7 +399,6 @@ model层 / ML合成，其余已删、可重跑复现——结论见 §三.13~17�
     ⚠️ 用法约束：HTML 必须从 `design/<子目录>/` 打开（相对路径 `../_shared/` 依赖层级），
     从别处打开会丢样式与图表。各目录自己的 `assets/charts.js` 未动、不含 `_shared` 引用。
 
-
 - **2026-10-27（作废的初赛方案目录 `reports/etf_contest/`）**：15 文件 / 0.5MB，
   含 20 日动量 Top3 方案的回测产物（`contest_summary.csv`、`contest_k5_*`、`board.html`、
   当日 `signals.csv`/`orders_*.csv`、`meta.json`、`run_config*.json`）。删除起因：该方案
@@ -380,7 +407,8 @@ model层 / ML合成，其余已删、可重跑复现——结论见 §三.13~17�
   引用扫描命中 5 处（`reports/etf_contest5/README.md` §一 与开篇、`reports/etf_champ/README.md`、
   设计文档 §P5、`scripts/portfolio/etf_contest_spec.py` docstring），已全部改为指向
   `reports/etf_contest5*` 或标注"已删除"；目录走 `_recycle_batch.py` 回收站（可从回收站恢复）。
-  `etf_contest_probe.py --specs base|k5` 仍可复跑并重建同名目录。
+  `etf_contest_probe.py --specs base|k5` 当时仍可复跑重建同名目录；该探针已于
+  2026-10-28 回收（见本节第二条），目录不再可重建。
 
 - **2026-10-26（jq 成交金额族 A/B 两臂 `_base/`）**：`reports/alla_rolling_jq_base/_base/`
   与 `.../jq_amt/_base/` 共 28 文件 / **903.1MB**，是 prep 的确定性产物，两臂逐字节

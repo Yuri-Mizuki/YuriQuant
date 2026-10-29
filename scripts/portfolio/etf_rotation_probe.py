@@ -1,29 +1,20 @@
 """
-ETF 轮动升级探针（P1）
-======================
+ETF 轮动回测引擎（数据装载 / 面板 / 回测 / 出场调度）
+=====================================================
 
-对照 `reports/docs/design/ETF轮动_研究与实施计划_2026-10-26.md` §三 P1：
-在扩池（50 只）与 PIT 流动性掩码之上，检验四个常见改进相对等权 TopK 的增量：
+生产信号板与回测共用：
 
-  1. 12-1 动量（跳过最近一个月）          —— 信号层
-  2. Dual Momentum（相对排序 + 绝对动量） —— 信号层
-  3. inverse-vol 加权                    —— 组合构造
-  4. 波动率目标（15% 年化）              —— 组合构造
-  5. 缓冲区换手（进入前 15 / 跌出前 40）  —— 组合构造
+  - ``load_bundle``：一次装载全样本价格 / 成交额 / 基准（含暖机），窗口切片复用；
+  - ``build_panels``：基础因子面板（12-1 动量等），扩展面板见 ``etf_rotation_panels``；
+  - ``run_variant``：单变体回测。**次日执行口径必须三件套**（见函数 docstring 禁忌）；
+  - ``build_exit_schedule`` / ``ExitOverlay`` / ``ExposureOverlay``：出场与仓位调度的
+    语义实现——出场比赛本身已全部判否，函数保留供测试与未来复用。
 
-判据（先验固定，跑完不改）：
-  - 全样本 Sharpe ≥ 0.5
-  - 全样本 MDD ≤ 35%
-  - 三段（2020-21 / 2022-23 / 2024-26）年化收益 ≥ 2/3 为正
-
-用法:
-    python -m scripts.portfolio.etf_rotation_probe
-    python -m scripts.portfolio.etf_rotation_probe --begin 20200102 --end 20261023
+方案与结论见 ``reports/etf_contest5/README.md``；历史变体清单与实验主循环已于
+2026-10-29 随实验记录一并回收。
 """
 from __future__ import annotations
 
-import argparse
-import json
 from pathlib import Path
 
 import numpy as np
@@ -32,8 +23,6 @@ import pandas as pd
 from backtest.costs import EtfCosts
 from backtest.engine import VectorBacktest
 from config import Config
-from data.cache import DataCache
-from data.datasource import create_datasource
 from data.etf_universe import EtfUniverse
 from strategy.base import Strategy
 from strategy.etf_rotation import EtfRotationAdvanced
@@ -41,60 +30,9 @@ from strategy.multi_signal import compose_signals
 
 BENCH = Config.benchmarks()["etf"]          # 沪深300
 ROOT = Path(__file__).resolve().parents[2]
-OUT = ROOT / "reports" / "etf_rotation_probe"
-
 MIN_AMOUNT = 3e7        # 近 60 日均成交额下限（元）
 SEGMENTS = [(2020, 2021), (2022, 2023), (2024, 2026)]
 WARMUP_BEGIN = 20180101  # 12-1 动量需要 ~273 个交易日暖机
-
-# 变体清单：signal / freq / top_k / 构造开关
-VARIANTS: list[dict] = [
-    {"name": "baseline_mom_week_nomask", "signal": "composite", "freq": "W",
-     "top_k": 5, "mask": False},
-    {"name": "baseline_mom_week", "signal": "composite", "freq": "W",
-     "top_k": 5, "mask": True},
-    {"name": "mom12_1_m5", "signal": "mom12_1", "freq": "M", "top_k": 5},
-    {"name": "dual_m5", "signal": "mom12_1", "freq": "M", "top_k": 5, "absolute": True},
-    {"name": "dual_m8", "signal": "mom12_1", "freq": "M", "top_k": 8, "absolute": True},
-    {"name": "dual_iv_m5", "signal": "mom12_1", "freq": "M", "top_k": 5,
-     "absolute": True, "weighting": "inverse_vol"},
-    {"name": "dual_vt15_m5", "signal": "mom12_1", "freq": "M", "top_k": 5,
-     "absolute": True, "target_vol": 0.15},
-    {"name": "dual_buf_m5", "signal": "mom12_1", "freq": "M", "top_k": 5,
-     "absolute": True, "enter_rank": 15, "exit_rank": 40},
-    # 组合项：同时叠加两个构造（先验上是「降波动 + 降换手」的自然搭配）
-    {"name": "baseline_mom_week_vt15", "signal": "composite", "freq": "W",
-     "top_k": 5, "target_vol": 0.15},
-    {"name": "dual_vt15_m8", "signal": "mom12_1", "freq": "M", "top_k": 8,
-     "absolute": True, "target_vol": 0.15},
-    {"name": "dual_vt20_m5", "signal": "mom12_1", "freq": "M", "top_k": 5,
-     "absolute": True, "target_vol": 0.20},
-    {"name": "dual_ivvt15_m5", "signal": "mom12_1", "freq": "M", "top_k": 5,
-     "absolute": True, "weighting": "inverse_vol", "target_vol": 0.15},
-    {"name": "dual_bufvt15_m5", "signal": "mom12_1", "freq": "M", "top_k": 5,
-     "absolute": True, "enter_rank": 15, "exit_rank": 40, "target_vol": 0.15},
-]
-
-# 主表 PASS 项的稳健性网格（**在看到主表结果后追加**，故单独成表、不加判据，
-# 只用于判断「唯一过线项是不是邻域尖峰」）。目标波动 / top_k / 缓冲区 / 双倍成本。
-ROBUST_VARIANTS: list[dict] = [
-    {"name": "ivvt15_m5", "signal": "mom12_1", "freq": "M", "top_k": 5,
-     "absolute": True, "weighting": "inverse_vol", "target_vol": 0.15},
-    {"name": "ivvt12_m5", "signal": "mom12_1", "freq": "M", "top_k": 5,
-     "absolute": True, "weighting": "inverse_vol", "target_vol": 0.12},
-    {"name": "ivvt18_m5", "signal": "mom12_1", "freq": "M", "top_k": 5,
-     "absolute": True, "weighting": "inverse_vol", "target_vol": 0.18},
-    {"name": "ivvt15_m3", "signal": "mom12_1", "freq": "M", "top_k": 3,
-     "absolute": True, "weighting": "inverse_vol", "target_vol": 0.15},
-    {"name": "ivvt15_m8", "signal": "mom12_1", "freq": "M", "top_k": 8,
-     "absolute": True, "weighting": "inverse_vol", "target_vol": 0.15},
-    {"name": "ivvt15_buf_m5", "signal": "mom12_1", "freq": "M", "top_k": 5,
-     "absolute": True, "weighting": "inverse_vol", "target_vol": 0.15,
-     "enter_rank": 15, "exit_rank": 40},
-    {"name": "ivvt15_m5_cost2x", "signal": "mom12_1", "freq": "M", "top_k": 5,
-     "absolute": True, "weighting": "inverse_vol", "target_vol": 0.15, "cost_x": 2.0},
-]
-
 
 def load_bundle(cache, begin: int = WARMUP_BEGIN, end: int | None = None):
     """构建全样本面板束（含暖机），后续按窗口切片复用。"""
@@ -324,11 +262,42 @@ def run_variant(bundle, panels: dict, spec: dict, w0: int | None = None,
                 w1: int | None = None, extra_close: pd.DataFrame | None = None,
                 rebalance_days: set | None = None,
                 exit_plan: dict | None = None,
-                exposure: pd.Series | None = None) -> dict:
+                exposure: pd.Series | None = None,
+                execution_split: tuple[pd.DataFrame, pd.DataFrame] | None = None,
+                execution_shift: bool = False,
+                ) -> dict:
     """在（可选）窗口上跑一个变体，返回指标与净值。
 
     ``extra_close`` 用于注入合成资产列（如防御腿 DEF：债+金的净值水平线）。
     合成资产的因子/波动率为 NaN（不会被选中），掩码恒为 True。
+
+    ``execution_split`` 为引擎的**次日执行价模式**（``build_execution_split`` 产物）：
+    传入后调仓日 T 的权重在 T+1 的 fill 价成交，默认为 ``None`` = 现行收盘价成交
+    （略乐观口径，见 ``etf_contest_spec.EXEC_NOTE``）。
+
+    ⚠️ ``execution_split`` 必须与 ``execution_shift=True`` 一起用，二者是同一件事的两半
+    （口径同 ``scripts/evaluation/caliber.py::run_once``）：
+      - 信号面板 ``shift(1)`` → 执行日 E 取信号日 T 的因子；
+      - 调仓日传 **E = T+1**（而非 T）；
+      - split 面板由**信号日 T** 构造（``build_execution_split(fill, close, rb_signal)``）。
+    缺任一项都会 silent 失效：只传 split、调仓日仍在 T 时，引擎在 E 日结算用的
+    ``current_weights`` 已是 T 日设定的**新权重**，隔夜段被错付给新仓位，
+    结果退化回「T 收盘成交」而只差二阶项（实测 equity 末值仅差 +0.27%，
+    会让人误判"次日开盘几乎无代价"）。
+
+    ``execution_shift=True`` 与 ``rebalance_days`` 同给时，后者按**信号日**
+    （``rb_signal``）解释，引擎收到的调仓日是其**下一个交易日**。非 ``freq``
+    可表达的相位（如「周内第 k 个交易日」）必须走这条路径，否则会被 ``freq``
+    分支覆盖、静默退回周一调仓。
+
+    ⚠️ **窗口口径陷阱（2026-10-29 实测）**：`ret_panel` 由**切片后的** close 重算，
+    逐窗独立调用时它只有窗口内 ~40 个交易日 ⇒ `_dedup` 的生效门槛
+    ``max(40, dedup_window // 2) = 60`` 与 `_risk_parity` 的 ``len(sub) >= 20``
+    会在窗口里冷启动失效。实测后果：定版 contest3 的 2 月窗口成绩从
+    ``均值 +5.59% / p10 −3.64% / 最差 −12.34%`` 假性恶化到
+    ``+3.24% / −7.78% / −19.66%``（Sharpe 1.28 → 1.86 的假性"改善"）。
+    **要窗口成绩请用「单次连续回测（20200101→末日）+ 事后按月首切 2 月窗口」**
+    （旧 `etf_contest_probe.two_month_table` 口径，已逐位复现）。
     """
     (uni, close, _amount, bench), p = slice_bundle(bundle, panels, w0, w1)
     extra_cols: list[str] = []
@@ -393,6 +362,30 @@ def run_variant(bundle, panels: dict, spec: dict, w0: int | None = None,
             | set(exit_plan["exits"].keys())
     if exposure is not None:
         strategy = ExposureOverlay(strategy, exposure, cash_code=cash)
+    if execution_shift:
+        # 次日执行价三件套之一：信号 shift(1) + 调仓日搬到 E=T+1。
+        # 与 build_execution_split(fill, close, rb_signal) 配套（见 docstring）。
+        freq = spec.get("freq", "M")
+        _s = pd.Series(close.index, index=close.index)
+        if rebalance_days:
+            # 显式传入的自定义调仓日按**信号日 rb_signal** 解释（再把 E=T+1 算出来）。
+            # 非 freq 可表达的相位（如「周内第 k 个交易日」）必须走这条，否则会被
+            # 下面的 freq 分支覆盖掉、静默变成周一调仓。
+            _in_index = set(close.index)
+            _sig = sorted(d for d in rebalance_days if d in _in_index)
+        elif freq == "W":
+            _sig = list(_s.groupby(_s.index.to_period("W")).first())
+        elif freq == "M":
+            _sig = list(_s.groupby(_s.index.to_period("M")).first())
+        elif freq == "2W":
+            _sig = list(_s.groupby(_s.index.to_period("W")).first())[::2]
+        else:
+            _sig = list(close.index)
+        _days = list(close.index)
+        _pos = {d: i for i, d in enumerate(_days)}
+        rebalance_days = {_days[_pos[t] + 1] for t in _sig
+                          if t in _pos and _pos[t] + 1 < len(_days)}
+        factor = factor.shift(1)
     bt = VectorBacktest(strategy=strategy, rebalance_freq=spec.get("freq", "M"),
                         initial_capital=1_000_000.0,
                         costs=EtfCosts(commission_rate=commission_bp * 1e-4 * cx,
@@ -400,7 +393,8 @@ def run_variant(bundle, panels: dict, spec: dict, w0: int | None = None,
                                        slippage_bp=slippage_bp * cx))
     res = bt.run(factor_panel=factor, returns_panel=returns,
                  executable_mask=mask if spec.get("mask", True) else None,
-                 horizon=1, rebalance_days=rebalance_days)
+                 horizon=1, rebalance_days=rebalance_days,
+                 execution_split=execution_split)
     m = res.metrics(benchmark_returns=bench if len(bench) else None)
     w = res.weights_history
     live = w[w.abs().sum(axis=1) > 1e-9]
@@ -429,62 +423,3 @@ def run_variant(bundle, panels: dict, spec: dict, w0: int | None = None,
         # 一根 bar 建仓（i < n-1），否则实盘指令会落后一周。
         "strategy": strategy,
     }
-
-
-def main(argv: list[str] | None = None) -> None:
-    ap = argparse.ArgumentParser(description="ETF 轮动升级探针（P1）")
-    ap.add_argument("--begin", type=int, default=20200102, help="回测起点（暖机自动前移）")
-    ap.add_argument("--end", type=int, default=None, help="回测终点，默认数据末日")
-    ap.add_argument("--out", default=str(OUT))
-    ap.add_argument("--variants", choices=("main", "robust"), default="main",
-                    help="main=先验主表；robust=主表 PASS 项的稳健性网格")
-    args = ap.parse_args(argv)
-    out = Path(args.out)
-    out.mkdir(parents=True, exist_ok=True)
-
-    cache = DataCache(create_datasource())
-    bundle = load_bundle(cache, WARMUP_BEGIN, args.end)
-    panels = build_panels(bundle[1], bundle[2])
-
-    variants = VARIANTS if args.variants == "main" else ROBUST_VARIANTS
-    tag = "" if args.variants == "main" else "_robust"
-    rows, seg_rows, eq = [], [], {}
-    for spec in variants:
-        full = run_variant(bundle, panels, spec, args.begin, args.end)
-        segs = []
-        for y0, y1 in SEGMENTS:
-            r = run_variant(bundle, panels, spec,
-                            max(args.begin, y0 * 10000 + 101), y1 * 10000 + 1231)
-            segs.append(r["annual_return"])
-        n_pos = int(sum(s > 0 for s in segs))
-        passed = (full["sharpe"] >= 0.5
-                  and abs(full["max_drawdown"]) <= 0.35
-                  and n_pos >= 2)
-        rows.append({**{k: v for k, v in spec.items() if k != "mask"},
-                     "name": spec["name"],
-                     "mask": spec.get("mask", True),
-                     **{k: v for k, v in full.items() if k != "equity"},
-                     "seg_pos": n_pos,
-                     **{f"seg_{i + 1}": s for i, s in enumerate(segs)},
-                     "pass": passed})
-        seg_rows.append({"name": spec["name"], **{f"seg_{i + 1}": s for i, s in enumerate(segs)}})
-        eq[spec["name"]] = full["equity"]
-        print(f"{spec['name']:<26} ann={full['annual_return']:+.2%} sh={full['sharpe']:.2f} "
-              f"mdd={full['max_drawdown']:.2%} ex={full['excess']:+.2%} "
-              f"seg={n_pos}/3 {'PASS' if passed else ''}", flush=True)
-
-    summary = pd.DataFrame(rows).sort_values(["pass", "sharpe"], ascending=[False, False])
-    summary.to_csv(out / f"summary{tag}.csv", index=False, encoding="utf-8-sig")
-    pd.DataFrame(seg_rows).to_csv(out / f"segments{tag}.csv", index=False, encoding="utf-8-sig")
-    pd.DataFrame(eq).to_csv(out / f"equity{tag}.csv", encoding="utf-8-sig")
-    (out / f"run_config{tag}.json").write_text(json.dumps({
-        "begin": args.begin, "end": args.end, "bench": BENCH,
-        "pool_size": len(bundle[1].columns), "min_amount": MIN_AMOUNT,
-        "segments": SEGMENTS, "judge": "Sharpe>=0.5, |MDD|<=35%, seg>=2/3 positive",
-        "tag": tag or "main", "variants": variants,
-    }, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"\n写入 {out}")
-
-
-if __name__ == "__main__":
-    main()
