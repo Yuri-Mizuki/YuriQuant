@@ -57,6 +57,7 @@ import subprocess
 import sys
 import tempfile
 import xml.etree.ElementTree as ET
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from xml.sax.saxutils import escape as _esc
@@ -410,6 +411,21 @@ def query_task_xml(task_name: str) -> dict[str, str] | None:
 #: 任务在跑时 ``Last Result`` 就是它，属正常瞬态 —— doctor 不当坏码。
 _RUNNING_RCS = ("267009", "0x41301")
 
+#: ``LastTaskResult`` 常见坏码 → 人话。只用于显示，不参与判据。
+_RC_HINTS = {
+    "-1073741510": "0xC000013A 进程被强制结束",
+    "3221225786": "0xC000013A 进程被强制结束",
+    "-1073741515": "0xC0000135 DLL 缺失",
+    "-1073741701": "0xC000007B 镜像格式错误",
+    "-1073740791": "0xC0000409 栈溢出/被强杀",
+}
+
+
+def _rc_hint(rc: object) -> str:
+    """把坏码翻成人话；不认识给空串（``rc=5`` → ``" (0xC0000409 ...)"``）。"""
+    hint = _RC_HINTS.get(str(rc).strip())
+    return f"（{hint}）" if hint else ""
+
 _STATUS_KEYS = {
     "state": ("计划任务状态", "Status", "Scheduled Task State"),
     "last_run": ("上次运行时间", "Last Run Time"),
@@ -509,6 +525,116 @@ def _latest_trading_day() -> int | None:
         return None
 
 
+# ---------------------------------------------------------------------------
+# 产物判据（可插拔）
+# ---------------------------------------------------------------------------
+#: ``config/schedule.yaml`` 的 ``product_check: <name>`` 注册表。
+#:
+#: 为什么要它：单个 ``product_glob`` 只能表达「最新一个文件的日期」。对**一次写多张
+#: 表**的任务（``altdata_daily`` 一跑写 7 张）完全不够——最新那张新鲜就判通过，
+#: 中途死了也看不出来。故允许登记命名判据，由函数逐项核对。
+#:
+#: 判据签名：``fn(latest_day: int | None) -> (problems, notes, summary)``；
+#: ``summary`` 进体检表的「产物」列（如 ``alt 7/7 表 @20261028``）。
+_PRODUCT_CHECKS: dict[str, Callable[[int | None], tuple[list[str], list[str], str]]] = {}
+
+
+def _product_check(name: str):
+    """把函数注册为 ``product_check: <name>`` 判据（装饰器）。"""
+
+    def _deco(fn):
+        _PRODUCT_CHECKS[name] = fn
+        return fn
+
+    return _deco
+
+
+#: altdata 日更链的**末位分片表**。``fetch_altdata_daily.py`` 的 ``ALL_TABLES`` 顺序
+#: 固定，链尾分片存在 ⇒ 整轮跑到底了；缺 ⇒ 中途死掉（按日分片，缺片=当日没跑）。
+_ALT_TAIL_SHARDS = (("cls", "alt_cls"), ("news", "alt_news"))
+
+#: altdata 里「每个交易日必有新数据」的表 ⇒ 直接判数据日期水位。
+_ALT_DATE_TABLES = (
+    ("cninfo_holder", "alt_cninfo_holder.parquet", "ann_date"),
+    ("macro_calendar", "alt_macro_calendar.parquet", "date"),
+)
+
+#: altdata 的三张**快照表**：每天全量重拉 ⇒ 判 mtime（``ann_date`` 会长期不更新，
+#: 用它判必误报——与 ``rebuild_panels`` 里刻意留空 ``product_glob`` 同源）。
+_ALT_SNAPSHOT_TABLES = ("holder_control", "inner_trade", "mgmt_hold")
+
+
+@_product_check("altdata_tables")
+def _check_altdata_tables(latest_day: int | None) -> tuple[list[str], list[str], str]:
+    """逐表核对另类数据覆盖，而不是只看 ``_alt_meta.json``。
+
+    为什么必须逐表：``AltDataCache._save_meta()`` 是**逐表增量写**（"磁盘为底、内存
+    为准合并"），前三张快照表一成功就刷新 ``_alt_meta.json`` 的 mtime。2026-10-28
+    任务在 ``cninfo_holder`` 处被无线网卡掉线打断（``cninfo`` 纯 HTTP 抓巨潮），
+    meta 却仍是新的 ⇒ doctor 报「OK」而实际缺 4 张表（cls/news 两片全无）。
+    """
+    import pandas as pd
+
+    from config import Config
+
+    problems: list[str] = []
+    notes: list[str] = []
+    root = Path(str(Config.cache()["root"]).replace("//", "/"))
+    if latest_day is None:
+        return problems, ["altdata: 取不到最近交易日，跳过逐表核对"], "未核对"
+    target = str(latest_day)
+    ok = total = 0
+
+    for table, fname, col in _ALT_DATE_TABLES:
+        total += 1
+        p = root / fname
+        if not p.exists():
+            problems.append(f"altdata 表 {table} 缺文件 {fname}")
+            continue
+        s = pd.read_parquet(p, columns=[col])[col]
+        if pd.api.types.is_datetime64_any_dtype(s):
+            day = s.max().strftime("%Y%m%d")
+        else:
+            day = str(int(pd.to_numeric(s, errors="coerce").max()))
+        if day < target:
+            problems.append(f"altdata 表 {table} 数据止于 {day} < 最近交易日 {target}")
+        else:
+            ok += 1
+
+    for table, sub in _ALT_TAIL_SHARDS:
+        total += 1
+        d = root / sub
+        shards = sorted(d.glob("*.parquet")) if d.is_dir() else []
+        if not shards:
+            problems.append(f"altdata 表 {table} 无任何分片（{sub}/ 为空）")
+            continue
+        newest = max(f.stem.split("_")[-1] for f in shards)
+        if newest < target:
+            problems.append(
+                f"altdata 表 {table} 最新分片 {newest} < 最近交易日 {target}"
+                "（按日分片，缺片=当日没跑）"
+            )
+        else:
+            ok += 1
+
+    for table in _ALT_SNAPSHOT_TABLES:
+        total += 1
+        p = root / f"alt_{table}.parquet"
+        if not p.exists():
+            problems.append(f"altdata 表 {table} 缺文件 alt_{table}.parquet")
+            continue
+        mday = datetime.fromtimestamp(p.stat().st_mtime).strftime("%Y%m%d")
+        if mday < target:
+            problems.append(f"altdata 表 {table} 本轮未重拉（mtime {mday} < {target}）")
+        else:
+            ok += 1
+
+    if problems:
+        notes.append("altdata 缺口可用 `fetch_altdata_daily.py --tables <表>` 补；"
+                     "**news 例外**：快照源无历史，丢了拿不回来（设计限制）")
+    return problems, notes, f"alt {ok}/{total} 表 @{target}"
+
+
 def _norm_path(s: str | None) -> str:
     """路径归一化：斜杠统一 + 去首尾空白/尾分隔符 + 大小写折叠（Windows 不区分）。"""
     t = (s or "").strip().replace("/", "\\").casefold()
@@ -564,12 +690,15 @@ def doctor(*, path: Path | str | None = None, verbose: bool = True) -> int:
     latest_day = _latest_trading_day()
     declared = {t.get("name") for t in tasks if t.get("name")}
     problems: list[str] = []
+    notes: list[str] = []
     rows: list[str] = []
 
     if verbose:
         stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
         day_txt = str(latest_day) if latest_day else "?"
         print(f"调度体检  {stamp}   最近交易日 {day_txt}")
+        print("图例：[OK] 正常 / [!!] 需处理 / [~~] 无问题，但带陈旧信号"
+              "（如被杀的 rc、产物已由补跑补齐）")
         print("-" * 96)
 
     for t in tasks:
@@ -613,7 +742,12 @@ def doctor(*, path: Path | str | None = None, verbose: bool = True) -> int:
         # 属正常瞬态，不能当坏码（否则每次恰逢在跑就误报）。
         running = rc_raw in _RUNNING_RCS or "运行" in state or "Running" in state
         bad_rc = rc_raw not in ("0", "?") and not running
-        warn = bad_rc or ("已禁用" in state)
+        disabled = "已禁用" in state
+        # 本任务自己的问题清单（最后并入 problems）。warn 只决定 ``[!!]`` 标记，
+        # 不决定「是不是问题」——两者必须分开，否则会出现「标了 [!!] 却写全部正常」。
+        mine: list[str] = []
+        if disabled:
+            mine.append(f"{key}: 任务是「已禁用」状态，登记表却记为 active")
 
         # 条件核对：电池两条必须是 false（2026-09-21 全灭事故的根因）
         cond_bad = (
@@ -621,40 +755,72 @@ def doctor(*, path: Path | str | None = None, verbose: bool = True) -> int:
             or info.get("stop_if_going_on_batteries") == "true"
         )
         if cond_bad:
-            problems.append(f"{key}: 任务条件仍带电池限制（裸建遗留）")
-            warn = True
+            mine.append(f"{key}: 任务条件仍带电池限制（裸建遗留）")
 
         # 漂移核对：登记表 vs 系统里实际注册的命令/参数/时间/工作目录
         # （只改 config/schedule.yaml 不重注册 ⇒ 系统仍跑旧口径，必须抓出来）
         drift = registry_drift(t, info)
-        if drift:
-            for d in drift:
-                problems.append(f"{key}: 与登记表脱钩 —— {d}；"
-                                f"跑 `task_scheduler install {key}` 重注册")
-            warn = True
+        for d in drift:
+            mine.append(f"{key}: 与登记表脱钩 —— {d}；"
+                        f"跑 `task_scheduler install {key}` 重注册")
 
+        # 产物核对。两种判据：命名判据（product_check，多产物任务用）/ 单 glob。
+        # prod_fresh：True=已覆盖最近交易日，False=没覆盖/缺产物，None=无从判定
         prod_txt = "-"
+        prod_fresh: bool | None = None
+        check_name = t.get("product_check")
         pat = t.get("product_glob")
-        if pat:
+        if check_name:
+            fn = _PRODUCT_CHECKS.get(check_name)
+            if fn is None:
+                mine.append(f"{key}: 登记了未实现的 product_check={check_name!r}"
+                            f"（可用：{sorted(_PRODUCT_CHECKS)}）")
+                prod_txt = "判据未实现"
+            else:
+                try:
+                    sub_problems, sub_notes, prod_txt = fn(latest_day)
+                except Exception as e:  # 判据本身坏了不能连带 doctor 崩掉
+                    mine.append(f"{key}: 产物判据 {check_name} 执行失败 —— "
+                                f"{type(e).__name__}: {e}")
+                    prod_txt = "判据异常"
+                else:
+                    notes.extend(sub_notes)
+                    mine.extend(f"{key}: {x}" for x in sub_problems)
+                    prod_fresh = not sub_problems
+        elif pat:
             hit = _latest_product(pat)
             if hit is None:
                 prod_txt = "无产物"
-                problems.append(f"{key}: 产物 {pat} 一个都没有")
-                warn = True
+                prod_fresh = False
+                mine.append(f"{key}: 产物 {pat} 一个都没有")
             else:
                 fname, ts = hit
                 prod_txt = f"{fname} @{ts:%m-%d %H:%M}"
+                prod_fresh = True
                 if latest_day:
                     day = _date_in_name(fname) or ts.strftime("%Y%m%d")
                     if day < str(latest_day):
                         prod_txt += f" (未覆盖 {latest_day})"
-                        problems.append(
+                        prod_fresh = False
+                        mine.append(
                             f"{key}: 最新产物日期 {day} < 最近交易日 {latest_day}"
                         )
-                        warn = True
 
+        # rc 非 0 但产物已覆盖最近交易日 ⇒ 属**历史残留**：任务被杀后由人工/次日补跑
+        # 落盘，而补跑不会回写任务的 LastTaskResult。只标注不计问题，否则一次已被修复
+        # 的事故会让 doctor 长期变红、把真告警稀释掉（同 rebuild_panels 留空 glob 的理由）。
+        stale_rc = bad_rc and prod_fresh is True
+        if bad_rc and not stale_rc:
+            mine.append(f"{key}: 上次运行 rc={rc_raw}{_rc_hint(rc_raw)}，"
+                        f"且产物未覆盖最近交易日")
+        if stale_rc:
+            prod_txt += "，rc 为历史残留"
+
+        problems.extend(mine)
+        warn = bool(mine)
+        mark = "[!!]" if warn else ("[~~]" if stale_rc else "[OK]")
         rows.append(
-            f"{'[!!]' if warn else '[OK]'} {key:<20} "
+            f"{mark} {key:<20} "
             f"{t.get('time', '?'):<6} {state:<6} rc={rc_raw:<12} {prod_txt}"
         )
 
@@ -672,6 +838,10 @@ def doctor(*, path: Path | str | None = None, verbose: bool = True) -> int:
                 print(f"  - {p}")
         else:
             print("全部正常。")
+        if notes:
+            print("提示：")
+            for n in notes:
+                print(f"  - {n}")
 
     return 1 if problems else 0
 

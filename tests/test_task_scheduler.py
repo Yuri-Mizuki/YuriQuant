@@ -7,7 +7,15 @@
 
 from __future__ import annotations
 
-from scripts.common.task_scheduler import _hhmm, _norm_path, registry_drift
+from pathlib import Path
+
+from scripts.common.task_scheduler import (
+    _check_altdata_tables,
+    _hhmm,
+    _norm_path,
+    _rc_hint,
+    registry_drift,
+)
 
 _TASK = {
     "key": "alla_daily_rank",
@@ -89,3 +97,87 @@ def test_multiple_drifts_all_reported():
     info = dict(_INFO, command=r"C:\other\py.exe", start_boundary="2026-10-10T09:00:00")
     drift = registry_drift(_TASK, info)
     assert len(drift) == 2
+
+
+# ---------------------------------------------------------------------------
+# 产物判据（2026-10-29 判据改造）
+# ---------------------------------------------------------------------------
+def test_rc_hint_translates_known_bad_codes():
+    # 0xC000013A（无符号 3221225786 / 有符号 -1073741510）都要翻成人话
+    assert "0xC000013A" in _rc_hint("-1073741510")
+    assert "0xC000013A" in _rc_hint("3221225786")
+    # 正常码与未知码不加注解（doctor 的 rc 列已有原值）
+    assert _rc_hint("0") == ""
+    assert _rc_hint("12345") == ""
+
+
+def _seed_altdata(root: Path, *, news_day: str, snapshot_day: str) -> None:
+    """造一份最小 altdata 缓存：7 张表齐全，news 分片与快照 mtime 可指定。"""
+    import os
+    from datetime import datetime
+
+    import pandas as pd
+
+    (root / "alt_cninfo_holder.parquet").write_bytes(b"")
+    pd.DataFrame({"ann_date": [20261001, 20261028]}).to_parquet(
+        root / "alt_cninfo_holder.parquet", index=False)
+    pd.DataFrame({"date": [pd.Timestamp("2026-10-01"), pd.Timestamp("2026-10-28")]}).to_parquet(
+        root / "alt_macro_calendar.parquet", index=False)
+
+    (root / "alt_cls").mkdir()
+    (root / "alt_cls" / "cls_20261028.parquet").write_bytes(b"")
+    (root / "alt_news").mkdir()
+    (root / "alt_news" / f"news_{news_day}.parquet").write_bytes(b"")
+
+    snap_ts = datetime.strptime(snapshot_day, "%Y%m%d").replace(hour=18).timestamp()
+    for t in ("holder_control", "inner_trade", "mgmt_hold"):
+        p = root / f"alt_{t}.parquet"
+        p.write_bytes(b"")
+        os.utime(p, (snap_ts, snap_ts))
+
+
+def _patch_cache_root(monkeypatch, root: Path) -> None:
+    from config import Config
+
+    monkeypatch.setattr(Config, "cache", classmethod(lambda cls: {"root": str(root)}))
+
+
+def test_altdata_check_passes_when_all_tables_fresh(tmp_path, monkeypatch):
+    _patch_cache_root(monkeypatch, tmp_path)
+    _seed_altdata(tmp_path, news_day="20261028", snapshot_day="20261028")
+    problems, _notes, summary = _check_altdata_tables(20261028)
+    assert problems == []
+    assert summary == "alt 7/7 表 @20261028"
+
+
+def test_altdata_check_flags_stale_news_shard(tmp_path, monkeypatch):
+    """10-28 事故形态：前三张快照表写成功、链尾 news 分片缺失。
+
+    ``_alt_meta.json`` 此时是新的（逐表增量写），旧判据只看它的 mtime ⇒ 报 OK。
+    """
+    _patch_cache_root(monkeypatch, tmp_path)
+    _seed_altdata(tmp_path, news_day="20261026", snapshot_day="20261028")
+    problems, notes, summary = _check_altdata_tables(20261028)
+    assert summary == "alt 6/7 表 @20261028"
+    assert len(problems) == 1 and "news" in problems[0] and "20261026" in problems[0]
+    assert any("news 例外" in n for n in notes)
+
+
+def test_altdata_check_flags_stale_snapshot_mtime(tmp_path, monkeypatch):
+    """快照表每天全量重拉 ⇒ mtime 落后即"本轮没走到"（ann_date 会长期不更新，不能用）。"""
+    _patch_cache_root(monkeypatch, tmp_path)
+    _seed_altdata(tmp_path, news_day="20261028", snapshot_day="20261020")
+    problems, _notes, _summary = _check_altdata_tables(20261028)
+    assert len(problems) == 3
+    assert all("本轮未重拉" in p for p in problems)
+
+
+def test_altdata_check_flags_stale_data_date(tmp_path, monkeypatch):
+    _patch_cache_root(monkeypatch, tmp_path)
+    _seed_altdata(tmp_path, news_day="20261028", snapshot_day="20261028")
+    import pandas as pd
+
+    pd.DataFrame({"ann_date": [20261001]}).to_parquet(
+        tmp_path / "alt_cninfo_holder.parquet", index=False)
+    problems, _notes, _summary = _check_altdata_tables(20261028)
+    assert len(problems) == 1 and "cninfo_holder" in problems[0] and "20261001" in problems[0]

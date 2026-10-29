@@ -123,7 +123,11 @@ tasks:
     # 修 2026-10-13：原写 'E:/data/parquet/_alt_meta.json'（09-20 迁移前口径）——
     # 而任务实际写盘在 Config.cache().root（本机 D:），doctor 的新鲜度核对因此
     # 一直在读**旧副本**（E 盘那份停在 10-11）。改为与 settings.yaml 同源的占位符。
-    product_glob: '${YQ_DATA_ROOT:D:/data}//parquet//_alt_meta.json'
+    #
+    # 🔴 2026-10-29 从 product_glob 换成 product_check（判据改造，见 notes）：
+    # 单个 glob 只核 `_alt_meta.json` 的 mtime，而该文件是**逐表增量写** ⇒ 前三张
+    # 快照表一成功就刷新 mtime，任务半途死掉 doctor 照样报 OK（10-28 即如此）。
+    product_check: altdata_tables
     description: 'YuriQuant 另类数据日更（akshare：质押/增减持/高管持股/宏观日历/财联社/新闻）'
     notes: >-
       🔧 2026-10-10 解释器订正：**改用系统 Python**（原写 .venv）。实测 akshare
@@ -132,6 +136,14 @@ tasks:
       原「必须 .venv（akshare 是本地 wheel，进不了 uv.lock）」的口径已过时：系统
       Python 不受 `uv sync` 影响，反而更稳。若日后重装，请仍装进系统 Python。
       与出榜并行无依赖；`--log-file` = 失败留痕；脚本内 keep_system_awake 防 S0 待机中断。
+      **🔴 2026-10-29 判据改造**：`product_glob` → `product_check: altdata_tables`。
+      病根 = `_alt_meta.json` 由 `_save_meta()` **逐表增量**写（前三张快照表成功即
+      刷新 mtime）⇒ 10-28 任务在 `cninfo_holder` 处被网卡掉线打断、缺 4 张表，
+      doctor 仍报「OK」。新判据逐表核对 7 张表，分三类：数据日期水位
+      （cninfo_holder/macro_calendar）、按日分片存在性（cls/news，链尾 ⇒ 缺片即未跑到底）、
+      快照表 mtime（holder_control/inner_trade/mgmt_hold，每天全量重拉，ann_date 会
+      长期不更新故不能用日期判）。⚠️ news 是不可回补的快照源（20 条/次，丢了拿不回来），
+      缺口只能等下一次完整运行补上；cls 可按发布日回补（`--tables cls`）。
 
   - key: daily_report
     name: 'WorkBuddy 自动化：全A出榜日报邮件推送'

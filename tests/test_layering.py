@@ -372,6 +372,10 @@ _TESTS_ONLY_PRIVATE: set[tuple[str, str]] = {
     ("data.altdata.source_akshare", "_fetch_inner_trade_xq_direct"),
     ("scripts.common.task_scheduler", "_hhmm"),
     ("scripts.common.task_scheduler", "_norm_path"),
+    # 2026-10-29 doctor 判据改造：rc 翻人话 + altdata 逐表核对是体检表内部实现，
+    # 白盒单测直连喂临时目录做判据对拍（无生产消费者，doctor 只打印）。
+    ("scripts.common.task_scheduler", "_rc_hint"),
+    ("scripts.common.task_scheduler", "_check_altdata_tables"),
     # 2026-10-26 聚宽看板探针：IC / 残差 IC / 秩面板 / 去重批处理是探针内部
     # 实现细节，白盒单测直连做口径对拍（无生产消费者）。
     ("scripts.evaluation.jq_factor_probe", "_cs_ic"),
