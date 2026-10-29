@@ -7,10 +7,14 @@
 > `reports/README.md` §1.6；架构与用法见 [`README.md`](README.md)。
 > 收尾回写：任务完成时结论写回本文件对应条目，已收口整段移入 TODO_ARCHIVE.md。
 
-## 〇、当前状态速览（2026-10-28）
+## 〇、当前状态速览（2026-10-29）
 
 - **✅ 运维告警已解（10-28 18:17）**：数据缓存已补到 `2026-10-28`（原缺 10-27/10-28）；
   `altdata_daily` 键保留观察项。详见 §三 前两条。
+- **✅ altdata 全链已齐 + doctor 判据已修（10-29）**：`cninfo_holder` / `macro_calendar` /
+  `cls` 三表补到最新；`news` 因快照源不可回补永久缺 10-27/10-28（设计限制）。
+  doctor 从「只看 `_alt_meta.json` mtime」改为逐表核对（`product_check`），
+  并修掉「标 `[!!]` 却打印全部正常」的自相矛盾。详见 §三 第三条。
 - **全 A 主线（已定版）**：fundind 快信号 h1020 ⊕ 慢信号 s0.5 + buffer(15/40)
   执行层；出榜链 dingban 10-10 已切（真源 `config/schedule.yaml`）。
   定版证据 `reports/batch1_920_收尾对照表.md`（沿革见册Ⅰ §一、册Ⅲ 批次 1）。
@@ -146,11 +150,32 @@
   已用 `fetch_altdata_daily.py --tables cninfo_holder,macro_calendar` 补齐：
   `alt_cninfo_holder` → **max 20261028 / 267,601 行**、
   `alt_macro_calendar` → **max 2026-10-29 / 65,989 行（done_days 2304）**。
-  🚨 **暴露 doctor 判据过松（未修）**：`altdata_daily` 的 `product_glob` 只核
-  `_alt_meta.json` 的 mtime，而该文件是**逐表增量写**的 —— 前三张快照表成功就会刷新
-  mtime ⇒ **半途失败也会被判 OK**。10-28 即如此（doctor 报 OK，实际缺 4 张表）。
-  建议把 `product_glob` 改成「任一关键表」或给 `_alt_meta.json` 加全表完成标记
-  再核对（属判据改造，非一处小改，待拍板）。
+  🚨 ~~暴露 doctor 判据过松（未修）~~ → **10-29 已修，见下条**：`altdata_daily` 的
+  `product_glob` 只核 `_alt_meta.json` 的 mtime，而该文件是**逐表增量写**的 ——
+  前三张快照表成功就会刷新 mtime ⇒ **半途失败也会被判 OK**。10-28 即如此
+  （doctor 报 OK，实际缺 4 张表）。
+- [x] **✅ doctor 判据改造 + 两个隐藏缺口（2026-10-29 收口）**
+  **① 判据改造**：`altdata_daily` 的 `product_glob` → `product_check: altdata_tables`。
+  `task_scheduler` 新增 `_PRODUCT_CHECKS` 注册表（单个 glob 表达不了「一次写 7 张表」），
+  逐表核对分三类：**数据日期水位**（`cninfo_holder.ann_date` / `macro_calendar.date`
+  ≥ 最近交易日）、**按日分片存在性**（`cls`/`news` 是链尾表 ⇒ 缺片即没跑到底）、
+  **快照表 mtime**（`holder_control`/`inner_trade`/`mgmt_hold` 每天全量重拉；
+  `ann_date` 会长期不更新，用日期判必误报 —— 与 `rebuild_panels` 刻意留空 glob 同源）。
+  配套把 `_rc_hint` 加进体检表（`-1073741510` → `0xC000013A 进程被强制结束`）。
+  **② 顺手修掉一个自相矛盾**：原先 `bad_rc` 只置 `[!!]` 标记、**不进 `problems`**，
+  于是「标了 `[!!]` 却打印全部正常、退出码 0」。现在语义分清：rc 坏 **且**产物未覆盖
+  ⇒ 计问题；rc 坏但产物已覆盖 ⇒ 走新标记 `[~~]`「历史残留」（被杀后由补跑落盘，
+  补跑不回写 `LastTaskResult`）—— 否则一次已修的事故会让 doctor 长期变红、把真告警稀释掉。
+  **③ 又揪出两个隐藏缺口**：`alt_cls`（4,320 天）停在 10-26、`alt_news` 停在 10-26，
+  10-27/10-28 两天两表都没跑。`cls` 可按发布日回补，已补到 **10-29**
+  （`--tables cls`，1,208,397 条，`cls_20261027/28/29` 三片落盘）。
+  ⚠️ **`news` 补不了**：快照源（20 条/次、无历史）⇒ 10-27/10-28 两片**永久缺失**，
+  属设计限制不是 bug；只能等下一次完整运行。doctor 会因此红一天，次日自愈。
+  **④ `keep_system_awake` 的日志改诚实**：三处 `log.info("防待机：… 生效=%s")` 改
+  「唤醒请求已提交=%s（S0 连接待机下无效，别当保险）」，`power.py` 模块头补 10-29 实证；
+  `_set_execution_state` 改为按 API 返回值判（0 = 失败），不再无条件 `return True`。
+  ✅ `test_task_scheduler` 16 passed（新增 6 项判据单测）· `test_power` 通过 ·
+  `ruff` 干净 · `doctor` 退出码与标记一致。
 - [ ] **🚨 无线网卡稳定性（本项为上面所有「神秘 `0xC000013A`」的共同上游）**：
   `Netwtw14` 7021 近 8 天计数：10-21 **6** / 10-22 **20** / 10-23 5 / 10-24 3 /
   10-25 2 / 10-26 **19** / 10-27 **22** / 10-28 **11** / 10-29 3。
