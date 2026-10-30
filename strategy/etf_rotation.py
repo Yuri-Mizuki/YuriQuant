@@ -99,6 +99,170 @@ def _hrp_weights(cov: np.ndarray) -> np.ndarray:
     return out / out.sum()
 
 
+def _shrunk_cov(cov: np.ndarray, delta: float = 0.2) -> np.ndarray:
+    """Ledoit-Wolf 式收缩：Σ ← (1−δ)Σ + δ·diag(Σ)。
+
+    收缩到对角 = 承认"协方差的非对角项估计噪声最大"。用固定 δ 而非
+    样本估计，避免在 n=3、60 日窗这种极小样本上再引入一层估计误差。
+    """
+    d = np.diag(np.diag(cov))
+    return (1.0 - delta) * cov + delta * d
+
+
+def _inv_cov_weights(cov: np.ndarray, mu: np.ndarray | None = None) -> np.ndarray:
+    """``w ∝ Σ⁻¹·mu`` 的统一实现（mu=1 → GMV；mu=σ → 最大分散化）。
+
+    奇异/非正定时加对角抖动重试，仍失败则退化为逆方差。
+    """
+    n = cov.shape[0]
+    if n == 1:
+        return np.ones(1)
+    var = np.diag(cov).copy()
+    if np.any(var <= 0):
+        return np.ones(n) / n
+    b = np.ones(n) if mu is None else np.asarray(mu, float)
+    eye = np.eye(n) * (var.mean() * 1e-6)
+    for jitter in (0.0, 1e-8, 1e-6, 1e-4):
+        try:
+            inv = np.linalg.inv(cov + eye * (jitter / 1e-6 if jitter else 0.0))
+            w = inv @ b
+        except np.linalg.LinAlgError:
+            continue
+        if np.all(np.isfinite(w)) and float(w.sum()) > 1e-12:
+            w = np.clip(w, 0.0, None)
+            if float(w.sum()) > 1e-12:
+                return w / float(w.sum())
+    w = 1.0 / var
+    return w / w.sum()
+
+
+def _risk_budget_weights(cov: np.ndarray, budget: np.ndarray) -> np.ndarray:
+    """风险预算：使各资产的风险贡献占比 ≈ ``budget``（ERC 是其特例 1/n）。"""
+    from scipy.optimize import minimize
+
+    n = cov.shape[0]
+    b = np.asarray(budget, float)
+    b = b / b.sum()
+    if n == 1:
+        return np.ones(1)
+    var = np.diag(cov)
+    if np.any(var <= 0):
+        return np.ones(n) / n
+    x0 = b.copy()
+
+    def _obj(w: np.ndarray) -> float:
+        port = float(w @ cov @ w)
+        if port <= 0:
+            return 1e6
+        rc = w * (cov @ w) / port
+        return float(np.sum((rc - b) ** 2)) * 1e4
+
+    res = minimize(_obj, x0, method="SLSQP", bounds=[(1e-4, 1.0)] * n,
+                   constraints=[{"type": "eq", "fun": lambda w: w.sum() - 1.0}],
+                   options={"maxiter": 200, "ftol": 1e-10})
+    w = res.x if res.success else x0
+    w = np.clip(w, 0.0, None)
+    return w / w.sum()
+
+
+def _hrp_cluster_equal(cov: np.ndarray) -> np.ndarray:
+    """HRP 的聚类骨架 + **簇间/簇内等权**（去掉逆方差分配腿）。
+
+    用来把 HRP 的两个成分拆开：若集中度主要来自「逆方差分配」而非「聚类」，
+    这一档的集中度应明显低于 HRP。
+    """
+    n = cov.shape[0]
+    if n == 1:
+        return np.ones(1)
+    sd = np.sqrt(np.diag(cov))
+    if np.any(sd <= 0):
+        return np.ones(n) / n
+    corr = np.nan_to_num(cov / np.outer(sd, sd), nan=0.0)
+    np.fill_diagonal(corr, 1.0)
+    dist = np.sqrt(np.clip((1.0 - corr) / 2.0, 0.0, 1.0))
+    np.fill_diagonal(dist, 0.0)
+    from scipy.cluster.hierarchy import linkage
+    from scipy.spatial.distance import squareform
+
+    link = linkage(squareform(dist, checks=False), method="single")
+    order = _quasi_diag(link)
+    w = pd.Series(1.0, index=order)
+    clusters = [order]
+    while clusters:
+        new: list[list[int]] = []
+        for c in clusters:
+            if len(c) <= 1:
+                continue
+            half = len(c) // 2
+            c0, c1 = c[:half], c[half:]
+            w[c0] *= 0.5
+            w[c1] *= 0.5
+            new += [c0, c1]
+        clusters = new
+    out = w.sort_index().to_numpy()
+    return out / out.sum()
+
+
+def _hrp_avg_corr(cov: np.ndarray) -> np.ndarray:
+    """把相关矩阵整体替换为「平均相关」单因子结构，再做 HRP。
+
+    等价于假设"所有标的共享一个共同因子"，只保留波动率差异。用于检验
+    两两相关的估计噪声是否在起反作用（n=3、60 日窗时相关矩阵只有 3 个参数，
+    但每个都由 ~60 个观测估出，噪声并不小）。
+    """
+    n = cov.shape[0]
+    if n == 1:
+        return np.ones(1)
+    sd = np.sqrt(np.diag(cov))
+    if np.any(sd <= 0):
+        return np.ones(n) / n
+    corr = np.nan_to_num(cov / np.outer(sd, sd), nan=0.0)
+    iu = np.triu_indices(n, k=1)
+    rbar = float(np.mean(corr[iu])) if len(iu[0]) else 0.0
+    rbar = float(np.clip(rbar, 0.0, 0.99))
+    flat = np.full((n, n), rbar)
+    np.fill_diagonal(flat, 1.0)
+    cov2 = flat * np.outer(sd, sd)
+    return _hrp_weights(cov2)
+
+
+#: 需要读协方差面板的权重规则（``_risk_parity`` 统一分发）。
+#: ``equal`` / ``inverse_vol`` / ``rank_decay`` 只看单只统计量，不在此列。
+COV_WEIGHTINGS = frozenset({
+    "hrp",          # 定版：层次风险平价（n=3 时实为「压到最不合群那只」）
+    "erc",          # 等风险贡献
+    "inv_var",      # 逆方差
+    "min_var",      # 全局最小方差（GMV）
+    "max_div",      # 最大分散化（MDP）
+    "risk_budget",  # 风险预算，按动量排名递减分配风险
+    "hrp_shrunk",   # 收缩协方差 + HRP（降噪）
+    "hrp_avgcorr",  # 单因子相关结构 + HRP（降噪）
+    "hrp_ew",       # HRP 聚类骨架 + 等权分配
+    "hrp_anticorr",  # HRP 的方向镜像：最大份额压给**最相关**那只（安慰剂）
+})
+
+
+def _hrp_anticorr(cov: np.ndarray) -> np.ndarray:
+    """HRP 的**方向镜像**：同样的权重分布，但把最大的那份压到**最相关**的那只。
+
+    用于检验「压最不合群」这个方向本身有没有信息：若 ``hrp`` 与
+    ``hrp_anticorr`` 表现接近，说明收益只来自集中度，与「选哪只」无关。
+    """
+    n = cov.shape[0]
+    if n == 1:
+        return np.ones(1)
+    w = _hrp_weights(cov)
+    sd = np.sqrt(np.diag(cov))
+    if np.any(sd <= 0):
+        return w
+    corr = np.nan_to_num(cov / np.outer(sd, sd), nan=0.0)
+    np.fill_diagonal(corr, 1.0)
+    mean_corr = (corr.sum(axis=1) - 1.0) / max(n - 1, 1)
+    out = np.empty(n)
+    out[np.argsort(-mean_corr)] = w[np.argsort(-w)]
+    return out
+
+
 class EtfRotation(Strategy):
     """动量轮动策略。
 
@@ -191,7 +355,7 @@ class EtfRotationAdvanced(Strategy):
             f"{'_abs' if self.absolute_filter else ''}"
             f"{'_iv' if self.weighting == 'inverse_vol' else ''}"
             f"{'_rd' if self.weighting == 'rank_decay' else ''}"
-            f"_{self.weighting}" if self.weighting in ("erc", "hrp") else ""
+            f"_{self.weighting}" if self.weighting in COV_WEIGHTINGS else ""
             f"{'_vt' if self.target_vol else ''}"
             f"{'_buf' if self.enter_rank else ''}"
             f"{'_mw' if self.max_weight else ''}"
@@ -269,7 +433,35 @@ class EtfRotationAdvanced(Strategy):
         if len(sub) < 20 or sub.shape[1] != len(sel):
             return fallback
         cov = sub.cov().to_numpy() * 252.0
-        w = _erc_weights(cov) if self.weighting == "erc" else _hrp_weights(cov)
+        rule = self.weighting
+        if rule == "erc":
+            w = _erc_weights(cov)
+        elif rule == "inv_var":
+            var = np.diag(cov).copy()
+            if np.any(var <= 0):
+                return fallback
+            w = 1.0 / var
+            w = w / w.sum()
+        elif rule == "min_var":
+            w = _inv_cov_weights(cov)
+        elif rule == "max_div":
+            w = _inv_cov_weights(cov, np.sqrt(np.diag(cov)))
+        elif rule == "risk_budget":
+            # 风险预算按**动量排名**递减：第 1 名拿 n 份、第 2 名 n−1 份 ……
+            # ``sel`` 的顺序就是 ``_select`` 的动量排名（fill 占位腿排在末尾，
+            # 自然拿最小预算）。n=3 时 = 50% / 33% / 17% 的风险贡献。
+            base = np.arange(len(sel), 0, -1, dtype=float)
+            w = _risk_budget_weights(cov, base)
+        elif rule == "hrp_shrunk":
+            w = _hrp_weights(_shrunk_cov(cov))
+        elif rule == "hrp_avgcorr":
+            w = _hrp_avg_corr(cov)
+        elif rule == "hrp_ew":
+            w = _hrp_cluster_equal(cov)
+        elif rule == "hrp_anticorr":
+            w = _hrp_anticorr(cov)
+        else:
+            w = _hrp_weights(cov)
         return pd.Series(w, index=sel)
 
     def _cap_weight(self, w: pd.Series) -> pd.Series:
@@ -333,7 +525,7 @@ class EtfRotationAdvanced(Strategy):
             # 但想保留前几名集中度」的规则约束（如比赛要求 ≥5 只产品）。
             base = np.arange(n, 0, -1, dtype=float)
             w = pd.Series(base / base.sum(), index=sel)
-        if self.weighting in ("erc", "hrp") and self.ret_panel is not None and date is not None:
+        if self.weighting in COV_WEIGHTINGS and self.ret_panel is not None and date is not None:
             w = self._risk_parity(sel, date, w)
         if self.max_weight is not None and n > 1:
             w = self._cap_weight(w)

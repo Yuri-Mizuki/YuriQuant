@@ -7,7 +7,8 @@ ETF 轮动生产信号板（三锋 / 五衡 / 磐石）
 
   - `contest3`「**三锋**」：正式赛定版（`FINAL`：Top3 + 拥挤软惩罚 + 剔除 20 日涨幅 >10%
     + 周频 + HRP 无上限）——**默认对外口径 T+1 开盘成交**；
-  - `contest5h`「**五衡**」：降档预案（同选标、Top5 + HRP），仅在三锋回撤触 −15% 时启用；
+  - `contest5h`「**五衡**」：**对照档**（同选标、Top5 + HRP）。原定位是「三锋回撤触 −15% 时的
+    降档预案」，**该纪律已于 2026-10-30 拍板取消**（三个状态下全无优势，README §8.1/§8.2）；
   - `champ`「**磐石**」：长线定版（月频 Top5 + 12-1 动量 + 拥挤度剔除 + 逆波动 +
     15% 波动目标 + 债金防御腿 + 去重 0.90 + buffer 15/40）。
 
@@ -94,12 +95,13 @@ PROFILES = {"champ": CHAMP, "contest5": CONTEST5, "contest3": CONTEST3,
             # 下 80 个 2 月窗口：无上限中位 +2.41% / Sharpe 0.89 / 最差 −13.8%，
             # 优于带上限的 +2.05% / 0.79 / −15.3%；代价是今日煤炭单只约 52%。
             # 想控集中度时用 --max-weight 0.30 临时加回。
-            # 降档预案「五衡」：同选标、Top5 + HRP 风险平价（60 日协方差）。
-            # 定版为「三锋」（Top3 + 拥挤软惩罚）。五衡不参与选型、不再调参，
-            # 只在三锋组合回撤触及 −15% 时临时启用。🚨 2026-10-29 PIT 修复后更正：
-            # 五衡 20.65% / SR 0.89 / MDD 33.27%，三锋的收益、p10、最差窗口、MDD **四项全优**，
-            # 配对差 −1.36%/窗（t=−1.97）**显著落后**。降档代价已从 −0.27pp/年变为约
-            # −10pp/年，这条纪律只剩「单只权重 80.7%→49.3%」这一个理由，**待重新拍板**。
+            # 对照档「五衡」：同选标、Top5 + HRP 风险平价（60 日协方差）。
+            # 定版为「三锋」（Top3 + 拥挤软惩罚）。五衡不参与选型、不再调参。
+            # 🚨 2026-10-29 PIT 修复后：五衡 20.65% / SR 0.89 / MDD 33.27%，
+            # 三锋的收益、p10、最差窗口、MDD **四项全优**，配对差 −1.36%/窗（t=−1.97）
+            # **显著落后**。原「降档预案」用途已于 **2026-10-30 拍板取消**（处置 A）：
+            # 全样本 −9.98pp/年、贴近触发线 −2.62pp、**触发之后 −3.46pp（胜率仅 16.7%）**，
+            # 连"深跌时换防守"这个最后理由也不成立（README §8.2）⇒ 保留仅为对照。
             # 🚨 同日 buffer 档位经**三轮修正**（见 README §4.1–4.2）：
             # ① `enter_rank` 是死参数（3/5/8/10/15 净值逐位相同），buffer 只有 `exit_rank`
             #    一个自由度；
@@ -108,8 +110,8 @@ PROFILES = {"champ": CHAMP, "contest5": CONTEST5, "contest3": CONTEST3,
             #    期 Sharpe 0.46 vs 0.45 几乎相同；日 Sharpe 1.30 含 √252 对低换手的高估。
             # ③ **样本外验证失败**：前 20 期 buffer +52.4% vs 三锋 +131.2%，优势只在 2024 之后，
             #    逐年滚动选档 6 年出手 1 次亏 40pp ⇒ 事前不可识别，是付费的降波选项。
-            # ⇒ 降档仍保留五衡（唯一同注摊薄：单只 80.9%→49.2%），定位**单只暴雷保护**。
-            # 见 reports/etf_contest5/README.md §4.1。
+            # ⇒ 五衡保留为**对照档**（原「单只暴雷保护」用途已于 2026-10-30 取消）。
+            # 见 reports/etf_contest5/README.md §4.1、§8.1、§8.2。
             "contest5h": {**CONTEST5, "name": "contest5_2m_hrp", "weighting": "hrp"}}
 DEF_PARTS = {"511010.SH": 0.5, "518880.SH": 0.5}
 PARTICIPATION = 0.05      # 单只单边下单 / 60 日均成交额
@@ -193,7 +195,7 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--positions", default=None, help="当前持仓 CSV（code,weight）")
     ap.add_argument("--profile", choices=tuple(PROFILES), default="champ",
                     help="champ=长线版「磐石」；contest5=合规版「五衡·等权」（≥5 只）；"
-                         "contest5h=预案「五衡」（Top5/HRP，仅降档用）；contest3=定版「三锋」"
+                         "contest5h=对照档「五衡」（Top5/HRP，非降档）；contest3=定版「三锋」"
                          "（Top3 + 拥挤软惩罚 + HRP）")
     ap.add_argument("--out", default=None,
                     help="输出目录（默认按 profile 落到 reports/etf_*）")
@@ -219,7 +221,7 @@ def main(argv: list[str] | None = None) -> None:
             spec["max_weight"] = args.max_weight
     label = {"champ": "长线版「磐石」（月度/波动目标/债金防御）",
              "contest5": "合规版「五衡·等权」（Top5/周频/去重）",
-             "contest5h": "预案「五衡」（Top5/HRP，回撤触线降档用）",
+             "contest5h": "对照档「五衡」（Top5/HRP，非降档）",
              "contest3": "定版「三锋」v2（Top3/HRP/拥挤软惩罚/剔除 20 日过热）"}[args.profile]
 
     cache = DataCache(create_datasource())
@@ -371,11 +373,12 @@ def main(argv: list[str] | None = None) -> None:
         "contest5": ("正式赛合规版依据 <code>reports/etf_contest5/README.md</code>"
                      "（80 个滚动 2 月窗口、**T+1 开盘成交**：均值 +3.01%、中位 +1.83%、"
                      "p10 −6.73%、最差 −16.50%、胜率 61.3%、Sharpe 0.56、年化 13.99%）。"),
-        "contest5h": ("降档预案依据 <code>reports/etf_contest5/README.md</code> §四"
+        "contest5h": ("对照档依据 <code>reports/etf_contest5/README.md</code> §四"
                       "（80 个滚动 2 月窗口、**T+1 开盘成交**：均值 +3.87%、中位 +3.08%、"
                       "p10 −5.99%、最差 −13.46%、胜率 63.7%、Sharpe 0.89、年化 20.65%）。"
                       "<b>⚠️ 本档在 PIT 修复后全面落后三锋</b>（年化 −10pp、MDD 33.3% 更深），"
-                      "<b>降档代价已从 −0.27pp/年变为约 −10pp/年</b>，是否保留待拍板。"),
+                      "<b>原「−15% 降档」用途已于 2026-10-30 取消</b>（触发之后仍落后 3.46pp、"
+                      "胜率仅 16.7%，§8.2），保留仅为对照。"),
         "contest3": ("定版 v2 依据 <code>reports/etf_contest5/README.md</code> §三（口径 §零）"
                      "（46 只比赛池 80 个滚动 2 月窗口、**T+1 开盘成交**：均值 +5.23%、"
                      "中位 +3.07%、p10 −4.86%、最差 −12.73%、胜率 70.0%、Sharpe 1.16、"

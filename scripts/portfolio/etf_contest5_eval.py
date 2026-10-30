@@ -111,28 +111,90 @@ def paired(a: pd.Series, b: pd.Series) -> dict:
             "win_rate": float((d > 0).mean())}
 
 
+def _vwap_panel(raw: pd.DataFrame, close: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
+    """由 ``amount / volume`` 造 VWAP 执行价面板，与 ``close`` 同口径（后复权）。
+
+    ETF 的 ``volume`` 单位是**份**、``amount`` 是**元** ⇒ 比值为当日成交均价（不复权），
+    再乘后复权因子 ``close / close_raw``。``volume <= 0`` 的停牌/异常日置 NaN。
+
+    ⚠️ 语义：这是"**次日全天按成交均价分批买入**"的算法单近似，隐含「能把全天成交量
+    均匀吃到」⇒ 对 46 只日成交额均在亿级的池子是可行的，但仍是**上限估计**（真实
+    VWAP 单有滑点、且我们无法预知当日 VWAP 形状）。
+    """
+    idx, cols = close.index, close.columns
+    amt = raw["amount"].unstack("code").reindex(index=idx, columns=cols)
+    vol = raw["volume"].unstack("code").reindex(index=idx, columns=cols)
+    rc = raw["close"].unstack("code").reindex(index=idx, columns=cols)
+    lo = raw["low"].unstack("code").reindex(index=idx, columns=cols)
+    hi = raw["high"].unstack("code").reindex(index=idx, columns=cols)
+    ratio = close / rc.where(rc > 0)
+    vw = (amt / vol.where(vol > 0)) * ratio
+    vw = vw.where(vw > 0)
+    # 自检：VWAP 必须落在当日 [low, high] 内（价格 3 位小数，留 5bp 容差）
+    ok = vw.notna() & lo.notna() & hi.notna()
+    inband = (vw >= lo * ratio * 0.9995) & (vw <= hi * ratio * 1.0005)
+    n_ok = int(ok.to_numpy().sum())
+    # ⚠️ 布尔 DataFrame 索引 DataFrame 是**掩码选择**（仍是矩阵），median 会按列返回
+    # Series ⇒ 必须先降成 numpy 一维再取分位。
+    diff = (vw / close - 1.0).to_numpy()
+    pick = ok.to_numpy() & np.isfinite(diff)
+    d = diff[pick]
+    diag = {
+        "coverage": n_ok / max(int(close.notna().to_numpy().sum()), 1),
+        "inband": int((inband & ok).to_numpy().sum()) / max(n_ok, 1),
+        "rel_med": float(np.median(d)) if d.size else float("nan"),
+        "rel_p10": float(np.percentile(d, 10)) if d.size else float("nan"),
+        "rel_p90": float(np.percentile(d, 90)) if d.size else float("nan"),
+    }
+    return vw.astype(np.float32), diag
+
+
 def exec_ladder(bundle, panels, spec: dict, close: pd.DataFrame,
-                open_adj: pd.DataFrame, mfs: pd.DatetimeIndex) -> pd.DataFrame:
-    """三个成交价位的实测对照（README §9.1）。fill=None ⇒ T 日收盘成交。
+                open_adj: pd.DataFrame, mfs: pd.DatetimeIndex,
+                raw: pd.DataFrame | None = None) -> pd.DataFrame:
+    """成交价位的实测对照（README §9.1）。fill=None ⇒ T 日收盘成交。
 
     ① `T 日收盘` 是**不 shift** 的口径（收盘出信号、收盘成交），语义上等价于
-    「信号与成交同一时点」，只作理论参照；②③ 才是「T 收盘出信号 + 次日成交」。
+    「信号与成交同一时点」，只作理论参照；②③④ 才是「T 收盘出信号 + 次日成交」。
+    ``raw`` 非空时追加 ④ `T+1 VWAP`（同日同批信号，仅换执行价）。
     """
     r0 = run_variant(bundle, panels, spec, BEGIN, None)
     rb = set(pd.DatetimeIndex(r0["rebalance_dates"]))
     rows = []
-    for tag, fill in (("① T 日收盘", None), ("② T+1 开盘", open_adj),
-                      ("③ T+1 收盘", close)):
+    steps: list[tuple[str, pd.DataFrame | None]] = [
+        ("① T 日收盘", None), ("② T+1 开盘", open_adj), ("③ T+1 收盘", close)]
+    vwap_adj, diag = None, None
+    if raw is not None:
+        vwap_adj, diag = _vwap_panel(raw, close)
+        # 执行日缺 VWAP 时回退开盘价（只影响停牌/极低量日，比例见下方自检）
+        steps.append(("④ T+1 VWAP", vwap_adj.fillna(open_adj)))
+    vw_res = None
+    for tag, fill in steps:
         if fill is None:
             r = r0
         else:
             r = run_variant(bundle, panels, spec, BEGIN, None,
                             execution_split=build_execution_split(fill, close, rb),
                             execution_shift=True)
+            if tag.startswith("④"):
+                vw_res = r
         w = two_month_windows(r["equity"], mfs)
         rows.append({"caliber": tag, "ann": r["annual_return"], "sharpe": r["sharpe"],
                      "mean": float(w.mean()), "p10": float(w.quantile(0.10)),
                      "worst": float(w.min()), "mdd": r["max_drawdown"]})
+    if vwap_adj is not None and vw_res is not None and diag is not None:
+        w = vw_res["weights"]
+        cols = [c for c in w.columns if c not in ("CASH", "DEF") and c in vwap_adj.columns]
+        held = (w[cols].abs() > 1e-12).to_numpy()
+        nan_ = vwap_adj[cols].isna().reindex(index=w.index, fill_value=True).to_numpy()
+        n_held, n_bad = int(held.sum()), int((held & nan_).sum())
+        print("\n== ④ VWAP 口径自检（不改信号，仅换执行价）==")
+        print(f"覆盖率：close 有效样本上 {diag['coverage']:.2%} 有 VWAP；"
+              f"落在当日 [low, high] 内 {diag['inband']:.2%}")
+        print(f"VWAP / close − 1：中位 {diag['rel_med']:+.2%}  p10 {diag['rel_p10']:+.2%}"
+              f"  p90 {diag['rel_p90']:+.2%}（<0 表示成交均价低于收盘）")
+        print(f"持仓位（执行日 × 实际权重>0）缺 VWAP：{n_bad}/{n_held} = "
+              f"{n_bad / max(n_held, 1):.2%}，已回退 T+1 开盘价")
     return pd.DataFrame(rows).set_index("caliber")
 
 
@@ -141,7 +203,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--only", default=None, help="只跑指定档位（逗号分隔）")
     ap.add_argument("--csv", default=None, help="窗口收益落盘路径")
     ap.add_argument("--exec-ladder", action="store_true",
-                    help="只跑 §9.1 三个成交价位（① T收盘 / ② T+1开盘 / ③ T+1收盘）")
+                    help="只跑 §9.1 成交价位（① T收盘 / ② T+1开盘 / ③ T+1收盘 / ④ T+1 VWAP）")
     ap.add_argument("--legacy-no-pit", action="store_true",
                     help="关掉权重层 PIT 修正，复现 2026-10-29 之前的历史数字（不外引用）")
     args = ap.parse_args(argv)
@@ -172,7 +234,7 @@ def main(argv: list[str] | None = None) -> int:
     open_def = open_adj.join(extra_def) if extra_def is not None else open_adj
 
     if args.exec_ladder:
-        d = exec_ladder(bundle, panels, VARIANTS[names[0]], close, open_adj, mfs)
+        d = exec_ladder(bundle, panels, VARIANTS[names[0]], close, open_adj, mfs, raw=raw)
         print("\n== 成交价位实测（§9.1，同一批信号）==")
         print(f"{'口径':<14}{'2月均值':>9}{'p10':>9}{'最差':>9}{'Sharpe':>9}{'年化':>9}{'MDD':>9}")
         for k, r in d.iterrows():

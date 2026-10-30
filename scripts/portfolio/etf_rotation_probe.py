@@ -159,6 +159,82 @@ class ExposureOverlay(Strategy):
         return w
 
 
+class BreakerOverlay(Strategy):
+    """熔断降仓覆盖层（2026-10-29，拍板前测「跌够就减仓」是否划算）。
+
+    ``states`` 是**逐交易日**的敞口系数表（key = 执行日 E，value = k ∈ (0,1]），
+    由调用方按「组合回撤触阈值」规则预先生成；引擎只在**状态切换日**调本层，
+    所以切换日必须一并放进 ``rebalance_days``（否则减仓/加仓不会发生、也不计成本）。
+
+    语义（刻意与「降档五衡」区分）：
+
+      - **减仓不换选标**：k<1 时沿用上次满仓选标，按收盘价漂移到 E−1 后整体
+        乘以 k，余量落 ``CASH``。真实减仓就是卖掉一部分份额，不会顺带换股。
+      - **加仓按当时信号重选标**：恢复满仓（k=1）当天重新走一遍 ``base``，
+        对应「退出熔断后回到三锋」的真实操作。
+      - 漂移用收盘价近似（首尾都用收盘），忽略隔夜跳空对权重的影响 ⇒ 换手成本
+        略被高估（偏保守）。
+
+    ⚠️ 与 ``ExposureOverlay`` 的区别：后者每个被调用的日子都重跑 ``base``
+    （减仓也会重选标），只适合做「每期按波动率缩放」。本类专供熔断实验。
+    """
+
+    def __init__(self, base: Strategy, states: dict, base_days: set,
+                 close: pd.DataFrame, cash_code: str = "CASH"):
+        self.base = base
+        self.states = states
+        self.base_days = set(base_days)
+        self.close = close
+        self.cash_code = cash_code
+        self._full = pd.Series(dtype=float)      # 上次满仓选标（未缩放）
+        self._ref: pd.Timestamp | None = None    # 该选标的定价日
+        self.name = base.name + "_breaker"
+
+    def get_weights(self, factor_values: pd.Series) -> pd.Series:
+        return self.get_weights_at(None, factor_values)
+
+    def _drift(self, w: pd.Series, date: pd.Timestamp) -> pd.Series:
+        """把 ``_ref`` 日的权重按收盘价漂移到 ``date`` 前一交易日。"""
+        if self._ref is None or w.empty:
+            return w
+        idx = self.close.index
+        try:
+            t1 = idx[idx < date][-1]
+        except IndexError:
+            return w
+        if self._ref not in idx or t1 not in idx:
+            return w
+        m = (self.close.loc[t1].reindex(w.index) / self.close.loc[self._ref].reindex(w.index))
+        m = m.replace([np.inf, -np.inf], np.nan).fillna(1.0)
+        x = w * m
+        tot = float(x.sum())
+        return x / tot if tot > 1e-12 else w
+
+    def _scale(self, date: pd.Timestamp, k: float) -> pd.Series:
+        x = self._drift(self._full, date)
+        if x.empty:
+            return pd.Series(dtype=float)
+        x = x * k
+        x[self.cash_code] = 1.0 - float(k)
+        return x
+
+    def get_weights_at(self, date: pd.Timestamp | None,
+                       factor_values: pd.Series) -> pd.Series:
+        k = float(self.states.get(date, 1.0)) if date is not None else 1.0
+        if date in self.base_days:
+            w = self.base.get_weights_at(date, factor_values)
+            self._full = w[w.index != self.cash_code].copy()
+            self._ref = date
+            return w if k >= 1.0 else self._scale(date, k)
+        if k >= 1.0:
+            # 恢复满仓：按当日信号重建组合（真实操作 = 回到三锋）
+            w = self.base.get_weights_at(date, factor_values)
+            self._full = w[w.index != self.cash_code].copy()
+            self._ref = date
+            return w
+        return self._scale(date, k)               # 减仓日：沿用持仓，只改敞口
+
+
 def build_exit_schedule(close: pd.DataFrame, weekly: list[pd.Timestamp],
                         selections: dict, rule: dict,
                         mom_rank: pd.DataFrame | None = None,
@@ -278,11 +354,16 @@ def run_variant(bundle, panels: dict, spec: dict, w0: int | None = None,
                 exposure: pd.Series | None = None,
                 execution_split: tuple[pd.DataFrame, pd.DataFrame] | None = None,
                 execution_shift: bool = False,
+                breaker: dict | None = None,
+                strategy_cls=None,
                 ) -> dict:
     """在（可选）窗口上跑一个变体，返回指标与净值。
 
     ``extra_close`` 用于注入合成资产列（如防御腿 DEF：债+金的净值水平线）。
     合成资产的因子/波动率为 NaN（不会被选中），掩码恒为 True。
+
+    ``strategy_cls`` 可替换策略类（仅探针用，如「随机单押」安慰剂）；
+    默认 ``EtfRotationAdvanced``，其余参数照常透传。
 
     ``execution_split`` 为引擎的**次日执行价模式**（``build_execution_split`` 产物）：
     传入后调仓日 T 的权重在 T+1 的 fill 价成交，默认为 ``None`` = 现行收盘价成交
@@ -309,6 +390,10 @@ def run_variant(bundle, panels: dict, spec: dict, w0: int | None = None,
     E 日当天收益（开盘下单时尚未发生）。**引擎结算的 ``returns`` 不 shift**
     （它按「第 i 行是 i−1→i 收益」对齐）。影响量级：三锋 +4.5pp、五衡 −4.0pp
     （方向都不同 ⇒ 不是"保守偏差"），详见 ``reports/etf_contest5/README.md`` §4.3。
+
+    ``breaker`` 是熔断降仓的状态表 ``{"states": {信号日: 敞口系数}}``（见
+    ``BreakerOverlay``），必须与 ``execution_shift=True`` 同用；状态表的键按**信号日**
+    解释、内部搬到执行日 T+1，且只有状态变化的日子会真调仓（含成本）。
 
     ⚠️ **窗口口径陷阱（2026-10-29 实测）**：`ret_panel` 由**切片后的** close 重算，
     逐窗独立调用时它只有窗口内 ~40 个交易日 ⇒ `_dedup` 的生效门槛
@@ -364,7 +449,7 @@ def run_variant(bundle, panels: dict, spec: dict, w0: int | None = None,
     # 移动会直接改写收益标签。探针与量级见 `scripts/portfolio/etf_leak_probe.py`。
     ret_for_strategy = _pit_shift(returns) if execution_shift else returns
     vol_for_strategy = _pit_shift(vol) if execution_shift else vol
-    strategy = EtfRotationAdvanced(
+    strategy = (strategy_cls or EtfRotationAdvanced)(
         top_k=spec.get("top_k", 5),
         absolute_filter=spec.get("absolute", False),
         abs_threshold=spec.get("abs_threshold", 0.0),
@@ -416,6 +501,27 @@ def run_variant(bundle, panels: dict, spec: dict, w0: int | None = None,
         rebalance_days = {_days[_pos[t] + 1] for t in _sig
                           if t in _pos and _pos[t] + 1 < len(_days)}
         factor = factor.shift(1)
+    if breaker is not None:
+        # 熔断状态表 ``{信号日 T: 敞口 k}`` → 执行日 E=T+1（与三件套一致）。
+        # 只在**切换日**加入 rebalance_days：不切换的日子若也调仓，等于每天
+        # 重设权重（凭空产生换手）。
+        if not execution_shift:
+            raise ValueError("breaker 需与 execution_shift=True 同用（状态表按信号日解释）")
+        _days = list(close.index)
+        _pos = {d: i for i, d in enumerate(_days)}
+        _st = {d: float(k) for d, k in breaker["states"].items() if d in _pos}
+        st_exec: dict[pd.Timestamp, float] = {}
+        for t, k in _st.items():
+            if _pos[t] + 1 < len(_days):
+                st_exec[_days[_pos[t] + 1]] = k
+        base_days = set(rebalance_days or ())
+        switches, prev = set(), 1.0
+        for d in sorted(st_exec):
+            if abs(st_exec[d] - prev) > 1e-12:
+                switches.add(d)
+            prev = st_exec[d]
+        rebalance_days = base_days | switches
+        strategy = BreakerOverlay(strategy, st_exec, base_days, close, cash_code=cash)
     bt = VectorBacktest(strategy=strategy, rebalance_freq=spec.get("freq", "M"),
                         initial_capital=1_000_000.0,
                         costs=EtfCosts(commission_rate=commission_bp * 1e-4 * cx,

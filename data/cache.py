@@ -52,6 +52,7 @@ import pandas as pd
 
 from config import Config
 from data.datasource import DataSource
+from scripts.common.atomic_io import write_parquet_atomic
 
 log = logging.getLogger("data.cache")
 
@@ -205,7 +206,14 @@ class DataCache:
             else:
                 # local 有独有列、或独有日期：并表（索引取 union，与旧实现一致）
                 combined = pd.concat([local_df[local_only], new_df], axis=1)
-            combined.to_parquet(p, compression="snappy")
+            # 🚨 必须原子写（2026-10-29 事故）：此前直接 ``to_parquet(p)`` 覆写目标，
+            # 进程在写盘中途被终止（本环境最常见触发 = SDK 被服务端 RspForceLogout
+            # 顶下线后静默 ``exit(0)``，见 ``update_data`` 第 6' 步注释）就会留下
+            # **截断文件**：头 4 字节仍是 ``PAR1``、footer 被吃掉，此后所有读取方一律
+            # ``ArrowInvalid: Parquet magic bytes not found in footer`` ⇒ 股票/ETF
+            # 两条线同时不可用，且坏文件读不出来也**无法自愈重建**
+            # （``_refresh_wide_table`` 一进来就读本地）。实测把 824KB 截断体留了下来。
+            write_parquet_atomic(combined, p, compression="snappy")
             local_df = combined
         cols = [c for c in codes if c in local_df.columns]
         return local_df[cols].sort_index() if cols else local_df
@@ -335,7 +343,9 @@ class DataCache:
             combined = pd.concat([local_full, new_df])
             combined = combined[~combined.index.duplicated(keep="last")]
             combined = combined.sort_index()
-            combined.to_parquet(p, compression="snappy")
+            # 同 `_refresh_wide_table`：截断的日K线/状态表同样会让下游全线不可读，
+            # 且长表体积更大、写盘窗口更长，被打断的概率更高。
+            write_parquet_atomic(combined, p, compression="snappy")
             max_ts = combined.index.get_level_values(time_col).max()
             last_int = int(pd.Timestamp(max_ts).strftime("%Y%m%d"))
             self._set_last_date(table_name, last_int)
