@@ -637,11 +637,11 @@ def main(argv: list[str] | None = None) -> int:
             say("=" * 100)
             if name == "rates":
                 diag = diagnose_beta(frame, say)
-                diag.to_csv(CACHE / "diag_beta.csv", index=False, encoding="utf-8-sig")
+                diag.to_csv(OUT / "diag_beta.csv", index=False, encoding="utf-8-sig")
                 say("")
             vs = rate_variants(frame, dates) if name == "rates" else {name: score}
             rows = report_split(say, frame, dates, vs, pl, split_n=args.split_placebo)
-            pd.DataFrame(rows).to_csv(CACHE / f"split_{name}.csv", index=False,
+            pd.DataFrame(rows).to_csv(OUT / f"split_{name}.csv", index=False,
                                       encoding="utf-8-sig")
 
     say("")
@@ -673,7 +673,7 @@ def main(argv: list[str] | None = None) -> int:
     Path(args.out).write_text("\n".join(lines) + "\n", encoding="utf-8")
     for name, m in results.items():
         if m["swap_n"]:
-            m["swaps"].to_csv(CACHE / f"swaps_{name}.csv", index=False, encoding="utf-8-sig")
+            m["swaps"].to_csv(OUT / f"swaps_{name}.csv", index=False, encoding="utf-8-sig")
     print(f"\n报告 → {args.out}")
     return 0
 
