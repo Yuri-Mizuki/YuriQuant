@@ -13,7 +13,7 @@ ETF 轮动三锋的收益结构已被量化（`reports/etf_contest5/README.md` �
 |-------------------|------------|-----------|----------------|
 | 24 只 2014–2019   | **0.452**  | **0.151** | **−0.97 ~ −3.89pp** |
 | 24 只 2020–2026   | 0.346      | 0.165     | +3.40 ~ +3.77pp |
-| 46 只 2020–2026   | 0.355      | **0.204** | **+20.08pp**   |
+| 45 只 2020–2026   | 0.355      | **0.204** | **+20.08pp**   |
 
 ⇒ 两个条件同时恶化时放大器归零。这两个数就是**失效前兆**，而它们可以每天算出来。
 
@@ -52,7 +52,7 @@ from data.etf_universe import ETF_CANDIDATES
 #: 长样本实测「失效区」值（README §4.6.6）——阈值的唯一来源，改动须同步文档。
 FAIL_ZONE_CORR = 0.452
 FAIL_ZONE_DISP = 0.151
-#: 当前有效区基线（46 只 2020–2026 生产池的**时间中位**，README §4.6.6）。
+#: 当前有效区基线（45 只 2020–2026 生产池的**时间中位**，README §4.6.6）。
 #: 🚨 基线是 7 年时间中位、当前值是最近 60 日截面 ⇒ 两者可比但不同口径，
 #: 差 ±0.05 属正常波动，不要因为「对不上 0.355」就认为算错了。
 BASE_CORR = 0.355
@@ -78,7 +78,7 @@ SIGNAL_DIR = Path("reports/etf_champ")
 def load_pool_close(cache: DataCache, upto: str | None) -> pd.DataFrame:
     """生产池后复权收盘价（与 `etf_long_sample`/回测同源：close × backward_factor）。
 
-    剔除 `EXCLUDED_5`（比赛屏蔽）⇒ 46 只，与 `FINAL` 的宇宙一致。
+    剔除 `EXCLUDED_5`（比赛屏蔽）⇒ 45 只，与 `FINAL` 的宇宙一致。
     """
     raw = cache.read_daily("etf")
     cl = raw["close"].unstack("code").sort_index()

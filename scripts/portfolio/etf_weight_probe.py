@@ -200,7 +200,7 @@ def mode_ret(env, spec):
     # 基准对照：同池等权 buy&hold
     r_ew = env["close"].pct_change(fill_method=None).mean(axis=1)
     eq_ew = (1.0 + r_ew.fillna(0.0)).cumprod()
-    print("\n  基准对照（同池 46 只等权持有）：")
+    print("\n  基准对照（同池 45 只等权持有）：")
     t2 = _drop_best_weeks(eq_ew)
     print(f"    全样本总收益 {t2.loc[0,'total']:.0%}")
     for _, x in t2.iterrows():
@@ -619,7 +619,7 @@ def mode_focus(env, spec, topn: int = 10):
     ann = (1.0 + rets).prod() ** (252.0 / max(len(rets), 1)) - 1.0
     cnt = f["top"].value_counts()
     tot = len(f)
-    print(f"  调仓日 {tot}；被押过 {len(cnt)} 只（池内 46 只）")
+    print(f"  调仓日 {tot}；被押过 {len(cnt)} 只（池内 45 只）")
     print(f"  {'代码':<12}{'次数':>6}{'占比':>8}{'池内平均相关':>13}{'全期年化':>10}")
     for code, n in cnt.head(topn).items():
         print(f"  {code:<12}{n:>6}{n / tot:>8.1%}"
