@@ -6,7 +6,7 @@
 
 **数据来源的关键发现（2026-10-30）**：不需要指数代理！
 `DataCache.get_index_daily` 能直接拉 **ETF 自身代码**的 2013 年起日线（SDK 不限品种），
-比跟踪指数更干净（无跟踪偏离）。46 只池里有 **24 只**在 2013–2019 有数据，
+比跟踪指数更干净（无跟踪偏离）。45 只池里有 **24 只**在 2013–2019 有数据，
 且**避险腿齐全**：黄金 518880(2013-07)、国债 511010(2013-03)、纳指 513100(2013-05)、
 标普 513500(2014-01)、恒生 159920(2013-01)。
 ⇒ HRP 依赖的「低相关腿」在长样本里存在，机制可检验。
@@ -57,8 +57,14 @@ NEAR_END = 20261231
 NEAR_START = 20200101      # 同池对照计分起点（池固定为 24 只）
 
 
-def load_env(cache, codes, begin: int, end: int, min_amount: float = 3e7) -> dict:
-    """拉 ETF 自身日线 → 后复权 close/open + amount 面板（含全池 mask）。"""
+def load_env(cache, codes, begin: int, end: int, min_amount: float = 3e7,
+             pit_listed: int = 0) -> dict:
+    """拉 ETF 自身日线 → 后复权 close/open + amount 面板（含全池 mask）。
+
+    ``pit_listed`` > 0 时给 mask 叠一条**时点可得性**约束：该标的须已上市（有价）
+    满 N 个交易日。语义 = 「回到 T 日那一天，你当时真的买得到它吗」。前提是
+    ``begin`` 早于所有标的上市日（否则 cumsum 从窗口起点起算，会把老标的误判为新）。
+    """
     frames, oframes, aframes = {}, {}, {}
     for code in codes:
         d = cache.get_index_daily(code, begin, end)
@@ -92,6 +98,10 @@ def load_env(cache, codes, begin: int, end: int, min_amount: float = 3e7) -> dic
     # 压到 2-3 只、使「选标」失去意义。故门槛可配（0 = 不加流动性约束）。
     panels["mask"] = (amount.rolling(60, min_periods=40).mean() >= min_amount
                       if min_amount > 0 else close.notna())
+    if pit_listed > 0:
+        # 上市天数代理 = 有价日累计（begin 早于全部上市日时等价于交易日龄）。
+        panels["mask"] = panels["mask"] & (close.notna().cumsum() >= pit_listed)
+    panels["age"] = close.notna().cumsum()
     mfs = pd.DatetimeIndex(
         pd.Series(close.index, index=close.index)
         .groupby(close.index.to_period("M")).first().to_numpy())
@@ -249,6 +259,48 @@ def main(argv=None) -> int:
         print("\n  == HRP 分年 ==")
         print((y * 100).round(1).to_string())
         out["yearly"] = y.reset_index()
+
+    if "pit" in modes:
+        from data.etf_universe import ETF_CANDIDATES
+        from scripts.portfolio.etf_contest_spec import EXCLUDED_5
+
+        pool_all = [c for c in ETF_CANDIDATES if c not in set(EXCLUDED_5)]
+        print(f"\n  == 时点可得池（PIT pool）== 生产池 {len(pool_all)} 只，"
+              f"数据从 2012-01 起（早于全部上市日）")
+        env_p = load_env(cache, pool_all, 20120101, NEAR_END, args.min_amount)
+        cl = env_p["close"]
+        ipo = cl.notna().idxmax()
+        print("\n  -- 上市年份分布 --")
+        print(ipo.dt.year.value_counts().sort_index().to_string())
+        # 每年末「当时真的买得到」的只数（上市满 250 交易日 且 60 日均额达标）。
+        base = env_p["panels"]["mask"]
+        rows = []
+        for y in range(2018, 2027):
+            d = pd.Timestamp(f"{y}-12-31")
+            if d > cl.index.max():
+                d = cl.index.max()
+            cut = cl.index[cl.index <= d][-1]
+            avail = int(base.loc[cut].sum())
+            listed = int((ipo <= cut).sum())
+            rows.append({"year": y, "listed": listed, "tradable": avail})
+        print("\n  -- 每年末可达池（上市且达标）--")
+        print(pd.DataFrame(rows).set_index("year").to_string())
+
+        for tag, n_listed in (("后视池（无 PIT 约束）", 0), ("上市满 250 日", 250),
+                              ("上市满 500 日", 500)):
+            pn = dict(env_p["panels"])
+            pn["mask"] = (base if n_listed == 0
+                          else (base & (pn["age"] >= n_listed)))
+            env_x = dict(env_p, panels=pn)
+            sp = dict(FINAL)
+            r = _run(env_x, sp, begin=NEAR_START)
+            m = _eq_metrics(r["equity"], NEAR_START)
+            print(f"  [{tag:<18}] 年化 {m['ann']:>7.2%} SR {m['sharpe']:>5.2f} "
+                  f"MDD {m['mdd']:>7.2%} 持仓 {r['avg_holdings']:.2f}")
+            out[f"pit_{n_listed}"] = {"tag": tag, **m,
+                                      "holdings": float(r["avg_holdings"])}
+        pd.DataFrame(out).T.to_csv(os.path.join(args.csv_dir, "pool_pit.csv"),
+                                   encoding="utf-8-sig")
 
     if "rand" in modes:
         rows = []

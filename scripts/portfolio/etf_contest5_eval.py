@@ -53,7 +53,7 @@ RNG = np.random.default_rng(20261029)
 
 _BASE = dict(PROFILES["contest3"])
 #: 待评档位。基线 ``contest3`` = 定版「三锋」（``etf_contest_spec.FINAL``）。
-#: 🚨 buffer 的 enter/exit **必须写全**：46 只池里 15/40、10/30、5/20 的窄档位
+#: 🚨 buffer 的 enter/exit **必须写全**：45 只池里 15/40、10/30、5/20 的窄档位
 #: 会退化成「还在清单就不卖」，三者结果逐位相同（README §七 #12 注）。
 VARIANTS: dict[str, dict] = {
     "contest3": _BASE,
@@ -118,7 +118,7 @@ def _vwap_panel(raw: pd.DataFrame, close: pd.DataFrame) -> tuple[pd.DataFrame, d
     再乘后复权因子 ``close / close_raw``。``volume <= 0`` 的停牌/异常日置 NaN。
 
     ⚠️ 语义：这是"**次日全天按成交均价分批买入**"的算法单近似，隐含「能把全天成交量
-    均匀吃到」⇒ 对 46 只日成交额均在亿级的池子是可行的，但仍是**上限估计**（真实
+    均匀吃到」⇒ 对 45 只日成交额均在亿级的池子是可行的，但仍是**上限估计**（真实
     VWAP 单有滑点、且我们无法预知当日 VWAP 形状）。
     """
     idx, cols = close.index, close.columns
@@ -198,6 +198,17 @@ def exec_ladder(bundle, panels, spec: dict, close: pd.DataFrame,
     return pd.DataFrame(rows).set_index("caliber")
 
 
+def _read_pool_file(path: str) -> set[str]:
+    """读自定义池清单：每行一个代码，或首列为代码的 CSV（忽略表头/空行/注释）。"""
+    keep: set[str] = set()
+    for line in Path(path).read_text(encoding="utf-8-sig").splitlines():
+        s = line.split(",")[0].strip()
+        if not s or s.startswith("#") or s.lower() in ("code", "pool_code", "代码"):
+            continue
+        keep.add(s)
+    return keep
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="ETF 轮动档位评测（80 个 2 月窗口）")
     ap.add_argument("--only", default=None, help="只跑指定档位（逗号分隔）")
@@ -206,6 +217,12 @@ def main(argv: list[str] | None = None) -> int:
                     help="只跑 §9.1 成交价位（① T收盘 / ② T+1开盘 / ③ T+1收盘 / ④ T+1 VWAP）")
     ap.add_argument("--legacy-no-pit", action="store_true",
                     help="关掉权重层 PIT 修正，复现 2026-10-29 之前的历史数字（不外引用）")
+    ap.add_argument("--keep-excluded", action="store_true",
+                    help="不屏蔽 EXCLUDED_5（= 50 只「自有策略」口径）。"
+                         "🚨 比赛对外口径必须关闭本开关；两口径不可混用")
+    ap.add_argument("--pool", default=None,
+                    help="自定义可投池清单（每行一个代码，或首列为代码的 CSV）；"
+                         "池外代码全部 mask=False。🚨 仅用于池结构实验，非对外口径")
     args = ap.parse_args(argv)
     if args.legacy_no_pit:
         import scripts.portfolio.etf_rotation_probe as _RP
@@ -222,8 +239,22 @@ def main(argv: list[str] | None = None) -> int:
     open_adj = (ro * (close / rc)).astype(np.float32)
 
     panels = build_extra_panels(close, build_panels(close, amount), rc)
-    for x in EXCLUDED_5:
-        panels["mask"].loc[:, x] = False
+    if not args.keep_excluded:
+        for x in EXCLUDED_5:
+            panels["mask"].loc[:, x] = False
+    else:
+        print(f"⚠️ --keep-excluded：{len(EXCLUDED_5)} 只非指定池标的已放回"
+              f"（自有策略口径，**不是**比赛对外口径）", flush=True)
+    if args.pool:
+        keep = _read_pool_file(args.pool)
+        unknown = sorted(keep - set(close.columns))
+        drop = [c for c in close.columns if c not in keep]
+        for x in drop:
+            panels["mask"].loc[:, x] = False
+        print(f"⚠️ --pool：自定义池 {len(keep)} 只，已 mask 掉池外 {len(drop)} 只"
+              f"（**池结构实验口径，非对外数字**）", flush=True)
+        if unknown:
+            print(f"   清单里 {len(unknown)} 只不在面板中，已忽略：{unknown[:5]}", flush=True)
     mfs = pd.DatetimeIndex(
         pd.Series(close.index, index=close.index)
         .groupby(close.index.to_period("M")).first().to_numpy())
