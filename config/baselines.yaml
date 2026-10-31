@@ -27,6 +27,12 @@
 #    同时传给两者 ⇒ fill 落 E+1、`open` 臂实际是 T+1 收盘成交。**修复前所有
 #    `open` 数字须视作旧口径**：882 代理已重跑（v1w-ortho882 production 16.39/0.681）；
 #    920 线（v1/v1w2）因本机无 pred 尚未重跑，引用时须注明「pre-exec-fix」。
+# 8. **显著性口径（2026-10-28 新增）**：`sharpe_t_stat` / `years_to_prove(_arith)` 现在由
+#    `caliber._metrics` 直接产出（此前 caliber 自己拼 dict、不调 `calc_all_metrics`
+#    ⇒ 走 caliber 的每条结论都缺这三个）。`t = SR·√T` 里的 SR **必须是算术**：
+#    只有 `years_to_prove_arith` 与 t 统计量同口径；`years_to_prove`（几何）仅在
+#    **正收益**时偏保守（v1w 实测虚高 31%），负收益/近零时反而虚短 ⇒
+#    **跨策略比较一律用 `_arith`**。推导与反例见 `backtest/metrics.py::sharpe_arithmetic`。
 #
 # 每个 baseline 的字段
 # --------------------
@@ -45,7 +51,7 @@
 # =============================================================================
 
 version: 2
-updated: "2026-10-19"
+updated: "2026-10-28"
 
 # 评估口径的规范值（caliber.py 的硬编码副本，供快速查阅；改 caliber 时同步）
 conventions:
@@ -155,7 +161,7 @@ baselines:
   # ---------------------------------------------------------------------------
   - id: v1w-ortho882
     created: "2026-10-13"
-    updated: "2026-10-19"
+    updated: "2026-10-28"
     status: working
     label: "本机工作基线：882 ortho ens_h1h5 + buffer(15/40)（生产执行层形态）"
     signal_key: ens_h1h5
@@ -190,12 +196,23 @@ baselines:
             turnover: 0.730
             cost_bp: 4245
             n_active: 406
+            # 显著性（2026-10-28 caliber 产出；规则见文件头 §8）
+            sharpe_arith: 0.675
+            sharpe_t_stat: 1.919        # NW(Andrews) 校正，H0: 日均值=0 → **未过 1.96**
+            years_to_prove: 11.1
+            years_to_prove_arith: 8.4
           eqw_buf0.15_0.4:
             ann: 0.1639
             sharpe: 0.681
             turnover: 0.371
             cost_bp: 2217
             n_active: 608
+            # 显著性：t_NW 2.139（过 1.96，余量 9%）；但 buffer 相对 top10pct 的
+            # +0.092 Sharpe 恰好把 1.919 推过线 ⇒ 「跨过 1.96」不单独构成改善证据。
+            sharpe_arith: 0.752
+            sharpe_t_stat: 2.139
+            years_to_prove: 8.3
+            years_to_prove_arith: 6.8
         fair:                           # = 研究压力口径（impact/close/1e8）
           eqw_top10pct:
             ann: 0.1519

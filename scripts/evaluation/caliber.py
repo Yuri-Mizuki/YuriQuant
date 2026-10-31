@@ -71,9 +71,11 @@ from backtest.metrics import (  # noqa: E402
     annual_volatility,
     max_drawdown,
     sharpe_ratio,
+    years_to_prove_from_sharpe,
 )
 from config import Config  # noqa: E402
 from optimize.multi_period import PrecomputedWeightsStrategy  # noqa: E402
+from stats.robust_stats import nw_tstat  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # 1) 口径常量（改这里 = 改全项目口径，慎动）
@@ -394,9 +396,10 @@ def cost_profile(kind: str = "impact", *, eta: float | None = None,
 def _metrics(res: BacktestResult, capital: float) -> dict:
     dr = res.daily_returns
     imp = getattr(res, "impact_cost_series", None)
+    sp = sharpe_pair(dr)
     return {
         "ann": float(annual_return(dr)),
-        **sharpe_pair(dr),
+        **sp,
         "vol": float(annual_volatility(dr)),
         "max_dd": float(max_drawdown(dr)),
         "turnover": float(res.turnover_series.dropna().mean()),
@@ -406,6 +409,15 @@ def _metrics(res: BacktestResult, capital: float) -> dict:
                       if imp is not None and len(imp) else 0.0),
         "n_active": float((res.weights_history > N_ACTIVE_TOL).sum(axis=1).mean()),
         "n_days": int(len(dr)),
+        # ---- 显著性（2026-10-28 补）----
+        # 此前本函数自己拼 dict、**从不调 `calc_all_metrics`** ⇒ 走 caliber 的每条
+        # 结论都不带 t / 证明年数，「指标在 metrics 里算、却从没进评估主路径」。
+        # t 恒等式（`t = SR·√T`）只认**算术** SR ⇒ 两个 years_to_prove 并列，
+        # 引用显著性一律用 `_arith` 那个；`years_to_prove` 保留是为了与
+        # `backtest.metrics.calc_all_metrics` 的既有产物对得上。
+        "sharpe_t_stat": float(nw_tstat(dr.dropna())[0]),
+        "years_to_prove": years_to_prove_from_sharpe(sp["sharpe"]),
+        "years_to_prove_arith": years_to_prove_from_sharpe(sp["sharpe_arith"]),
     }
 
 

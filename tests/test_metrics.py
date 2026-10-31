@@ -131,3 +131,69 @@ def test_calc_all_metrics_excess_tstat_requires_benchmark():
     assert "excess_t_stat" not in m
     mb = calc_all_metrics(daily, benchmark_returns=bench)
     assert (mb["excess_t_stat"] > 0) == (mb["excess_return"] > 0)
+
+
+# ---------------------------------------------------------------------------
+# 算术 Sharpe / 算术口径证明年数（2026-10-28 新增）
+# ``t = SR·√T`` 恒等式只认算术 SR；几何 SR 套公式会错配，且**方向不单调**。
+# 下面用「精确控制均值」的构造序列，避免随机均值落到近零退化区间。
+# ---------------------------------------------------------------------------
+def _mean_exact(mu: float, n: int = 1008, sigma: float = 0.012, seed: int = 7):
+    """构造日均值**精确**为 ``mu`` 的序列（去掉抽样噪声，测试才可判）。"""
+    raw = np.random.default_rng(seed).normal(0.0, sigma, n)
+    return pd.Series(raw - raw.mean() + mu)
+
+
+def test_arith_sharpe_is_the_significance_scale():
+    """算术 SR × √(n/252) 与 NW t 同口径（iid 序列下近似恒等）。
+
+    参数照抄 ``v1w-ortho882`` 的量级（vol 24.8% / 算术 SR 0.675）——这是本项目
+    的主流区间，也是几何/算术分歧最大的区间：实测几何 0.589 / 算术 0.675
+    ⇒ 用几何算的 ``years_to_prove`` 虚高 31%。本用例锁死「算术版 ↔ t 统计量」
+    这条不变式，防止后来人把 ``years_to_prove_arith`` 按几何口径重算。
+    """
+    n = 1008
+    daily = _mean_exact(0.000664, n, sigma=0.01563)
+    m = calc_all_metrics(daily)
+    implied_t = m["sharpe_arith"] * np.sqrt(n / 252)
+    assert implied_t == pytest.approx(m["sharpe_t_stat"], rel=0.15)
+    # vol 高、SR 低 ⇒ |几何| < |算术| ⇒ 几何口径年数更长（偏保守）
+    assert abs(m["sharpe"]) < abs(m["sharpe_arith"])
+    assert m["years_to_prove"] > m["years_to_prove_arith"]
+
+
+def test_negative_return_geo_years_shorter():
+    """⚠️ 收益为负时方向**翻转**：几何更负 ⇒ |几何| > |算术| ⇒ 几何年数**虚短**。
+
+    同参数（日波 1.56%）下把日均从 +0.066% 翻成 −0.066%：几何 SR −0.717 /
+    算术 −0.665，年数 7.5 vs 8.7。⇒ **「几何版总比算术版保守」是错的**，
+    只在正收益（``a>0``）时成立。
+    """
+    daily = _mean_exact(-0.000664, 1008, sigma=0.01563, seed=8)
+    m = calc_all_metrics(daily)
+    assert m["sharpe"] < 0 and m["sharpe_arith"] < 0
+    assert abs(m["sharpe"]) > abs(m["sharpe_arith"])
+    assert m["years_to_prove"] < m["years_to_prove_arith"]
+
+
+def test_years_to_prove_degenerate_near_zero_sharpe():
+    """⚠️ 边界：算术 SR≈0 时几何被 ``b = σ²/2`` 拖累放大，**方向反转**。
+
+    日均精确 0 ⇒ 算术 SR≈0、``years_to_prove_arith`` 天文数字（≈7e29）；但几何
+    年化被波动拖累拉成明显负值 ⇒ ``|几何| ≫ |算术|``、``years_to_prove`` 反而
+    **虚短**（几百年级别而非天文）。⇒ 近零 Sharpe 上该指标没有解释力。
+    """
+    daily = _mean_exact(0.0, 1008, seed=9)
+    m = calc_all_metrics(daily)
+    assert abs(m["sharpe_arith"]) < 1e-9
+    assert abs(m["sharpe"]) > 0.05            # 被 b 拖成明显负值
+    assert m["years_to_prove_arith"] > 1e20   # 算术口径 ≈ inf（浮点残差非严格 0）
+    assert m["years_to_prove"] < 1000         # 几何口径「虚短」——不可当保守估计
+
+
+def test_years_to_prove_from_sharpe_edge_cases():
+    """SR=1.96 → 1 年；SR=0 → inf；负 SR 用绝对值。"""
+    from backtest.metrics import years_to_prove_from_sharpe
+    assert years_to_prove_from_sharpe(0.0) == float("inf")
+    assert years_to_prove_from_sharpe(1.96) == pytest.approx(1.0, abs=0.05)
+    assert years_to_prove_from_sharpe(-1.96) == years_to_prove_from_sharpe(1.96)

@@ -17,7 +17,9 @@
 - 信息比率 Information Ratio（需基准）
 - 超额年化 Excess Return（需基准）
 - 夏普 t 统计量 Sharpe t-stat（Newey-West，H0: 日均值=0）
-- 证明所需年数 Years to Prove = (1.96/|SR|)²
+- 算术夏普 Sharpe (arithmetic) = mean/std·√N —— **换算显著性专用**
+- 证明所需年数 Years to Prove = (1.96/|SR|)²（几何 SR，偏保守）
+- 证明所需年数(算术) Years to Prove (arith) = (1.96/|SR_arith|)²（与 t 同口径）
 - 超额 t 统计量 Excess t-stat（需基准，H0: 超额均值=0）
 
 所有函数接收日频收益率 Series(index=date)。
@@ -69,6 +71,52 @@ def sharpe_ratio(daily_returns: pd.Series, rf: float = 0.0, periods_per_year: in
     if vol == 0:
         return 0.0
     return annual_return(excess, periods_per_year) / vol
+
+
+def sharpe_arithmetic(daily_returns: pd.Series, rf: float = 0.0,
+                      periods_per_year: int = PERIODS_PER_YEAR) -> float:
+    """**算术**夏普比率 ``mean(excess)/std(excess)·√N``。
+
+    与 :func:`sharpe_ratio`（几何年化收益 / 年化波动）并列存在，**用途不同**：
+
+    - ``sharpe_ratio``（几何）→ **报数**（生产定版口径，`caliber` 的 ``sharpe``）；
+    - 本函数（算术）→ **换算显著性**。文献的 ``t = SR·√T`` 恒等式只认算术口径
+      （因为 ``t = mean/std·√n`` ≡ ``SR_arith·√(n/252)``）；用几何 SR 套公式会
+      **错配**。2026-10-28 实测 ``v1w-ortho882``：几何 0.589 / 算术 0.675，
+      ``years_to_prove`` 虚高 31%。
+
+    ⚠️ **几何年化收益 ≤ 算术年化收益 恒成立**（波动拖累 ``−b`` 压过 ``exp`` 凸性），
+    其中 ``b = 年化方差/2``、``a = 年化算术收益``。⇒ 偏差方向由**收益符号**决定：
+
+    - ``a > 0``（策略赚钱，本项目主流）：几何 SR 偏小 ⇒ ``|几何| < |算术|``
+      ⇒ 几何口径年数**偏保守（高估）**。实测 ``v1w-ortho882``（vol 24.8% /
+      算术 SR 0.675，``b/a ≈ 0.18``）：几何 0.589 vs 算术 0.675，年数虚高 31%。
+    - ``a < 0``（策略亏钱）：几何更负 ⇒ ``|几何| > |算术|`` ⇒ 几何口径年数**虚短**
+      （实测日均 −0.066% / 日波 1.56%：几何 −0.717 vs 算术 −0.665）。
+    - ``a ≈ 0``（退化）：``b`` 单独主导 ⇒ 几何年化 ≈ ``−b`` 明显为负而算术≈0
+      ⇒ ``|几何| ≫ |算术|``、年数虚短（天文数 → 几百年），此区间无解释力。
+
+    ⇒ **判据：正收益用几何版是保守的，负收益/近零时必须用算术版**；
+    跨策略比较一律用算术版，否则正负两组的「证明年数」不可比。
+
+    **引用任何外部显著性公式前，先确认它要的是哪种 SR。**
+    """
+    rfd = _rf_daily(rf, periods_per_year)
+    excess = (1 + daily_returns.dropna()) / (1 + rfd) - 1
+    sd = float(excess.std())
+    if sd == 0:
+        return 0.0
+    return float(excess.mean() / sd * np.sqrt(periods_per_year))
+
+
+def years_to_prove_from_sharpe(sr: float, z: float = 1.96) -> float:
+    """``(z/|SR|)²`` —— 让 ``t = SR·√T`` 达到 ``z`` 所需的样本年数。
+
+    ``SR=0`` → ``inf``。**必须在算术 SR 上传入才与 t 统计量同口径**；
+    传几何 SR 得到的是**错配**值（正收益时高估年数、负收益/近零时低估，
+    见 :func:`sharpe_arithmetic`）。
+    """
+    return round((z / abs(sr)) ** 2, 1) if sr else float("inf")
 
 
 def sortino_ratio(daily_returns: pd.Series, rf: float = 0.0, periods_per_year: int = PERIODS_PER_YEAR) -> float:
@@ -199,8 +247,10 @@ METRIC_LABELS = {
     "total_return":        "累计收益 Total Return",
     "annual_volatility":   "年化波动率 Annual Volatility",
     "sharpe":              "夏普比率 Sharpe Ratio",
+    "sharpe_arith":        "算术夏普 Sharpe (arithmetic, mean/std·√N)",
     "sharpe_t_stat":       "夏普 t 统计量 Sharpe t-stat",
     "years_to_prove":      "证明所需年数(1.96/|SR|)² Years to Prove",
+    "years_to_prove_arith": "证明所需年数(算术SR) Years to Prove (arith SR)",
     "excess_t_stat":       "超额 t 统计量 Excess t-stat",
     "sortino":             "索提诺比率 Sortino Ratio",
     "max_drawdown":        "最大回撤 Max Drawdown",
@@ -243,11 +293,16 @@ def calc_all_metrics(
         rf: 年化无风险利率（默认 0），用于 Sharpe / Sortino 的超额收益。
     """
     sharpe = sharpe_ratio(daily_returns, rf=rf, periods_per_year=periods_per_year)
+    # 算术 Sharpe 只用于换算显著性（见 sharpe_arithmetic 的 docstring）：
+    # 2026-10-28 起与几何版并列登记，避免「拿几何 SR 套 t=SR·√T」的口径错配。
+    sharpe_arith = sharpe_arithmetic(daily_returns, rf=rf,
+                                     periods_per_year=periods_per_year)
     m = {
         "annual_return": annual_return(daily_returns, periods_per_year),
         "total_return": (1 + daily_returns).prod() - 1,
         "annual_volatility": annual_volatility(daily_returns, periods_per_year),
         "sharpe": sharpe,
+        "sharpe_arith": sharpe_arith,
         "sortino": sortino_ratio(daily_returns, rf=rf, periods_per_year=periods_per_year),
         "max_drawdown": max_drawdown(daily_returns),
         "calmar": calmar_ratio(daily_returns, periods_per_year),
@@ -260,7 +315,11 @@ def calc_all_metrics(
         "sharpe_t_stat": nw_tstat(daily_returns.dropna())[0],
         # 证明策略所需年数 (1.96/|SR|)^2（paperswithbacktest 复现口径）：
         # t = SR*sqrt(T) 达到 1.96 所需的样本年限。
-        "years_to_prove": round((1.96 / abs(sharpe)) ** 2, 1) if sharpe != 0 else float("inf"),
+        # ⚠️ 这里传的是**几何** SR ⇒ 与 t 统计量口径错配（非退化区间年数偏保守、
+        # 近零区间虚短，详见 sharpe_arithmetic）；严格同口径的是下面那行（算术 SR），
+        # 两者并列登记、不要混用。
+        "years_to_prove": years_to_prove_from_sharpe(sharpe),
+        "years_to_prove_arith": years_to_prove_from_sharpe(sharpe_arith),
         "n_days": len(daily_returns),
     }
     if benchmark_returns is not None:
