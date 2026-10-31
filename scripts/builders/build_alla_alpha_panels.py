@@ -222,6 +222,46 @@ def _worker(wid: int, n_workers: int, warmup: int, keep_from: int,
     log.info("[w%d] 完成 %d 因子, 耗时 %.0fs", wid, n_done, time.time() - t0)
 
 
+def _upsert_registry(ds_dir: Path, df: pd.DataFrame) -> None:
+    """把本次 run 的统计行**并入** registry（只增不减 + 补齐元数据）。
+
+    按 ``set`` 分组调用 ``FactorLibrary.upsert_rows(fill_missing_only=False)``：
+
+    - ``source`` 前缀必须是集名（``alpha101:builders:<ds>`` —— `extend_factor_library`
+      的路由键就是它），四族的 prefix 各不相同，所以必须**逐组**传；
+    - 四族 ``family`` 同为「量价」，仍走 ``family_for_set`` 而不是写死；
+    - ``fill_missing_only=False`` 是刻意的：本次 run 重算了面板，统计列必须刷新。
+      stats 行只带 ``name/set/label/coverage/ic_mean_h*``，所以另外 5 个元数据字段
+      必须由这里显式给出，否则整行替换会把它们洗成空（旧实现的实测后果：
+      alpha 798 行的 source/family/kind/maturity/frequency **100% 空白**）。
+    """
+    from research.factor_library import FactorLibrary, family_for_set, source_for
+
+    lib = FactorLibrary(root=ds_dir.parent, dataset=ds_dir.name)
+    if Path(lib.root).resolve() != ds_dir.resolve():
+        # 不再静默退回「全量覆盖」——那条路径正是本函数要根治的问题
+        raise RuntimeError(
+            f"registry 库根推断不一致（{lib.root} != {ds_dir}），"
+            "拒绝写入；请检查 Config['factor_library']['root']")
+
+    for set_name, sub in df.groupby("set", dropna=False, sort=True):
+        set_str = "" if pd.isna(set_name) else str(set_name).strip()
+        if not set_str:
+            log.warning("registry: %d 行缺少 set 列，跳过（无法确定 source 前缀）",
+                        len(sub))
+            continue
+        stat = lib.upsert_rows(
+            sub.to_dict("records"),
+            source=source_for(set_str, scope=ds_dir.name),
+            family=family_for_set(set_str),
+            kind="raw", maturity="experimental", frequency="日频",
+            set_name=set_str,
+            fill_missing_only=False,  # 本次重算的统计列必须覆盖旧值
+        )
+        log.info("[%s] registry: %d -> %d（新增 %d, 更新 %d）", set_str,
+                 stat["before"], stat["after"], stat["added"], stat["updated"])
+
+
 def _merge_outputs(dataset: str, n_workers: int = 1):
     """合并各 worker 的统计与 IC 分片 → registry.csv + ic_h{h}.parquet。
 
@@ -231,6 +271,16 @@ def _merge_outputs(dataset: str, n_workers: int = 1):
     `ValueError: Duplicate column names found`（2026-10-16 实测：06:00 的
     `--workers 6` 留下 w1..w5，13:54 改成 `--workers 1` 只覆写 w0 却含全部 798
     因子 ⇒ 合并 798 + 5 份残片 = 重复列、全链在最后一步中止、2.3h 白算）。
+
+    🚨 registry 写入必须**只增不减**（2026-10-27 修，见 :func:`_upsert_registry`）。
+    旧实现 ``pd.DataFrame(rows).drop_duplicates(...).to_csv(ds_dir/"registry.csv")``
+    是**全量覆盖**，两个后果：
+    ① 把非 alpha 族（fundamental/altf/evt… 共 152 个）整批冲掉。而
+       ``rebuild_panel_library._steps()`` 第 2 步就是本函数 —— 若链条在它之后、
+       其余 14 个 builder 之前中断（10-16 断过一次），registry 只剩 798 行、7 个族
+       的元数据全丢：面板文件还在，但 coverage 过滤 / 族统计 / ``list_all()``
+       都看不到它们。跑完整链条才会"自愈"（798 + 152 重登 = 950），所以一直没暴露。
+    ② alpha 798 行自己的 source/family/kind 每次都被洗空。
     """
     from config import Config
     lib_root = Path(str(Config.get()["factor_library"]["root"]))
@@ -246,8 +296,8 @@ def _merge_outputs(dataset: str, n_workers: int = 1):
     if not rows:
         log.warning("无统计产出")
         return
-    reg = pd.DataFrame(rows).drop_duplicates(subset="name", keep="last")
-    reg.to_csv(ds_dir / "registry.csv", index=False, encoding="utf-8-sig")
+    df = pd.DataFrame(rows).drop_duplicates(subset="name", keep="last")
+    _upsert_registry(ds_dir, df)
     for h in HORIZONS:
         parts = [p for p in (ds_dir / f"ic_parts/w{i}_h{h}.parquet"
                              for i in range(n_workers)) if p.exists()]
@@ -265,9 +315,9 @@ def _merge_outputs(dataset: str, n_workers: int = 1):
         merged.index.name = "date"
         merged.astype(np.float32).to_parquet(ds_dir / f"ic_h{h}.parquet")
         log.info("ic_h%d: %d 因子 × %d 日", h, merged.shape[1], len(merged))
-    log.info("registry: %d 因子 | IC(h1) 中位数 %.4f, |IC|>0.01 的 %d 个",
-             len(reg), reg["ic_mean_h1"].median(),
-             int((reg["ic_mean_h1"].abs() > 0.01).sum()))
+    log.info("本次 run: %d 因子 | IC(h1) 中位数 %.4f, |IC|>0.01 的 %d 个",
+             len(df), df["ic_mean_h1"].median(),
+             int((df["ic_mean_h1"].abs() > 0.01).sum()))
 
 
 def main():

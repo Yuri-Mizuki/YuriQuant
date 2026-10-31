@@ -15,6 +15,7 @@ import json
 import logging
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from research.factor_library import (
@@ -25,6 +26,7 @@ from research.factor_library import (
     SET_TO_FAMILY,
     FactorLibrary,
     _align_registry,
+    _collapse_duplicate_names,
     family_for_set,
     normalize_tags,
     source_for,
@@ -224,6 +226,92 @@ def test_upsert_rows_does_not_overwrite_human_tags(tmp_path):
     assert reg.loc["f1", "source"] == "alpha101:builders:ds_keep"
 
 
+def test_upsert_rows_refreshes_stat_columns_on_rerun(tmp_path):
+    """统计列必须随重跑刷新，标签列保持人工值（2026-10-27）。
+
+    历史坑：``upsert_rows`` 对整个行走 ``old.combine_first(new)``——旧值非空
+    即胜，于是任何计算型字段**一旦写过就再也改不动**。holder_dyn 曾因 dtype
+    bug 把 ``active_day_frac=0.008`` 焊死在 registry，修好重跑也进不去。
+    更隐蔽的是 ``coverage``：数据天天长，重建后覆盖变了而 registry 冻结在首次
+    入库态，``MIN_COVERAGE`` / ``MIN_NEU_COVERAGE`` 三道过滤全读它。
+    """
+    lib = FactorLibrary(root=tmp_path / "flib", dataset="ds_stat_refresh")
+    kw = dict(source="holder:builders:ds_stat_refresh", family="事件",
+              set_name="holder")
+    lib.upsert_rows([{"name": "s1", "coverage": 0.5, "ic_mean_h1": 0.01}], **kw)
+    assert lib.set_tag("s1", family="动量") is True
+    h, lg = _capture("factor_library")
+    _lvl = lg.level
+    lg.setLevel(logging.INFO)   # 刷新格数走 log.info，默认 WARNING 会过滤掉
+    try:
+        lib.upsert_rows([{"name": "s1", "coverage": 0.72,
+                          "ic_mean_h1": 0.033}], **kw)
+    finally:
+        lg.removeHandler(h)
+        lg.setLevel(_lvl)
+    msgs = [r.getMessage() for r in h.records]
+    # 日志要如实报出刷新了几格（此处恰好 2 格：coverage + ic_mean_h1）
+    assert any("统计刷新 2 格" in m for m in msgs), msgs
+
+    reg = lib.list_all().set_index("name")
+    assert abs(float(reg.loc["s1", "coverage"]) - 0.72) < 1e-12
+    assert abs(float(reg.loc["s1", "ic_mean_h1"]) - 0.033) < 1e-12
+    # 人工标签不被冲掉
+    assert reg.loc["s1", "family"] == "动量"
+
+
+def test_count_changed_ignores_repr_noise():
+    """同一 float 经 CSV 往返后 repr 会变长——不得算作"改了一格"。"""
+    from research.factor_library import _count_changed
+
+    old = pd.DataFrame({"v": [-0.0221045296639204], "s": [""]})
+    new = pd.DataFrame({"v": [-0.022104529663920403], "s": [np.nan]})
+    assert _count_changed(old, new) == 0
+    # 真变化要数出来
+    assert _count_changed(old, pd.DataFrame({"v": [0.5], "s": [np.nan]})) == 1
+
+
+def test_upsert_rows_blank_values_never_clear_existing(tmp_path):
+    """空值永远不清空已有字段——两种模式下都成立。
+
+    ``fill_missing_only=False`` 曾走 ``concat`` 整行替换，stats 行没有的列
+    （``source`` / ``formula`` / ``created_at``…）全被洗成 NaN。
+    """
+    lib = FactorLibrary(root=tmp_path / "flib", dataset="ds_blank")
+    lib.upsert_rows([{"name": "b1", "coverage": 0.4, "label": "旧标签"}],
+                    source="evt:builders:ds_blank", family="事件",
+                    set_name="evt", frequency="日频")
+    assert lib.set_tag("b1", note="人工备注") is True
+    # 只带了一个空统计行 —— 不得清掉 coverage / label / note
+    lib.upsert_rows([{"name": "b1"}], source="evt:builders:ds_blank",
+                    family="事件", set_name="evt", frequency="日频")
+
+    reg = lib.list_all().set_index("name")
+    assert float(reg.loc["b1", "coverage"]) == 0.4
+    assert reg.loc["b1", "label"] == "旧标签"
+    assert reg.loc["b1", "note"] == "人工备注"
+
+
+def test_upsert_rows_force_mode_keeps_metadata_absent_from_batch(tmp_path):
+    """``fill_missing_only=False`` 只该覆盖"本批带来的列"，不得整行替换。"""
+    lib = FactorLibrary(root=tmp_path / "flib", dataset="ds_force")
+    lib.upsert_rows([{"name": "f1"}], source="alpha101:builders:ds_force",
+                    family="量价", set_name="alpha101")
+    assert lib.set_tag("f1", note="人工备注", maturity="oos_verified") is True
+
+    # 本批只带统计列（模拟 stats 行）
+    lib.upsert_rows([{"name": "f1", "coverage": 0.9, "ic_mean_h1": -0.02}],
+                    source="alpha101:builders:ds_force", family="量价",
+                    set_name="alpha101", fill_missing_only=False)
+
+    reg = lib.list_all().set_index("name")
+    assert float(reg.loc["f1", "coverage"]) == 0.9        # 统计已刷新
+    assert float(reg.loc["f1", "ic_mean_h1"]) == -0.02
+    assert reg.loc["f1", "note"] == "人工备注"            # 元数据未被洗掉
+    assert reg.loc["f1", "maturity"] == "oos_verified"    # 人工标签未被冲掉
+    assert reg.loc["f1", "source"] == "alpha101:builders:ds_force"
+
+
 def test_upsert_rows_warns_on_empty_source(tmp_path):
     """空来源必须告警——它会让这批因子进不了「延长数据集」的因子集路由。"""
     lib = FactorLibrary(root=tmp_path / "flib", dataset="ds_warn")
@@ -233,6 +321,125 @@ def test_upsert_rows_warns_on_empty_source(tmp_path):
     finally:
         lg.removeHandler(h)
     assert any("source 为空" in r.getMessage() for r in h.records)
+
+
+def test_upsert_rows_dedupes_intra_batch_duplicates(tmp_path):
+    """批内同名必须收敛成一行（2026-10-27：registry 1112 行 / 950 唯一的根因）。
+
+    ``rows`` 来自追加式 ``factor_stats_*.jsonl``，同一因子重跑几次就有几行。
+    ``upsert_rows`` 的 ``new_only`` 分支只排除"库里已有的"，不拦批内重复，
+    于是首次入库即写多行、``added`` 还虚报。
+    """
+    lib = FactorLibrary(root=tmp_path / "flib", dataset="ds_dup_batch")
+    stat = lib.upsert_rows(
+        [{"name": "d_a", "coverage": 0.5, "ic_mean_h1": 0.01},
+         {"name": "d_a", "coverage": 0.7, "ic_mean_h1": 0.03},
+         {"name": "d_b", "coverage": 0.6}],
+        source="evt:builders:ds_dup_batch", family="事件", set_name="evt")
+    assert stat == {"before": 0, "after": 2, "added": 2, "updated": 0}
+    reg = lib.list_all().set_index("name")
+    assert list(reg.index) == ["d_a", "d_b"]
+    # keep="last"：追加顺序即运行顺序，取最后一次统计
+    assert float(reg.loc["d_a", "coverage"]) == 0.7
+    assert float(reg.loc["d_a", "ic_mean_h1"]) == 0.03
+
+
+def test_load_registry_collapses_legacy_duplicates(tmp_path):
+    """历史遗留的重复行在**读入口**收敛，且落盘由下一次写操作顺带完成。
+
+    重复索引会让 ``reg["family"].get(n)`` 返回 Series（静默污染族占比统计）、
+    ``float(reg.loc[n, "coverage"])`` 抛 ``TypeError``——所以不能指望每个
+    消费者各自去重。
+    """
+    lib = FactorLibrary(root=tmp_path / "flib", dataset="ds_legacy_dup")
+    lib.upsert_rows([{"name": "L1", "coverage": 0.5}],
+                    source="evt:builders:x", family="事件", set_name="evt")
+    p = lib.root / "registry.csv"
+    df = pd.read_csv(p)
+    stale = df.copy()
+    stale["coverage"] = 0.9  # 后写入的那行 = 更新
+    pd.concat([df, stale], ignore_index=True).to_csv(
+        p, index=False, encoding="utf-8-sig")
+    assert len(pd.read_csv(p)) == 2  # 盘上确实重复
+
+    h, lg = _capture("factor_library")
+    try:
+        reg = lib.list_all()
+    finally:
+        lg.removeHandler(h)
+    assert len(reg) == 1 and reg["name"].nunique() == 1
+    assert float(reg["coverage"].iloc[0]) == 0.9
+    assert any("重复登记" in r.getMessage() for r in h.records), \
+        [r.getMessage() for r in h.records]
+
+
+def test_collapse_duplicate_names_is_noop_on_clean_registry():
+    """干净的 registry 必须原样返回（``list_all`` 走高频快速路径）。"""
+    reg = pd.DataFrame({"name": ["a", "b"], "coverage": [0.5, 0.6]})
+    assert _collapse_duplicate_names(reg) is reg
+    empty = pd.DataFrame(columns=["name"])
+    assert _collapse_duplicate_names(empty) is empty
+
+
+def test_read_stats_keeps_last_per_name(tmp_path):
+    """builder 的 stats jsonl 是追加写的：读回必须按 name 去重取最后一行。"""
+    from scripts.builders.common import read_stats
+
+    ds = tmp_path / "ds_stats"
+    ds.mkdir()
+    rows = [{"name": "s_x", "coverage": 0.5},
+            {"name": "s_y", "coverage": 0.6},
+            {"name": "s_x", "coverage": 0.9}]  # 第二次运行追加的
+    (ds / "factor_stats_evt.jsonl").write_text(
+        "\n".join(json.dumps(r) for r in rows), encoding="utf-8")
+    out = read_stats(ds, "evt")
+    assert len(out) == 2
+    assert {r["name"]: r["coverage"] for r in out}["s_x"] == 0.9
+    assert read_stats(ds, "不存在的族") == []
+
+
+def test_alpha_merge_registry_keeps_other_sets_and_backfills_meta(tmp_path):
+    """``build_alla_alpha_panels._upsert_registry`` 必须**只增不减**。
+
+    旧实现是 ``pd.DataFrame(rows).to_csv(ds_dir/"registry.csv")`` 全量覆盖：
+    ① 把非 alpha 族（152 个）整批冲掉 —— `rebuild_panel_library` 第 2 步就是它，
+    中断即丢 7 个族的元数据；② alpha 798 行自己的 source/family/kind 每次被洗空
+    （实测 100% 空白）。新实现按 set 分组 upsert + 显式补元数据。
+    """
+    from scripts.builders.build_alla_alpha_panels import _upsert_registry
+
+    base = tmp_path / "flib"
+    ds = base / "all_a_2018_2026"
+    lib = FactorLibrary(root=base, dataset="all_a_2018_2026")
+    # 非 alpha 族（模拟其余 builder 的产出）
+    lib.upsert_rows([{"name": "alt_news_cnt", "coverage": 0.8}],
+                    source="altf:builders:all_a_2018_2026",
+                    family="另类", set_name="altf")
+    # alpha 旧行：元数据空（旧实现留下的形态），统计待刷新
+    lib.upsert_rows([{"name": "alpha101_001", "coverage": 0.5,
+                      "ic_mean_h1": 0.01, "label": "old"}],
+                    set_name="alpha101", source="")
+
+    df = pd.DataFrame([
+        {"name": "alpha101_001", "set": "alpha101", "label": "WQ101 #001",
+         "coverage": 0.72, "ic_mean_h1": -0.022},
+        {"name": "alpha158_001", "set": "alpha158", "label": "Qlib #001",
+         "coverage": 0.70, "ic_mean_h1": 0.03},
+    ])
+    _upsert_registry(ds, df)
+
+    reg = FactorLibrary(root=base, dataset="all_a_2018_2026").list_all() \
+        .set_index("name")
+    assert len(reg) == 3, list(reg.index)            # 非 alpha 行没被冲掉
+    assert "alt_news_cnt" in reg.index
+    assert float(reg.loc["alpha101_001", "coverage"]) == 0.72   # 统计已刷新
+    assert float(reg.loc["alpha101_001", "ic_mean_h1"]) == -0.022
+    for n, want_src in (("alpha101_001", "alpha101:builders:all_a_2018_2026"),
+                        ("alpha158_001", "alpha158:builders:all_a_2018_2026")):
+        assert reg.loc[n, "source"] == want_src
+        assert reg.loc[n, "family"] == "量价"
+        assert reg.loc[n, "kind"] == "raw"
+        assert reg.loc[n, "frequency"] == "日频"
 
 
 def test_merge_outputs_default_source_is_set_prefixed(tmp_path):

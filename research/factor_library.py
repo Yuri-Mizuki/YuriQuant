@@ -232,6 +232,93 @@ CANONICAL_COLUMNS: list[str] = [
 ]
 
 
+#: **计算型统计列**——每次 builder 重跑都会重算，必须允许覆盖旧值。
+#:
+#: 与 :data:`CANONICAL_COLUMNS` 里的其余列分两类处理（2026-10-27）：
+#:
+#: - **标签/标识类**（``name`` / ``kind`` / ``source`` / ``family`` /
+#:   ``subfamily`` / ``frequency`` / ``maturity`` / ``note`` / ``set`` /
+#:   ``label`` / ``formula`` / ``parents`` / ``panel_path`` / ``eval_path``）：
+#:   默认模式（``fill_missing_only=True``）下**只补空缺、不覆盖**；其中
+#:   :data:`TAG_COLUMNS` 那 5 列即使在 ``False`` 模式下也保持旧值优先。
+#: - **统计类**（本清单）：由面板/IC 现算，**两种模式都刷新**。
+#:
+#: 历史坑（2026-09-20 首次暴露，10-27 收口）：``upsert_rows`` 曾对整个行做
+#: ``old.combine_first(new)`` —— 旧值非空即胜，于是**任何计算型字段一旦写过，
+#: 后续修正值永远进不去 registry**。holder_dyn 踩得最狠：dtype bug 态跑出
+#: ``active_day_frac=0.008``，修好重跑、stats 已是正确值，registry 仍是 0.008
+#: （当时只能在 ``scripts/oneoff/_fix_holder_dyn_registry.py`` 里外科回填）。
+#: 更隐蔽的是 ``coverage``：数据天天长，重建后面板覆盖变了，registry 却冻结在
+#: 首次入库态 —— 而 ``MIN_COVERAGE`` / ``MIN_NEU_COVERAGE`` / ``MIN_IC_COVERAGE``
+#: 三道过滤正是读它。
+STAT_COLUMNS: frozenset[str] = frozenset([
+    # 面板覆盖（raw 口径；中性化覆盖另立 neutralized_coverage）
+    "coverage", "neutralized_coverage",
+    # 事件类因子的活跃度（altf / holder_dyn）
+    "active_day_frac", "active_first", "active_last",
+    # 多周期 IC
+    "ic_mean_h1", "ic_mean_h5", "ic_mean_h10", "ic_mean_h20",
+    # 检验统计
+    "n_dates", "n_codes", "ic_mean", "ic_std", "ic_ir", "t_stat", "t_stat_nw",
+    "p_value_nw", "ic_win_rate", "ic_decay5", "autocorr", "significant",
+    # 结构化证据
+    "monotonicity", "pfs",
+    # 冗余预检
+    "dup_checked", "dup_corr_max", "dup_top", "resid_ic", "resid_t_nw",
+    # 分组回测
+    "best_sharpe", "best_config",
+]).union({f"{m}_{c.key}" for c in CANONICAL_CONFIGS for m in _METRIC_COLS})
+
+
+#: **人工可编辑的标签列**——与 :data:`STAT_COLUMNS` 互补。
+#:
+#: 清单 = :meth:`FactorLibrary.set_tag` 能改的那几列。这些列一旦被人工改过
+#: （例如把某个 alpha101 因子标成「动量」而非默认的「量价」），任何 builder
+#: 重跑都不该把它冲回去，因此**两种 upsert 模式下都旧值优先**，只补空缺。
+#: ``subfamily`` 不在其中：它由 builder 从统计行写入（见 altf），属机器派生。
+TAG_COLUMNS: frozenset[str] = frozenset([
+    "family", "frequency", "maturity", "note", "source",
+])
+
+
+def _cmp_parts(s: pd.Series) -> tuple[pd.Series, pd.Series]:
+    """把一列拆成 (数值视图, 归一化文本视图)。
+
+    文本视图里 ``NaN`` / 空串 / 字面 "nan"/"none"/"<na>" 全部归一成 ``""``
+    —— registry CSV 里"空"有两种落盘形态（``""`` 和 NaN），读回来必须视为
+    同一状态，否则统计"改了几格"会把格式差异算成内容变化。
+
+    .. warning::
+       文本视图**只用于非数值对**。pandas 3 的 ``astype(str)`` 保留完整
+       repr，同一个 float 经 CSV 往返会变成 ``-0.0221045296639204`` vs
+       ``-0.022104529663920403`` —— 拿它比较数值对必然误报。
+    """
+    t = s.astype(str).where(s.notna(), "").str.strip()
+    t = t.where(~t.str.lower().isin(["", "nan", "none", "<na>"]), "")
+    num = pd.to_numeric(t.where(t != "", np.nan), errors="coerce")
+    return num, t
+
+
+def _count_changed(old: pd.DataFrame, new: pd.DataFrame) -> int:
+    """统计 ``new`` 相对 ``old`` 真正变化的单元格数（浮点带容差）。
+
+    用于 ``upsert_rows`` 的刷新计数日志：只想知道"这次重跑到底改了多少"。
+    数值对用 ``isclose(atol=1e-12)``（受得住 repr 抖动）；其余按归一化文本比。
+    """
+    n = 0
+    for col in new.columns:
+        a = old[col] if col in old.columns else pd.Series(np.nan,
+                                                          index=old.index)
+        b = new[col]
+        an, at = _cmp_parts(a)
+        bn, bt = _cmp_parts(b)
+        both = an.notna() & bn.notna()
+        n += int((both & ~np.isclose(an.where(both, 0.0), bn.where(both, 0.0),
+                                     rtol=0.0, atol=1e-12)).sum())
+        n += int((~both & (at != bt)).sum())
+    return n
+
+
 def _align_registry(reg: pd.DataFrame) -> pd.DataFrame:
     """把 registry 的列集/列序对齐到 :data:`CANONICAL_COLUMNS`。
 
@@ -255,6 +342,43 @@ def _align_registry(reg: pd.DataFrame) -> pd.DataFrame:
             reg[c] = np.nan
     tail = [c for c in reg.columns if c not in CANONICAL_COLUMNS]
     return reg[list(CANONICAL_COLUMNS) + tail]
+
+
+def _collapse_duplicate_names(reg: pd.DataFrame, *, where: str = "") -> pd.DataFrame:
+    """同一 ``name`` 出现多行时收敛为一行（**保留最后一行**）。
+
+    重复登记的成因见 :func:`scripts.builders.common.read_stats` 的注释：builder 的
+    ``factor_stats_*.jsonl`` 是**追加**写的，读回时不按 name 去重，整批同名行
+    原样进 registry（``upsert_rows`` 只挡「库里已有的」，不挡「批内重复」）。
+    2026-10-27 实测 ``all_a_2018_2026``：1112 行 / 950 唯一 —— 152 个名字被登记
+    2~3 次，全部集中在非 alpha 族（alpha 四族因 ``_merge_outputs`` 全量覆盖而幸免）。
+
+    为什么"保留最后一行"就是"保留最新统计"：追加顺序即运行顺序，且实测 152 组里
+    ``active_last`` 可比的 26 组 **0 例倒退**、``coverage`` 144/152 单调不降。
+
+    收敛放在**读入口**而不是写入口，是为了让所有消费者（``list_all`` /
+    ``has`` / 下游直接 ``set_index("name")`` 的脚本）一次治干净：重复索引会让
+    ``reg["family"].get(n)`` 返回 Series（静默污染）、``float(reg.loc[n, "coverage"])``
+    抛 ``TypeError``。落盘由下一次 :meth:`_save_registry` 顺带完成，不额外改盘。
+
+    Args:
+        reg: 已对齐列序的 registry。
+        where: 日志标识（``load:<dataset>`` / ``upsert``），便于定位来源。
+
+    Returns:
+        pd.DataFrame: 去重后的 registry（原位序保持首次出现顺序，索引已重置）。
+    """
+    if reg.empty or "name" not in reg.columns:
+        return reg
+    dup = reg["name"].duplicated()
+    if not bool(dup.any()):
+        return reg
+    n_before, n_dup_names = len(reg), int(reg.loc[dup, "name"].nunique())
+    out = reg.drop_duplicates(subset="name", keep="last").reset_index(drop=True)
+    log.warning("registry 重复登记（%s）：%d 行 → %d 个唯一因子（%d 个名字重复，"
+                "已保留最后一次统计）。根因 = factor_stats jsonl 追加写 + "
+                "read_stats 未去重", where, n_before, len(out), n_dup_names)
+    return out
 
 
 def _slug(name: str) -> str:
@@ -344,8 +468,9 @@ class FactorLibrary:
     # ---- registry IO ----
     def _load_registry(self) -> pd.DataFrame:
         if self._registry_path.exists():
-            return _align_registry(
+            reg = _align_registry(
                 pd.read_csv(self._registry_path, dtype={"parents": str}))
+            return _collapse_duplicate_names(reg, where=f"load:{self.dataset}")
         # schema 真源 = 模块级 CANONICAL_COLUMNS：空库也给完整列集，免得
         # "新建库少几列 → 第一次批量入库后又变成另一套"
         return pd.DataFrame(columns=list(CANONICAL_COLUMNS))
@@ -578,8 +703,11 @@ class FactorLibrary:
             maturity: experimental / oos_verified / active / retired。
             frequency: 日频 / 周频 / 月频 / 日内。
             set_name: 因子集名（alpha101/evt/moneyflow…），写入 ``set`` 列。
-            fill_missing_only: True（默认）只补空缺字段、不覆盖已有非空值——
-                builder 重跑不该把人工补过的标签冲掉。
+            fill_missing_only: True（默认）时**只有** :data:`STAT_COLUMNS`
+                （计算型统计）允许用新值覆盖旧值，其余列只补空缺——builder
+                重跑不该把人工补过的标签冲掉。False 时本批带来的所有列都以
+                新值优先（:data:`TAG_COLUMNS` 仍旧值优先）。**两种模式都是
+                "非空才写"**：空值永远不会清空已有字段。
 
         Returns:
             dict: ``{"before": n, "after": m, "added": a, "updated": u}``。
@@ -603,6 +731,16 @@ class FactorLibrary:
         new_df = pd.DataFrame(rows)
         if "name" not in new_df.columns:
             raise ValueError("upsert_rows: rows 缺少 name 列")
+        # 🚨 批内同名去重（2026-10-27）。rows 多来自追加式 jsonl（见
+        # ``scripts.builders.common.read_stats``）：同一因子重跑几次就有几行。
+        # 下面的 ``new_only`` 分支只排除"库里已有的"，**不排除批内重复** ⇒ 首次
+        # 入库就把 2~3 行同名原样写进 registry（实测 all_a 1112 行 / 950 唯一，
+        # ``added`` 也虚报）。这里按 keep="last" 收敛（追加顺序 = 运行顺序）。
+        if new_df["name"].duplicated().any():
+            n_dup = int(new_df["name"].duplicated().sum())
+            log.warning("upsert_rows: 批内 %d 行同名重复，按最后一次统计收敛"
+                        "（来源 jsonl 追加写，见 read_stats）", n_dup)
+            new_df = new_df.drop_duplicates(subset="name", keep="last")
 
         batch = {"source": source, "family": family, "kind": kind,
                  "maturity": maturity, "frequency": frequency, "set": set_name}
@@ -622,11 +760,37 @@ class FactorLibrary:
         n_add = int((~new_df["name"].isin(known)).sum())
         dup = reg["name"].isin(new_df["name"])
         keep = reg[~dup]
-        if dup.any() and fill_missing_only:
-            # 已有行：逐字段只补空缺（空串视同空缺），新行整行并入
-            old = reg[dup].set_index("name").replace(r"^\s*$", np.nan, regex=True)
-            add = new_df.set_index("name").reindex(old.index)
-            upd = old.combine_first(add).reset_index()
+        n_refresh = 0
+        if dup.any():
+            # 已有行：**按列分组合并**（2026-10-27 重写，见 STAT_COLUMNS）。
+            #   - 统计列：非空新值胜出 —— 重跑重算过就必须刷新。
+            #   - 标签列：fill_missing_only=True 时旧值优先（保住人工标签），
+            #     False 时非空新值胜出（builder 明确要求整批覆盖）。
+            # 两种模式都是「非空才写」：空值不再清空任何已有字段。此前
+            # False 分支走 concat 整行替换，stats 行没有的列（source /
+            # formula / created_at…）会被洗成 NaN，这正是 holder_dyn 只敢用
+            # oneoff 脚本外科回填的原因。
+            old = (reg[dup].set_index("name")
+                   .replace(r"^\s*$", np.nan, regex=True))
+            # 空串一律视同缺失：否则 ``stats`` 里的 "" 会盖掉旧值（写回 CSV
+            # 又变成空，等于把统计抹掉一格），且刷新计数会把 ""↔NaN 当成变化
+            add = (new_df.set_index("name").reindex(old.index)
+                   .replace(r"^\s*$", np.nan, regex=True))
+            # 旧值优先打底（= 只补空缺）
+            upd = old.combine_first(add)
+            refresh = [c for c in add.columns if c in STAT_COLUMNS]
+            if not fill_missing_only:
+                # 显式覆盖：本批带了的列全部以新值优先（仍不动空值）。
+                # 但 :data:`TAG_COLUMNS`（set_tag 可人工改的列）始终旧值优先——
+                # builder 重跑不能把人工分类冲掉。
+                refresh = [c for c in add.columns if c not in TAG_COLUMNS]
+            if refresh:
+                new_wins = add[refresh].combine_first(old.reindex(columns=refresh))
+                # 计数：真正发生变化的单元格（浮点容差，避免 repr 抖动误计）
+                n_refresh = int(_count_changed(old.reindex(columns=refresh),
+                                               new_wins))
+                upd[refresh] = new_wins
+            upd = upd.reset_index()
             # 2026-09-22 修：混合批次（新+已有）时 upd 只覆盖交集，
             # 纯新增行会被 keep 过滤后静默丢失——必须显式并回
             new_only = new_df[~new_df["name"].isin(known)]
@@ -634,8 +798,8 @@ class FactorLibrary:
         else:
             out = pd.concat([keep, new_df], ignore_index=True)
         self._save_registry(out)
-        log.info("轻量登记: %d -> %d 因子（新增 %d, 更新 %d）",
-                 before, len(out), n_add, int(dup.sum()))
+        log.info("轻量登记: %d -> %d 因子（新增 %d, 更新 %d, 统计刷新 %d 格）",
+                 before, len(out), n_add, int(dup.sum()), n_refresh)
         return {"before": before, "after": len(out), "added": n_add,
                 "updated": int(dup.sum())}
 

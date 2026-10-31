@@ -10,8 +10,8 @@ factor_stats jsonl 文件名与两处小开关）、``ffill_pit_multi`` 4 份、
 - **close_adj 构建**：daily_all_a × backward_factor，交集对齐，float32，
   从 :data:`KEEP_FROM` 起（单一缓存根 = ``Config.cache()["root"]``）；
 - **registry 合并**：统一走 ``FactorLibrary.upsert_rows()``（原子写、列序归一
-  到 CANONICAL_COLUMNS、只补空缺不覆盖人工标签）；仅在库根推断失败时才回退
-  历史直写（append + ``keep="last"``、utf-8-sig）；
+  到 CANONICAL_COLUMNS、**统计列刷新 + 标签列只补空缺**，人工标签不覆盖）；
+  仅在库根推断失败时才回退历史直写（append + ``keep="last"``、utf-8-sig）；
 - **IC 融合**：对本次 stats 里的因子名重算 ``ic_h{h}``，
   ``fwd = close_adj.pct_change(h).shift(-h)``，因子面板按
   ``IC_CODE_STRIDE`` 抽稀取列（与既有 ic_h 同口径）。
@@ -95,12 +95,34 @@ def ffill_pit_multi(series_long: pd.DataFrame, cal_idx: pd.DatetimeIndex,
 
 
 def read_stats(ds_dir: Path, family: str) -> list[dict]:
-    """读取本次产出的 ``factor_stats_{family}.jsonl``（逐因子统计行）。"""
+    """读取本次产出的 ``factor_stats_{family}.jsonl``（逐因子统计行，按名去重）。
+
+    🚨 **必须按 ``name`` 去重取最后一行**：这个文件是 builder 用 ``open("a")``
+    **追加**写的（重跑保留历史、也支持断点续跑），所以跑过 N 次就有 N 行同名。
+    读回去重前，整批同名行会经 ``merge_outputs`` 原样进 registry ——
+    ``upsert_rows`` 只排除"库里已有的"，不拦批内重复，于是首次入库即写 2~3 行。
+    2026-10-27 实测 ``all_a_2018_2026``：registry 1112 行 / 950 唯一，152 个名字
+    重复（altf 40→20、fundamental 178→86、evt 26→11…），全部非 alpha 族 ——
+    alpha 四族只因 ``build_alla_alpha_panels._merge_outputs`` 自己
+    ``drop_duplicates(keep="last")`` 后全量覆盖才幸免。
+
+    "最后一行 = 最新统计"的依据：追加顺序即运行顺序，实测 152 组里
+    ``active_last`` 可比的 26 组 0 例倒退、``coverage`` 144/152 单调不降。
+    """
     p = ds_dir / f"factor_stats_{family}.jsonl"
     if not p.exists():
         return []
-    return [json.loads(line) for line in
+    rows = [json.loads(line) for line in
             p.read_text(encoding="utf-8").splitlines() if line.strip()]
+    by_name: dict[str, dict] = {}
+    for r in rows:
+        nm = r.get("name")
+        if nm:
+            by_name[nm] = r  # 后者覆盖前者 = keep="last"
+    if len(by_name) != len(rows):
+        log.debug("read_stats(%s): %d 行 → %d 个唯一因子（jsonl 追加写历史）",
+                  family, len(rows), len(by_name))
+    return list(by_name.values())
 
 
 def fuse_horizon_ic(ds_dir: Path, h: int, family: str, *,
@@ -183,7 +205,8 @@ def merge_outputs(ds_dir: Path, family: str, *,
         family_tag: 因子族标签（受控词表，见 ``FAMILY_WHITELIST``）。
         kind / maturity / frequency: 轻量登记的默认标签。
 
-    写入统一走 ``FactorLibrary.upsert_rows()``：原子写 + 列序归一 + 只补空缺，
+    写入统一走 ``FactorLibrary.upsert_rows()``：原子写 + 列序归一 +
+    **统计列刷新 / 标签列只补空缺**（见 ``research.factor_library.STAT_COLUMNS``），
     不再直接 ``to_csv`` 覆盖 registry（那条路径正是 912 个因子
     ``source``/``family``/``kind`` 全空的成因）。
     """
