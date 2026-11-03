@@ -26,6 +26,7 @@
 | `monitoring/` | 监控台账 + 报告。⚠️ 旧链 2026-09-21 退休（计划任务已删，证据 `legacy_monitor_*_20260921.log` / `legacy_task_xml_20260921.xml`）；`production_ic_daily.csv` 为**现役**每日 IC 台账 | `scripts/reporting/monitor_performance.py`（退休，手动可跑）+ `scripts/reporting/monitor_production_ic.py`（现役） |
 | `models/` | 模型注册台账（旧监控链读取；现役链不依赖） | `scripts/evaluation/walk_forward_model.py` |
 | `textmining/` | 文本因子管线（**活跃开发中**，结构见其自带 README） | `scripts/textmining/*` |
+| `alla_rolling_ortho920fundind/` | 定版 `dingban_fundind` 的滚动产物；`selection/` 供每日出榜（`--preset dingban`）读取，**勿动** | `scripts/pipelines/rolling_grid_alla.py --preproc ortho_fundind` |
 
 ### 结论速查：43 份实验 README（每个目录一行）
 
@@ -39,6 +40,7 @@
 | `altf_neu_backfill` | alt 20 因子回填 `panels_neu` 后门槛 strict 通过，但入选集逐位不变（死重） | 判负 | 2026-10-10 |
 | `altf_p1` | alt 三族 20 因子入库；等权合成稀释（news ΔIC 随权重单调降），席位 0/36 | 判负 | 2026-10-09 |
 | `altf_p1/model_ablation` | macro / news 作旁路特征 ΔIC −0.0007 / −0.0005，pred 秩相关 0.995+ ⇒ 框架吸收不了 | 判负 | 2026-10-10 |
+| `alphasage_probe` | AlphaSAGE(ICLR 2026) 探针：编码器 GRU→RGCN 单变量对照。ΔOOS\|IC\| **+0.0093（0.1034→0.1127）< 0.02 门槛 ⇒ 不可分辨**（Δ/SE≈0.5）；换图成本仅 +3.3% s/iter、不需 GPU（reward 求值是唯一瓶颈）、`--jobs` 仅 1.55×；两个缺陷：参数量 2.06× 未对齐、两臂 600 iters 后均未超均匀基线 | 工具保留 · 增量不可分辨 | 2026-11-03 |
 | `cheap_lever_scan` | 低成本仍有肉：小 buffer entry + 高 h5 权重，两个微调四窗口全一致 | 采纳 | 2026-10-14 |
 | `consensus_availability` | 分析师一致预期数据不可得（先验尽调），不立项 | 判负 | 2026-10-13 |
 | `cost_penalty_probe` | 成本感知 QP 自救 +11.7pp 后仍输简单 buffer；本目录两版旧结论已作废 | 判负 | 2026-10-13 |
@@ -48,8 +50,11 @@
 | `etf_champ` | 长线「磐石」信号板运行产物（方案与口径见 `etf_contest5/README.md` §五） | 采纳 | 2026-10-29 |
 | `factor_pool_composition` | 量价占比 86.0%（入选 84% → gain 90.5%）；非量价 28% 席位只贡献 9.5% | 归档 | 2026-10-10 |
 | `four_paths` | 四条提升路径全收口，无一过门槛（新信息源 / 新归纳偏置均空） | 判负 | 2026-10-10 |
-| `industry_rotation` | 行业池轮动独立线（31 申万一级原生信号）：9/10 信号无稳定超额，唯一 `sue_low` +7.80pp/t 2.15（45% 来自静态选行业，未过 caliber） | 工具保留 | 2026-10-31 |
-| `report_replica` | 国泰海通《七维共振》复现（周频 Top5）：**7 类只做出动量 1 类**（8 因子 +2.1~+6.4%）；深度学习**已按研报自训 TCN**（个股可成交 IC **0.072**、行业层市值加权 0.006、组合 −7.95%；⚠️ 早期 0.197 已证为标签分母伪相关、作废）；**归零机制已查清 = 信号在小票、权重在大票**（等权 0.0423/t 2.10、小市值 0.0770/t 3.92、大市值 −0.0039，见 `dl/decomp_industry.md`），超预期方向相反、估值无效，分析师/大单/RAFT 无数据 | 判负（框架保留） | 2026-10-31 |
+| `industry_rotation` | 行业池轮动独立线（31 申万一级原生信号）：9/10 信号无稳定超额，唯一 `sue_low`（做多低 SUE 行业）全窗 +9.42pp/t 2.49 —— 但**只有全窗显著**，2023 起后半段 t 1.19，且数字随 `sue_q` 面板每日重建而漂（11-02 复核时同一窗口两次跑出 +7.80pp/t 2.15 → +9.42pp/t 2.49），未过 caliber | 工具保留 | 2026-11-02 |
+| `report_replica` | 国泰海通《七维共振》复现（周频 Top5）：**7 类只做出动量 1 类**（8 因子 +2.1~+6.4%）；深度学习**已按研报自训 TCN**（个股可成交 IC **0.072**、行业层市值加权 0.006、组合 −7.95%；⚠️ 早期 0.197 已证为标签分母伪相关、作废）；**归零机制已查清 = 信号在小票、权重在大票**（等权 0.0423/t 2.10、小市值 0.0770/t 3.92、大市值 −0.0039，见 `dl/decomp_industry.md`），超预期方向相反、估值无效，分析师/大单/RAFT 无数据；**`six_fixes/`** = 评述 §四 六条改法的实测（降换手对慢信号有效/对快信号无效 · holdout+FDR 保留率 0.27 · 滚动权重与 ETF 联合优化双双否掉 · 31 行业仅 25 个可买纯 ETF） | 判负（框架保留） | 2026-11-02 |
+| `report_replica/industry_direct` | 直接训行业模型（31 行业 × 520 期，标签=行业收益）：🚨 **11-02 晚修标准化轴后重跑**，rank IC 最高 **0.0443 / t 2.13**（`lgbm_top100`，2020–2026）= 旧天花板 0.0333 的 1.33 倍（修前报的 0.0549/t 2.67 是错轴产物，作废）；36bp 最好臂变成 **`eq_ic_top20` +2.64%**（略胜纯月频动量 +1.44%），但它 2021+ IC 只剩 0.0074、36bp +0.96%，`lgbm_top200` 2021+ 36bp **−0.96%** ⇒ **「行业层没 alpha」被推翻，「这条路能稳定赚钱」不成立**；副产品：2025/2026 行业层 IC **+0.096/−0.025**（同期 8 个全 A 模型聚合后全为负） | 判负（结论已推翻一处旧判断） | 2026-11-02 |
+| `report_replica/ic_bridge` | **IC 经济桥接**（诊断口径）：证明「IC 高不赚钱」可算不可玄——`E[超额]=IC×σ×z` 与实测同量级（折扣 0.39–1.34）；**IC 排序与盈亏平衡点完全相反**（IC 0.049→breakeven 11.5bp vs IC 0.031→30.7bp）；T+1 后周频 IC 腰斩 44–47%、月频无损；四相位极差 6.9pp（原表 gross 取在最好相位）；🚨 查出**成本口径 2 倍偏差**（本线 36bp 单边 = 项目 36bp 往返，`net36bp`≡项目 `net18bp`），修正后最好臂 +1.32% | 工具保留 | 2026-11-02 |
+| `report_replica/p0a` | **P0a：给行业模型未中性化特征** ⇒ 判负（**理由待复跑**）。🚨 该页 raw 臂数字都是在「跨因子标准化」这条错轴上跑的：修成跨行业 z 后 raw **反而更好**（`ridge_top50__m20` IC **0.0937/t 3.55**、`lgbm_top200` 0.0673/t 2.84；neu 同臂 0.0254/0.0377），与「0.0496→0.0183」方向相反。但 2021+ 36bp 仍为负（+2.24%→−0.09%）⇒ **「赚不到钱」保住，「中性化更好」这条机制解释作废**。原判据（四相位 −0.67%、市值剥离后更差 −1.38%~−3.19%、raw 与 log 市值相关 +0.19~0.20）全部需在 `--znorm ind` 下重跑。**§五 中性化审计**仍有效：生产残差行业均值 ≡ 0、放宽中性化不是解、**0.033 产生在「集成」这一步**；副产品 **59/950 因子的 `panels_neu` 是浮点噪声放大成的假面板**。**「特征层是瓶颈」这一诊断被自己的实验否掉**（η²=10.3% 是方差分解、不是可预测上限） | 判负（理由待复跑确认） | 2026-11-02 |
 | `frontier_audit_2026-10-19` | h60 预测力存活（IC 0.161）但组合层无增量；残差无正交信息 | 判负 | 2026-10-19 |
 | `hp_sensitivity` | 13 配置超参扫描无被漏掉的低垂果实，当前点已在地板 | 判负 | 2026-10-10 |
 | `impact_cost_probe` | 逐股冲击 vs 固定滑点：1e8 下冲击 ≈ 固定 10bp，成本是 AUM 强函数 | 工具保留 | 2026-10-13 |
@@ -78,6 +83,7 @@
 
 | 目录 | 说明 |
 |---|---|
+| `caliber/` | 统一口径基线落盘（`baseline_prod/fair/impact/flat.json`、`buffer_scan_prod.json`、`caliber_gap_matrix.md`）；真源 `scripts/evaluation/caliber.py`，数值以 `config/baselines.yaml` 为准 |
 | `cpcv_h1/` | h=1 CPCV 无偏评估（2026-09-11 重生成） |
 | `freq_tune/` | 调仓频率精修（含引擎修复前存档 `freq_tune_prefix_engine_fix_20260825.csv`） |
 | `multiyear/` | 多年度 OOS 稳健性（2026-09-01 修复后重跑） |
@@ -122,7 +128,7 @@
 | `dpp_sigma_sweep/` | DPP sigma × quality 扫描（2026-10-09）：s≥0.2 全平；DPP vs 直选最强 50 仅 +0.0014（噪声内），价值在降相关 |
 | `altf_p1/` | alt 三族 20 因子首轮入库 + 增量测试（2026-10-09，registry 955→975）：news 族含独立信息（相关 0.139）但等权合成稀释 |
 | `deliverable_portfolio/` | 可交付组合 集中度 × 行业约束（2026-10-09/10，**P0 落地**）：甜点 35~45 只（+1.9~2.3pp）；行业硬只数上限 −2.64pp、m≥8 才回本；脚本已固化 `scripts/evaluation/deliverable_portfolio.py` |
-| `alla_rolling_macrof*/`、`alla_rolling_newsf*/`（5 臂） | altf P1 模型层 A/B 五臂（`_base` 已清、pred 保留）：macro/news 旁路特征均无增益（ΔIC −0.0007 / −0.0005）→ 见 `altf_p1/model_ablation/` |
+| `alla_rolling_macrof/`、`alla_rolling_macrof_base/`、`alla_rolling_macrof_h20/`、`alla_rolling_newsf/`、`alla_rolling_newsf_h20/` | altf P1 模型层 A/B 五臂（`_base` 已清、pred 保留）：macro/news 旁路特征均无增益（ΔIC −0.0007 / −0.0005）→ 见 `altf_p1/model_ablation/` |
 | `news_alpha_probe/` | news 族组合层收尾（2026-10-10，**P0 路径关闭**）：可交易 IC 仅 0.0098(h1)/0.0174(h20)，融合在 ±0.3pp 噪声内 |
 | `factor_pool_composition/` | 因子池体检（2026-10-10）：量价占 86.0%；非量价 28% 席位只贡献 9.5% gain |
 | `altf_neu_backfill/` | alt 族回填 `panels_neu`（2026-10-10，数据面问题 #1）：门槛 strict 通过，但入选集逐位不变（死重） |
@@ -139,6 +145,10 @@
 > 本节由 `scripts/data_tools/docs_lint.py` 规则 1 逼出来：上表用 `etf_contest5*`、
 > `alla_rolling_macrof*/` 这类**通配写法**，新臂建目录时不加行也不会被发现，
 > 于是 22 个目录长期处于「索引里查不到、只能靠 ls」的状态。此后**每臂一行**。
+> 🚨 **2026-11-03 起拒绝通配**：`alla_rolling_macrof*/` 这种写法不再算覆盖，
+> 每个目录必须在 §1.1 / §1.2 / 本表 / §结论速查 之一有**精确名字**的一行
+> （`docs_lint --check` 会红）。起因：10-28 立的「每臂一行」无人执行，11-03 复查
+> 又漏了 `alla_rolling_macrof`、`_newsf` 两个父目录 ⇒ **没有 lint 的约定等于没有约定**。
 > 判定列口径同 §一 速查表（这些目录无独立 README，结论挂在其父实验的 README）。
 
 | 目录 | 是什么 | 判定 |
@@ -175,6 +185,7 @@
 | `docs/另类数据管道_数据源说明.md` | 另类数据管道 7 源落地实况 + PIT 对齐规则（§四，TODO 引用） |
 | `docs/research_notes/另类数据调研三部曲_2026-09-20.md` | 另类数据调研合并册（方向 → 全景分类 → 现成源实测；2026-09-24 由 3 篇合并，原文件快照见 §四） |
 | `docs/research_notes/短板匹配与微信文章研读_2026-09-22.md` | 短板盘点×前沿方案匹配 + 微信文章逐篇研读合并册（2026-09-24 由 2 篇合并） |
+| `docs/research_notes/国泰海通七维共振_方法论评述_2026-11-02.md` | 《七维共振》方法论评述：四处研究自由度（聚合/选优/组合权重）被当成技术细节 + 6 条改法（2026-11-02，`report_replica/dl/README.md` §九 引用） |
 | `docs/research_notes/`（其余 12 篇） | 研报研读笔记（一篇一报，被 TODO_ARCHIVE 册Ⅱ 指针引用，**不做合并**）+ P1 速读批/CNEquity 调研 |
 | `docs/consistency_checks/` | **研报口径核对 & 公平性核对报告**（2026-09-16 新建）：`AI97_预算与复现一致性核对.md`、`口径核对_AI39_多因子10.md`、`gflownet_im_faircheck.md` + 对应三臂原始日志 |
 | `archive/ml-synthesis-hs300-report/` | 已归档的 ML 合成交付报告（根 README 能力表引用） |
@@ -222,8 +233,12 @@
 
 #### 三条硬规则
 
-1. **新实验自建目录**：跑一个新实验前先 `mkdir reports/<实验名>/`，所有产物（含日志）进该目录。
-   **不要**把 `xxx_run.log` 丢在根目录——这是 2026-09-16 之前根目录 38 个散件的主因。
+1. **新实验用工具建目录，别手敲 `mkdir`**：
+   `python -m scripts.data_tools.new_experiment <名> --desc "<假设一句话>" --script <脚本>`
+   —— 一条命令建目录 + 复制四要素模板 + 在 §结论速查 登记 `进行中`。
+   所有产物（含日志）进该目录，**不要**把 `xxx_run.log` 丢在根目录——这是 2026-09-16
+   之前根目录 38 个散件的主因。收口时把判定从 `进行中` 改成实际结论。
+   手敲的目录没有判定行，`docs_lint --check` 直接 rc=1。
 2. **临时件必须带 `_` 前缀**且只放在 `_tmp/`。当天调试产生的 `_pytest_*.log` / `_smoke_*.json`
    **当天清**，不要留在根目录过夜。落根目录的 `_` 文件视为待清理。
 3. **移动前先查引用**：任何 `reports/` 下文件的移动，先执行：
@@ -319,6 +334,13 @@ model层 / ML合成，其余已删、可重跑复现——结论见 §三.13~17�
 ---
 
 ## 四、清理记录
+
+- **2026-11-03（jqs 两臂 `_base/`，947.0MB）**：`alla_rolling_jqs_amt/_base/` 与
+  `alla_rolling_jqs_base/_base/` 逐文件 md5 全相同（互为副本，不是两份独立结果）、
+  无脚本读取（全库扫过；`jq_amount_roll/compare.py` 只读 `pred/` 和 metrics）、
+  `--stage prep` 约 65s 可重建。快照
+  `%USERPROFILE%\_yq_backup\20261103_jqs_base_manifest\manifest.csv`，走回收站删除。
+  ⚠️ 保留 `pred/` / `equity/` / `metrics_*.csv` / `selection/`——那是「判负」结论的证据。
 
 - **2026-10-29（ETF 实验记录收口：探针脚本 + 临时脚本 + 12 个产物目录）**：
   5 脚本 + 18 临时脚本 + 12 目录，全部走 `scripts/oneoff/_recycle_batch.py` 回收站。

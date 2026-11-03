@@ -44,20 +44,105 @@
 ### P0（本周，决定去留）
 
 - [ ] **① 深度学习维「口径修正重训」= 研报线最终判决（好机器，唯一保留攻的方向）**
-  三处已定位缺陷全部修好后再判：**`close` 分母基线** / **去量纲两变体**（OHLC÷均价、
-  个股时序 z-score）/ **训练与预测都剔 T 日涨跌停**；8 个日频配置 × 2018–2026 全年滚动 ×
-  seed 3。**预注册判据（出数前定，不许事后改）**：主 **大市值三分位行业 IC ≥ 0.04**
-  （现 −0.0039）、次 **全样本等权行业 IC ≥ 0.05**（现 0.0423）。
+  三处已定位缺陷全部修好后再判：**`close` 分母基线** / **去量纲三变体**（OHLC÷均价、
+  个股时序 z-score、时序 z 的 5 日变化）/ **训练与预测都剔 T 日涨跌停**；8 个日频配置 ×
+  2018–2026 全年滚动 × seed 3，共 **5 臂（A0–A4）**。
+  **预注册判据（出数前定，不许事后改）**：主 **大市值三分位行业 IC ≥ 0.04**
+  （现 0.0127，float 口径 0.0169）；次 **全样本等权行业 IC ≥ 0.05**（现 0.0424）；
+  **准入闸门 = 周双边换手 ≤ 110%**（现 158%，研报 97.7%）——**不达则即使 IC 过线也不进组合层**。
   → **不达 ⇒ 正式判「研报 DL 维复现不出」，研报线整段归档，不再追**；
-  达 ⇒ 才进组合层（判据：Top5 周频年化超额 ≥ +10% 且多头单调）。
-  命令与硬边界见 §一「研报七维复现线」段；产物 `reports/report_replica/dl/`。
+  达 ⇒ 才进组合层（判据：Top5 周频 10bp 净超额 ≥ +2pp 且多头单调）。
+  ✅ **同批已做、不需重训的 P0**：聚合口径改等权（`--agg equal`）⇒ 毛超额 −0.06%→+4.60%、
+  行业 IC 1.69%→4.24%（t 2.28），但换手不变 ⇒ **口径是必要条件，降换手才是活路**
+  （证据 `reports/report_replica/dl/README.md` §九）。
+  命令、臂表、回传清单见 §一「研报七维复现线」；**自包含执行版** = `reports/report_replica/dl/GOOD_MACHINE_TASK.md`；产物 `reports/report_replica/dl/`。
   🚨 现有 `pred_*.parquet` 是**伪标签（分母 = 均价）训的**，只能当偏保守下界引用。
+
+- [x] **①·附 评述 §四 六条改法已全部跑完（本机，2026-11-02）** → `reports/report_replica/six_fixes/README.md`
+  - **降换手：对快信号无效、对慢信号有效**。DL 换手 158%→22%，36bp 从 −22.2% 改善到 **−4.6%**
+    但仍为负；根因 = **alpha/换手恒为 0.0009~0.0014**（毛 alpha 与换手近似成正比，只能等比缩量）。
+    `mom_180_20` 月频 36bp **+4.35~4.59%**（周频 −0.95%），alpha/换手 0.0121→0.0690（5.7×）
+    ⇒ **这是目前唯一没被成本吃掉的形态，但 t 仅 ~1.0，仍不是"已验证的 alpha"**。
+  - **holdout + BH-FDR = 本线最硬负结果**：样本内 IC 只有 **27%** 活到样本外（中位保留率 0.27）、
+    **11/29 符号翻转**、|IC| 中位 0.0374→0.0134；FDR 只放行 **3/29 且全是反向 SUE**
+    （验证窗口 t −3.09/−3.01/−2.34）。⇒ **本线任何 IC 数字先打 0.27 折**；
+    也解释了研报「92 选 43 全在同一段上算」为什么不可能维持 6.85%。
+  - **两条否掉**：① 滚动 `Σ_IC⁻¹·IC` 组合权重（毛 +0.16pp 噪声级、换手翻倍、36bp −2.85%→−9.71%）；
+    ② 以 ETF 为资产联合优化（λ=4→1024 单调收敛回 `two_step_te`，**无一档超过**；ETF 层能优化的
+    只有跟踪误差，而两步法已在做）。
+
+- [x] **②·附 直接训行业模型（换标签而不是换输入）已判负（本机，2026-11-02）**
+  → `reports/report_replica/industry_direct/README.md`、`scripts/evaluation/industry_direct_model.py`
+  - **范式确实成立**：31 行业 × 520 期、标签 = 行业指数下期收益。**修标准化轴后重跑**（见 ②·附3）：
+    样本外 rank IC 最高 **0.0443 / t 2.13**（`lgbm_top100`）= 旧天花板「个股模型聚合」0.0333 的 **1.33 倍**；
+    `lgbm_top200` 0.0377 / t 1.86（修前 0.0496 / t 2.49 —— 其中一部分来自错轴，别再用旧数）。
+  - **经济价值不成立**：36bp 下 **最好的一臂变成 `eq_ic_top20` +2.64%**（已略胜纯月频动量 +1.44%），
+    但它 2021+ IC 只剩 **0.0074**、36bp **+0.96%**；`lgbm_top200` 2021+ 36bp **−0.96%**。
+    ⇒ **31×85 的样本量是硬约束，不是调参能解决的**。
+  - 🔑 **推翻旧结论**：行业层 2025/2026 的 IC 是 **+0.096/−0.025**（`lgbm_top200` 修轴后），而同期
+    8 个全 A 模型聚合后**全为负**（−0.026~−0.046）⇒ **死的不是行业层 alpha，是「个股模型聚合」这个取法**。
+  - 🔑 **可复用判据：IC 高 ≠ 赚钱**。纯因子库（去掉动量特征）m20 IC 0.0322 vs 含动量 0.0377，
+    毛超额却只有 +0.39% vs +5.13% —— 全截面 IC 靠中间名次，Top5 靠尾部。
+    ⇒ 以后有人拿 IC 涨价汇报，先问「Top5 尾部排序变了没有」。
+  - **覆盖率缺口（阻塞「判可交易」）**：31 行业仅 **25** 个能买到纯 ETF（缺纺织服饰/轻工/商贸零售/
+    综合/汽车/环保）；ETF 层把 TE 从 12.4% 抬到 19.5~25.1%（研报 10.24→20.40，同现象）。
+  - 🚨 **顺带修 bug**：`report_replica.port_backtest` 硬编码 52 期年化 ⇒ `--freq M` 的超额/年化
+    被放大 ~4×，**历史 `*_M.*` 产物别直接引用**（已改按 `dates` 自动判 `ppy`）。
+
+- [x] **②·附2 中性化审计 ⇒ 判否（本机，2026-11-02 晚）** → `reports/report_replica/p0a/README.md` §五、
+  `scripts/evaluation/industry_agg_neutralize_p0.py`
+  回答「生产到底有没有做行业中性化、它是不是行业层没 alpha 的瓶颈」。
+  - **做了，且是硬性的**：`neutralize` 逐日 OLS，设计矩阵 = `[log 流通市值] + [申万一级**全量**哑变量]`
+    （不 drop_first，列和 span 截距）⇒ 残差对每个行业哑变量正交。产线 `--preproc ortho` 读 `panels_neu`。
+  - **代数后果（恒等式级，比 η² 更硬）**：任一天任一行业，残差**等权均值 ≡ 0**。950 因子全扫，
+    **873/950（91.9%）** 实测 median **7.5e-09**（float32 舍入）。⇒「把行业信息还给模型」在当前生产面板上目标值恰好为零，不是"不够"。
+  - **但放宽它不是解**：24 因子配对（同因子/同日/同行业/同权重/同基准，只换预处理）——
+    月频 `|IC|` raw **0.0192** vs neu **0.0195**（**持平**）；周频 0.0112→0.0122（1.7×，75% 因子变好）
+    但绝对值仍 **0.012**，远低于可交易门槛，且 ②·附 已实测 raw 特征喂模型四相位全负。
+  - 🔑 **0.033 与中性化无关，它产生在「集成」这一步**：单因子聚合 ≈0 → 模型聚合 0.030
+    （gbdt 0.030/0.034、ens 0.015/0.028、线性 ridge 0.036/0.017，中位恰好 0.030）。
+    **gbdt 的行业共同成分幅度 0.172σ vs ridge 0.0015σ（115×），两者行业层 IC 却相当**
+    ⇒ 排序信息来自极微弱但一致的扰动，不吃"大成分"（秩 IC 对幅度免疫）。
+    剔除 `log(行业股票数)`+行业均值 `log 市值` 后保留率 **0.91~1.37** ⇒ 非规模/覆盖度代理。
+  - ⚠️ **副产品：59/950（6.2%）因子的 `panels_neu` 是浮点噪声放大成的假面板**：
+    零膨胀 → `winsorize_mad` MAD=0 压常数 → 残差 ~1e-7 → `zscore` 放大成 O(1) 纯噪声，
+    覆盖率/统计全正常。**48 个可救**（原始唯一值≥2，被 `winsorize_mad` 的 MAD=0 分支压坏，
+    改退化到 quantile 即可救回）/ **11 个原始即常数**（无救，应剔除，如 `alpha360_CLOSE0`）。
+    命中含 **`ln_mktcap`/`float_mktcap`/`is_st`/`alpha191_004`/`alpha101_086`** 等
+    （`ln_mktcap` 的 neu 与 log 市值相关 **−0.0035** 却 sd 0.35）。
+    进 gbdt 是零信息列，只增方差 ⇒ **P2 清理项**（先修 `winsorize_mad` 再重建 48 个面板）。
+  - 结论：**P0「放宽中性化 + 重训」这条不再开臂**；行业线唯一有解释力的方向仍是**行业原生特征**（③）。
+
+- [x] **②·附3 行业轮动三线·独立复核（本机，2026-11-02）** → `reports/docs/consistency_checks/行业轮动线_独立复核_2026-11-02.md`
+  - ✅ **P0 三条已修并全部重跑（11-02 晚）**，修复记录见报告开头「修复记录」表。修完的实测：
+    - **`sue_low` 只有全窗显著**（原判据不变）：全窗 +9.42%（几何）/t 2.49，前半 t 2.50、
+      **后半 t 1.19**（+6.8%）。后半比复核当时（t 0.69）好很多，**原因是 `sue_q` 面板 11-01 重建过**——
+      同一份代码两天跑出 +7.80pp → +9.42pp。⇒ README 已加「数据态指纹」行与边界第 8 条。
+    - **换手 P0 改 T+1 成交**（`run()` 按块重写，同批修掉 k=3 年化 `ppy/k` 与 IC 口径）：
+      gbdt IC 0.0217→**0.0179**、毛 2.91%→**1.72%**、净 2.21%→**1.02%**；18bp 下最优臂 **−0.57%**。
+      新结论：**降频只救 `ridge`**（季调+buf2 净 +4.50%），`gbdt` 季调后 IC 反号（−0.0071）⇒ 它只有一个月寿命。
+      → `reports/report_replica/p0a/parte_rotation_turnover.md`
+    - **`industry_direct_model` 标准化轴修好**（`--znorm ind` 默认跨行业，`fac` 留作对照臂）：
+      `lgbm_top200__m20` IC 0.0496→**0.0377（t 1.86，不再 >2）**、36bp +0.56%；
+      **最好 36bp 变成 `eq_ic_top20` +2.64%**，但它 2021+ IC 只剩 0.0074、36bp +0.96% ⇒ 判负结论不变、理由换了。
+  - 🚨 **修轴翻出待办：`p0a` 的 raw 对照也在错轴上，结论需复跑**。换跨行业 z 后 raw 反而高得多
+    （`ridge_top50__m20` IC **0.0937/t 3.55**、`lgbm_top200` 0.0673/t 2.84，neu 同臂 0.0254/0.0377），
+    与「0.0496→0.0183 下降」方向相反。但 2021+ 36bp 仍为负（+2.24%→−0.09%）⇒
+    **「赚不到钱」保住，「中性化更好」这条机制解释作废**。待办：在 `--znorm ind` 下重跑
+    四相位 / 市值剥离 / 安慰剂三件，再改 `p0a/README.md` 的判定。证据 `industry_direct/post_fix_robust.csv`。
+  - P1（未修，保留在案）：成本 `turn×2×36bp` 实收 **72bp/单位单边换手**（`Config.costs()` 是 36bp 往返，
+    **偏保守 2×**，已在 docstring 写明并暂不改数以免放大超额）；
+    超额定义三条线混用（几何/算术，同信号差 0.8~8pp，`turnover_p0` 已加 `excess_geo` 列）；
+    静态分解控制组自带前视（**59% → 无前视 15%**，已在 README §三 加警告）；年化超额 SE 实测 **3.58pp**（已改为实算）。
+  - 骨架判对：T+1 成交、基准同源、`sue_q` 的 PIT（`ann_date` ffill）、逐年扩展窗 —— 四处均无前视。
 
 - [ ] **② 给行业轮动线补「合法基线」（阻塞项：不做则一切数字不许叫「改进」）**
   `config/baselines.yaml` 现在**没有行业轮动基线** ⇒ `caliber.py` 无从对照，
   `sue_low +7.80pp` 只能线内比较。要建两条并落指纹：
   **31 个申万一级等权买入持有（月频再平衡）** + **行业层 `mom12_1`**。
   **这是 `sue_low` 能否对外引用的唯一前置**（也顺带解决 ⑦ 的动量族对照）。
+  ⚠️ 补基线时一并解决复核发现的两件：`sue_q` 面板要落**数据态指纹**（重跑已从 +7.80pp 漂到 +9.42pp）、
+  成本口径统一到 `Config.costs()`（现在收 2×，全线下调后超额会上浮 ~0.65pp）。
 
 - [ ] **③ `sue_low` 可信化三连（本机，一天量级）**
   ① **行业原生 SUE 代理**（行业整体净利增速 / ROE 环比变化，不再聚合个股）
@@ -873,20 +958,78 @@
   实测同一份预测换 `close[t]` 分母后 **0.198→0.072**，裸特征 `−(vwap/close)` **+0.167→−0.013**。
   代码已修（`forward_avg_ret(avg, idx, h, close)` 强制传 close）。**现有 `pred_*.parquet`
   是伪标签训的**，0.072 是偏保守下界，不能当模型上限。
-- **⏳ 好机器任务（待执行；方向已按新诊断重排）**：
-  **① 用 `close` 分母重训**（代码已改，只需重跑，这是基线）+
-  **② 换去量纲方式**（OHLC 除以均价 / 个股时序 z-score）+
-  **③ 训练/预测剔除 T 日涨跌停**，然后 8 个日频配置 × 2018–2026 全年滚动 × seed 3。
-  🚨 **预注册判据改为分市值看**：主判据 = **大市值三分位行业 IC ≥ 0.04**（现在 −0.004；
-  均值加权口径 6.85% 的达成前提），次判据 = 全样本等权行业 IC ≥ 0.05（现在 0.042）。
-  **不再用 η²、不再只看市值加权全样本 IC**。
-  （研报表 1 的 `week30` 四个配置需先把日线重采样为周线，P1）。
-  ```
+- **⏳ 好机器任务（待执行 · 2026-11-02 定稿为 5 臂；代码已就绪，只需拉仓库+改一行数据根）**：
+
+  **环境 / 前置**（不做完这几步会白烧机时）
+  1. `git pull` 到含 2026-11-02 提交的版本（`scripts/report_replica_industry.py` 是新的 tracked
+     模块；`replica_deep.py` 新增 `--feat-mode/--drop-limit/--tag`）。
+  2. 数据：`daily_all_a`（含 open/high/low/close/volume/amount）+ `adj_factor` +
+     `equity_structure` + `industry_classification_level1` + `sw_industry_daily`，走
+     `config/settings_local.yaml` 指向本机数据根（**不许硬编码盘符**，
+     `tests/test_no_hardcoded_drive_paths.py` 会拦）。**数据起点越早越好**：研报「前 9 年训练」，
+     本机只有 2015-01 起 ⇒ 首个可训模型 2018 年、只用 3 年历史。若该机有 2005 起全 A，把
+     `DATA_START` 调到 2005 并把 `--start 2015`，可与研报真正同口径（**这是唯一能消除
+     「时代效应 −6.2pp」的杠杆**）。
+  3. `python -m pytest tests/test_report_replica_industry.py tests/test_replica_deep_features.py -q`
+     （6+5 条，纯合成数据，无数据也能过；过不了说明口径代码有问题，别开始跑）。
+  4. `nvidia-smi` 确认卡可用；`--device cuda`。单配置单年估时先用
+     `--smoke --feat-mode cs` 量一次，再按 (配置数 × 年数 × 臂数) 乘。**先报估时再开跑。**
+
+  **5 个臂（预注册，不许中途改；每臂 8 配置 × 9 年 × seed 3）**
+
+  | 臂 | 命令关键参数 | 要回答的问题 |
+  |---|---|---|
+  | **A0** 基线 | `--feat-mode cs` | `close` 分母修正后，原口径能到多少（对照伪标签版 0.072/0.0424） |
+  | **A1** 剔板 | `--feat-mode cs --drop-limit` | 剔涨跌停值多少（本机实测个股 IC 0.072→0.047，是「纸面」还是「真信号」） |
+  | **A2** 时序标准化 | `--feat-mode ts --drop-limit` | 研报「去量纲」若指个股时序 z-score，行业层能不能起来 |
+  | **A3** 时序变化 | `--feat-mode ts_chg --drop-limit` | 本机探针里最强的一档（close_ret 行业 IC 2.62%、t 2.04）能否放大 |
+  | **A4** OHLC÷均价 | `--feat-mode ohlc_avg --drop-limit` | 若研报的「去量纲」是价格除以均价，这是它的字面实现 |
+
+  ```bash
+  # 每臂一条命令（A0 为例）；--tag 让 5 臂产物互不覆盖
   python -m scripts.model_train.replica_deep --configs all --start 2018 \
-      --epochs 30 --patience 4 --device cuda
-  python -m scripts.model_train.eval_dl_industry --configs all
+      --years 2018,2019,2020,2021,2022,2023,2024,2025,2026 \
+      --epochs 30 --patience 4 --seeds 3 --device cuda --feat-mode cs --tag A0
+  python -m scripts.model_train.eval_dl_industry --configs all --cap-check --suffix _A0
+
+  # A1/A2/A3/A4 把 --feat-mode / --drop-limit / --tag 换掉即可
+  # 评估端 --cap-check 才会输出「大市值三分位行业 IC」（主判据），必须带
   ```
-  产出 `dl/pred_*.parquet` + `train_log_*.csv` + `dl_industry_W.csv`。
+  ⚠️ `--feat-mode ts` 会重建 `arrays_2015_ts.npz`（个股 60 日 rolling，峰值内存 ~2–4GB，
+  比 `cs` 高）；四臂不要并行开，按 A0→A1→A2→A3→A4 串行，否则 OOM 会伪装成「跑得慢」。
+
+  **seed 噪声**（只在 A0 与最好的一臂上做，别全臂 × 3 seed，机时 ×3 换来的是噪声估计）
+  ```bash
+  python -m scripts.model_train.replica_deep --configs TCN_4_day60_10d,GRU_2_day60_10d \
+      --seeds 3,11,29 --epochs 30 --patience 4 --device cuda --feat-mode cs --tag A0seed
+  ```
+  ⇒ 报「同配置 3 seed 的行业 IC 极差」；**若极差 ≥ 判据间距（0.04 vs 0.05），说明判据本身
+  在噪声里，必须先加 seed 再判**，这一条要写在回传里。
+
+  **验收（判据出数前已定，写死在这里）**
+  - 主：**大市值三分位行业 IC ≥ 0.04**（`dl_industry_W_A*.csv` 的 `ic_large`，现 0.0127）；
+  - 次：**全样本等权行业 IC ≥ 0.05**（`ic_equal`，现 0.0424）；
+  - 闸门：**周双边换手 ≤ 110%**（`turnover` 列 /52，现 158%、研报 97.7%）；
+  - 组合层（仅在过闸门后看）：Top5 周频 **10bp 净超额 ≥ +2pp**、36bp 也 > 0、多头单调。
+  ⇒ 全过 = 「DL 维复现成功，进组合层」；过 IC 不过闸门 = 「有信号、收不到钱」，
+  下一步只做降换手（集成 / 平滑），不再提 IC；全不过 = 归档本线。
+
+  **回传清单（少一样都无法判定）**
+  1. `reports/report_replica/dl/` 下 `pred_*_A*.parquet`（或 `_s{seed}`）+ `train_log_*` +
+     `meta_*`（含 `feat_mode`/`drop_limit`/`tag`，出问题可反查）；
+  2. `dl_industry_W_A0..A4.csv`（`--cap-check` 版，含 `ic_float/ic_equal/ic_small/ic_large`、
+     `excess`、`excess_36bp`、`turnover`）；
+  3. 一段 markdown：5 臂 × 8 配置的 IC 表 + 换手 + 达标判定，**附估时与实际机时**；
+  4. seed 极差（`--tag A0seed` 那一组）。
+  回传后在本机跑 `python -m scripts.evaluation.agg_weight_p0 --price pred_<最好臂>.parquet --only-attrib`
+  复核 size 暴露与安慰剂，再落 README §十。
+
+  **硬边界（别在回传里当成 bug）**
+  - 8 个日频配置；研报表 1 的 `week30` 那 4 个（周线重采样）**不在本批**（P1）；
+  - 研报未公开 hidden/lr/epochs，我们取 hidden=64、lr=1e-3、早停；
+  - 申万一级 31 个 vs 研报中信一级 30 个；
+  - 训练集按 `h` 天降采样（重叠标签去冗余，研报未写明）；
+  - **`--feat-mode` 只改输入标准化，不改架构/损失/batch/滚动**，所以 A0–A4 之间是干净对照。
 - **预注册判据（出数前定，不许事后改）**：
   ① 行业层 IC 均值 ≥ **5%**（研报 12 个因子 5.48%~8.21%，均值 6.85%）；
   ② Top5 周频组合年化超额 ≥ **+10%**（研报 14.66%）；
@@ -908,6 +1051,49 @@
 
 ## 三、生产化 / 长期（可选）
 
+- [x] **✅ 架构合规复审 + 两处口径收口（2026-11-03）**：详情
+  `docs/consistency_checks/全项目代码与口径审计_2026-10-19.md` **§七**（续写，非新文件）。
+  三问结论：**① 底层口径部分统一** —— `caliber.py` 是评测单点，但成本「实收 2 倍」偏差
+  仍在 4 处自建回测里（`report_replica` / `industry_rotation` / `qw_etf_joint` /
+  `qw_six_fixes`，均 `turn×2×bp`），已加守卫 `cost_caliber_lint` 逐处登记、**数值未改**；
+  **② 实验复用：主力合规、新线不合规** —— 35+ evaluation 脚本走 `VectorBacktest`，
+  研报/行业线自带回测循环与 `COST_BP` 常量；**③ 策略归属 ETF ✅ / 全A ❌** ——
+  ETF 在 `strategy/etf_rotation.py` + `VectorBacktest`，全A 定版形态住在
+  `strategy/examples.py::BufferedTopFracLongOnly`（被 `caliber` 等 20+ 文件引用），
+  生产 `apply_buffer` 是它的薄 wrapper（**核实：非重复实现**，上轮判断有误已纠正）。
+  **同日已修**：`strategy/buffer.py` 统一「先掩码后选」入口（生产逐位不变，
+  判据 `max|Δ| = 0`，10 期）；`rank(ascending=False)` 全仓静态守卫；
+  成本误导注释纠错；`industry_rotation` 补 `method="first"`。
+  🚨 **新发现的真分歧（未修）**：可交易性掩码在**信号层**（生产）vs **权重层**（引擎），
+  实测平均差 **7.9 只/期、10 期无一相同**（引擎 767.4 / 生产 759.5 只）
+  ⇒ 「回测 18.07%」与「每日榜单」不是同一组持仓。收益影响**未量化**
+  （需同一 pred 面板跑两次全回测）；改引擎会改写全部历史数字，故只固化不动。
+  🔴 **存量红**：`test_layering` 2 项失败 —— 3 个文件函数级 import gitignored
+  `scripts/oneoff/`（`decomp_dl_industry` / `industry_rotation` / `report_replica`），
+  干净 clone 必 ImportError。未修，待决策迁址。
+- [x] **✅ 三项结构问题收口：归位 / 复用 / 成本口径（2026-11-03 下午）**：详情
+  `docs/consistency_checks/全项目代码与口径审计_2026-10-19.md` **§八**。
+  **① 归位**：`strategy/examples.py`（含生产核心 `BufferedTopFracLongOnly`）→
+  `strategy/cross_section.py`，旧文件降为**纯转发壳**（零实现、43 个入库 import 已收敛，
+  守卫 `test_strategy_module_placement` 4 项）；`scripts/report_replica_industry.py`
+  （`scripts/` 根）→ `scripts/portfolio/`，14 处引用同批更新。
+  **② 复用**：3 处「入库代码 import gitignored `scripts/oneoff`」全部切断
+  （`decomp_dl_industry` / `industry_rotation` / `report_replica`），改为复用
+  `scripts.portfolio.report_replica_industry`，逐位等价证明 `max|Δ| = 0`
+  （`_probe_industry_ctx_equiv`）⇒ `test_layering::..._does_not_import_oneoff` **转绿**。
+  **③ 成本口径**：`backtest/costs.py` 新增 `net_return(gross, turnover, *, bp_roundtrip)`
+  + `roundtrip_bp_from_side` + `roundtrip_bp_from_config`，**6 处自建扣费全部改走它**、
+  参数名带单位（`cost_bp`→`bp_per_side`）；`cost_caliber_lint` 规则升级为三条且
+  **豁免表清空**（4 处旧写法真改，不是登记了事）。**数值逐位不变**
+  （`_probe_industry_cost_equiv`：净值 identical=True）。
+  `industry_rotation` 主表仍按 **72bp 往返**（保守值不动），新增 §四 三臂对照
+  72/36/26bp：`sue_low` +10.77%→+11.51%，差 0.74pp/年。
+  🚨 **必须知道**：重跑后 `native_combo` 由 −4.50% 变 **−3.74%**，原因是上一轮
+  tie-break 修复的滞后显影（该信号取值全是 1/31 倍数、大量精确并列），
+  **旧产物已不可复现**；已写入 `reports/industry_rotation/README.md` §七 变更记录。
+  其余 9/10 行逐位不变，`sue_low` 结论不动。
+  🔴 **仍未处理**：`test_layering::test_no_private_names_cross_module` 存量 20 条
+  （`_exec_rows`/`_row`/`_is_weekly`/`_hrp_weights` 等被跨模块 import），修法=改公开名。
 - [x] **✅ P0 数据缓存已补齐 10-27/10-28（2026-10-28 18:17 收口）**：原缺口
   `daily_all_a.parquet` 末 `2026-10-26`（2868 交易日）⇒ 缺 **10-27、10-28**。
   **不是数据源问题**——直接调 `ds.get_daily_kline(['600000.SH','000001.SZ'], 20261023, 20261028)`
@@ -1052,6 +1238,16 @@
   WSL2/Docker/rdagent 环境阻塞，转待有 WSL2 的机器执行；DEEPSEEK key 已就绪。
 
 ## 四、低优先研读 / 复现（P2 可选，等主线空闲）
+
+- [x] ~~**AlphaSAGE（ICLR 2026, arXiv:2509.25055）编码器探针**~~ → **工具保留 · 增量不可分辨
+  （2026-11-03）**：只搬「RGCN 编码 AST 替掉序列编码器」这一项（论文消融里增益最大项），
+  代价为零（600 iters 实测 +3.3% s/iter）。单 seed 实测 ΔOOS|IC| = **+0.0093**
+  （0.1034 → 0.1127），**低于预设 0.02 门槛、Δ/SE≈0.5 ⇒ 按判据不补 seed**。
+  🚨 两个对照缺陷：① 参数量 30207 vs 14687（**2.06×**）未对齐 ⇒ 即使有差也归因不到"图结构"；
+  ② 两臂 600 iters 后**均未超均匀基线**（GRU 0.0702 < 0.0807）⇒ 实际在比"两个都没学到东西的模型"。
+  要分辨 0.01 量级效应需每臂 ~15 seed / 39h，不划算。→ `reports/alphasage_probe/`。
+  **论文本身的宣传口径有泡沫**（成本假设为零、A股纯多头 vs 美股多空不可比、CSI500 ICIR 并非第一），
+  详见同目录 §〇。**未实现** `R_SA`/`R_NOV` 两项奖励 ⇒ 本探针不能评价 AlphaSAGE 整体。
 
 - [ ] 华泰 AI32/34 AlphaNet——GP/GFlowNet 之外第三条路径对照
 - [ ] 华泰 AI26 GP 在 CTA 信号挖掘——跨资产泛化验证
