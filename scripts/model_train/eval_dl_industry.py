@@ -47,7 +47,7 @@ FEAT_NAMES = ["open/close", "high/close", "low/close", "close_ret", "vwap/close"
 
 def agg_one(panel: pd.DataFrame, ctx: dict) -> pd.DataFrame:
     """个股面板 → 行业因子（行业内自由流通市值加权 + 1/99 winsorize）。"""
-    from scripts.oneoff.etf_industry_factor_p0 import _agg
+    from scripts.builders.industry_context import agg_industry as _agg
 
     rows = []
     for i, dt in enumerate(ctx["dates"]):
@@ -167,6 +167,9 @@ def main() -> None:
     ap.add_argument("--configs", default="all")
     ap.add_argument("--start", default="2018-01-01")
     ap.add_argument("--freq", default="W", choices=["W", "M"])
+    ap.add_argument("--weight", default="float_mcap",
+                    choices=["float_mcap", "free_mcap", "equal"],
+                    help="行业内部加权口径；equal = 行业内等权（落地买 ETF 时与市值加权等价）")
     ap.add_argument("--report", action="store_true")
     args = ap.parse_args()
 
@@ -174,7 +177,9 @@ def main() -> None:
 
     px = load_px()
     tdays = px.index
-    ctx = build_ctx(args.freq, args.start)
+    ctx = build_ctx(args.freq, args.start, weight=args.weight)
+    suffix = "" if args.weight == "float_mcap" else f"_{args.weight}"
+    print(f"加权口径 {args.weight}（{len(ctx['dates'])} 期）")
     dates = list(pd.DatetimeIndex(ctx["dates"]))
 
     files = (sorted(DL_DIR.glob("pred_*.parquet")) if args.configs == "all"
@@ -213,7 +218,7 @@ def main() -> None:
         print("无可用预测")
         return
     df = pd.DataFrame(rows).sort_values("ic", ascending=False)
-    df.to_csv(OUT_DIR / f"dl_industry_{args.freq}.csv", index=False,
+    df.to_csv(OUT_DIR / f"dl_industry_{args.freq}{suffix}.csv", index=False,
               encoding="utf-8-sig")
 
     comb = None
@@ -224,11 +229,11 @@ def main() -> None:
               f"基准 {comb['ann_bench']:+.2%} 超额 {comb['excess']:+.2%} "
               f"t(IR) {comb['t_ir']:+.2f}")
         pd.DataFrame({"ret": comb["ret"], "bench": comb["bench"]}).to_csv(
-            OUT_DIR / f"dl_comb_returns_{args.freq}.csv", encoding="utf-8-sig")
+            OUT_DIR / f"dl_comb_returns_{args.freq}{suffix}.csv", encoding="utf-8-sig")
         print(by_year(comb["ret"].dropna(), comb["bench"].dropna()).to_string(
             float_format=lambda v: f"{v:+.4f}"))
 
-    print(f"\n→ {OUT_DIR / f'dl_industry_{args.freq}.csv'}")
+    print(f"\n→ {OUT_DIR / f'dl_industry_{args.freq}{suffix}.csv'}")
     if args.report:
         write_report(df, diags, comb, args.freq)
 

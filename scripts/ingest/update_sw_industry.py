@@ -4,7 +4,7 @@
 用途：行业轮动线的**基准层**。此前本地只有自建「流通市值加权行业收益」，
 与研报用的申万官方指数口径不同（分红处理、成分权重、调整时点都有差），
 导致行业层 IC 无法与研报对照。本脚本把官方点位落盘，供
-`scripts/oneoff/etf_industry_factor_p0.py` 直接消费。
+`scripts/portfolio/report_replica.py:load_px` 直接消费。
 
 产物：`{data_root}/parquet/sw_industry_daily.parquet`
       列 = date / code / close / amount；code 形如 `801010.SI`

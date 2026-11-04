@@ -202,7 +202,7 @@ def stats(ics: np.ndarray) -> dict:
 
 def agg_matrix(panel: pd.DataFrame, ctx: dict, px: pd.DataFrame) -> pd.DataFrame:
     """任意个股面板（含模型分数）→ 行业因子。"""
-    from scripts.oneoff.etf_industry_factor_p0 import _agg
+    from scripts.builders.industry_context import agg_industry as _agg
     rows = []
     for i, dt in enumerate(ctx["dates"]):
         if dt not in panel.index:
@@ -287,7 +287,7 @@ def lead_mv_momentum(ctx: dict, dates: list[pd.Timestamp], lam: float = 0.6,
 
     研报选用的是 λ=60、回望 180 的那一档，故默认对齐。
     """
-    from scripts.oneoff.etf_industry_factor_p0 import float_share_panel
+    from scripts.builders.industry_context import float_share_panel
 
     d = pd.read_parquet(PQ / "daily_all_a.parquet", columns=["close"])
     close = d["close"].unstack("code").sort_index().astype(np.float32)
@@ -395,10 +395,15 @@ def by_year(r: pd.Series, b: pd.Series) -> pd.DataFrame:
 
 
 # ----------------------------------------------------- 成分股加权族（超预期/估值）
-def build_ctx(freq: str = "W", start: str = "2018-01-01") -> dict:
-    """复用 P0 的行业上下文（申万一级 PIT 分类 + 流通市值权重 + 调仓日）。"""
-    from scripts.oneoff.etf_industry_factor_p0 import build_context
-    return build_context(pd.Timestamp(start), freq=freq)
+def build_ctx(freq: str = "W", start: str = "2018-01-01",
+              weight: str = "float_mcap") -> dict:
+    """复用行业上下文的共享实现（申万一级 PIT 分类 + 权重 + 调仓日）。
+
+    `weight`：`float_mcap`（流通市值，历史基线）/ `free_mcap`（自由流通市值近似）/
+    `equal`（行业内等权）。见 `scripts/builders/industry_context.py`。
+    """
+    from scripts.builders.industry_context import build_context
+    return build_context(pd.Timestamp(start), freq=freq, weight=weight)
 
 
 def agg_panels(names: list[str], ctx: dict, px: pd.DataFrame) -> dict[str, pd.DataFrame]:
@@ -406,7 +411,7 @@ def agg_panels(names: list[str], ctx: dict, px: pd.DataFrame) -> dict[str, pd.Da
 
     聚合函数直接复用 P0 的 `_agg`，保证与既有 P0 结果同口径。
     """
-    from scripts.oneoff.etf_industry_factor_p0 import _agg
+    from scripts.builders.industry_context import agg_industry as _agg
 
     out: dict[str, pd.DataFrame] = {}
     for name in names:

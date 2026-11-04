@@ -27,7 +27,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from scripts.model_train.replica_deep import build_arrays, forward_avg_ret  # noqa: E402
-from scripts.oneoff.etf_industry_factor_p0 import _agg  # noqa: E402
+from scripts.builders.industry_context import agg_industry as _agg  # noqa: E402
 from scripts.portfolio.report_replica import OUT_DIR, build_ctx  # noqa: E402
 
 DL_DIR = OUT_DIR / "dl"

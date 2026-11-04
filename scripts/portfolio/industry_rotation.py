@@ -85,7 +85,7 @@ def build_signals(px: pd.DataFrame, amt: pd.DataFrame) -> dict[str, pd.DataFrame
 
 def agg_sue(dates: list[pd.Timestamp], px_cols: pd.Index) -> pd.DataFrame:
     """个股 SUE → 行业内流通市值加权（对照组信号，非原生）。"""
-    from scripts.oneoff.etf_industry_factor_p0 import build_context
+    from scripts.builders.industry_context import build_context
 
     panel = pd.read_parquet(
         PQ.parent / "factor_library" / "all_a_2018_2026" / "panels" / "sue_q.parquet")
