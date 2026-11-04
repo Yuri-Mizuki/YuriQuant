@@ -6,8 +6,11 @@
 
 严格照抄的六条（研报原文 → 本脚本）：
 1. 输入 = 30/60 日行情，**6 个特征**：高、开、低、收、均价、换手率，去量纲+标准化
-   → 实现为 `open/close, high/close, low/close, close_{t}/close_{t-1}, vwap/close,
-   turnover`，再逐日截面 z-score
+   → 实现为 `open_r, high_r, low_r, close_ret, vwap_r, turn`，再逐日截面 z-score。
+   🚨 **去量纲的基准价研报没写**，2026-11-01 起四口径并列（`--descale`，见模块常量
+   `DESCALES`）：`close`（÷当日收盘，**只剩日内形状、60 日窗口内没有跨日趋势信息**）、
+   `prev`（÷前收，保留累计涨幅）、`avg`（÷均价）、`zscore`（个股自身时序标准化）。
+   默认仍是 `close`，只为和历史产物同名；判断哪个口径对，看 `--descale` 对照臂。
 2. 标签 = t+1 起的 5 日 / 10 日**均价**涨跌幅，标准化（逐日截面 z-score）
    → 分母取**当日收盘价**，不用 `avg[t]`（理由见 `forward_avg_ret` docstring）
 3. 滚动训练 = 每年一个模型供下一年使用；训练集末尾按标签长度 purge
@@ -16,15 +19,22 @@
 6. GRU 2 层；TCN kernel=3，60 日 4 层 `[8,16,32,64]`、30 日 3 层 `[8,16,32]`
 
 与研报的已知差异（引用必须带，见 README §四）：
-- 数据起点 2016-07（研报 2008 起）⇒ 首个可训模型落在 2019 年，评估期 2019+，短 3 年
+- 数据起点 2015-01（`daily_all_a` 起点；研报 2008 起）⇒ 首个可训模型落在 2018 年，
+  短 3 年以上
 - 研报「前 9 年训练 + 第 10 年验证」；我们是「截至上年底全部历史训练 + 上一年验证」
   （数据不足 9 年，改成最小 2 年训练窗）
 - 研报未公开 hidden_size / lr / epochs，本脚本取 hidden=64、lr=1e-3、早停
+- 研报未写明**训练集是否按标签长度降采样**；本脚本默认 `--train-step h`（重叠标签去冗余，
+  等于砍掉 90% 样本），`--train-step 1` 是判别这一点的对照臂
 - 研报用中信一级，我们用申万一级（PIT）
 
 用法：
     python -m scripts.model_train.replica_deep --smoke        # 单配置单年，测通与计时
     python -m scripts.model_train.replica_deep --configs all
+    python -m scripts.model_train.replica_deep --configs TCN_4_day60_10d \
+        --descale prev --tag dprev                            # 去量纲对照臂
+    python -m scripts.model_train.replica_deep --configs TCN_4_day60_10d \
+        --train-step 1 --tag step1                            # 降采样对照臂
 """
 
 # ruff: noqa: E501
@@ -54,6 +64,15 @@ DATA_START = pd.Timestamp("2015-01-01")
 MIN_TRAIN_DAYS = 400          # 最少训练交易日（≈1.6 年），不足则该年跳过
 PURGE_EXTRA = 2               # 标签长度之外再间隔 2 天
 
+# 去量纲口径（研报只写「去量纲+标准化」，未给基准价；2026-11-01 起四口径并列做实验）
+#   close : p / 当日收盘 —— 只剩日内形状，60 日窗口内**没有跨日趋势信息**
+#   prev  : p / 前收     —— 保留隔夜跳空与累计涨幅，是唯一「像行情」的口径（本次新增）
+#   avg   : p / 当日均价 —— 相对 VWAP 的形状，第 5 个特征取倒数（close/avg）
+#   zscore: 先按 prev 去量纲，再对每只股票做**自身**过去 60 日时序标准化
+DESCALES = ("close", "prev", "avg", "zscore")
+TS_WIN = 60                   # zscore 口径的时序窗口
+TS_MIN_PERIODS = 20
+
 
 # --------------------------------------------------------------------- 数据
 def _cs_zscore(a: np.ndarray) -> np.ndarray:
@@ -75,8 +94,20 @@ def _close_panel(idx: pd.DatetimeIndex, codes: pd.Index) -> np.ndarray:
     return w.to_numpy(np.float32)
 
 
-def build_arrays(cache: bool = True) -> dict:
-    """构造特征 (T,N,6) 与均价面板；缓存到 `reports/report_replica/dl/arrays_<起始年>.npz`。"""
+def build_arrays(cache: bool = True, descale: str = "close") -> dict:
+    """构造特征 (T,N,6) 与均价面板；缓存到 `reports/report_replica/dl/arrays_<起始年>.npz`。
+
+    Args:
+        cache: 有缓存则直接读。
+        descale: 去量纲口径，见 `DESCALES`。缓存里存的是**原始比值** `raw`
+            （= `close` 口径、未截面 z-score），其余口径由它现场变换，不必重读行情。
+
+    Returns:
+        dict：`feat`（已按 `descale` 变换 + 逐日截面 z-score + 停牌掩码）、
+        `raw`、`avg`、`close`、`index`、`codes`、`tradable`。
+    """
+    if descale not in DESCALES:
+        raise ValueError(f"未知 descale={descale!r}，只支持 {DESCALES}")
     DL_DIR.mkdir(parents=True, exist_ok=True)
     fp = DL_DIR / f"arrays_{DATA_START.year}.npz"
     if cache and fp.exists():
@@ -85,10 +116,19 @@ def build_arrays(cache: bool = True) -> dict:
         codes = pd.Index(z["codes"])
         # 旧缓存没有 close 键（2026-10-31 前生成），补读一列，避免整块重建
         close = z["close"] if "close" in z.files else _close_panel(idx, codes)
-        return {"feat": z["feat"], "avg": z["avg"], "index": idx,
-                "codes": codes, "tradable": z["tradable"], "close": close}
+        if "raw" not in z.files:
+            print("  缓存缺 raw（2026-11-01 前生成）⇒ 重建，否则无法切换去量纲口径")
+            cache = False
+        else:
+            base = {"feat": z["feat"] if (descale == "close" and "feat" in z.files)
+                    else None,
+                    "raw": z["raw"], "avg": z["avg"], "index": idx, "codes": codes,
+                    "tradable": z["tradable"], "close": close}
+            if base["feat"] is None:
+                base["feat"] = _features_from_raw(base["raw"], base["tradable"], descale)
+            return base
 
-    from scripts.oneoff.etf_industry_factor_p0 import float_share_panel
+    from scripts.builders.industry_context import float_share_panel
 
     t0 = time.time()
     d = pd.read_parquet(PQ / "daily_all_a.parquet",
@@ -131,15 +171,72 @@ def build_arrays(cache: bool = True) -> dict:
             turn,
         ], axis=-1).astype(np.float32)                            # (T,N,6)
 
-    feat = np.stack([_cs_zscore(raw[:, :, k]) for k in range(raw.shape[-1])], axis=-1)
-    feat[~tradable] = np.nan
-    print(f"特征构造完成 {feat.shape} 用时 {time.time() - t0:.1f}s "
+    feat = _features_from_raw(raw, tradable, descale)
+    feat_close = feat if descale == "close" else _features_from_raw(raw, tradable, "close")
+    print(f"特征构造完成 feat={feat.shape} 口径={descale} 用时 {time.time() - t0:.1f}s "
           f"（{idx.min().date()}~{idx.max().date()}, {len(codes)} 只）")
 
-    np.savez_compressed(fp, feat=feat, avg=avg, close=close_raw, index=idx.values,
-                        codes=np.asarray(codes), tradable=tradable)
-    return {"feat": feat, "avg": avg, "index": idx, "codes": codes,
+    # 存 raw（未 z-score 的原始比值）+ close 口径的 feat；其余口径现场变换。
+    # 用 savez 而非 savez_compressed：400MB 级 float32 压缩收益有限，读写慢 10 倍。
+    np.savez(fp, raw=raw, feat=feat_close, avg=avg, close=close_raw, index=idx.values,
+             codes=np.asarray(codes), tradable=tradable)
+    return {"feat": feat, "raw": raw, "avg": avg, "index": idx, "codes": codes,
             "tradable": tradable, "close": close_raw}
+
+
+def descale_features(raw: np.ndarray, descale: str) -> np.ndarray:
+    """把「÷当日收盘」的 6 个原始比值变换到另一种去量纲口径（仍未 z-score）。
+
+    列序：0 `open/close`、1 `high/close`、2 `low/close`、3 `close_ret`、
+    4 `vwap/close`、5 `turn`。`close_ret` 与 `turn` 本身就是无量纲比值，四口径下
+    一律不动 —— 变的只有 4 个价格特征（0/1/2/4）。
+
+    变换用到的恒等式（全部可从缓存里的 raw 反解，不必重读行情）：
+        close[t]/close[t-1] = 1 + raw[...,3]
+        p/prev = (p/close) × (1 + raw[...,3])
+        p/avg  = (p/close) ÷ raw[...,4]
+    """
+    if descale == "close":
+        return raw
+    out = np.array(raw, dtype=np.float32, copy=True)
+    prev = 1.0 + raw[..., 3]                       # close[t] / close[t-1]
+    with np.errstate(divide="ignore", invalid="ignore"):
+        if descale == "prev":
+            for k in (0, 1, 2, 4):
+                out[..., k] = raw[..., k] * prev
+        elif descale == "avg":
+            vw = raw[..., 4]                       # avg/close
+            for k in (0, 1, 2):
+                out[..., k] = raw[..., k] / vw
+            out[..., 4] = 1.0 / vw                 # 第 5 个特征改为 close/avg
+        elif descale == "zscore":
+            for k in (0, 1, 2, 4):
+                out[..., k] = raw[..., k] * prev
+            out = _ts_zscore(out, TS_WIN, TS_MIN_PERIODS, cols=(0, 1, 2, 4))
+        else:
+            raise ValueError(f"未知 descale={descale!r}，只支持 {DESCALES}")
+    return out.astype(np.float32)
+
+
+def _ts_zscore(a: np.ndarray, win: int, min_periods: int,
+               cols: tuple[int, ...]) -> np.ndarray:
+    """逐股票、沿时间轴的滚动 z-score（只用过去 `win` 日，不含未来）。"""
+    out = np.array(a, dtype=np.float32, copy=True)
+    for k in cols:
+        s = pd.DataFrame(a[:, :, k])
+        mu = s.rolling(win, min_periods=min_periods).mean()
+        sd = s.rolling(win, min_periods=min_periods).std(ddof=1)
+        z = (s - mu) / sd.where(sd > 1e-12)
+        out[:, :, k] = z.to_numpy(np.float32)
+    return out
+
+
+def _features_from_raw(raw: np.ndarray, tradable: np.ndarray, descale: str) -> np.ndarray:
+    """原始比值 → 指定去量纲口径 → 逐日截面 z-score（研报「标准化」）→ 停牌掩码。"""
+    x = descale_features(raw, descale)
+    feat = np.stack([_cs_zscore(x[:, :, k]) for k in range(x.shape[-1])], axis=-1)
+    feat[~tradable] = np.nan
+    return feat
 
 
 def forward_avg_ret(avg: np.ndarray, idx: pd.DatetimeIndex, h: int,
@@ -189,12 +286,30 @@ CONFIGS = {
 }
 
 
+def out_name(cfg_name: str, descale: str = "close", tag: str = "") -> str:
+    """产物键：配置名 + `@去量纲口径`（非 close 才带）+ `__tag`。
+
+    这样 `--descale prev` / `--tag step1` 的对照臂不会覆盖基线产物，
+    `eval_dl_industry --configs all` 也会把它们当成独立配置各自评估。
+    """
+    key = cfg_name if descale == "close" else f"{cfg_name}@{descale}"
+    return f"{key}__{tag}" if tag else key
+
+
 def rolling_predict(name: str, cfg: dict, arr: dict, *, years: list[int],
                     epochs: int, patience: int, verbose: bool,
                     args_threads: int = 8, train_step: int = 0,
                     val_step: int = 5, device: str = "cpu",
-                    seed: int = 3) -> pd.DataFrame:
-    """年度滚动：Y 年模型用 `<Y-1` 年训练、`Y-1` 年做验证集，预测 Y 年。"""
+                    seed: int = 3, ckpt: Path | None = None,
+                    resume: bool = False) -> pd.DataFrame:
+    """年度滚动：Y 年模型用 `<Y-1` 年训练、`Y-1` 年做验证集，预测 Y 年。
+
+    Args:
+        ckpt: 逐年落盘的检查点路径。长跑（多年 × 全样本训练，单年 20 分钟起）必须给，
+            否则进程中途被杀 = 全部年份白跑（结果只在最后一次性写出）。
+        resume: 从 `ckpt` 续跑：已有预测的年份直接跳过。判据是「该年测试窗内
+            过半交易日有预测值」（单年可能有个别停牌/样本不足的空日）。
+    """
     feat, idx = arr["feat"], arr["index"]
     seq_len, h = cfg["seq"], cfg["h"]
 
@@ -204,6 +319,12 @@ def rolling_predict(name: str, cfg: dict, arr: dict, *, years: list[int],
     years_end = end_days.year.to_numpy()
 
     out = np.full(feat.shape[:2], np.nan, dtype=np.float32)
+    if resume and ckpt is not None and ckpt.exists():
+        prev = pd.read_parquet(ckpt)
+        keep_idx = idx.isin(prev.index)
+        out[np.ix_(keep_idx, np.arange(len(arr["codes"])))] = prev.reindex(
+            index=idx[keep_idx], columns=arr["codes"]).to_numpy(np.float32)
+        print(f"  续跑：已载入 {ckpt.name}（覆盖 {int(np.isfinite(prev).any(axis=1).sum())} 天）")
     log_rows = []
     for yr in years:
         tr_m = years_end <= (yr - 2)
@@ -213,6 +334,11 @@ def rolling_predict(name: str, cfg: dict, arr: dict, *, years: list[int],
         cut = np.where(tr_m)[0]
         if len(cut) == 0:
             continue
+        if te_m.sum():
+            done = np.isfinite(out[seq_len - 1 + np.where(te_m)[0]]).any(axis=1)
+            if resume and done.mean() > 0.5:
+                print(f"  {yr}: 已有预测（{int(done.sum())}/{int(te_m.sum())} 天），跳过")
+                continue
         keep = cut[cut <= cut[-1] - (h + PURGE_EXTRA)]
         n_raw = len(keep)
         if n_raw < MIN_TRAIN_DAYS or va_m.sum() == 0 or te_m.sum() == 0:
@@ -250,9 +376,15 @@ def rolling_predict(name: str, cfg: dict, arr: dict, *, years: list[int],
         print(f"  {yr}: 训 {n_tr} 天 / 验 {int(va_m.sum())} 天 / 测 {int(te_m.sum())} 天 "
               f"| ver IC {tr.best_score:+.4f} @ep{tr.best_epoch} | {time.time() - t0:.0f}s")
         del tr
+        if ckpt is not None:
+            # 逐年落盘 + 同步日志：长跑被杀也能续（`--resume`）
+            pd.DataFrame(out, index=idx, columns=arr["codes"]).to_parquet(ckpt)
+            pd.DataFrame(log_rows).to_csv(DL_DIR / f"train_log_{name}.csv", index=False,
+                                          encoding="utf-8-sig")
 
-    pd.DataFrame(log_rows).to_csv(DL_DIR / f"train_log_{name}.csv", index=False,
-                                  encoding="utf-8-sig")
+    if log_rows:      # 续跑时可能整轮都被跳过，别把已有日志覆盖成空文件
+        pd.DataFrame(log_rows).to_csv(DL_DIR / f"train_log_{name}.csv", index=False,
+                                      encoding="utf-8-sig")
     print(f"  [{name}] 训练完成，验证集最佳 IC 见 train_log_{name}.csv")
     return pd.DataFrame(out, index=idx, columns=arr["codes"])
 
@@ -274,13 +406,19 @@ def main() -> None:
     ap.add_argument("--val-step", type=int, default=5,
                     help="验证集（仅早停用）每 N 天取 1 天")
     ap.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
+    ap.add_argument("--descale", default="close", choices=list(DESCALES),
+                    help="去量纲口径；非 close 时产物名带 @口径 后缀，不会覆盖基线")
+    ap.add_argument("--tag", default="",
+                    help="额外产物后缀（同一配置跑多个对照臂时用，如 --tag step1）")
+    ap.add_argument("--resume", action="store_true",
+                    help="多年跑时从已有产物续跑（跳过已出预测的年份）")
     ap.add_argument("--verbose", action="store_true")
     args = ap.parse_args()
 
     if args.device == "auto":
         import torch
         args.device = "cuda" if torch.cuda.is_available() else "cpu"
-    arr = build_arrays()
+    arr = build_arrays(descale=args.descale)
     idx = arr["index"]
     names = list(CONFIGS) if args.configs == "all" else args.configs.split(",")
 
@@ -301,26 +439,35 @@ def main() -> None:
     seeds = [int(x) for x in args.seeds.split(",")]
     for name in names:
         cfg = CONFIGS[name]
+        key = out_name(name, args.descale, args.tag)
         for seed in seeds:
-            print(f"\n[{name}] arch={cfg['arch']} seq={cfg['seq']} label={cfg['h']}d "
-                  f"device={args.device} seed={seed}")
-            pred = rolling_predict(name, cfg, arr, years=years, epochs=args.epochs,
+            print(f"\n[{key}] arch={cfg['arch']} seq={cfg['seq']} "
+                  f"label={cfg['h']}d descale={args.descale} "
+                  f"device={args.device} seed={seed} train_step={args.train_step or cfg['h']}")
+            pred = rolling_predict(key, cfg, arr, years=years, epochs=args.epochs,
                                    patience=args.patience, verbose=args.verbose,
                                    args_threads=args.threads,
                                    train_step=args.train_step,
                                    val_step=args.val_step, device=args.device,
-                                   seed=seed)
-            fp = DL_DIR / (f"pred_{name}.parquet" if len(seeds) == 1
-                           else f"pred_{name}_s{seed}.parquet")
+                                   seed=seed,
+                                   ckpt=(DL_DIR / (f"pred_{key}.parquet" if len(seeds) == 1
+                                                   else f"pred_{key}_s{seed}.parquet")
+                                         if len(years) > 1 else None),
+                                   resume=args.resume)
+            fp = DL_DIR / (f"pred_{key}.parquet" if len(seeds) == 1
+                           else f"pred_{key}_s{seed}.parquet")
             pred.to_parquet(fp)
             cov = pred.notna().any(axis=1)
             rng = (f"{pred.index[cov][0].date()}~{pred.index[cov][-1].date()}"
                    if cov.any() else "空")
             print(f"  → {fp.name} 覆盖 {int(cov.sum())} 天 ({rng})")
-            (DL_DIR / f"meta_{name}.json").write_text(
+            (DL_DIR / f"meta_{key}.json").write_text(
                 json.dumps({**cfg, "years": years, "epochs": args.epochs,
                             "patience": args.patience, "seed": seed,
-                            "device": args.device}, ensure_ascii=False, indent=2),
+                            "device": args.device, "descale": args.descale,
+                            "train_step": args.train_step or cfg["h"],
+                            "val_step": args.val_step,
+                            "tag": args.tag}, ensure_ascii=False, indent=2),
                 encoding="utf-8")
 
 
