@@ -183,6 +183,7 @@
 | `reporting/build_monitor_seed.py` | 构造 monitor_production_ic 的生产口径历史种子面板（一次性，2026-10-17）。 |
 | `reporting/factor_explorer_report.py` | 交互式因子检测报告：时间段选择 + 来源筛选 + 指标排序 + 因子详情。 |
 | `reporting/factor_dashboard.py` | 聚宽式因子看板：筛选 + 排序表 + 点行看详情（自包含 HTML）。 |
+| `factors/backfill_library_metrics.py` | 因子库指标批量回填：canonical 分层回测 + 显著性 + 路径/公式/族标签（维护工具）。 |
 | `reporting/factor_library_full_report.py` | 全因子库检验报告：821 个因子的标准检验汇总（自包含 HTML）。 |
 | `reporting/generate_report.py` | 一键端到端研究报告生成 |
 | `reporting/jq_style_report.py` | 最佳策略收益曲线页（聚宽模拟交易风格）——策略 vs 中证全指口径基准。 |

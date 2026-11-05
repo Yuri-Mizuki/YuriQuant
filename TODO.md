@@ -1258,6 +1258,56 @@
 
 ## 三、生产化 / 长期（可选）
 
+- [ ] **⏳ 好机器任务：因子库全A指标批量回填（P0+P1 维护，2026-11-05 体检立项；代码已就绪）**
+
+  **背景**：`all_a_2018_2026` 库 950 因子经批量通道（`upsert_rows`）入库，`register()`
+  正常会算的东西全部缺位——分层回测指标 / significant / formula / panel_path / eval_path
+  均 0% 填充（hs300 旧库三项都是 100%）；`family` 有 17 个旧英文码出受控词表。
+  体检明细 → `reports/docs/consistency_checks/`（2026-11-05 因子库管理体检）。
+
+  **环境 / 前置**
+  1. `git pull` 到含 factor_library_backfill 脚本的版本
+     （`scripts/factors/backfill_library_metrics.py`，2026-11-05 提交）。
+  2. 数据：`daily_all_a.parquet` + `backward_factor.parquet`（cache root 走
+     `Config.cache()['root']`，用 `settings_local.yaml` 指数据根，**不硬编码盘符**）。
+  3. `python -m pytest tests/ -q -k "factor_library or backfill"` 先绿再跑。
+  4. **内存**：收益面板 + 逐因子面板串行加载，峰值 ~2GB；**不要与面板重建链并行**
+     （2026-11-05 事故：并发写打穿杀软吞吐，见 `reports/panels_rebuild_incident/`）。
+
+  **命令（两步，串行）**
+  ```bash
+  # 冒烟：5 个因子，先看回测耗时/日志无异常（估 <1 分钟/因子×3 配置）
+  python -m scripts.factors.backfill_library_metrics --dataset all_a_2018_2026 --limit 5
+  # 全量（~950 因子 ×3 canonical 配置；--resume 可断点续跑，每 50 因子落盘）
+  python -m scripts.factors.backfill_library_metrics --dataset all_a_2018_2026
+  ```
+
+  **脚本已固化的口径（不许改）**
+  - canonical 回测 = `VectorBacktest(cfg.strategy(k=30), rebalance_freq)`，
+    cfg ∈ `CANONICAL_CONFIGS`（ls_M/lo_M/ls_W），成本走引擎默认——与 hs300 库登记口径同源；
+  - 收益面板 = 后复权 close → `pct_change(1, fill_method=None).shift(-1)`（库内 shift(-1) 口径，
+    与 `build_alla_alpha_panels` 的 fwd 构造同构）；
+  - IC 显著性 **不重算 IC**：消费既有 `ic_h1.parquet`（批量链 canonical，**stride-3 抽稀截面**
+    口径），`stats.significance.mean_inference`（NW），significant = |t_nw|>2（register 同判据）；
+    重算全截面 IC 会与已填 99% 的 `ic_mean_h*` 打架，禁止；
+  - `formula := label`（hs300 先例：alpha 系 formula 即引用式标签）；
+  - family 迁移：rnd/lev/liq/pro/qual/cfq → family=基本面 + subfamily 细分
+    （语义源 `build_alla_style_factors.FACTOR_DEFS`，映射表在脚本头 `FAMILY_MIGRATE`）；
+  - registry.csv 自动 cp 快照 `.bak-<ts>`；写回走 `lib._save_registry`（列对齐真源）。
+
+  **验收判据（跑完逐条核，写回本条目 + `reports/factor_library_backfill/README.md`）**
+  1. `annual_return_ls_M` / `significant` / `formula` 填充率 ≥99%（950 行）；
+  2. 抽 3 个因子（1 个 alpha + 1 个 fundamental + 1 个 altf）用
+     `lib.reconstruct_backtest(name, "ls_M")` 能重建且 metrics 与 registry 行一致；
+  3. significant 数量级 sanity：全库 |t_nw|>2 的占比应与 hs300 库量级相当（过高=口径错）；
+  4. `panel_path` 缺失的行数记录进汇总（panels/ 978 文件 vs registry 950 的对账结果）；
+  5. 重跑 `python -m scripts.reporting.factor_dashboard` 看板：多空年化/换手列、
+     公式列、详情页净值曲线全部点亮。
+
+  **已就绪的配套件（同批提交）**：`scripts/factors/backfill_library_metrics.py`（P0+P1
+  写回一体）、实验目录 `reports/factor_library_backfill/`（README 四要素已建）、
+  看板 `scripts/reporting/factor_dashboard.py`（验收第 5 条用它）。
+
 - [x] **✅ 架构合规复审 + 两处口径收口（2026-11-03）**：详情
   `docs/consistency_checks/全项目代码与口径审计_2026-10-19.md` **§七**（续写，非新文件）。
   三问结论：**① 底层口径部分统一** —— `caliber.py` 是评测单点，但成本「实收 2 倍」偏差
