@@ -31,7 +31,8 @@
 写盘纪律：
 - registry.csv 先 cp 快照（.bak-<ts>），再经 ``lib._save_registry``（列对齐真源）写回；
 - 每 --flush-every 因子落一次盘，中断可 --resume 续跑（跳过已填行）；
-- evals/<slug>.parquet 按 register 的 slug 规则（md5[:12]）落盘。
+- evals/<slug>.parquet 落 dret_/equity_/turnover_ × {ls_M, lo_M, ls_W}
+  （换手序列供看板按时间区间重算区间换手）。
 
 用法:
     python -m scripts.factors.backfill_library_metrics --dataset all_a_2018_2026
@@ -219,6 +220,8 @@ def main() -> None:
                     res = bt.run(panel, returns_panel, check_convention=False)
                     eval_cols[f"dret_{cfg.key}"] = res.daily_returns
                     eval_cols[f"equity_{cfg.key}"] = res.equity_curve
+                    # 换手序列（调仓日有值）：看板按时间区间重算区间换手要用
+                    eval_cols[f"turnover_{cfg.key}"] = res.turnover_series
                     # 超额只对纯多配置算（LS 对基准求超额无经济含义，见 docstring）
                     is_lo = cfg.key.startswith("lo")
                     m = res.metrics(benchmark_returns=bench if is_lo else None)

@@ -51,6 +51,23 @@ SRC_GROUPS: dict[str, set[str]] = {
                 "moneyflow", "margin", "status"},
 }
 
+#: 回测区间（对齐聚宽「近三月/近一年/…」）。锚点 = 数据最后一天，向前推自然月。
+#: 区间只作用于**展示**：IC 类指标按区间切片现算，回测类从 evals 日收益重算；
+#: 不改任何入库/入库判据。
+WINDOWS: list[tuple[str, int | None]] = [
+    ("3M", 3), ("1Y", 12), ("3Y", 36), ("10Y", 120), ("ALL", None),
+]
+WIN_LABEL = {"3M": "近三月", "1Y": "近一年", "3Y": "近三年",
+             "10Y": "近十年", "ALL": "全部"}
+
+
+def slice_window(obj, months: int | None):
+    """按自然月截取尾部（months=None → 原样返回）。"""
+    if months is None or len(obj) == 0:
+        return obj
+    end = obj.index.max()
+    return obj.loc[obj.index > end - pd.DateOffset(months=months)]
+
 
 def src_group(set_name: str) -> str:
     for g, sets in SRC_GROUPS.items():
@@ -120,15 +137,92 @@ def ic_metrics(ic: pd.DataFrame) -> pd.DataFrame:
             months, monthly)
 
 
-def load_equity(lib_root: Path, reg: pd.DataFrame) -> tuple[dict, dict | None]:
-    """有 evals 的因子 → 月频降采样净值（LS/LO）+ 数据集级基准净值。
+def window_ic_metrics(mats: dict[str, pd.DataFrame]) -> dict[str, dict[str, dict]]:
+    """按区间重算 IC 类指标 → ``{win: {name: {ic1, icir, nw, win, ic5, ic10, ic20}}}``。
+
+    口径与全期一致（同 ``nw_t_stat``、同 NaN 跳过规则），只是切片不同；
+    区间内样本不足（<2 日）时返回空 dict，前端显示 —。
+    """
+    out: dict[str, dict[str, dict]] = {}
+    for wkey, m in WINDOWS:
+        cols: dict[str, np.ndarray] = {}
+        idx_names = None
+        if "h1" in mats:
+            sub = slice_window(mats["h1"], m)
+            idx_names = sub.columns
+            if len(sub) >= 2:
+                arr = sub.to_numpy(dtype=float)
+                mean = np.nanmean(arr, axis=0)
+                with np.errstate(divide="ignore", invalid="ignore"):
+                    cols["ic1"] = mean
+                    cols["icir"] = mean / np.nanstd(arr, axis=0)
+                cols["win"] = np.nanmean(arr > 0, axis=0)
+                cols["nw"] = nw_t_stat(arr)
+        for h in (5, 10, 20):
+            key = f"h{h}"
+            if key not in mats:
+                continue
+            sub = slice_window(mats[key], m)
+            if idx_names is None:
+                idx_names = sub.columns
+            if len(sub) >= 1:
+                cols[f"ic{h}"] = np.nanmean(sub.to_numpy(dtype=float), axis=0)
+        if idx_names is None or not cols:
+            out[wkey] = {}
+            continue
+        df = pd.DataFrame({k: np.asarray(v, dtype=float).round(4) for k, v in cols.items()},
+                          index=idx_names)
+        # 显式转 python float + NaN→None（np.float64 / NaN 都不是合法 JSON）
+        out[wkey] = {
+            nm: {k: (None if not np.isfinite(v) else round(float(v), 4))
+                 for k, v in row.items()}
+            for nm, row in df.to_dict("index").items()
+        }
+    return out
+
+
+def _ann(series: pd.Series | None, ppy: int = 252) -> float | None:
+    """净值序列 → 年化收益（几何；按交易日计年）。样本不足返回 None。"""
+    if series is None:
+        return None
+    s = series.dropna()
+    if len(s) < 2:
+        return None
+    a, b = float(s.iloc[0]), float(s.iloc[-1])
+    if a <= 0:
+        return None
+    years = (len(s) - 1) / ppy
+    if years <= 0:
+        return None
+    try:
+        return round((b / a) ** (1 / years) - 1, 4)
+    except (OverflowError, ValueError, ZeroDivisionError):
+        return None
+
+
+def load_equity(lib_root: Path, reg: pd.DataFrame):
+    """有 evals 的因子 → 月频降采样净值（LS/LO）+ 数据集级基准 + 区间回测指标。
 
     月频而非周频：回填后全库 ~950 个因子都有 evals，周频内嵌 payload 超 6MB，
-    月频（~120 点）足够支撑详情页 200px 高的曲线。"""
-    out = {}
+    月频（~120 点）足够支撑详情页 200px 高的曲线。
+
+    区间回测指标从 evals 的日净值/日换手重算（年化几何、超额 = 纯多 − 全A等权、
+    换手 = 区间内调仓日均值）；缺列则该区间留空，不回落到全期值冒充。
+    """
+    out, bt = {}, {}
+    last_dt = None
+    # 基准先读（区间超额要用区间基准年化）
+    bench, bench_nav = None, None
+    bp = lib_root / "bench_returns.parquet"
+    if bp.exists():
+        b = pd.read_parquet(bp).iloc[:, 0]
+        bench_nav = (1 + b.fillna(0)).cumprod()
+        mo = bench_nav.resample("ME").last()
+        bench = {"d": [d.strftime("%Y-%m-%d") for d in mo.index],
+                 "v": [round(float(v), 4) for v in mo]}
     ev_paths = reg.get("eval_path")
     if ev_paths is None:
-        return out, None
+        return out, bench, bt, last_dt
     for _, r in reg.iterrows():
         ep = r.get("eval_path")
         if not isinstance(ep, str) or not ep.strip():
@@ -144,6 +238,9 @@ def load_equity(lib_root: Path, reg: pd.DataFrame) -> tuple[dict, dict | None]:
             log.warning("evals 读取失败 %s: %s", p.name, exc)
             continue
         mo = ev.resample("ME").last().dropna(how="all")
+        if len(ev.index):
+            dmax = ev.index.max()
+            last_dt = dmax if last_dt is None or dmax > last_dt else last_dt
         out[r["name"]] = {
             "d": [d.strftime("%Y-%m-%d") for d in mo.index],
             "ls": [round(float(v), 4) if pd.notna(v) else None
@@ -151,16 +248,35 @@ def load_equity(lib_root: Path, reg: pd.DataFrame) -> tuple[dict, dict | None]:
             "lo": [round(float(v), 4) if pd.notna(v) else None
                    for v in mo.get("equity_lo_M", pd.Series(dtype=float))],
         }
-    bench = None
-    bp = lib_root / "bench_returns.parquet"
-    if bp.exists():
-        b = pd.read_parquet(bp).iloc[:, 0]
-        nav = (1 + b.fillna(0)).cumprod()
-        mo = nav.resample("ME").last()
-        bench = {"d": [d.strftime("%Y-%m-%d") for d in mo.index],
-                 "v": [round(float(v), 4) for v in mo]}
-    log.info("内嵌净值曲线 %d 个因子 | 基准: %s", len(out), "有" if bench else "无")
-    return out, bench
+        # 区间回测指标（日净值/日换手重算；月、周调仓各一套）
+        rec: dict[str, dict] = {}
+        for wk, m in WINDOWS:
+            mrec: dict[str, dict] = {}
+            for freq in ("M", "W"):
+                e_ls = ev.get(f"equity_ls_{freq}")
+                e_lo = ev.get("equity_lo_M") if freq == "M" else None
+                t_s = ev.get(f"turnover_ls_{freq}")
+                d: dict = {}
+                if e_ls is not None:
+                    d["ls"] = _ann(slice_window(e_ls.dropna(), m))
+                    if e_lo is not None:
+                        d["lo"] = _ann(slice_window(e_lo.dropna(), m))
+                        ba = _ann(slice_window(bench_nav, m)) if bench_nav is not None else None
+                        if d["lo"] is not None and ba is not None:
+                            d["ex"] = round(d["lo"] - ba, 4)
+                if t_s is not None:
+                    ts = slice_window(t_s.dropna(), m)
+                    if len(ts):
+                        d["to"] = round(float(ts.mean()), 4)
+                if d:
+                    mrec[freq] = d
+            if mrec:
+                rec[wk] = mrec
+        if rec:
+            bt[r["name"]] = rec
+    log.info("内嵌净值曲线 %d 个因子 | 区间回测指标 %d | 基准: %s",
+             len(out), len(bt), "有" if bench else "无")
+    return out, bench, bt, last_dt
 
 
 # ---------------------------------------------------------------- 主流程
@@ -198,7 +314,13 @@ def main() -> None:
     has_w = reg["annual_return_ls_W"].notna().any() if "annual_return_ls_W" in reg else False
     has_ex = ("excess_return_lo_M" in reg.columns
               and reg["excess_return_lo_M"].notna().any())
-    equity, bench = load_equity(lib_root, reg)
+    wm = window_ic_metrics(mats)
+    equity, bench, bt_win, data_last = load_equity(lib_root, reg)
+    # 区间锚点：有 IC 矩阵用矩阵末日（与 IC 切片一致），否则用 evals 最新日期
+    ic_last = mats["h1"].index.max() if "h1" in mats else data_last
+    win_start = {wk: (None if m is None or ic_last is None else
+                      str((ic_last - pd.DateOffset(months=m)).date()))
+                 for wk, m in WINDOWS}
 
     # ---- 行数据（与前端列一一对应）----
     def f(v, nd=4):
@@ -206,32 +328,53 @@ def main() -> None:
 
     rows = []
     for i, r in reg.iterrows():
-        ic1 = r.get("calc_ic1")
-        # h20：矩阵均值与 registry 的 ic_mean_h20 同源（都来自 ic_h20），优先矩阵现算
-        ic20 = None
-        if "h20" in mats and r["name"] in mats["h20"].columns:
-            ic20 = f(np.nanmean(mats["h20"][r["name"]].to_numpy(dtype=float)))
-        if ic20 is None:
-            ic20 = f(r.get("ic_mean_h20"))
         setv = str(r.get("set") or "—")
+        # 区间指标：IC 类逐区间现算；回测类优先 evals 重算，全期区间回落到 registry
+        # 登记值（registry 的 ALL 值是入库时的权威口径，优先于日序列近似重算）。
+        wrow: dict[str, dict] = {}
+        name = str(r["name"])
+        for wk, _ in WINDOWS:
+            d = dict(wm.get(wk, {}).get(name) or {})
+            b = bt_win.get(name, {}).get(wk) or {}
+            if b:
+                d["bt"] = b
+            if wk == "ALL" and not wm.get("ALL"):
+                # 无 ic_h* 矩阵的库（如 hs300）→ 全期区间回落到 registry 登记值
+                for src, dst, nd in (("ic_mean", "ic1", 4), ("ic_ir", "icir", 4),
+                                     ("t_stat_nw", "nw", 2), ("ic_win_rate", "win", 3),
+                                     ("ic_mean_h5", "ic5", 4), ("ic_mean_h10", "ic10", 4),
+                                     ("ic_mean_h20", "ic20", 4)):
+                    if dst not in d:
+                        v = f(r.get(src), nd)
+                        if v is not None:
+                            d[dst] = v
+            if wk == "ALL" and has_ls:
+                mrec = d.setdefault("bt", {}).setdefault("M", {})
+                if mrec.get("ls") is None:
+                    mrec["ls"] = f(r.get("annual_return_ls_M"))
+                if mrec.get("lo") is None:
+                    mrec["lo"] = f(r.get("annual_return_lo_M"))
+                if mrec.get("to") is None:
+                    mrec["to"] = f(r.get("avg_turnover_ls_M"))
+                if has_ex and mrec.get("ex") is None:
+                    mrec["ex"] = f(r.get("excess_return_lo_M"))
+                if has_w:
+                    wrec = d["bt"].setdefault("W", {})
+                    if wrec.get("ls") is None:
+                        wrec["ls"] = f(r.get("annual_return_ls_W"))
+                    if wrec.get("to") is None:
+                        wrec["to"] = f(r.get("avg_turnover_ls_W"))
+            wrow[wk] = d
+
         rows.append({
-            "i": i, "name": str(r["name"]),
+            "i": i, "name": name,
             "set": setv, "grp": src_group(setv),
             "fam": str(r.get("family") or "—"),
             "cov": f(r.get("coverage"), 3),
-            "ic1": f(ic1), "ic5": f(r.get("ic_mean_h5")),
-            "ic10": f(r.get("ic_mean_h10")), "ic20": ic20,
-            "icir": f(r.get("calc_icir")), "nw": f(r.get("calc_nw"), 2),
-            "win": f(r.get("calc_win"), 3),
-            "lsM": f(r.get("annual_return_ls_M")) if has_ls else None,
-            "lsW": f(r.get("annual_return_ls_W")) if has_ls and has_w else None,
-            "lo": f(r.get("annual_return_lo_M")) if has_ls else None,
-            "toM": f(r.get("avg_turnover_ls_M")) if has_ls else None,
-            "toW": f(r.get("avg_turnover_ls_W")) if has_ls and has_w else None,
-            "ex": f(r.get("excess_return_lo_M")) if has_ex else None,
+            "w": wrow,
             "sig": bool(r["significant"]) if "significant" in reg and pd.notna(r.get("significant")) else None,
-            "has_ic": bool(r["name"] in monthly),
-            "has_eq": r["name"] in equity,
+            "has_ic": bool(name in monthly),
+            "has_eq": name in equity,
         })
 
     payload = {
@@ -249,6 +392,9 @@ def main() -> None:
             "al": "" if pd.isna(r.get("active_last")) else str(r.get("active_last"))[:10],
         } for _, r in reg.iterrows()},
         "hasLS": bool(has_ls), "hasW": bool(has_w), "hasEx": bool(has_ex),
+        "wins": [k for k, _ in WINDOWS],
+        "winLabel": WIN_LABEL,
+        "winStart": win_start,
     }
 
     # ---- HTML ----
@@ -376,7 +522,18 @@ function renderSubChips() {
 $('famSel').onchange = e => { famFilter = e.target.value; renderRows(); };
 $('fsearch').oninput = e => { q = e.target.value.toLowerCase(); renderRows(); };
 
-// ---- 调仓周期切换（月/周，仅 hasLS && hasW 时显示）----
+// ---- 回测区间（近三月/近一年/近三年/近十年/全部）----
+let win = 'ALL', curRow = null;
+document.querySelectorAll('#winChips .chip').forEach(ch => {
+  ch.onclick = () => {
+    win = ch.dataset.w;
+    document.querySelectorAll('#winChips .chip').forEach(c => c.classList.toggle('on', c === ch));
+    renderRows();
+    if (curRow) showDetail(curRow);
+  };
+});
+
+// ---- 调仓频率切换（月/周，仅 hasLS && hasW 时显示）----
 let per = 'M';
 const perSel = $('perSel');
 if (perSel) {
@@ -386,19 +543,31 @@ if (perSel) {
       per = ch.dataset.p;
       perSel.querySelectorAll('.chip').forEach(c => c.classList.toggle('on', c === ch));
       renderRows();
+      if (curRow) showDetail(curRow);
     };
   });
 }
 
-// ---- 排序 ----
-let sortKey = 'nw', sortAsc = false;
-D.rows.sort((a, b) => {                    // 初始视图：NW-t 降序，缺值垫底
-  const av = a.nw ?? null, bv = b.nw ?? null;
+// 取值器：IC 类 = 当前区间；回测类 = 当前区间 × 当前调仓频率
+const curOf = (r, k) => { const d = r.w[win]; return d && d[k] !== undefined ? d[k] : null; };
+const btOf = (r, k) => {
+  const d = r.w[win]; const b = d && d.bt && d.bt[per];
+  return b && b[k] !== undefined ? b[k] : null;
+};
+const BT_KEYS = new Set(['ls', 'lo', 'ex', 'to']);
+const ROOT_KEYS = new Set(['name', 'set', 'fam', 'cov']);
+const valOf = (r, k) => ROOT_KEYS.has(k) ? r[k] : (BT_KEYS.has(k) ? btOf(r, k) : curOf(r, k));
+const cmp = (a, b, k) => {
+  const av = valOf(a, k), bv = valOf(b, k);
   if (av === null && bv === null) return 0;
   if (av === null) return 1; if (bv === null) return -1;
-  return bv - av;
-});
-const NaNlast = (a, b) => (a === null) - (b === null);
+  if (typeof av === 'string') return sortAsc ? av.localeCompare(bv) : bv.localeCompare(av);
+  return sortAsc ? av - bv : bv - av;
+};
+
+// ---- 排序（初始 NW-t 降序，缺值垫底）----
+let sortKey = 'nw', sortAsc = false;
+D.rows.sort((a, b) => cmp(a, b, 'nw'));
 function renderRows() {
   const tb = $('ftable').tBodies[0];
   tb.innerHTML = '';
@@ -414,18 +583,18 @@ function renderRows() {
     tr.innerHTML =
       `<td><b>${r.name}</b></td><td>${r.set}</td><td>${r.fam}</td>` +
       `<td class="num">${fmt(r.cov, 2)}</td>` +
-      `<td class="num ${cls(r.ic1)}">${fmt(r.ic1)}</td>` +
-      `<td class="num ${cls(r.icir)}">${fmt(r.icir, 2)}</td>` +
-      `<td class="num ${cls(r.nw)}">${fmt(r.nw, 2)}</td>` +
-      `<td class="num">${fmt(r.win, 2)}</td>` +
-      `<td class="num ${cls(r.ic5)}">${fmt(r.ic5)}</td>` +
-      `<td class="num ${cls(r.ic10)}">${fmt(r.ic10)}</td>` +
-      `<td class="num ${cls(r.ic20)}">${fmt(r.ic20)}</td>` +
+      `<td class="num ${cls(curOf(r,'ic1'))}">${fmt(curOf(r,'ic1'))}</td>` +
+      `<td class="num ${cls(curOf(r,'icir'))}">${fmt(curOf(r,'icir'), 2)}</td>` +
+      `<td class="num ${cls(curOf(r,'nw'))}">${fmt(curOf(r,'nw'), 2)}</td>` +
+      `<td class="num">${fmt(curOf(r,'win'), 2)}</td>` +
+      `<td class="num ${cls(curOf(r,'ic5'))}">${fmt(curOf(r,'ic5'))}</td>` +
+      `<td class="num ${cls(curOf(r,'ic10'))}">${fmt(curOf(r,'ic10'))}</td>` +
+      `<td class="num ${cls(curOf(r,'ic20'))}">${fmt(curOf(r,'ic20'))}</td>` +
       (D.hasLS
-        ? `<td class="num ${cls(r['ls'+per])}">${fmt(r['ls'+per])}</td>` +
-          `<td class="num ${cls(r.lo)}">${fmt(r.lo)}</td>` +
-          (D.hasEx ? `<td class="num ${cls(r.ex)}">${fmt(r.ex)}</td>` : '') +
-          `<td class="num">${fmt(r['to'+per], 2)}</td>`
+        ? `<td class="num ${cls(btOf(r,'ls'))}">${fmt(btOf(r,'ls'))}</td>` +
+          `<td class="num ${cls(btOf(r,'lo'))}">${fmt(btOf(r,'lo'))}</td>` +
+          (D.hasEx ? `<td class="num ${cls(btOf(r,'ex'))}">${fmt(btOf(r,'ex'))}</td>` : '') +
+          `<td class="num">${fmt(btOf(r,'to'), 2)}</td>`
         : '') +
       `<td class="fml" title="${(D.formula[r.name]||'').replace(/"/g,'&quot;')}">${(D.formula[r.name]||'').slice(0,50)}</td>`;
     tr.onclick = () => showDetail(r, tr);
@@ -434,17 +603,9 @@ function renderRows() {
   $('cnt').textContent = shown;
   document.querySelectorAll('#ftable th[data-k]').forEach(th => {
     th.onclick = () => {
-      let k = th.dataset.k;
-      // 多空年化/换手率列头跟随当前周期档（lsM/toM ↔ lsW/toW）
-      if (k === 'lsM' || k === 'toM') k = k.slice(0, -1) + per;
+      const k = th.dataset.k;
       if (sortKey === k) sortAsc = !sortAsc; else { sortKey = k; sortAsc = false; }
-      D.rows.sort((a, b) => {
-        const av = a[k] ?? null, bv = b[k] ?? null;
-        if (av === null && bv === null) return 0;
-        if (av === null) return 1; if (bv === null) return -1;
-        if (typeof av === 'string') return sortAsc ? av.localeCompare(bv) : bv.localeCompare(av);
-        return sortAsc ? av - bv : bv - av;
-      });
+      D.rows.sort((a, b) => cmp(a, b, k));
       renderRows();
     };
   });
@@ -453,8 +614,11 @@ function renderRows() {
 // ---- 详情抽屉 ----
 let icChart = null, eqChart = null;
 function showDetail(r, tr) {
-  document.querySelectorAll('tbody tr.sel').forEach(x => x.classList.remove('sel'));
-  tr.classList.add('sel');
+  curRow = r;
+  if (tr) {
+    document.querySelectorAll('tbody tr.sel').forEach(x => x.classList.remove('sel'));
+    tr.classList.add('sel');
+  }
   const d = $('detail'); d.classList.add('show');
   const m = D.meta[r.name] || {};
   $('dTitle').textContent = r.name;
@@ -462,23 +626,37 @@ function showDetail(r, tr) {
     `<span class="badge">来源 ${r.set}</span><span class="badge">族 ${r.fam}</span>` +
     (m.sub && m.sub !== '' ? `<span class="badge">子族 ${m.sub}</span>` : '') +
     `<span class="badge">${m.freq}</span><span class="badge">${m.mat}</span>` +
-    (m.af ? `<span class="badge">覆盖 ${m.af} ~ ${m.al}</span>` : '');
+    (m.af ? `<span class="badge">覆盖 ${m.af} ~ ${m.al}</span>` : '') +
+    `<span class="badge">区间 ${D.winLabel[win]}</span>` +
+    (D.hasLS ? `<span class="badge">调仓 ${per === 'M' ? '月' : '周'}</span>` : '');
   $('dGrid').innerHTML =
-    dcell('IC(h1)', r.ic1) + dcell('ICIR', r.icir) + dcell('NW-t', r.nw) + dcell('IC胜率', r.win, 2) +
-    dcell('IC(h5)', r.ic5) + dcell('IC(h10)', r.ic10) + dcell('IC(h20)', r.ic20) +
-    dcell('覆盖率', r.cov, 2);
+    dcell('IC(h1)', curOf(r,'ic1')) + dcell('ICIR', curOf(r,'icir')) +
+    dcell('NW-t', curOf(r,'nw'), 2) + dcell('IC胜率', curOf(r,'win'), 2) +
+    dcell('IC(h5)', curOf(r,'ic5')) + dcell('IC(h10)', curOf(r,'ic10')) +
+    dcell('IC(h20)', curOf(r,'ic20')) + dcell('覆盖率', r.cov, 2) +
+    (D.hasLS ? dcell('多空年化', btOf(r,'ls')) + dcell('多头年化', btOf(r,'lo')) +
+      dcell('超额年化', btOf(r,'ex')) + dcell('换手率', btOf(r,'to'), 2) : '');
   $('dFml').textContent = D.formula[r.name] || '（无公式记录）';
 
-  // 月度 IC
+  // 月度 IC（按当前区间截取尾部 N 个月）
   const ctx1 = $('dIcChart');
   if (icChart) icChart.destroy();
-  $('dIcWrap').style.display = D.monthly[r.name] ? '' : 'none';
-  $('dIcEmpty').style.display = D.monthly[r.name] ? 'none' : '';
-  if (D.monthly[r.name]) {
-    const vals = D.monthly[r.name];
+  const start = D.winStart[win];
+  const from = start ? start.slice(0, 7) : '';
+  let idxFrom = 0;
+  if (from) {
+    const k = D.months.findIndex(x => x >= from);
+    idxFrom = k < 0 ? D.months.length : k;
+  }
+  const hasIc = D.monthly[r.name] && D.months.length - idxFrom >= 1;
+  $('dIcWrap').style.display = hasIc ? '' : 'none';
+  $('dIcEmpty').style.display = hasIc ? 'none' : '';
+  if (hasIc) {
+    const labels = D.months.slice(idxFrom);
+    const vals = D.monthly[r.name].slice(idxFrom);
     icChart = new Chart(ctx1, {
       type: 'bar',
-      data: { labels: D.months,
+      data: { labels: labels,
         datasets: [{ data: vals,
           backgroundColor: vals.map(v => v === null ? '#ccc' : (v > 0 ? '#A32D2D' : '#3B6D11')) }]},
       options: { responsive: true, maintainAspectRatio: false, animation: false,
@@ -488,22 +666,26 @@ function showDetail(r, tr) {
                   y: { grid: { color: '#eee' } } } }
     });
   }
-  // LS/LO 净值
+  // LS/LO 净值（按当前区间截取）
   const ctx2 = $('dEqChart');
   if (eqChart) eqChart.destroy();
-  $('dEqWrap').style.display = D.equity[r.name] ? '' : 'none';
-  if (D.equity[r.name]) {
-    const e = D.equity[r.name];
+  const eq = D.equity[r.name];
+  const keep = eq ? eq.d.map((x, i) => (!start || x >= start) ? i : -1).filter(i => i >= 0) : [];
+  const hasEq = eq && keep.length >= 2;
+  $('dEqWrap').style.display = hasEq ? '' : 'none';
+  $('dEqEmpty').style.display = hasEq ? 'none' : '';
+  if (hasEq) {
+    const labels = keep.map(i => eq.d[i]);
     const benchMap = {};
-    if (D.bench) D.bench.d.forEach((d, i) => benchMap[d] = D.bench.v[i]);
+    if (D.bench) D.bench.d.forEach((x, i) => benchMap[x] = D.bench.v[i]);
     eqChart = new Chart(ctx2, {
       type: 'line',
-      data: { labels: e.d, datasets: [
-        { label: '多空LS(月)', data: e.ls, borderColor: '#A32D2D',
+      data: { labels: labels, datasets: [
+        { label: '多空LS(月)', data: keep.map(i => eq.ls[i]), borderColor: '#A32D2D',
           backgroundColor: 'rgba(163,45,45,.08)', borderWidth: 1.4, pointRadius: 0, fill: true, tension: 0 },
-        { label: '多头LO(月)', data: e.lo, borderColor: '#185FA5',
+        { label: '多头LO(月)', data: keep.map(i => eq.lo[i]), borderColor: '#185FA5',
           borderWidth: 1.4, pointRadius: 0, tension: 0 },
-        ...(D.bench ? [{ label: '全A等权', data: e.d.map(d => benchMap[d] ?? null),
+        ...(D.bench ? [{ label: '全A等权', data: labels.map(x => benchMap[x] ?? null),
           borderColor: '#999', borderDash: [4, 3], borderWidth: 1, pointRadius: 0, tension: 0 }] : [])]},
       options: { responsive: true, maintainAspectRatio: false, animation: false,
         interaction: { mode: 'index', intersect: false },
@@ -543,12 +725,15 @@ def render(dataset: str, n: int, reg: pd.DataFrame, payload: dict, months: list)
         for g, c in sorted(grp_cnt.items(), key=lambda kv: -kv[1]))
     fam_opts = '<option value="">全部族</option>' + "".join(
         f'<option value="{f}">{f}</option>' for f in fams)
-    ls_head = ("<th data-k='lsM'>多空年化</th><th data-k='lo'>多头年化</th>"
+    ls_head = ("<th data-k='ls'>多空年化</th><th data-k='lo'>多头年化</th>"
                + ("<th data-k='ex'>超额年化</th>" if has_ex else "")
-               + "<th data-k='toM'>换手率</th>") if has_ls else ""
+               + "<th data-k='to'>换手率</th>") if has_ls else ""
     per_sel = ("""<span class="chiprow" id="perSel" style="display:none">
 <span class="chip on" data-p="M">月调仓</span><span class="chip" data-p="W">周调仓</span></span>"""
                if has_ls and has_w else "")
+    win_chips = '<span style="font-size:12px;color:#888">区间</span>' + "".join(
+        f'<span class="chip{" on" if k == "ALL" else ""}" data-w="{k}">{WIN_LABEL[k]}</span>'
+        for k, _ in WINDOWS)
 
     body = f"""<div class="topbar">
 <h1>YuriQuant 因子看板 — {dataset}</h1>
@@ -563,6 +748,7 @@ def render(dataset: str, n: int, reg: pd.DataFrame, payload: dict, months: list)
 <div class="kpi"><div class="v">{date_min}~{date_max}</div><div class="k">IC 覆盖区间</div></div>
 </div>
 <div class="filters">
+<div class="chiprow" id="winChips">{win_chips}</div>
 <div class="chiprow" id="grpChips">{chips}</div>
 <div class="chiprow" id="subChips" style="display:none"></div>
 <select id="famSel">{fam_opts}</select>
@@ -570,11 +756,12 @@ def render(dataset: str, n: int, reg: pd.DataFrame, payload: dict, months: list)
 <input class="search" id="fsearch" placeholder="搜索因子名 / 公式…">
 <span style="font-size:12px;color:#888">显示 <b id="cnt">0</b> 个 | 点击表头排序，点行看详情</span>
 </div>
-<div class="note"><b>口径提示：</b>IC 系列指标由逐日 IC 矩阵现场计算（Newey-West 稳健 t，
-滞后阶 L=int(4·(T/100)^(2/9))）；批量入库行为<b>全样本统计、无挖-验分离</b>。
-分层回测 = canonical TopK（k=30）多空/纯多，月/周两档，成本走引擎默认费率；
-超额年化 = 纯多(k=30·月) − 全A等权。缺失显示 —；口径详见 reports/README.md §一。
-红=正、绿=负（A 股惯例）。</div>
+<div class="note"><b>口径提示：</b>顶部「区间」控制<b>全部指标</b>的时间窗口（近三月/一年/三年/十年/全部，
+锚点 = 数据最后一天）：IC 类按区间切片现算；回测类（年化/超额/换手）从 evals 日序列重算，
+「全部」用 registry 登记值。Newey-West 稳健 t，滞后阶 L=int(4·(T/100)^(2/9))；
+批量入库行为<b>全样本统计、无挖-验分离</b>。分层回测 = canonical TopK（k=30）多空/纯多，
+月/周两档，成本走引擎默认费率；超额年化 = 纯多 − 全A等权。缺失显示 —。
+口径详见 reports/README.md §一。红=正、绿=负（A 股惯例）。</div>
 <div class="scroll"><table id="ftable">
 <thead><tr>
 <th data-k="name">因子名</th><th data-k="set">细分来源</th><th data-k="fam">族</th>
@@ -596,6 +783,7 @@ def render(dataset: str, n: int, reg: pd.DataFrame, payload: dict, months: list)
 <div style="display:none;font-size:12px;color:#999" id="dIcEmpty">该因子无逐日 IC 数据</div>
 <div class="dchart" id="dEqWrap"><div style="font-size:12px;color:#555;margin-bottom:4px">分层净值（TopK k=30 · 月调仓 · 成本=引擎默认）</div>
 <div style="height:200px"><canvas id="dEqChart"></canvas></div></div>
+<div style="display:none;font-size:12px;color:#999" id="dEqEmpty">该区间内无分层净值数据（需先跑指标回填）</div>
 </div>
 </div>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>

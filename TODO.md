@@ -1301,8 +1301,9 @@
      `lib.reconstruct_backtest(name, "ls_M")` 能重建且 metrics 与 registry 行一致；
   3. significant 数量级 sanity：全库 |t_nw|>2 的占比应与 hs300 库量级相当（过高=口径错）；
   4. `panel_path` 缺失的行数记录进汇总（panels/ 978 文件 vs registry 950 的对账结果）；
-  5. 重跑 `python -m scripts.reporting.factor_dashboard` 看板：多空年化/多头年化/
-     换手率列（月/周切换）、超额年化列、公式列、详情页净值曲线（含全A等权基准线）全部点亮。
+  5. 重跑 `python -m scripts.reporting.factor_dashboard` 看板：顶部「区间」chips
+     （近三月/一年/三年/十年/全部）切换后全部指标随之变化；多空年化/多头年化/
+     换手率列（另含月/周调仓切换）、超额年化列、公式列、详情净值曲线（含全A等权基准线）点亮。
 
   **已就绪的配套件（同批提交）**：`scripts/factors/backfill_library_metrics.py`（P0+P1
   写回一体）、实验目录 `reports/factor_library_backfill/`（README 四要素已建）、
