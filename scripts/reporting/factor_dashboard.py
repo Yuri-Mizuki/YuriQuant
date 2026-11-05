@@ -40,6 +40,23 @@ from scripts.common.cli_common import setup_logging  # noqa: E402
 
 log = setup_logging("factor_dashboard")
 
+#: 来源两级分组：大类（chips 第一层）→ registry 的 set（细分，第二层 chips）。
+#: 映射不到的 set 一律落 "其他"——新增 set 值不用改这里也能正确显示，
+#: 但建议归入大类后再看（改这张表 = 改展示口径，不影响任何数字）。
+SRC_GROUPS: dict[str, set[str]] = {
+    "公开量价库": {"alpha101", "alpha158", "alpha191", "alpha360"},
+    "基本面": {"fundamental"},
+    "另类数据": {"altf", "evt", "holder", "holder_dyn",
+                "moneyflow", "margin", "status"},
+}
+
+
+def src_group(set_name: str) -> str:
+    for g, sets in SRC_GROUPS.items():
+        if set_name in sets:
+            return g
+    return "其他"
+
 
 # ---------------------------------------------------------------- 数据加载
 
@@ -185,9 +202,11 @@ def main() -> None:
             ic20 = f(np.nanmean(mats["h20"][r["name"]].to_numpy(dtype=float)))
         if ic20 is None:
             ic20 = f(r.get("ic_mean_h20"))
+        setv = str(r.get("set") or "—")
         rows.append({
             "i": i, "name": str(r["name"]),
-            "set": str(r.get("set") or "—"), "fam": str(r.get("family") or "—"),
+            "set": setv, "grp": src_group(setv),
+            "fam": str(r.get("family") or "—"),
             "cov": f(r.get("coverage"), 3),
             "ic1": f(ic1), "ic5": f(r.get("ic_mean_h5")),
             "ic10": f(r.get("ic_mean_h10")), "ic20": ic20,
@@ -203,6 +222,8 @@ def main() -> None:
 
     payload = {
         "rows": rows, "months": months,
+        "groups": {g: sorted({r["set"] for r in rows if r["grp"] == g})
+                   for g in dict.fromkeys(r["grp"] for r in rows)},
         "monthly": {k: v for k, v in monthly.items()},
         "equity": equity,
         "formula": {str(r["name"]): str(r.get("formula") or "")[:300]
@@ -257,6 +278,9 @@ body { font-family:-apple-system,'PingFang SC','Microsoft YaHei',sans-serif;
 .chip { padding:4px 12px; border-radius:14px; border:1px solid #d5d9e0; cursor:pointer;
         background:#f8f9fa; font-size:12px; user-select:none; }
 .chip.on { background:#1a3a6b; color:#fff; border-color:#1a3a6b; }
+.chiprow { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+.subchip { font-size:11px; padding:3px 10px; color:#555; }
+.subchip.on { color:#fff; }
 select,.search { padding:6px 10px; border:1px solid #ddd; border-radius:8px; font-size:12px; }
 .search { width:220px; }
 .note { background:#fff3cd; border:1px solid #ffe082; border-radius:8px; padding:10px 14px;
@@ -299,21 +323,40 @@ const fmt = (v, nd) => v === null || v === undefined ? '—' : (+v).toFixed(nd =
 const cls = v => v === null || v === undefined ? '' : (v > 0 ? 'pos' : 'neg');
 const rowByIdx = {}; D.rows.forEach(r => rowByIdx[r.i] = r);
 
-// ---- 筛选状态 ----
-const activeSets = new Set();          // 空 = 全部
-let famFilter = '', q = '';
-document.querySelectorAll('.chip[data-set]').forEach(ch => {
+// ---- 筛选状态（来源两级：大类 → 细分 set）----
+let activeGrp = '', famFilter = '', q = '';
+const activeSubs = new Set();          // 空 = 该大类下全部细分
+document.querySelectorAll('#grpChips .chip').forEach(ch => {
   ch.onclick = () => {
-    ch.classList.toggle('on');
-    if (ch.dataset.set === '__ALL__') {
-      document.querySelectorAll('.chip[data-set]:not([data-set="__ALL__"])')
-        .forEach(c => { c.classList.remove('on'); activeSets.delete(c.dataset.set); });
+    if (ch.dataset.g === '__ALL__') {
+      activeGrp = ''; activeSubs.clear();
+      document.querySelectorAll('#grpChips .chip')
+        .forEach(c => c.classList.toggle('on', c === ch));
     } else {
-      ch.classList.contains('on') ? activeSets.add(ch.dataset.set) : activeSets.delete(ch.dataset.set);
+      activeGrp = ch.classList.contains('on') ? '' : ch.dataset.g;
+      activeSubs.clear();
+      document.querySelectorAll('#grpChips .chip')
+        .forEach(c => c.classList.toggle('on', c === ch && activeGrp !== ''));
     }
-    renderRows();
+    renderSubChips(); renderRows();
   };
 });
+function renderSubChips() {
+  const box = $('subChips');
+  box.innerHTML = '';
+  if (!activeGrp) { box.style.display = 'none'; return; }
+  box.style.display = '';
+  (D.groups[activeGrp] || []).forEach(s => {
+    const c = document.createElement('span');
+    c.className = 'chip subchip'; c.textContent = s;
+    c.onclick = () => {
+      c.classList.toggle('on');
+      c.classList.contains('on') ? activeSubs.add(s) : activeSubs.delete(s);
+      renderRows();
+    };
+    box.appendChild(c);
+  });
+}
 $('famSel').onchange = e => { famFilter = e.target.value; renderRows(); };
 $('fsearch').oninput = e => { q = e.target.value.toLowerCase(); renderRows(); };
 
@@ -331,7 +374,8 @@ function renderRows() {
   tb.innerHTML = '';
   let shown = 0;
   for (const r of D.rows) {
-    if (activeSets.size && !activeSets.has(r.set)) continue;
+    if (activeGrp && r.grp !== activeGrp) continue;
+    if (activeSubs.size && !activeSubs.has(r.set)) continue;
     if (famFilter && r.fam !== famFilter) continue;
     if (q && !(r.name.toLowerCase().includes(q) || (D.formula[r.name]||'').toLowerCase().includes(q))) continue;
     shown++;
@@ -450,8 +494,12 @@ def render(dataset: str, n: int, reg: pd.DataFrame, payload: dict, months: list)
     js = _JS.replace("__PAYLOAD__", json.dumps(payload, ensure_ascii=False,
                                                separators=(",", ":")))
 
-    chips = '<span class="chip on" data-set="__ALL__">全部</span>' + "".join(
-        f'<span class="chip" data-set="{s}">{s}</span>' for s in sets)
+    # 大类 chips（按数量降序，带计数）；细分 chips 由前端按所选大类动态渲染
+    from collections import Counter
+    grp_cnt = Counter(r["grp"] for r in payload["rows"])
+    chips = '<span class="chip on" data-g="__ALL__">全部</span>' + "".join(
+        f'<span class="chip" data-g="{g}">{g} <span style="opacity:.65">{c}</span></span>'
+        for g, c in sorted(grp_cnt.items(), key=lambda kv: -kv[1]))
     fam_opts = '<option value="">全部族</option>' + "".join(
         f'<option value="{f}">{f}</option>' for f in fams)
     ls_head = "<th data-k='ls'>多空年化(M)</th><th data-k='to'>换手(M)</th>" if has_ls else ""
@@ -464,12 +512,13 @@ def render(dataset: str, n: int, reg: pd.DataFrame, payload: dict, months: list)
 <div class="main">
 <div class="kpis">
 <div class="kpi"><div class="v">{n}</div><div class="k">因子总数</div></div>
-<div class="kpi"><div class="v">{len(sets)}</div><div class="k">来源集合</div></div>
+<div class="kpi"><div class="v">{len(grp_cnt)}</div><div class="k">来源大类（细分 {len(sets)}）</div></div>
 <div class="kpi"><div class="v">{len(fams)}</div><div class="k">因子族</div></div>
 <div class="kpi"><div class="v">{date_min}~{date_max}</div><div class="k">IC 覆盖区间</div></div>
 </div>
 <div class="filters">
-{chips}
+<div class="chiprow" id="grpChips">{chips}</div>
+<div class="chiprow" id="subChips" style="display:none"></div>
 <select id="famSel">{fam_opts}</select>
 <input class="search" id="fsearch" placeholder="搜索因子名 / 公式…">
 <span style="font-size:12px;color:#888">显示 <b id="cnt">0</b> 个 | 点击表头排序，点行看详情</span>
@@ -480,7 +529,7 @@ def render(dataset: str, n: int, reg: pd.DataFrame, payload: dict, months: list)
 reports/README.md §一。红=正、绿=负（A 股惯例）。</div>
 <div class="scroll"><table id="ftable">
 <thead><tr>
-<th data-k="name">因子名</th><th data-k="set">来源</th><th data-k="fam">族</th>
+<th data-k="name">因子名</th><th data-k="set">细分来源</th><th data-k="fam">族</th>
 <th data-k="cov" class="num">覆盖率</th>
 <th data-k="ic1" class="num">IC(h1)</th><th data-k="icir" class="num">ICIR</th>
 <th data-k="nw" class="num">NW-t</th><th data-k="win" class="num">IC胜率</th>
