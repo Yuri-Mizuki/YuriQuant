@@ -11,6 +11,7 @@
 ① 基线形态     拿 ``TopFracLongOnly(0.10)``（研究口径、423 只、换手 72%）   ~2.0pp
                当基线；生产执行层实为 ``BufferedTopFracLongOnly(0.15,0.40)``
 ② 窗口        探针默认 2019+，生产定版 2018+（2018 是纯 β 年）              ~6.4pp
+               → 2026-11-05 已统一：主口径一律 2019+（2018 缺可执行性掩码）
 ③ Sharpe 定义  算术 ``mean/std·√252`` vs 生产几何 ``年化/年化波动``          0.05~0.13
 ④ 协方差暖机   收益面板被截断到回测窗口 ⇒ 早期调仓日 Σ 不足 ⇒ QP 静默空仓    ~2.7pp/年
 ⑤ 成本模型     QP 臂漏传 ``adv/vol`` ⇒ 冲击项恒 0、只扣佣金印花               ~6500bp
@@ -32,7 +33,7 @@
 
     from scripts.evaluation.caliber import get_profile, load_context
     from scripts.evaluation.caliber import cost_profile, evaluate_strategy
-    from strategy.examples import BufferedTopFracLongOnly
+    from strategy.cross_section import BufferedTopFracLongOnly
 
     p = get_profile("production")                          # 生产口径（默认）
     ctx = load_context(signal="ens_h1h5", window="prod", execution=p.execution)
@@ -80,10 +81,21 @@ from stats.robust_stats import nw_tstat  # noqa: E402
 # ---------------------------------------------------------------------------
 # 1) 口径常量（改这里 = 改全项目口径，慎动）
 # ---------------------------------------------------------------------------
-#: 回测窗口。**生产定版 = ``prod``（2018 起）**。``iso2019`` 只用于隔离 2018
-#: 这个纯 β 年的敏感性，**其数字不可与生产并列**（2018 该臂 −24.75% vs 沪深300 −25.39%）。
+#: 回测窗口。
+#:
+#: **主口径 = ``prod``（2019-01 起，2026-11-05 由莉酱拍板）**。
+#: 理由不是「数字好看」（剔 2018 抬高的 7.2pp 年化全是 β 红利，超额只动 0.33pp），
+#: 而是**口径不同源**：可执行性掩码（涨跌停封板 / 停牌 / ST）只有 2019 起有状态表，
+#: 2018 年按「所有股票都能买进」处理 ⇒ 它与 2019+ 测的不是同一件事。
+#: 见 ``load_context`` 里 ``mask`` 的加载分支。
+#:
+#: ``prod2018`` = 历史口径（2018 起，含缺掩码年份），**仅用于追溯
+#: ``config/baselines.yaml`` 里 2018+ 的旧登记值**，不得用于新结论。
+#: ``iso2019`` = ``prod`` 的兼容别名（``cost_penalty_probe`` /
+#: ``portfolio_weighting`` 等旧脚本仍按此名调用），值相同。
 WINDOWS: dict[str, str] = {
-    "prod": "20180101",
+    "prod": "20190101",
+    "prod2018": "20180101",
     "iso2019": "20190101",
 }
 DEFAULT_WINDOW = "prod"
@@ -535,9 +547,10 @@ def describe(ctx: CaliberContext, cost_kind: str, capital: float | None = None,
     cap = capital if capital is not None else DEFAULT_CAPITAL
     tag = f"[{profile}] " if profile else ""
     warns = ""
-    if ctx.window == "iso2019":
-        warns += ("\n🚨 窗口 = 2019+，**非生产口径**（生产定版 2018 起）；2018 为纯 β 年，"
-                  "剔除虚增约 +6.4pp，本表数字不可与定版并列。")
+    if ctx.window == "prod2018":
+        warns += ("\n🚨 窗口 = 2018+，**含缺掩码年份**（2018 无涨跌停/停牌/ST 状态表，"
+                  "按「全部可交易」处理）⇒ 与主口径 prod(2019+) **不同源，绝对数字不可并列**。"
+                  "此窗口只用于追溯登记表旧值，勿用于新结论。")
     if ctx.execution == "close":
         warns += ("\n⚠️ 成交价 = close（T 收盘成交，**乐观上限**）—— 比生产 T+1 open "
                   "高约 +0.7pp。")
@@ -565,7 +578,7 @@ def load_registry() -> dict:
 
 
 def _arm_strategies(buffer: str, eqw_topk: str) -> list[tuple[str, object]]:
-    from strategy.examples import BufferedTopFracLongOnly, TopFracLongOnly
+    from strategy.cross_section import BufferedTopFracLongOnly, TopFracLongOnly
     arms: list[tuple[str, object]] = [("eqw_top10pct", TopFracLongOnly(frac=0.10))]
     for spec in [x for x in buffer.split(",") if x.strip()]:
         a_s, b_s = spec.split(":")

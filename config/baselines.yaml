@@ -39,7 +39,8 @@
 #   id                 唯一标识
 #   status             production（当前生产）/ working（本机迭代代理）/ superseded
 #   signal_key         对应 caliber.SIGNALS 的键（决定读哪份 predict 面板）
-#   window             对应 caliber.WINDOWS 的键
+#   window             对应 caliber.WINDOWS 的键。**2026-11-05 起 `prod` = 2019 起**；
+#                      2018 起的旧条目一律写 `prod2018`（含无掩码年份，历史口径）
 #   signal / execution 口径描述（供人读，也是重建参数的记录）
 #   caliber            该条数字对应的**口径组合**（profile/cost/execution/capital/脚本）
 #   data_state         数据态（income 补齐前后）与当前态等效值
@@ -50,14 +51,15 @@
 #   source             数字出处（报告路径 / 命令）
 # =============================================================================
 
-version: 2
-updated: "2026-10-28"
+version: 3
+updated: "2026-11-05"
 
 # 评估口径的规范值（caliber.py 的硬编码副本，供快速查阅；改 caliber 时同步）
 conventions:
   windows:
-    prod: "20180101"      # 生产定版窗口（含 2018 纯 β 年）
-    iso2019: "20190101"   # 仅做敏感性；数字不可与生产并列
+    prod: "20190101"      # 主口径（2026-11-05 起）：2018 缺可执行性掩码，与 2019+ 不同源
+    prod2018: "20180101"  # 历史口径：含缺掩码年份，仅用于追溯旧登记值，不得用于新结论
+    iso2019: "20190101"   # = prod 的兼容别名（旧脚本仍按此名调用）
   sharpe: "geometric"     # backtest.metrics.sharpe_ratio（几何年化/年化波动）
   rebalance: "monthly_first_trading_day"
   covariance_warmup: "untruncated_history"   # Σ 面板不得截断到回测窗口
@@ -85,7 +87,7 @@ baselines:
     status: production
     label: "定版主模型 v1（920 fundind 快信号 h1020 ⊕ 慢信号 s0.5 + buffer(15/40)）"
     signal_key: dingban_fundind
-    window: prod
+    window: prod2018          # 2018 起；该起点缺可执行性掩码，2026-11-05 起降为历史口径
     signal:
       preproc: ortho_fundind            # 因子层正交化 + 基本面保留席位
       panel_source: all_a_2018_2026/panels_neu_fundind
@@ -161,11 +163,11 @@ baselines:
   # ---------------------------------------------------------------------------
   - id: v1w-ortho882
     created: "2026-10-13"
-    updated: "2026-10-28"
+    updated: "2026-11-05"
     status: working
     label: "本机工作基线：882 ortho ens_h1h5 + buffer(15/40)（生产执行层形态）"
     signal_key: ens_h1h5
-    window: prod
+    window: prod2018          # 2018 起；该起点缺可执行性掩码，2026-11-05 起降为历史口径
     signal:
       preproc: ortho
       panel_source: all_a_2018_2026/panels_neu
@@ -257,13 +259,90 @@ baselines:
     reproducible_local: true
     regen_cmd: >
       D:/python/Python312/python.exe scripts/evaluation/caliber.py
-      --signal ens_h1h5 --window prod --profile production --buffer 0.15:0.40
+      --signal ens_h1h5 --window prod2018 --profile production --buffer 0.15:0.40
+      （🚨 2026-11-05：必须写 `--window prod2018`。`prod` 已改指 2019 起，
+       用 `--window prod` 会重建出 23.57%/0.993 而不是本条登记的 16.39%/0.681。）
     source: "reports/caliber/baseline_prod.json / baseline_fair.json（caliber.py 产出）；2026-10-19 修复后重跑：reports/caliber/caliber_execfix_20261019.json（2026-11-03 由根目录归位） + reports/alla_rolling_ortho/metrics_ensemble.csv"
     verified_local: true
     notes: >
       与 v1 的差额 = 信号口径（fundind 特征集 + 慢信号）≈ +0.5~0.7pp（当前数据态估）。
       本机优化的**唯一合法基线**。**两个口径组合都必须登记**：production 用于
       「比生产强不强」，fair 用于成本稳健性/容量/QP 对照。
+      🔴 2026-11-05：本条窗口为 2018+，**含 2018 这个无掩码年份**，已降为历史口径。
+      新结论请用 `v1w-ortho882-2019`（同信号同执行层，窗口 2019+）。
+
+  # ---------------------------------------------------------------------------
+  # v1w-ortho882-2019 —— 主口径基线（2026-11-05 由莉酱拍板：窗口改 2019 起）
+  #   与 v1w-ortho882 是**同一个信号、同一执行层、同一费率**，只差起点。
+  #   切换理由 = 口径同源：可执行性掩码（涨跌停封板/停牌/ST）只有 2019 起有状态表，
+  #   2018 按「全部可交易」处理 ⇒ 两段测的不是同一件事，不可并列。
+  #   🚨 不是「数字好看」：剔 2018 抬高的 7.2pp 年化全是 β 红利，超额只 +6.63→+6.96%。
+  # ---------------------------------------------------------------------------
+  - id: v1w-ortho882-2019
+    created: "2026-11-05"
+    updated: "2026-11-05"
+    status: working
+    label: "主口径基线：882 ortho ens_h1h5 + buffer(15/40)，窗口 2019-01 起（含可执行性掩码）"
+    signal_key: ens_h1h5
+    window: prod
+    signal:
+      preproc: ortho
+      panel_source: all_a_2018_2026/panels_neu
+      ensemble: h1h5
+      horizons: [1, 5]
+      slow_blend: 0.0
+      selection_dir: reports/alla_rolling_ortho/selection
+      tradable_labels: false
+      n_factors: 882
+    execution:
+      strategy: BufferedTopFracLongOnly
+      buffer_entry: 0.15
+      buffer_exit: 0.40
+      rebalance_freq: M
+    caliber:
+      profile: production
+      cost: "固定 10bp（Config.costs()，impact_model=none）"
+      execution: "open（T+1 开盘）"
+      capital: 1.0e6
+      mask: "信号预掩码 sig.shift(1).where(mask)；掩码自 2019 起有状态表"
+    metrics:
+      window_label: "2019-01-02..2026-09-07（1864 日 / 7.39 年）"
+      fingerprint: 0a0b6b7acc6b
+      profiles:
+        production:
+          eqw_top10pct:
+            ann: 0.2160
+            sharpe: 0.882
+            sharpe_arith: 0.922
+            sharpe_t_stat: 2.489        # NW 校正，过 1.96
+            turnover: 0.720
+            cost_bp: 5369
+            max_dd: 0.377
+            n_active: 417
+            years_to_prove_arith: 4.5
+          eqw_buf0.15_0.4:
+            ann: 0.2357
+            sharpe: 0.993
+            sharpe_arith: 1.012
+            sharpe_t_stat: 2.741        # NW 校正，余量 40%（2018+ 同臂仅 2.139）
+            turnover: 0.365
+            cost_bp: 2780
+            max_dd: 0.341
+            n_active: 626
+            years_to_prove_arith: 3.8
+    fingerprint: 0a0b6b7acc6b
+    reproducible_local: true
+    regen_cmd: >
+      D:/python/Python312/python.exe -m scripts.evaluation.caliber
+      --signal ens_h1h5 --window prod --profile production --buffer 0.15:0.40
+      --json reports/caliber/baseline_2019_prod.json
+    source: "reports/caliber/baseline_2019_prod.json（2026-11-05 caliber 产出）；同信号在 2019+ 的池子臂交叉验证见 reports/pool_scope_probe/README.md §二·1（全A 臂 23.57%/0.993/626 只，与本条逐位一致）"
+    verified_local: true
+    notes: >
+      **直接收益是显著性**：同一臂的信号与执行完全相同，只是把缺掩码的 2018 移出窗口，
+      Sharpe t_NW 从 2.139（余量 9%）升到 2.741（余量 40%），years_to_prove 从 6.8 降到 3.8。
+      2018 那一年策略 −26.6%、超额 +3.0%，但 +3.0% 是「假设全部买得进」算的，
+      与 2019+ 的可执行口径不同源 —— 详见 reports/pool_scope_probe/README.md §二·补。
 
   # ---------------------------------------------------------------------------
   # v1w2 —— 候选微调（cheap_lever_scan 产出；🔴 生产切换 2026-10-17 搁置）
@@ -281,7 +360,7 @@ baselines:
     status: superseded
     label: "已终判否决（10-21 批次 12①）：定版信号 buffer(8/40) + h1 份额 0.125 —— 3/5 窗未达门槛，链路优化线关闭"
     signal_key: dingban_fundind          # 920 复验后生产形态 = 定版信号 + 两处微调
-    window: prod
+    window: prod2018
     signal:
       preproc: ortho_fundind
       panel_source: all_a_2018_2026/panels_neu_fundind

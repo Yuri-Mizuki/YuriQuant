@@ -58,7 +58,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 from strategy.base import Strategy  # noqa: E402
-from strategy.examples import (  # noqa: E402
+from strategy.cross_section import (  # noqa: E402
     BufferedTopFracLongOnly,
     TopFracLongOnly,
 )
@@ -155,7 +155,7 @@ class VolWeightedTopKLongOnly(Strategy):
 class BufferedTopKLongOnly(Strategy):
     """固定 K 多头的排名缓冲带（**有状态**，每回测须用新实例）。
 
-    与 `strategy.examples.BufferedTopFracLongOnly` 同规则，但目标持仓数固定为 K
+    与 `strategy.cross_section.BufferedTopFracLongOnly` 同规则，但目标持仓数固定为 K
     （集中组合口径 45 只），而非按截面比例。保留门槛 = 排名 ≤ K×exit_mult。
     """
 
@@ -195,8 +195,11 @@ def main(argv: list[str] | None = None) -> None:
                     choices=["production", "fair", "legacy"],
                     help="评测口径：production(默认，统一口径真源) / fair / "
                          "legacy(旧路径，仅复现历史产物)")
-    ap.add_argument("--window", default="prod", choices=["prod", "iso2019"],
-                    help="回测窗口（caliber WINDOWS；legacy 路径忽略）")
+    ap.add_argument("--window", default="prod",
+                    choices=["prod", "prod2018", "iso2019"],
+                    help="回测窗口（caliber WINDOWS；legacy 路径忽略）。"
+                         "prod = 2019 起（主口径）；prod2018 = 2018 起（历史口径，"
+                         "含无掩码年份，不可与 prod 并列）；iso2019 = prod 别名")
     ap.add_argument("--freq", default="M", choices=["M", "W"],
                     help="调仓频率（caliber 路径固定 M，仅 legacy 生效）")
     args = ap.parse_args(argv)
