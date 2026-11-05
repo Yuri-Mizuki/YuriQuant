@@ -39,4 +39,17 @@
   ② 实验 README 四要素齐备（**只审新写或刚改的**，存量按 mtime 基线豁免）；
   ③ README 标题带日期；④ `reports/docs/` 无孤儿文档。
   违规提示会直接给出改哪一条，别用「加空标题」绕过。
+- **改记忆后跑记忆校验**（2026-11-03 起，与 `docs_lint` 同级）：
+  ```bash
+  python -m scripts.data_tools.memory_lint --check    # 违规 rc=1
+  python -m scripts.data_tools.memory_lint --accept   # 人工确认增量后定新基线
+  ```
+  记忆层（`~/.workbuddy/USER.md`、`.workbuddy/memory/MEMORY*.md`）**只准放三类内容**：
+  ① 口径铁律 ② 指针 ③ 带日期的判断。**禁止**当前值、进度百分比、无日期的状态断言——
+  状态一律现查 `TODO.md` / `TODO_ARCHIVE.md` / `reports/README.md` §一。
+  起因：「优化层自评 20%」无任何文档出处，只在记忆里存活数月、被反复引用成事实。
+  **规则 3 是增量审查**：比对 `.workbuddy/memory/.lint_baseline.json`，只列本次**新增行**
+  （带数字的标 ⚠）。实测关键词法抓不住真实失误形态——注入「当前收益 17.31%/夏普 0.707」
+  时规则 2 报 0 项，规则 3 才抓出来。故**改完必须看一遍增量再 `--accept`**；
+  `--accept` 是把当前状态定为基线，等于宣布「我已逐行看过」，别不看就接受。
 - 回写完成后与代码一起分组提交推送。

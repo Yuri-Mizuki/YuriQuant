@@ -258,7 +258,7 @@ baselines:
     regen_cmd: >
       D:/python/Python312/python.exe scripts/evaluation/caliber.py
       --signal ens_h1h5 --window prod --profile production --buffer 0.15:0.40
-    source: "reports/caliber/baseline_prod.json / baseline_fair.json（caliber.py 产出）；2026-10-19 修复后重跑：reports/caliber_execfix_20261019.json + reports/alla_rolling_ortho/metrics_ensemble.csv"
+    source: "reports/caliber/baseline_prod.json / baseline_fair.json（caliber.py 产出）；2026-10-19 修复后重跑：reports/caliber/caliber_execfix_20261019.json（2026-11-03 由根目录归位） + reports/alla_rolling_ortho/metrics_ensemble.csv"
     verified_local: true
     notes: >
       与 v1 的差额 = 信号口径（fundind 特征集 + 慢信号）≈ +0.5~0.7pp（当前数据态估）。
