@@ -63,7 +63,20 @@ def write_parquet_atomic(df: pd.DataFrame, path: Path | str, **kwargs) -> None:
         pass
     print(f"[atomic_io] 原子改名重试 {RETRIES} 次仍被拒（{last_exc}）⇒ 降级就地覆写 "
           f"{path.name}", file=sys.stderr, flush=True)
-    df.to_parquet(path, **kwargs)
+    # 🚨 降级路径**也必须重试**：2026-11-05 重建链在 [18/19] neu_fundind 因这里裸抛
+    # PermissionError 而整批中止（27 万行日志显示改名被拒的同一批文件，就地覆写也
+    # 会被瞬时占用拦下）。改名失败往往正是「有进程正打开着这个文件」的信号，
+    # 紧接着的覆写几乎必然撞锁 —— 不重试等于把失败率放大。
+    last_exc = None
+    for i in range(RETRIES):
+        try:
+            df.to_parquet(path, **kwargs)
+            return
+        except PermissionError as exc:
+            last_exc = exc
+            time.sleep(BACKOFF * (2 ** i))
+    raise PermissionError(
+        f"就地覆写重试 {RETRIES} 次仍被拒：{path}（最后一次：{last_exc}）") from last_exc
 
 
 def sweep_stale_tmp(directory: Path | str, *, min_age_seconds: float = 600.0) -> int:
