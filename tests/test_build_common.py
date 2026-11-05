@@ -227,3 +227,47 @@ def test_run_neutralization_aborts_on_massive_failure(tmp_path, monkeypatch):
     monkeypatch.setattr(common, "neutralize_one", fake)
     with pytest.raises(RuntimeError, match="失败率"):
         common.run_neutralization(tmp_path, "panels_neu", workers=1, force=True)
+
+
+def test_run_neutralization_aborts_early_on_systemic_failure(tmp_path, monkeypatch):
+    """前 20 个里失败 8 个（40%）⇒ 立刻中止，不等 932 个跑完。
+
+    2026-11-05 现场：6 worker 并发时失败率 50%，但末端护栏要等整批结束才判，
+    34 个之后进程被打断才停——不打断就是白烧 6 小时。写盘故障集中在批处理开头
+    （并发/权限/杀软），前 20 个足以定性。
+    """
+    from scripts.builders import common
+
+    names = [f"g{i:02d}" for i in range(30)]
+    _mk_neu_ds(tmp_path, names)
+    seen: list[str] = []
+
+    def fake(task):
+        seen.append(task[0])
+        if len(seen) <= 8:
+            raise PermissionError(13, "Permission denied")
+        return task[0], 0.9
+
+    monkeypatch.setattr(common, "neutralize_one", fake)
+    with pytest.raises(RuntimeError, match="系统性写盘故障"):
+        common.run_neutralization(tmp_path, "panels_neu", workers=1, force=True)
+    assert len(seen) == common.EARLY_N        # 到第 20 个就停，不是跑满 30 个
+
+
+def test_run_neutralization_tolerates_isolated_failures(tmp_path, monkeypatch):
+    """25 个里 2 个失败（8%）⇒ 整批跑完，不误判为系统性故障。"""
+    from scripts.builders import common
+
+    names = [f"h{i:02d}" for i in range(25)]
+    _mk_neu_ds(tmp_path, names)
+    seen: list[str] = []
+
+    def fake(task):
+        seen.append(task[0])
+        if len(seen) <= 2:
+            raise PermissionError(13, "Permission denied")
+        return task[0], 0.9
+
+    monkeypatch.setattr(common, "neutralize_one", fake)
+    n = common.run_neutralization(tmp_path, "panels_neu", workers=1, force=True)
+    assert n == 23 and len(seen) == 25

@@ -325,6 +325,13 @@ def merge_outputs(ds_dir: Path, family: str, *,
 # ---------------------------------------------------------------------------
 #: 进入中性化的 registry coverage 下限（与 MIN_IC_COVERAGE 对齐）
 MIN_NEU_COVERAGE = 0.3
+
+#: 快速失败：处理数达到 ``EARLY_N`` 后，若失败率超过 ``EARLY_FAIL_RATE`` 立即中止。
+#: 2026-11-05 实测：6 worker 并发推 57MB parquet（≈22MB/s）打穿 Defender 实时扫描
+#: 吞吐，失败率 50%；而整批护栏要等 932 个跑完才判，等于白烧数小时算力。
+#: 前 20 个足以定性 —— 系统性写盘故障（并发/权限/杀软）vs 偶发占用。
+EARLY_N = 20
+EARLY_FAIL_RATE = 0.3
 _ROOT = Path(__file__).resolve().parents[2]
 _NEU_BASE_DIR = _ROOT / "reports" / "alla_rolling" / "_base"
 
@@ -378,7 +385,11 @@ def _safe_neutralize(task: tuple[str, str, str, bool]
 
 
 def run_neutralization(ds: Path, out_subdir: str, *,
-                       workers: int = 6,
+                       # 本机实测（2026-11-05，57MB/因子）：1 worker 15.5s/个、
+                       # 3 worker 6.9s/个（失败率 0）、6 worker 2.6s/个但失败率 50%
+                       # —— 瓶颈是 Defender 实时扫描吞吐（≈8MB/s 是这台机器的线），
+                       # 不是 CPU。默认值取「能跑通」的那一档。
+                       workers: int = 3,
                        only: list[str] | None = None,
                        force: bool = False,
                        set_name: str = "neutralized",
@@ -414,6 +425,20 @@ def run_neutralization(ds: Path, out_subdir: str, *,
     t0 = time.time()
     stats = []
     failed: list[dict] = []
+
+    def _abort_if_systemic(i: int, last: str) -> None:
+        """前 ``EARLY_N`` 个里失败率过高 ⇒ 立即中止。
+
+        末端的 10% 护栏只能在跑完 932 个之后判——那时代价已经付掉了。写盘故障
+        几乎都集中在批处理开头（并发配置不对/权限/杀软），早判能省下全部算力。
+        """
+        if i >= EARLY_N and len(failed) / i > EARLY_FAIL_RATE:
+            raise RuntimeError(
+                f"{label}前 {i} 个因子失败 {len(failed)} 个"
+                f"（{len(failed) / i:.0%} > {EARLY_FAIL_RATE:.0%}），最后失败：{last}"
+                f" ⇒ 判为系统性写盘故障（并发过高 / 杀软占用 / 权限），已中止。"
+                f"建议降低 --workers 或把输出目录加入安全软件扫描排除项。")
+
     tasks = [(n, str(ds), out_subdir, n in industry_only) for n in todo]
     if workers > 1 and len(tasks) > 1:
         with ProcessPoolExecutor(max_workers=workers) as ex:
@@ -422,10 +447,12 @@ def run_neutralization(ds: Path, out_subdir: str, *,
                     failed.append({"name": name, "error": err})
                     print(f"[{i}/{len(tasks)}] {name} 写盘失败：{err}",
                           file=sys.stderr, flush=True)
+                    _abort_if_systemic(i, name)
                     continue
                 stats.append({"name": name, "set": set_name, "coverage": cov})
                 print(f"[{i}/{len(tasks)}] {name} cov={cov:.3f} "
                       f"({time.time()-t0:.0f}s)", flush=True)
+                _abort_if_systemic(i, name)
     else:
         for i, task in enumerate(tasks, 1):
             _name, cov, err = _safe_neutralize(task)
@@ -433,10 +460,12 @@ def run_neutralization(ds: Path, out_subdir: str, *,
                 failed.append({"name": _name, "error": err})
                 print(f"[{i}/{len(tasks)}] {_name} 写盘失败：{err}",
                       file=sys.stderr, flush=True)
+                _abort_if_systemic(i, _name)
                 continue
             stats.append({"name": _name, "set": set_name, "coverage": cov})
             print(f"[{i}/{len(tasks)}] {_name} cov={cov:.3f} "
                   f"({time.time()-t0:.0f}s)", flush=True)
+            _abort_if_systemic(i, _name)
 
     (ds / (stats_file or f"factor_stats_{set_name}.jsonl")).open(
         "w", encoding="utf-8").write(
