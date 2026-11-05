@@ -36,7 +36,6 @@ from backtest.metrics import (  # noqa: E402
     sharpe_ratio,
 )
 from scripts.evaluation.caliber import (  # noqa: E402
-    _metrics,
     cost_profile,
     get_profile,
     load_context,
@@ -44,9 +43,8 @@ from scripts.evaluation.caliber import (  # noqa: E402
 )
 from scripts.evaluation.pool_scope_probe import (  # noqa: E402
     POOLS,
-    _bench_returns,
+    _pool_bench,
     _pool_mask,
-    _raw_fwd,
 )
 from strategy.cross_section import BufferedTopFracLongOnly  # noqa: E402
 
@@ -107,12 +105,13 @@ def main() -> int:
     dr_long = _run(sig)                 # 做多高分 15%
     dr_rev = _run(-sig)                 # 做多低分 15%（反向臂）
 
+    # 完整面板（只对齐列，不裁 index）—— 裁 index 会让窗口首日无前值
     close_full = pd.read_parquet(
         ROOT / "reports/alla_rolling/_base/close_adj.parquet"
-    ).reindex(index=ctx.pred.index, columns=ctx.pred.columns)
-    fwd = close_full.pct_change(fill_method=None).shift(-1)
+    ).reindex(columns=ctx.pred.columns)
+    fwd = close_full.pct_change(fill_method=None).shift(-1).reindex(ctx.pred.index)
     ic = _ic_by_year(sig, fwd, mask)
-    bench = _bench_returns(_raw_fwd(ctx), mask)
+    bench = _pool_bench(mask, ctx.pred.index)
 
     rows = []
     for y in sorted(dr_long.index.year.unique()):
