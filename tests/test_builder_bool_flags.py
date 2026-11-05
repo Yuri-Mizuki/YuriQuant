@@ -38,6 +38,27 @@ def test_is_st_keeps_zero():
     assert flag.loc[CAL[0], "000002.SZ"] == 0.0
 
 
+def test_is_st_is_limited_to_listed_domain():
+    """上市前的样本不该被算成「已上市且非 ST」——域外必须是 NaN。"""
+    from scripts.builders.build_alla_status_factors import build_panels
+
+    status = pd.DataFrame({
+        "date": [CAL[0], CAL[0]],
+        "code": CODES,
+        "is_suspended": [False, False],
+        "is_st": [True, False],
+        "pre_close": [10.0, 10.0],
+        "high_limited": [11.0, 11.0],
+    })
+    close_raw = pd.DataFrame(10.0, index=CAL, columns=CODES)
+    close_raw.loc[CAL[:2], "000002.SZ"] = np.nan     # 后 3 天才上市
+    flag = build_panels(CAL, pd.Index(CODES), status=status,
+                        close_raw=close_raw)["is_st"]
+    assert pd.isna(flag.loc[CAL[0], "000002.SZ"])
+    assert flag.loc[CAL[-1], "000002.SZ"] == 0.0
+    assert flag.loc[CAL[0], "000001.SZ"] == 1.0
+
+
 # ---------------------------------------------------------------------------
 # express_reporting：域内未披露补 0，域外（上市前）保持 NaN
 # ---------------------------------------------------------------------------

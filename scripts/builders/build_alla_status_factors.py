@@ -116,8 +116,17 @@ def build_panels(cal_idx, codes, status: pd.DataFrame | None = None,
     suspend_ratio = is_sus_b.rolling(W60, min_periods=5).mean().astype(np.float32)
     suspend_count = is_sus_b.rolling(W60, min_periods=5).sum().astype(np.float32)
     # ST 状态（PIT：当日已知）
-    st_flag = is_st_p.fillna(False).astype(np.float32)
-    st_enter = _st_days(st_flag)
+    st_raw = is_st_p.fillna(False).astype(np.float32)
+    # 「连续 ST 天数」要在全样本上累计（域外 NaN 会让累加断掉），故先算
+    st_enter = _st_days(st_raw)
+    # 但 is_st 本身要**限定在上市域内**：状态表按全市场铺开，直接 fillna(False)
+    # 会把「还没上市」也算成「已上市且非 ST」，凭空造出 0 值样本。
+    # 用未复权收盘有值作为上市域（与 events 族 express_reporting 同口径）。
+    st_flag = st_raw
+    if close_raw is not None:
+        dom = (close_raw.reindex(index=cal_idx, columns=codes)
+               .notna().fillna(False).astype(bool))
+        st_flag = st_raw.where(dom)
 
     limit_pos = pd.DataFrame(np.nan, index=cal_idx, columns=codes, dtype=float)
     lim = st.dropna(subset=["pre_close", "high_limited"])
