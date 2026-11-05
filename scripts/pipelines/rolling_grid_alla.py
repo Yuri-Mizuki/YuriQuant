@@ -442,6 +442,41 @@ def stage_prep(mask_lag: int = 1):
 # ---------------------------------------------------------------------------
 # Phase B: 特征筛选（每年 × horizon，仅用过去数据）
 # ---------------------------------------------------------------------------
+#: 截面池永久排除清单缓存（``config/factor_pool.yaml``，2026-11-05 建立）
+_POOL_EXCLUDE: set[str] | None = None
+
+
+def pool_exclusions() -> set[str]:
+    """读 ``config/factor_pool.yaml`` 的 ``exclude`` 名单（进程内缓存一次）。
+
+    语义 = **审查判定「不能作为截面选股变量」**，与 ``--exclude-features`` 的
+    实验消融不同：这里永久生效、进版本库、理由可复核。
+
+    为什么要读文件而不是写死在代码里：排除理由（市场级广播 / 定义性常数）
+    与证据指针必须和因子名放在一起，否则半年后没人知道为什么少了一个因子。
+    文件缺失时**告警**并返回空集——不静默，因为清单丢了会让已知无效因子
+    重新进池，而症状（假面板）只在跑完之后才可见。
+    """
+    global _POOL_EXCLUDE
+    if _POOL_EXCLUDE is not None:
+        return _POOL_EXCLUDE
+    import yaml
+
+    p = ROOT / "config" / "factor_pool.yaml"
+    out: set[str] = set()
+    if not p.exists():
+        log.warning("config/factor_pool.yaml 缺失：截面池排除清单为空（已知无效因子会重新进池）")
+        _POOL_EXCLUDE = out
+        return out
+    cfg = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+    for item in cfg.get("exclude") or []:
+        name = item.get("name") if isinstance(item, dict) else item
+        if name:
+            out.add(str(name))
+    _POOL_EXCLUDE = out
+    return out
+
+
 def _reserve_alt(quality: pd.Series, cov_ok: pd.Series) -> list[str]:
     """另类数据族保留席位：子族轮转 + 按 |IC| 择优 + 同值去重。
 
@@ -511,6 +546,16 @@ def select_features_for_year(year: int, horizon: int, ic_cache: pd.DataFrame,
     ic_q = ic_cache.loc[ic_cache.index.intersection(q_days)]
     quality = ic_q.mean().abs().sort_values(ascending=False)
 
+    # 截面池永久排除（config/factor_pool.yaml）：在 quality 上 drop 一次即覆盖
+    # 四条入选路径（DPP 候选池 / 基本面席位 / 另类席位 / _extra 兜底），
+    # 机制与 --exclude-features 相同、语义不同（见 pool_exclusions 文档）。
+    _pool = pool_exclusions()
+    if _pool:
+        _pool_hit = [n for n in _pool if n in quality.index]
+        if _pool_hit:
+            log.debug("  截面池排除 %d 个：%s", len(_pool_hit), _pool_hit)
+        quality = quality.drop(index=_pool_hit)
+
     # 消融：硬剔除指定特征（在 quality 上 drop 一次即覆盖全部入选路径）。
     # 记录被剔者在当期 |IC| 榜的原位次——若它本就在候选区外，剔除是空操作，
     # 报告里须如实呈现（否则会把「本来没选」误读成「剔了没影响」）。
@@ -553,8 +598,10 @@ def select_features_for_year(year: int, horizon: int, ic_cache: pd.DataFrame,
     # exclude 对 _extra 路径同样生效：_extra 从 registry（cov_ok）取名而非
     # quality，会绕过上面的 quality.drop——2026-10-22 批次 12③ 实测踩坑
     # （排除 7 个缺面板 P5 后仍被基本面补位池捞回，select 采样读面板炸）。
-    if exclude:
-        _excl = set(exclude)
+    # 截面池排除同理合并进来：_extra 一样会从 registry 旁路捞回 pool 里的名字。
+    _excl = set(exclude) if exclude else set()
+    _excl |= _pool
+    if _excl:
         cands = [n for n in cands if n not in _excl]
     k_remain = max(0, MAX_FEATURES - len(reserved))
     if k_remain == 0:
@@ -1081,7 +1128,7 @@ def stage_backtest(quick: bool = False, execution: str = "open"):
     from backtest.costs import default_costs
     from backtest.engine import VectorBacktest, build_execution_split
     from scripts.common.portfolio_common import neutralize_panel
-    from strategy.examples import TopFracLongOnly
+    from strategy.cross_section import TopFracLongOnly
 
     t0 = time.time()
     base = load_base()
@@ -1247,7 +1294,7 @@ def stage_smallcap(quick: bool = False):
     from backtest.costs import default_costs
     from backtest.engine import VectorBacktest
     from factor.preprocessing import neutralize
-    from strategy.examples import TopFracLongOnly
+    from strategy.cross_section import TopFracLongOnly
 
     t0 = time.time()
     base = load_base()
@@ -1368,7 +1415,7 @@ def stage_ensemble(quick: bool = False, execution: str = "open"):
     from backtest.engine import VectorBacktest, build_execution_split
     from factor.preprocessing import neutralize
     from stats.ic import calc_ic_series
-    from strategy.examples import TopFracLongOnly
+    from strategy.cross_section import TopFracLongOnly
 
     t0 = time.time()
     base = load_base()
