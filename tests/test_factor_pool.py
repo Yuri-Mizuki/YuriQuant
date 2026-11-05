@@ -11,6 +11,7 @@
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pandas as pd
@@ -40,13 +41,26 @@ def test_pool_entries_are_unique_and_nonempty():
     assert all(n.strip() == n and n for n in names)
 
 
-def test_every_pool_name_exists_in_registry():
-    """拼错一个名字 = 排除静默失效。registry 不在本机时跳过（不误报红）。"""
+def test_every_pool_name_exists_in_registry_or_rejected():
+    """拼错一个名字 = 排除静默失效。registry 不在本机时跳过（不误报红）。
+
+    🚨 允许「不在 registry 但被入库闸拒过」：两者是不同机制、不同时点——
+    入库闸在写 registry 之前拦（统计判据），排除清单在 select 之前拦（设计判定）。
+    `alt_macro_*` 下次重建会被闸门拒收、从 registry 消失，但清单里仍要留着：
+    一旦某个数据态重建时 registry 复用了旧快照，清单是最后一道防线。
+    """
     if not REGISTRY.exists():
         pytest.skip("registry.csv 不在本机")
     reg = set(pd.read_csv(REGISTRY, usecols=["name"])["name"])
-    missing = sorted(rga.pool_exclusions() - reg)
-    assert not missing, f"排除清单里有 registry 不存在的名字：{missing}"
+    rej = set()
+    for p in REGISTRY.parent.glob("factor_stats_*_rejected.jsonl"):
+        for line in p.read_text(encoding="utf-8").splitlines():
+            try:
+                rej.add(json.loads(line)["name"])
+            except (ValueError, KeyError):
+                continue
+    missing = sorted(rga.pool_exclusions() - reg - rej)
+    assert not missing, f"排除清单里有不认识的名字（拼错？）：{missing}"
 
 
 def test_pool_matches_known_structural_fakes():

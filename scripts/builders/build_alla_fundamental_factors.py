@@ -53,12 +53,13 @@ from scripts.builders.common import HORIZONS, IC_CODE_STRIDE
 
 #: 无量纲比率因子的统一裁剪界（压 ep_ttm / pcf / peg 这类比值的长尾）
 CLIP_RATIO = 1e4
-#: 水平量因子的裁剪界：单位是元，不是比率。
-#: 2026-11-05 查明：全族一刀切 `clip(-1e4, 1e4)` 把流通市值（A 股实测 ~1e9–1e13 元）
-#: 整列钉在上限 10000，面板退化成常数 ⇒ 中性化残差恒 0 ⇒ zscore 把 float32
-#: 尾数放大成 sd=1 的假面板（见 reports/structural_fake_panels/）。
-#: 水平量只需守物理边界：市值不可能为负；上界 1e14 元（100 万亿）> 全 A 合计。
-CLIP_LEVEL = (0.0, 1e14)
+#: 水平量因子的裁剪界：单位是**万元**，不是比率。
+#: 2026-11-05 查明：全族一刀切 `clip(-1e4, 1e4)` 把流通市值整列钉在上限 10000，
+#: 面板退化成常数 ⇒ 中性化残差恒 0 ⇒ zscore 把 float32 尾数放大成 sd=1 的假面板
+#: （见 reports/structural_fake_panels/）。实测修复后中位 4.9e5 万元（≈48.8 亿）、
+#: 最大 3.1e8 万元（≈3.1 万亿）。
+#: 水平量只需守物理边界：市值不可能为负；上界 1e9 万元（=1e13 元）> 全 A 合计。
+CLIP_LEVEL = (0.0, 1e9)
 LEVEL_FACTORS = frozenset({"float_mktcap"})
 
   # noqa: E402
