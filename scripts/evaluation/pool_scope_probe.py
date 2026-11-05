@@ -137,6 +137,13 @@ def _bench_returns(fwd: pd.DataFrame, mask: pd.DataFrame) -> pd.Series:
 
     段内权重按价格漂移（买入后不动），不做事后再平衡；下一个月首重置为等权。
     与策略臂同频（``caliber.rebalance_dates`` = 每月首个交易日）⇒ 可直接比。
+
+    🚨 2026-11-05 修复：调仓日权重**只给当日有收益数据的股票**。
+    此前用 ``mask`` 全域归一，而面板列（5801）远多于当时有价的股票
+    （2018 年仅 3134 只）⇒ 42% 的权重落在「收益记 0」的空列上，基准被严重稀释：
+    2018 年真实全A 等权 **−30.6%** 被算成 **−18.4%**，导致当年超额从 +4.0%
+    误报为 −8.2%。凡 2026-11-05 之前本脚本产出的 ``bench_*`` / ``excess_*``
+    数字均作废。
     """
     dates = fwd.index
     flag = np.array([d in rebalance_dates(dates) for d in dates])
@@ -144,15 +151,38 @@ def _bench_returns(fwd: pd.DataFrame, mask: pd.DataFrame) -> pd.Series:
     out = pd.Series(np.nan, index=dates)
     for _, sub in fwd.groupby(seg):
         first = sub.index[0]
-        m = mask.loc[first].to_numpy(dtype=float)
-        n = m.sum()
+        # 权重只分配给「该段内有收益数据」的池内股票。
+        # 用段内 any 而非段首 notna：窗口首日（或调仓日停牌）整列 NaN 时，
+        # 用段首会把整段 1 个月 skip 掉（2024-01 微盘暴跌月就这么丢过）。
+        w = (mask.loc[first].to_numpy(dtype=float)
+             * sub.notna().any(axis=0).to_numpy(dtype=float))
+        n = w.sum()
         if n == 0:
             continue
-        w = m / n
+        w = w / n
         cum = (1.0 + sub.fillna(0.0)).cumprod()
         prev = cum.shift(1).fillna(1.0)
         out.loc[sub.index] = (cum / prev).to_numpy() @ w - 1.0
     return out.fillna(0.0)
+
+
+def _raw_fwd(ctx) -> pd.DataFrame:
+    """**未填 0** 的前瞻收益（基准专用）。
+
+    两个坑（2026-11-05 实测）：
+    1. ``caliber.load_context`` 返回的 ``ctx.fwd`` 已 ``fillna(0.0)`` ⇒「当年还没
+       价格的列」与「真实 0 收益」不可区分，等权基准被稀释（2018 年真实 −30.6%
+       被算成 −18.4%）。
+    2. ``ctx.close`` 是**窗口裁剪后**的，窗口首日没有前值 ⇒ 首行全 NaN。若窗口首日
+       恰是月首（2024-01-02 就是），整段 1 月会被跳过——而 2024 年 1 月是微盘股
+       暴跌月 ⇒ 基准从 4.6% 被抬到 28.9%。
+    ⇒ 必须从**完整** close 面板算 pct_change，再裁到窗口。
+    """
+    from scripts.evaluation.caliber import BASE_DIR
+
+    full = pd.read_parquet(BASE_DIR / "close_adj.parquet").reindex(columns=ctx.pred.columns)
+    f = full.pct_change(fill_method=None).replace([np.inf, -np.inf], np.nan)
+    return f.reindex(index=ctx.pred.index)
 
 
 def _bench_metrics(dr: pd.Series) -> dict:
@@ -190,6 +220,7 @@ def main() -> int:
           f"{ctx.pred.index.min().date()}..{ctx.pred.index.max().date()}")
 
     rows = []
+    fwd_raw = _raw_fwd(ctx)          # 完整面板算一次，循环内复用（读盘 ~1s/次）
     for pool in [p.strip() for p in args.pools.split(",") if p.strip()]:
         if pool == "all_a":
             m = pd.DataFrame(True, index=ctx.pred.index, columns=ctx.pred.columns)
@@ -222,7 +253,7 @@ def main() -> int:
         m_tr = _metrics(res, prof.capital)
         dr = res.daily_returns
 
-        bench = _bench_returns(ctx.fwd, m)
+        bench = _bench_returns(fwd_raw, m)
         bm = _bench_metrics(bench)
         excess = dr - bench.reindex(dr.index).fillna(0.0)
 
