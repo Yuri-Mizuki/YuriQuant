@@ -81,6 +81,8 @@ def test_fallback_write_retries_transient_lock(
     monkeypatch.setattr(os, "replace", lambda *a, **k: (_ for _ in ()).throw(
         PermissionError(5, "拒绝访问。")))
     monkeypatch.setattr("scripts.common.atomic_io.BACKOFF", 0.001)
+    monkeypatch.setattr("scripts.common.atomic_io.FALLBACK_BUDGET", 0.05)
+    monkeypatch.setattr("scripts.common.atomic_io.FALLBACK_MAX_SLEEP", 0.01)
 
     import pandas as pd_mod
     real_to_parquet = pd_mod.DataFrame.to_parquet
@@ -110,6 +112,8 @@ def test_fallback_write_raises_after_retries_exhausted(
     monkeypatch.setattr(os, "replace", lambda *a, **k: (_ for _ in ()).throw(
         PermissionError(5, "拒绝访问。")))
     monkeypatch.setattr("scripts.common.atomic_io.BACKOFF", 0.001)
+    monkeypatch.setattr("scripts.common.atomic_io.FALLBACK_BUDGET", 0.05)
+    monkeypatch.setattr("scripts.common.atomic_io.FALLBACK_MAX_SLEEP", 0.01)
 
     import pandas as pd_mod
     real_to_parquet = pd_mod.DataFrame.to_parquet
@@ -120,7 +124,7 @@ def test_fallback_write_raises_after_retries_exhausted(
         return real_to_parquet(self, path, *a, **k)
 
     monkeypatch.setattr(pd_mod.DataFrame, "to_parquet", _always_denied)
-    with pytest.raises(PermissionError, match="就地覆写重试"):
+    with pytest.raises(PermissionError, match="就地覆写"):
         write_parquet_atomic(pd.DataFrame({"a": [1.0]}), dst)
 
 
