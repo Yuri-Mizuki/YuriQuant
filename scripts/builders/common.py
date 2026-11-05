@@ -181,6 +181,65 @@ def _lib_for(ds_dir: Path):
     return lib
 
 
+def gate_stats_rows(rows: list[dict], ds_dir: Path, family: str, *,
+                    panels_subdir: str = "panels"
+                    ) -> tuple[list[dict], list[dict]]:
+    """入库闸：剔除「当日截面恒常数 / 浮点噪声格点」的面板。
+
+    判据与背景见 ``factor.validation``。这里只做 I/O 编排：
+    每个因子读 parquet 最后一个 row group 的末 20 行（~0.05s），代价可忽略。
+
+    放行规则：
+      - 面板文件不存在 ⇒ 放行（缺面板由 select 阶段的完整性检查负责，不在这里拦）
+      - 读盘异常 ⇒ 放行并告警（不能让闸门把整批构建搞崩）
+      - ``sparse`` / ``discrete`` ⇒ 放行（稀疏事件因子与布尔因子是合法形态）
+
+    拒收记录追加到 ``factor_stats_{family}_rejected.jsonl``，便于事后审计
+    「这批少了一个因子是因为什么」。
+
+    Args:
+        rows: ``read_stats`` 读出的统计行（含 ``name``）。
+        ds_dir: 数据集根目录（其下 ``panels/`` 是面板）。
+        family: 因子集名，仅用于拒收日志文件名。
+
+    Returns:
+        ``(kept, rejected)``。
+    """
+    from factor.validation import check_panel, describe_reason, read_panel_sample
+
+    panel_dir = ds_dir / panels_subdir
+    kept: list[dict] = []
+    rejected: list[dict] = []
+    for r in rows:
+        name = r.get("name")
+        if not name:
+            continue
+        p = panel_dir / f"{name}.parquet"
+        if not p.exists():
+            kept.append(r)
+            continue
+        try:
+            ok, reason, st = check_panel(read_panel_sample(p))
+        except Exception as e:                                    # noqa: BLE001
+            log.warning("入库闸读面板失败 %s：%s（放行）", name, e)
+            kept.append(r)
+            continue
+        if ok:
+            kept.append(r)
+            continue
+        rejected.append({**r, "reject_reason": reason, **st})
+        log.warning("入库闸拒收 %s：%s（uniq=%d ratio=%.2e flat=%.0f%%）",
+                    name, describe_reason(reason), st["uniq"],
+                    st["uniq_ratio"], st["flat_frac"] * 100)
+    if rejected:
+        p = ds_dir / f"factor_stats_{family}_rejected.jsonl"
+        with p.open("a", encoding="utf-8") as fh:
+            for r in rejected:
+                fh.write(json.dumps(r, ensure_ascii=False) + "\n")
+        log.warning("入库闸：%d 个因子被拒（明细 %s）", len(rejected), p.name)
+    return kept, rejected
+
+
 def merge_outputs(ds_dir: Path, family: str, *,
                   horizons: tuple[int, ...] = HORIZONS,
                   close_adj_loader=None, ic_code_stride: int = IC_CODE_STRIDE,
@@ -214,6 +273,12 @@ def merge_outputs(ds_dir: Path, family: str, *,
     if not rows:
         if empty_log:
             log.warning(empty_log)
+        return
+    # 入库闸：截面恒常数的面板一律不进 registry（见 factor.validation）。
+    # 放在 upsert 之前是必须的——registry 一旦写入，select 就会把它当候选。
+    rows, _rejected = gate_stats_rows(rows, ds_dir, family)
+    if not rows:
+        log.warning("入库闸拒收全部 %d 个因子，跳过 registry 写入", len(_rejected))
         return
     # 默认来源 = <因子集>:builders:<数据集>，默认族 = SET_TO_FAMILY[因子集]。
     # 故意不在 12 个 builder 里各写一遍：漏改一个就等于那批因子重新落入
