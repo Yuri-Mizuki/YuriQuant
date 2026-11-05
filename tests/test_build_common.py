@@ -133,3 +133,42 @@ def test_print_no_save(caplog):
     with caplog.at_level(logging.INFO):
         print_no_save(["a", "b"], panels)
     assert "未入库" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# 入库闸（factor.validation 的 I/O 编排层）
+# ---------------------------------------------------------------------------
+def _mk_panel(values, codes=200):
+    idx = pd.date_range("2024-01-02", periods=values.shape[0], freq="B")
+    return pd.DataFrame(values, index=idx,
+                        columns=[f"{i:06d}.SZ" for i in range(codes)])
+
+
+def test_gate_stats_rows_rejects_flat_and_logs(tmp_path):
+    """截面恒常数的面板被拒，且明细落 factor_stats_{family}_rejected.jsonl。"""
+    from scripts.builders.common import gate_stats_rows
+
+    (tmp_path / "panels").mkdir()
+    rng = np.random.default_rng(0)
+    _mk_panel(rng.normal(size=(100, 200))).to_parquet(tmp_path / "panels" / "good.parquet")
+    _mk_panel(np.ones((100, 200))).to_parquet(tmp_path / "panels" / "const.parquet")
+
+    kept, rejected = gate_stats_rows(
+        [{"name": "good"}, {"name": "const"}], tmp_path, "demo")
+
+    assert [r["name"] for r in kept] == ["good"]
+    assert [r["name"] for r in rejected] == ["const"]
+    assert rejected[0]["reject_reason"] == "flat"
+    log = (tmp_path / "factor_stats_demo_rejected.jsonl").read_text(encoding="utf-8")
+    assert "const" in log and "flat" in log
+
+
+def test_gate_stats_rows_passes_missing_panel(tmp_path):
+    """面板文件缺失不在这里拦（由 select 阶段的完整性检查负责）。"""
+    from scripts.builders.common import gate_stats_rows
+
+    (tmp_path / "panels").mkdir()
+    kept, rejected = gate_stats_rows([{"name": "absent"}], tmp_path, "demo")
+    assert [r["name"] for r in kept] == ["absent"]
+    assert rejected == []
+    assert not (tmp_path / "factor_stats_demo_rejected.jsonl").exists()
