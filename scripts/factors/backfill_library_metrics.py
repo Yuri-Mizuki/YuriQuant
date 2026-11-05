@@ -15,6 +15,12 @@
   stride-3 抽稀截面口径，与 registry 已填 99% 的 ic_mean_h* 同源），
   逐因子过 ``stats.significance.mean_inference``（NW），significant = |t_nw| > 2
   （register 同判据）；ic_ir 用 ``research.factor_analysis.calc_ir``（register 同源）；
+- 超额年化（看板对齐聚宽「超额收益」列）：仅对 lo_M（TopK 纯多）配置传
+  ``metrics(benchmark_returns=全A等权日收益)``（returns_panel 截面均值，含当日
+  有交易个股），经 ``calc_all_metrics`` 现成口径产出 excess_return_lo_M /
+  information_ratio_lo_M / excess_t_stat_lo_M（新增列，无历史口径冲突）；
+  LS 多空为自融资组合，对基准求超额无经济含义，不算。基准序列落
+  ``bench_returns.parquet``（数据集级一份）；
 - ic_decay5 / autocorr：全截面面板现算（register 同函数，新增列无历史口径冲突）；
 - formula := label（hs300 库先例：alpha 系 formula 即引用式标签，label 已 100% 填充）；
 - family 旧码迁移：rnd/lev/liq/pro/qual/cfq 共 17 行 → family=基本面，
@@ -135,6 +141,21 @@ def main() -> None:
 
     ic1 = pd.read_parquet(ds_dir / "ic_h1.parquet") if (ds_dir / "ic_h1.parquet").exists() else None
 
+    # 超额基准：全A等权日收益（截面均值，NaN=停牌自动剔除）。数据集级一份。
+    bench = None
+    if returns_panel is not None:
+        bench = returns_panel.mean(axis=1, skipna=True)
+        bp = ds_dir / "bench_returns.parquet"
+        bench.rename("bench_ew").to_frame().to_parquet(bp)
+        log.info("基准(全A等权): %d 日 → %s", len(bench), bp.name)
+
+    # 超额列预建（避免逐行 .at 增列的版本差异）
+    EXCESS_COLS = ("excess_return_lo_M", "information_ratio_lo_M",
+                   "excess_t_stat_lo_M")
+    for c in EXCESS_COLS:
+        if c not in reg.columns:
+            reg[c] = np.nan
+
     todo_idx: list[int] = []
     for i, r in reg.iterrows():
         if not args.force and pd.notna(r.get("annual_return_ls_M")) and \
@@ -198,10 +219,16 @@ def main() -> None:
                     res = bt.run(panel, returns_panel, check_convention=False)
                     eval_cols[f"dret_{cfg.key}"] = res.daily_returns
                     eval_cols[f"equity_{cfg.key}"] = res.equity_curve
-                    m = res.metrics()
+                    # 超额只对纯多配置算（LS 对基准求超额无经济含义，见 docstring）
+                    is_lo = cfg.key.startswith("lo")
+                    m = res.metrics(benchmark_returns=bench if is_lo else None)
                     for mc in _METRIC_COLS:
                         if mc in m:
                             reg.at[i, f"{mc}_{cfg.key}"] = m[mc]
+                    if is_lo:
+                        for ek in ("excess_return", "information_ratio", "excess_t_stat"):
+                            if ek in m:
+                                reg.at[i, f"{ek}_{cfg.key}"] = m[ek]
                     if m["sharpe"] > best_sharpe:
                         best_sharpe, best_config = m["sharpe"], cfg.key
                 reg.at[i, "best_sharpe"] = best_sharpe

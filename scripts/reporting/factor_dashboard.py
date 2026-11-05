@@ -3,8 +3,9 @@
 对齐 joinquant.com/view/factorlib/list 的信息架构：
 - 顶部筛选：来源(set) chips / 因子族 / 搜索框
 - 主表：因子名 / 来源 / 族 / 覆盖率 / IC(h1,h5,h10,h20) / ICIR / NW-t / IC胜率
-  / IC衰减 / （有分层回测的库额外：多空年化 / Sharpe / 多头年化 / 换手） / 公式
+  / （有分层回测的库额外：多空年化·月/周切换 / 多头年化 / 超额年化 / 换手率） / 公式
 - 点行 → 右侧详情：指标卡 + 月度 IC 柱状图 + （有 evals 的因子）LS/LO 净值曲线
+  （含全A等权基准虚线，如数据集有 bench_returns.parquet）
 
 数据来源（全部预计算，前端零后端）：
 - registry.csv：元数据 + ic_mean_h*（批量入库行只有多周期 IC 均值，无分层回测指标）
@@ -119,16 +120,16 @@ def ic_metrics(ic: pd.DataFrame) -> pd.DataFrame:
             months, monthly)
 
 
-def load_equity(lib_root: Path, reg: pd.DataFrame, max_n: int = 40) -> dict:
-    """有 evals 的因子 → 周频降采样净值曲线（LS/LO）。"""
+def load_equity(lib_root: Path, reg: pd.DataFrame) -> tuple[dict, dict | None]:
+    """有 evals 的因子 → 月频降采样净值（LS/LO）+ 数据集级基准净值。
+
+    月频而非周频：回填后全库 ~950 个因子都有 evals，周频内嵌 payload 超 6MB，
+    月频（~120 点）足够支撑详情页 200px 高的曲线。"""
     out = {}
     ev_paths = reg.get("eval_path")
     if ev_paths is None:
-        return out
-    n = 0
+        return out, None
     for _, r in reg.iterrows():
-        if n >= max_n:
-            break
         ep = r.get("eval_path")
         if not isinstance(ep, str) or not ep.strip():
             continue
@@ -142,17 +143,24 @@ def load_equity(lib_root: Path, reg: pd.DataFrame, max_n: int = 40) -> dict:
         except Exception as exc:
             log.warning("evals 读取失败 %s: %s", p.name, exc)
             continue
-        wk = ev.resample("W-FRI").last().dropna(how="all")
+        mo = ev.resample("ME").last().dropna(how="all")
         out[r["name"]] = {
-            "d": [d.strftime("%Y-%m-%d") for d in wk.index],
+            "d": [d.strftime("%Y-%m-%d") for d in mo.index],
             "ls": [round(float(v), 4) if pd.notna(v) else None
-                   for v in wk.get("equity_ls_M", pd.Series(dtype=float))],
+                   for v in mo.get("equity_ls_M", pd.Series(dtype=float))],
             "lo": [round(float(v), 4) if pd.notna(v) else None
-                   for v in wk.get("equity_lo_M", pd.Series(dtype=float))],
+                   for v in mo.get("equity_lo_M", pd.Series(dtype=float))],
         }
-        n += 1
-    log.info("内嵌净值曲线 %d 个因子", n)
-    return out
+    bench = None
+    bp = lib_root / "bench_returns.parquet"
+    if bp.exists():
+        b = pd.read_parquet(bp).iloc[:, 0]
+        nav = (1 + b.fillna(0)).cumprod()
+        mo = nav.resample("ME").last()
+        bench = {"d": [d.strftime("%Y-%m-%d") for d in mo.index],
+                 "v": [round(float(v), 4) for v in mo]}
+    log.info("内嵌净值曲线 %d 个因子 | 基准: %s", len(out), "有" if bench else "无")
+    return out, bench
 
 
 # ---------------------------------------------------------------- 主流程
@@ -187,7 +195,10 @@ def main() -> None:
             reg[c] = np.nan
 
     has_ls = reg["annual_return_ls_M"].notna().any() if "annual_return_ls_M" in reg else False
-    equity = load_equity(lib_root, reg) if not has_ls else {}
+    has_w = reg["annual_return_ls_W"].notna().any() if "annual_return_ls_W" in reg else False
+    has_ex = ("excess_return_lo_M" in reg.columns
+              and reg["excess_return_lo_M"].notna().any())
+    equity, bench = load_equity(lib_root, reg)
 
     # ---- 行数据（与前端列一一对应）----
     def f(v, nd=4):
@@ -212,9 +223,12 @@ def main() -> None:
             "ic10": f(r.get("ic_mean_h10")), "ic20": ic20,
             "icir": f(r.get("calc_icir")), "nw": f(r.get("calc_nw"), 2),
             "win": f(r.get("calc_win"), 3),
-            "ls": f(r.get("annual_return_ls_M")) if has_ls else None,
+            "lsM": f(r.get("annual_return_ls_M")) if has_ls else None,
+            "lsW": f(r.get("annual_return_ls_W")) if has_ls and has_w else None,
             "lo": f(r.get("annual_return_lo_M")) if has_ls else None,
-            "to": f(r.get("avg_turnover_ls_M")) if has_ls else None,
+            "toM": f(r.get("avg_turnover_ls_M")) if has_ls else None,
+            "toW": f(r.get("avg_turnover_ls_W")) if has_ls and has_w else None,
+            "ex": f(r.get("excess_return_lo_M")) if has_ex else None,
             "sig": bool(r["significant"]) if "significant" in reg and pd.notna(r.get("significant")) else None,
             "has_ic": bool(r["name"] in monthly),
             "has_eq": r["name"] in equity,
@@ -225,7 +239,7 @@ def main() -> None:
         "groups": {g: sorted({r["set"] for r in rows if r["grp"] == g})
                    for g in dict.fromkeys(r["grp"] for r in rows)},
         "monthly": {k: v for k, v in monthly.items()},
-        "equity": equity,
+        "equity": equity, "bench": bench,
         "formula": {str(r["name"]): str(r.get("formula") or "")[:300]
                     for _, r in reg.iterrows()},
         "meta": {str(r["name"]): {
@@ -234,7 +248,7 @@ def main() -> None:
             "af": "" if pd.isna(r.get("active_first")) else str(r.get("active_first"))[:10],
             "al": "" if pd.isna(r.get("active_last")) else str(r.get("active_last"))[:10],
         } for _, r in reg.iterrows()},
-        "hasLS": bool(has_ls),
+        "hasLS": bool(has_ls), "hasW": bool(has_w), "hasEx": bool(has_ex),
     }
 
     # ---- HTML ----
@@ -251,7 +265,9 @@ def main() -> None:
     extra = [c for c in ("calc_icir", "calc_nw", "calc_win") if c in reg.columns]
     if has_ls:
         extra += ["annual_return_ls_M", "sharpe_ls_M", "annual_return_lo_M",
-                  "avg_turnover_ls_M"]
+                  "avg_turnover_ls_M"] + (
+                  ["annual_return_ls_W", "avg_turnover_ls_W"] if has_w else []) + (
+                  ["excess_return_lo_M", "information_ratio_lo_M"] if has_ex else [])
     reg[[c for c in cols + extra if c in reg.columns]].to_csv(
         csv_out, index=False, encoding="utf-8-sig")
     log.info("全表 CSV: %s", csv_out)
@@ -360,6 +376,20 @@ function renderSubChips() {
 $('famSel').onchange = e => { famFilter = e.target.value; renderRows(); };
 $('fsearch').oninput = e => { q = e.target.value.toLowerCase(); renderRows(); };
 
+// ---- 调仓周期切换（月/周，仅 hasLS && hasW 时显示）----
+let per = 'M';
+const perSel = $('perSel');
+if (perSel) {
+  perSel.style.display = D.hasLS && D.hasW ? '' : 'none';
+  perSel.querySelectorAll('.chip').forEach(ch => {
+    ch.onclick = () => {
+      per = ch.dataset.p;
+      perSel.querySelectorAll('.chip').forEach(c => c.classList.toggle('on', c === ch));
+      renderRows();
+    };
+  });
+}
+
 // ---- 排序 ----
 let sortKey = 'nw', sortAsc = false;
 D.rows.sort((a, b) => {                    // 初始视图：NW-t 降序，缺值垫底
@@ -392,7 +422,10 @@ function renderRows() {
       `<td class="num ${cls(r.ic10)}">${fmt(r.ic10)}</td>` +
       `<td class="num ${cls(r.ic20)}">${fmt(r.ic20)}</td>` +
       (D.hasLS
-        ? `<td class="num ${cls(r.ls)}">${fmt(r.ls)}</td><td class="num">${fmt(r.to, 2)}</td>`
+        ? `<td class="num ${cls(r['ls'+per])}">${fmt(r['ls'+per])}</td>` +
+          `<td class="num ${cls(r.lo)}">${fmt(r.lo)}</td>` +
+          (D.hasEx ? `<td class="num ${cls(r.ex)}">${fmt(r.ex)}</td>` : '') +
+          `<td class="num">${fmt(r['to'+per], 2)}</td>`
         : '') +
       `<td class="fml" title="${(D.formula[r.name]||'').replace(/"/g,'&quot;')}">${(D.formula[r.name]||'').slice(0,50)}</td>`;
     tr.onclick = () => showDetail(r, tr);
@@ -401,7 +434,9 @@ function renderRows() {
   $('cnt').textContent = shown;
   document.querySelectorAll('#ftable th[data-k]').forEach(th => {
     th.onclick = () => {
-      const k = th.dataset.k;
+      let k = th.dataset.k;
+      // 多空年化/换手率列头跟随当前周期档（lsM/toM ↔ lsW/toW）
+      if (k === 'lsM' || k === 'toM') k = k.slice(0, -1) + per;
       if (sortKey === k) sortAsc = !sortAsc; else { sortKey = k; sortAsc = false; }
       D.rows.sort((a, b) => {
         const av = a[k] ?? null, bv = b[k] ?? null;
@@ -459,13 +494,17 @@ function showDetail(r, tr) {
   $('dEqWrap').style.display = D.equity[r.name] ? '' : 'none';
   if (D.equity[r.name]) {
     const e = D.equity[r.name];
+    const benchMap = {};
+    if (D.bench) D.bench.d.forEach((d, i) => benchMap[d] = D.bench.v[i]);
     eqChart = new Chart(ctx2, {
       type: 'line',
       data: { labels: e.d, datasets: [
         { label: '多空LS(月)', data: e.ls, borderColor: '#A32D2D',
           backgroundColor: 'rgba(163,45,45,.08)', borderWidth: 1.4, pointRadius: 0, fill: true, tension: 0 },
         { label: '多头LO(月)', data: e.lo, borderColor: '#185FA5',
-          borderWidth: 1.4, pointRadius: 0, tension: 0 }]},
+          borderWidth: 1.4, pointRadius: 0, tension: 0 },
+        ...(D.bench ? [{ label: '全A等权', data: e.d.map(d => benchMap[d] ?? null),
+          borderColor: '#999', borderDash: [4, 3], borderWidth: 1, pointRadius: 0, tension: 0 }] : [])]},
       options: { responsive: true, maintainAspectRatio: false, animation: false,
         interaction: { mode: 'index', intersect: false },
         plugins: { legend: { labels: { boxWidth: 10, font: { size: 10 } } } },
@@ -487,6 +526,8 @@ def render(dataset: str, n: int, reg: pd.DataFrame, payload: dict, months: list)
     sets = sorted(reg["set"].dropna().astype(str).unique())
     fams = sorted(reg["family"].dropna().astype(str).unique())
     has_ls = payload["hasLS"]
+    has_w = payload["hasW"]
+    has_ex = payload["hasEx"]
     date_min = min(months) if months else "—"
     date_max = max(months) if months else "—"
     n_ic = sum(1 for r in payload["rows"] if r["has_ic"])
@@ -502,7 +543,12 @@ def render(dataset: str, n: int, reg: pd.DataFrame, payload: dict, months: list)
         for g, c in sorted(grp_cnt.items(), key=lambda kv: -kv[1]))
     fam_opts = '<option value="">全部族</option>' + "".join(
         f'<option value="{f}">{f}</option>' for f in fams)
-    ls_head = "<th data-k='ls'>多空年化(M)</th><th data-k='to'>换手(M)</th>" if has_ls else ""
+    ls_head = ("<th data-k='lsM'>多空年化</th><th data-k='lo'>多头年化</th>"
+               + ("<th data-k='ex'>超额年化</th>" if has_ex else "")
+               + "<th data-k='toM'>换手率</th>") if has_ls else ""
+    per_sel = ("""<span class="chiprow" id="perSel" style="display:none">
+<span class="chip on" data-p="M">月调仓</span><span class="chip" data-p="W">周调仓</span></span>"""
+               if has_ls and has_w else "")
 
     body = f"""<div class="topbar">
 <h1>YuriQuant 因子看板 — {dataset}</h1>
@@ -520,13 +566,15 @@ def render(dataset: str, n: int, reg: pd.DataFrame, payload: dict, months: list)
 <div class="chiprow" id="grpChips">{chips}</div>
 <div class="chiprow" id="subChips" style="display:none"></div>
 <select id="famSel">{fam_opts}</select>
+{per_sel}
 <input class="search" id="fsearch" placeholder="搜索因子名 / 公式…">
 <span style="font-size:12px;color:#888">显示 <b id="cnt">0</b> 个 | 点击表头排序，点行看详情</span>
 </div>
 <div class="note"><b>口径提示：</b>IC 系列指标由逐日 IC 矩阵现场计算（Newey-West 稳健 t，
 滞后阶 L=int(4·(T/100)^(2/9))）；批量入库行为<b>全样本统计、无挖-验分离</b>。
-分层回测指标（多空/多头/换手）仅限 registry 有值的行，缺失显示 —；旧数据集口径详见
-reports/README.md §一。红=正、绿=负（A 股惯例）。</div>
+分层回测 = canonical TopK（k=30）多空/纯多，月/周两档，成本走引擎默认费率；
+超额年化 = 纯多(k=30·月) − 全A等权。缺失显示 —；口径详见 reports/README.md §一。
+红=正、绿=负（A 股惯例）。</div>
 <div class="scroll"><table id="ftable">
 <thead><tr>
 <th data-k="name">因子名</th><th data-k="set">细分来源</th><th data-k="fam">族</th>
@@ -546,7 +594,7 @@ reports/README.md §一。红=正、绿=负（A 股惯例）。</div>
 <div class="dchart" id="dIcWrap"><div style="font-size:12px;color:#555;margin-bottom:4px">月度 IC（红=正 / 绿=负）</div>
 <div style="height:180px"><canvas id="dIcChart"></canvas></div></div>
 <div style="display:none;font-size:12px;color:#999" id="dIcEmpty">该因子无逐日 IC 数据</div>
-<div class="dchart" id="dEqWrap"><div style="font-size:12px;color:#555;margin-bottom:4px">分层净值（多空/多头，月频调仓）</div>
+<div class="dchart" id="dEqWrap"><div style="font-size:12px;color:#555;margin-bottom:4px">分层净值（TopK k=30 · 月调仓 · 成本=引擎默认）</div>
 <div style="height:200px"><canvas id="dEqChart"></canvas></div></div>
 </div>
 </div>
