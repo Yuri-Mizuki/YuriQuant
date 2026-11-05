@@ -120,7 +120,8 @@ def _pit_notice(notice: pd.DataFrame, cal_idx, codes) -> dict:
 # ---------------------------------------------------------------------------
 # ② 业绩快报超预期
 # ---------------------------------------------------------------------------
-def _pit_express(express: pd.DataFrame, cal_idx, codes) -> dict:
+def _pit_express(express: pd.DataFrame, cal_idx, codes,
+                 *, listed: pd.DataFrame | None = None) -> dict:
     if express is None or express.empty:
         return {}
     e = express.copy()
@@ -135,9 +136,22 @@ def _pit_express(express: pd.DataFrame, cal_idx, codes) -> dict:
         "express_rev_yoy": e["yoy_gr_gross_rev"].values,
         "express_reporting": np.ones(len(e)),
     })
-    return common.ffill_pit_multi(out_long, cal_idx, codes,
-                            ["express_profit_yoy", "express_rev_yoy",
-                             "express_reporting"])
+    frames = common.ffill_pit_multi(out_long, cal_idx, codes,
+                                    ["express_profit_yoy", "express_rev_yoy",
+                                     "express_reporting"])
+    # 披露标记是**布尔状态量**：0（未披露）是真值，不是缺失。
+    # 2026-11-05 前这里只 ffill 出「最近一次披露以来 = 1」，其余留 NaN ⇒
+    # 截面值域恒 {1}，中性化后成假面板。改为域内补 0：
+    #   listed = 有价格即有上市（close_adj.notna()），域外（上市前）仍留 NaN，
+    #   否则会把「还没上市」也算成「已上市但没发快报」，凭空造出 0 值样本。
+    flag = frames["express_reporting"]
+    if listed is not None:
+        dom = (listed.reindex(index=flag.index, columns=flag.columns)
+               .fillna(False).astype(bool))
+        frames["express_reporting"] = flag.fillna(0.0).where(dom)
+    else:
+        frames["express_reporting"] = flag.fillna(0.0)
+    return frames
 
 
 # ---------------------------------------------------------------------------
@@ -202,12 +216,15 @@ EVENT_ROUTES: tuple[tuple[str, object, dict[str, str]], ...] = (
 
 
 def build_panels(cal_idx, codes,
-                 tables: dict[str, pd.DataFrame] | None = None
+                 tables: dict[str, pd.DataFrame] | None = None,
+                 listed: pd.DataFrame | None = None
                  ) -> dict[str, pd.DataFrame]:
     """在给定交易日历/股票池上构建事件族面板。
 
     与 ``main`` 走同一 PIT 代码路径；``alla_daily_rank`` 传尾部
     (cal_idx, codes) 做尾部重算，``tables`` 不给则读本地缓存三张事件表。
+    ``listed`` 是上市域掩码（有价格即有上市），只用于把 ``express_reporting``
+    的「域内未披露」补成 0；不给则该列退化为全 1（仅兼容旧调用）。
     """
     if tables is None:
         tables = _load_event_tables()
@@ -217,7 +234,10 @@ def build_panels(cal_idx, codes,
         if tbl is None or tbl.empty:
             log.warning("表 %s 无数据，跳过", key)
             continue
-        out.update(pit_fn(tbl, cal_idx, codes))
+        if key == "express":
+            out.update(pit_fn(tbl, cal_idx, codes, listed=listed))
+        else:
+            out.update(pit_fn(tbl, cal_idx, codes))
     return out
 
 
@@ -249,7 +269,8 @@ def main() -> None:
     ic_codes = close_adj.columns[::IC_CODE_STRIDE]
 
     defs: dict[str, dict] = {}
-    panels_all = build_panels(cal_idx, codes, tables=tables)
+    panels_all = build_panels(cal_idx, codes, tables=tables,
+                              listed=close_adj.notna())
     for key, _pit_fn, labels in EVENT_ROUTES:
         defs.update({k: {"src": key, "label": v}
                      for k, v in labels.items() if k in panels_all})

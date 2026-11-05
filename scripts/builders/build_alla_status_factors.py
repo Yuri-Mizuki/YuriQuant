@@ -130,10 +130,15 @@ def build_panels(cal_idx, codes, status: pd.DataFrame | None = None,
         lp["limit_pos"] = ((lp["close"] - lp["pre_close"]) / lp["den"]).clip(0, 1)
         limit_pos = _pivot(lp, "limit_pos", cal_idx, codes)
 
+    # is_st 是布尔量：0（非 ST）是真值，不是缺失。2026-11-05 前这里用
+    # `.replace(0.0, np.nan)` 把 96% 的「正常」样本删成 NaN，面板只剩 ST 股
+    # 全 1 ⇒ 截面无差异 ⇒ 中性化后成假面板。布尔量必须保留 0。
+    # 其余三个是连续/计数类：0 占绝对多数，若保留会零膨胀触发 winsorize 的
+    # MAD=0 分支，故沿用「只留有事件样本」的稀疏化口径；改它们需先做 IC 对照。
     return {
         "suspend_ratio_60d": suspend_ratio.replace(0.0, np.nan),
         "suspend_count_60d": suspend_count.replace(0.0, np.nan),
-        "is_st": st_flag.replace(0.0, np.nan),
+        "is_st": st_flag,
         "st_days": st_enter.replace(0.0, np.nan),
         "limit_pos": limit_pos,
     }
