@@ -1,0 +1,68 @@
+# =============================================================================
+# 截面选股池排除清单 —— 全项目唯一真源（2026-11-05 建立）
+# =============================================================================
+#
+# 规则（改本文件前必读）
+# --------------------
+# 1. 这里登记的是「**不能作为截面选股变量**」的因子，理由必须是可复核的机制，
+#    不是「IC 差」。IC 差由 DPP 自然淘汰，不需要手工拉黑。
+# 2. 排除在 `rolling_grid_alla.select_features_for_year` 的 `quality` 上做**一次**，
+#    覆盖四条入选路径：DPP 候选池 / 基本面保留席位 / `_reserve_alt` 另类席位 /
+#    两处 `_extra` 兜底。因此排除后不会从旁路漏回。
+# 3. **与 `--exclude-features` 的分工**：那个是实验消融开关（临时、CLI 传入、
+#    需要独立 out-tag）；这里是审查结论（永久、进版本库、需要证据）。
+# 4. 移除条目 = 改口径，必须重跑 select 并说明理由；不许为了「多一个特征」删条目。
+# 5. 判据来自 `factor/validation.py::check_panel_variation`
+#    （当日截面唯一值 / 有效样本 < 1% ⇒ 无截面信息）。
+#
+# 背景（2026-11-05）
+# -----------------
+# 修复 `winsorize_mad` 的 MAD=0 守卫后，假面板从 46 个降到 11 个。逐个回查**原始
+# 面板**（未裁剪未中性化）发现：这 11 个在进中性化之前截面唯一值就是 1 —— 中性化
+# 没有 bug，它只是忠实放大了「无截面差异」这个输入事实。其中 3 个是 builder 实现
+# 错误（`float_mktcap` 被 clip 削平、`is_st`/`express_reporting` 把布尔 0 当缺失），
+# 已修（见各自 builder 注释）；剩下 8 个是**口径错**，登记在本文件。
+#
+# 🚨 注意：宏观信息本身不是不能用，但必须**与截面变量交互**才能变成截面因子。
+#    反例（保留在池内）：`alt_macro_surprise_str5_x_vol20` 把宏观超预期乘以个股
+#    20 日波动，原始面板截面唯一值 5546 ⇒ 真截面变量。要复活上面 6 个宏观因子，
+#    走这条路，而不是解禁原面板。
+# =============================================================================
+
+version: 1
+updated: "2026-11-05"
+evidence: reports/structural_fake_panels/
+
+exclude:
+  # ---- 市场级广播：日级宏观序列被 np.repeat 铺满全市场 ----
+  # build_alla_altfactors.py:197 `_daily_to_panel` 对全 codes 广播同一标量，
+  # 当日截面 sd 恒 0（实测 flat 天数占比 30%~100%）⇒ 中性化残差 ≡ 0。
+  - name: alt_macro_chn_surprise_str_5d
+    reason: 市场级广播，当日截面 sd=0 占 75%
+    symptom: "uniq=1, coverage=94.9%"
+  - name: alt_macro_surprise_neg_cnt_1d
+    reason: 市场级广播，当日截面 sd=0 占 100%
+    symptom: "uniq=1, coverage=94.9%"
+  - name: alt_macro_surprise_pos_cnt_1d
+    reason: 市场级广播，当日截面 sd=0 占 100%
+    symptom: "uniq=1, coverage=94.9%"
+  - name: alt_macro_surprise_str_5d
+    reason: 市场级广播，当日截面 sd=0 占 30%
+    symptom: "uniq=1, coverage=94.9%"
+  - name: alt_macro_surprise_net_20d
+    reason: 市场级广播，当日截面 sd=0 占 35%
+    symptom: "uniq=1, coverage=94.9%"
+  - name: alt_macro_imp3_cnt_20d
+    reason: 市场级广播，当日截面 sd=0 占 100%
+    symptom: "uniq=1, coverage=94.9%"
+
+  # ---- 定义性常数：Qlib Alpha360 的归一化基准项 ----
+  # factor/alpha158.py:410 `_close_ref(i=0) = close_t / close_t ≡ 1`；
+  # `_volume_ref(i=0) = vol_t / (vol_t + eps) ≈ 1`。这两项在原设计里就是
+  # 归一化分母，不含任何信息，登记进因子池属于入库口径错误。
+  - name: alpha360_CLOSE0
+    reason: 定义性常数 close/close ≡ 1
+    symptom: "值域 [1,1]"
+  - name: alpha360_VOLUME0
+    reason: 定义性常数 vol/(vol+eps) ≈ 1
+    symptom: "值域 [1,1]"

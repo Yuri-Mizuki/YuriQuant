@@ -8,7 +8,7 @@
 >
 > 整合前快照（md5，存 `~/yuriquant_snapshots/2026-10-27_todo_consolidation/`）：
 > `TODO.md e7321f3f…` · `RESEARCH_TODO.md e9f1f70e…` ·
-> `GOOD_MACHINE_TASKS.md 8a51949c…` · `ai97_100k.json d5051d74…`（后者已移出 git）
+> `GOOD_MACHINE_TASKS.md 8a51949c…` · `reports/archive/ai97_100k.json d5051d74…`（后者已移出 git；2026-11-03 由根目录归位）
 
 ## 导航（三册）
 

@@ -22,8 +22,10 @@ factor_stats jsonl 文件名与两处小开关）、``ffill_pit_multi`` 4 份、
 from __future__ import annotations
 
 import json
+import sys
 import time
 from concurrent.futures import ProcessPoolExecutor
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -181,6 +183,65 @@ def _lib_for(ds_dir: Path):
     return lib
 
 
+def gate_stats_rows(rows: list[dict], ds_dir: Path, family: str, *,
+                    panels_subdir: str = "panels"
+                    ) -> tuple[list[dict], list[dict]]:
+    """入库闸：剔除「当日截面恒常数 / 浮点噪声格点」的面板。
+
+    判据与背景见 ``factor.validation``。这里只做 I/O 编排：
+    每个因子读 parquet 最后一个 row group 的末 20 行（~0.05s），代价可忽略。
+
+    放行规则：
+      - 面板文件不存在 ⇒ 放行（缺面板由 select 阶段的完整性检查负责，不在这里拦）
+      - 读盘异常 ⇒ 放行并告警（不能让闸门把整批构建搞崩）
+      - ``sparse`` / ``discrete`` ⇒ 放行（稀疏事件因子与布尔因子是合法形态）
+
+    拒收记录追加到 ``factor_stats_{family}_rejected.jsonl``，便于事后审计
+    「这批少了一个因子是因为什么」。
+
+    Args:
+        rows: ``read_stats`` 读出的统计行（含 ``name``）。
+        ds_dir: 数据集根目录（其下 ``panels/`` 是面板）。
+        family: 因子集名，仅用于拒收日志文件名。
+
+    Returns:
+        ``(kept, rejected)``。
+    """
+    from factor.validation import check_panel, describe_reason, read_panel_sample
+
+    panel_dir = ds_dir / panels_subdir
+    kept: list[dict] = []
+    rejected: list[dict] = []
+    for r in rows:
+        name = r.get("name")
+        if not name:
+            continue
+        p = panel_dir / f"{name}.parquet"
+        if not p.exists():
+            kept.append(r)
+            continue
+        try:
+            ok, reason, st = check_panel(read_panel_sample(p))
+        except Exception as e:                                    # noqa: BLE001
+            log.warning("入库闸读面板失败 %s：%s（放行）", name, e)
+            kept.append(r)
+            continue
+        if ok:
+            kept.append(r)
+            continue
+        rejected.append({**r, "reject_reason": reason, **st})
+        log.warning("入库闸拒收 %s：%s（uniq=%d ratio=%.2e flat=%.0f%%）",
+                    name, describe_reason(reason), st["uniq"],
+                    st["uniq_ratio"], st["flat_frac"] * 100)
+    if rejected:
+        p = ds_dir / f"factor_stats_{family}_rejected.jsonl"
+        with p.open("a", encoding="utf-8") as fh:
+            for r in rejected:
+                fh.write(json.dumps(r, ensure_ascii=False) + "\n")
+        log.warning("入库闸：%d 个因子被拒（明细 %s）", len(rejected), p.name)
+    return kept, rejected
+
+
 def merge_outputs(ds_dir: Path, family: str, *,
                   horizons: tuple[int, ...] = HORIZONS,
                   close_adj_loader=None, ic_code_stride: int = IC_CODE_STRIDE,
@@ -214,6 +275,12 @@ def merge_outputs(ds_dir: Path, family: str, *,
     if not rows:
         if empty_log:
             log.warning(empty_log)
+        return
+    # 入库闸：截面恒常数的面板一律不进 registry（见 factor.validation）。
+    # 放在 upsert 之前是必须的——registry 一旦写入，select 就会把它当候选。
+    rows, _rejected = gate_stats_rows(rows, ds_dir, family)
+    if not rows:
+        log.warning("入库闸拒收全部 %d 个因子，跳过 registry 写入", len(_rejected))
         return
     # 默认来源 = <因子集>:builders:<数据集>，默认族 = SET_TO_FAMILY[因子集]。
     # 故意不在 12 个 builder 里各写一遍：漏改一个就等于那批因子重新落入
@@ -258,6 +325,13 @@ def merge_outputs(ds_dir: Path, family: str, *,
 # ---------------------------------------------------------------------------
 #: 进入中性化的 registry coverage 下限（与 MIN_IC_COVERAGE 对齐）
 MIN_NEU_COVERAGE = 0.3
+
+#: 快速失败：处理数达到 ``EARLY_N`` 后，若失败率超过 ``EARLY_FAIL_RATE`` 立即中止。
+#: 2026-11-05 实测：6 worker 并发推 57MB parquet（≈22MB/s）打穿 Defender 实时扫描
+#: 吞吐，失败率 50%；而整批护栏要等 932 个跑完才判，等于白烧数小时算力。
+#: 前 20 个足以定性 —— 系统性写盘故障（并发/权限/杀软）vs 偶发占用。
+EARLY_N = 20
+EARLY_FAIL_RATE = 0.3
 _ROOT = Path(__file__).resolve().parents[2]
 _NEU_BASE_DIR = _ROOT / "reports" / "alla_rolling" / "_base"
 
@@ -294,8 +368,28 @@ def neutralize_one(task: tuple[str, str, str, bool]) -> tuple[str, float]:
     return name, cov
 
 
+def _safe_neutralize(task: tuple[str, str, str, bool]
+                     ) -> tuple[str, float | None, str | None]:
+    """``neutralize_one`` 的包装：把单点失败变成可记录的结果而不是异常。
+
+    🚨 2026-11-05：本机 Defender 实时防护会把刚写完的 57MB parquet 占用数十秒
+    （实测重试 42s 仍被拒），一次占用就让 932 个因子的批处理整批中止、后续步骤
+    全跳过 —— 已经为此重跑三次。单文件被锁不该让另外 900 多个白跑：
+    失败的因子单独落盘记录，由调用方汇总并在下次深检中被发现。
+    """
+    try:
+        name, cov = neutralize_one(task)
+        return name, cov, None
+    except Exception as e:                                        # noqa: BLE001
+        return task[0], None, f"{type(e).__name__}: {e}"
+
+
 def run_neutralization(ds: Path, out_subdir: str, *,
-                       workers: int = 6,
+                       # 本机实测（2026-11-05，57MB/因子）：1 worker 15.5s/个、
+                       # 3 worker 6.9s/个（失败率 0）、6 worker 2.6s/个但失败率 50%
+                       # —— 瓶颈是 Defender 实时扫描吞吐（≈8MB/s 是这台机器的线），
+                       # 不是 CPU。默认值取「能跑通」的那一档。
+                       workers: int = 3,
                        only: list[str] | None = None,
                        force: bool = False,
                        set_name: str = "neutralized",
@@ -330,22 +424,67 @@ def run_neutralization(ds: Path, out_subdir: str, *,
 
     t0 = time.time()
     stats = []
+    failed: list[dict] = []
+
+    def _abort_if_systemic(i: int, last: str) -> None:
+        """前 ``EARLY_N`` 个里失败率过高 ⇒ 立即中止。
+
+        末端的 10% 护栏只能在跑完 932 个之后判——那时代价已经付掉了。写盘故障
+        几乎都集中在批处理开头（并发配置不对/权限/杀软），早判能省下全部算力。
+        """
+        if i >= EARLY_N and len(failed) / i > EARLY_FAIL_RATE:
+            raise RuntimeError(
+                f"{label}前 {i} 个因子失败 {len(failed)} 个"
+                f"（{len(failed) / i:.0%} > {EARLY_FAIL_RATE:.0%}），最后失败：{last}"
+                f" ⇒ 判为系统性写盘故障（并发过高 / 杀软占用 / 权限），已中止。"
+                f"建议降低 --workers 或把输出目录加入安全软件扫描排除项。")
+
     tasks = [(n, str(ds), out_subdir, n in industry_only) for n in todo]
     if workers > 1 and len(tasks) > 1:
         with ProcessPoolExecutor(max_workers=workers) as ex:
-            for i, (name, cov) in enumerate(ex.map(neutralize_one, tasks), 1):
+            for i, (name, cov, err) in enumerate(ex.map(_safe_neutralize, tasks), 1):
+                if err is not None:
+                    failed.append({"name": name, "error": err})
+                    print(f"[{i}/{len(tasks)}] {name} 写盘失败：{err}",
+                          file=sys.stderr, flush=True)
+                    _abort_if_systemic(i, name)
+                    continue
                 stats.append({"name": name, "set": set_name, "coverage": cov})
                 print(f"[{i}/{len(tasks)}] {name} cov={cov:.3f} "
                       f"({time.time()-t0:.0f}s)", flush=True)
+                _abort_if_systemic(i, name)
     else:
         for i, task in enumerate(tasks, 1):
-            _name, cov = neutralize_one(task)
+            _name, cov, err = _safe_neutralize(task)
+            if err is not None:
+                failed.append({"name": _name, "error": err})
+                print(f"[{i}/{len(tasks)}] {_name} 写盘失败：{err}",
+                      file=sys.stderr, flush=True)
+                _abort_if_systemic(i, _name)
+                continue
             stats.append({"name": _name, "set": set_name, "coverage": cov})
             print(f"[{i}/{len(tasks)}] {_name} cov={cov:.3f} "
                   f"({time.time()-t0:.0f}s)", flush=True)
+            _abort_if_systemic(i, _name)
 
     (ds / (stats_file or f"factor_stats_{set_name}.jsonl")).open(
         "w", encoding="utf-8").write(
         "\n".join(json.dumps(s, ensure_ascii=False) for s in stats) + "\n")
     print(f"{label}面板完成 {len(stats)} 个因子 ({time.time()-t0:.0f}s)", flush=True)
+
+    if failed:
+        # 失败清单单独落盘：深检只看日期，不会告诉你「这批少了哪个」。
+        list_path = ds / f"{label}_failed_{datetime.now():%Y%m%d_%H%M}.txt"
+        list_path.write_text(
+            "\n".join(f"{f['name']}\t{f['error']}" for f in failed) + "\n",
+            encoding="utf-8")
+        rate = len(failed) / max(len(tasks), 1)
+        print(f"⚠️ {label}写盘失败 {len(failed)}/{len(tasks)}（{rate:.1%}）"
+              f"，清单：{list_path}", file=sys.stderr, flush=True)
+        # 少量失败是可容忍的文件占用；大面积失败说明是系统性故障（路径/权限/磁盘），
+        # 继续跑只会把整库写成半旧半新，必须让调用方中断。
+        if rate > 0.1:
+            raise RuntimeError(
+                f"{label}失败率 {rate:.1%} 超过 10%，判定为系统性故障，"
+                f"中止以免产出半旧半新的面板库：{list_path}")
     return len(stats)

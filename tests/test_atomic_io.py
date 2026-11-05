@@ -65,6 +65,69 @@ def test_falls_back_to_direct_write_when_replace_always_denied(
     assert list(tmp_path.glob("*.tmp")) == []      # 降级路径也清掉自己的 tmp
 
 
+def test_fallback_write_retries_transient_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """降级就地覆写也要扛瞬时占用。
+
+    2026-11-05 现场：`panels_neu_fundind` 整批改名被拒后降级覆写，第一枪撞上
+    文件仍被占用 ⇒ 裸抛 PermissionError ⇒ 重建链在 [18/19] 中止，40 分钟算力白烧。
+    改名失败本身就是「有人正打开这个文件」的信号，覆写不重试等于放大失败率。
+    """
+    dst = tmp_path / "x.parquet"
+    write_parquet_atomic(_df(), dst)
+    new = pd.DataFrame({"a": [7.0], "b": [8.0]})
+
+    monkeypatch.setattr(os, "replace", lambda *a, **k: (_ for _ in ()).throw(
+        PermissionError(5, "拒绝访问。")))
+    monkeypatch.setattr("scripts.common.atomic_io.BACKOFF", 0.001)
+    monkeypatch.setattr("scripts.common.atomic_io.FALLBACK_BUDGET", 0.05)
+    monkeypatch.setattr("scripts.common.atomic_io.FALLBACK_MAX_SLEEP", 0.01)
+
+    import pandas as pd_mod
+    real_to_parquet = pd_mod.DataFrame.to_parquet
+    calls = {"n": 0}
+
+    def _flaky(self, path, *a, **k):
+        # 第一次就地覆写被拒，第二次成功（模拟瞬时占用释放）
+        if ".tmp" not in str(path):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise PermissionError(13, "Permission denied")
+        return real_to_parquet(self, path, *a, **k)
+
+    monkeypatch.setattr(pd_mod.DataFrame, "to_parquet", _flaky)
+    write_parquet_atomic(new, dst)
+    assert calls["n"] >= 2                       # 确实重试过
+    pd.testing.assert_frame_equal(pd.read_parquet(dst), new)
+
+
+def test_fallback_write_raises_after_retries_exhausted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """持续被拒时仍然抛出（不能静默吞掉写入失败）。"""
+    dst = tmp_path / "x.parquet"
+    write_parquet_atomic(_df(), dst)
+
+    monkeypatch.setattr(os, "replace", lambda *a, **k: (_ for _ in ()).throw(
+        PermissionError(5, "拒绝访问。")))
+    monkeypatch.setattr("scripts.common.atomic_io.BACKOFF", 0.001)
+    monkeypatch.setattr("scripts.common.atomic_io.FALLBACK_BUDGET", 0.05)
+    monkeypatch.setattr("scripts.common.atomic_io.FALLBACK_MAX_SLEEP", 0.01)
+
+    import pandas as pd_mod
+    real_to_parquet = pd_mod.DataFrame.to_parquet
+
+    def _always_denied(self, path, *a, **k):
+        if ".tmp" not in str(path):
+            raise PermissionError(13, "Permission denied")
+        return real_to_parquet(self, path, *a, **k)
+
+    monkeypatch.setattr(pd_mod.DataFrame, "to_parquet", _always_denied)
+    with pytest.raises(PermissionError, match="就地覆写"):
+        write_parquet_atomic(pd.DataFrame({"a": [1.0]}), dst)
+
+
 def test_sweep_stale_tmp_respects_min_age(tmp_path: Path) -> None:
     old = tmp_path / "old.parquet.tmp"
     fresh = tmp_path / "fresh.parquet.tmp"

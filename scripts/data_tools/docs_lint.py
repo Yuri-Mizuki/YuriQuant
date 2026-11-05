@@ -15,6 +15,20 @@
 3. **标题带日期**：README 的 H1 必须含 ``YYYY-MM`` 或 ``YYYY-MM-DD``。
 4. **无孤儿**：``reports/docs/`` 下的 ``.md`` 至少被一处引用（tracked 文件或
    ``reports/`` 内其它 md）。
+5. **判定必须存在**（2026-11-03 加）：每个 ``reports/<dir>/`` 必须在 §结论速查 /
+   §1.2.1 的表格里**有一行**，且判定列 ∈ ``VERDICTS``。
+   起因：规则 1 是弱代理——它只查「目录名在 55KB 全文出现过」，于是通配写法
+   ``alla_rolling_macrof*/`` 一行就能覆盖 5 个目录（§1.2.1 标题自己写着
+   「之前靠通配符扫过 ⇒ 等于没登记」）。2026-11-03 实测：114 个目录判定覆盖率
+   仅 47%，而 ``--check`` 全绿。**判定是唯一能同时让「留」和「删」都合法的动作**；
+   没有判定就只能永远留着，这是目录堆积的物理成因。
+6. **根部白名单**（2026-11-03 加）：``reports/`` 根部只允许 §1.4 的 4 个接口文件
+   + ``README.md``。规则自 2026-09-20 就有，一直零守卫，实测 14 个直挂文件。
+
+判定缺口的存量处理
+------------------
+未判定的存量目录登记在 ``docs/待补判定清单.md``（**只减不增**），逐条勾掉。
+这份清单本身就是待办：条目数应随每次清理单调下降；涨了就说明新目录在逃逸。
 
 存量豁免：按时间基线，不按白名单
 --------------------------------
@@ -40,6 +54,7 @@
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import re
 import subprocess
 import sys
@@ -59,6 +74,41 @@ ELEMENTS = {
 }
 
 DATE_IN_TITLE = re.compile(r"20\d{2}-\d{2}")
+
+#: 完整日期 `YYYY-MM-DD`（规则 7 算超期用）。
+DATE_FULL = re.compile(r"(20\d{2}-\d{2}-\d{2})")
+
+#: 规则 7：`进行中` 的最长挂起天数。超过就必须收口或说明。
+PENDING_DAYS = 30
+
+#: 规则 5：判定列合法取值（§结论速查 的 5 个口径 + 生产 + 进行中）。
+#: `生产` 给 §1.1 的每日运行目录（它们不是实验，不需要"判负/采纳"）；
+#: `进行中` 给尚未收口的实验（自带日期，读到就知道是哪个时点的状态）。
+VERDICTS = ("采纳", "判负", "归档", "工具保留", "事故记录", "生产", "进行中")
+
+#: 只在「结论速查」和 §1.2.1 这两张表里找判定行 —— 正文提到目录名不算。
+VERDICT_SECTIONS = ("### 结论速查", "### 1.2.1")
+
+#: §1.1「生产运行」表里的目录，判定视为 `生产`（不要求再往结论表抄一遍）。
+PRODUCTION_SECTION = "### 1.1"
+
+#: §1.2「保留实验与报告」表里的目录，判定视为 `工具保留`（该表的定义就是
+#: 「有代码读取、或支撑已归档脚本引用的结论」⇒ 保留）。这是**弱判定**，
+#: 结论表里的精确判定（采纳/判负/归档）优先覆盖它。
+RETAINED_SECTION = "### 1.2 "
+
+#: 规则 5 的存量豁免清单（只减不增）。每行一个目录名（`- `xxx` ` 或 `- xxx`）。
+VERDICT_TODO = DOCS / "待补判定清单.md"
+
+#: 规则 6：reports/ 根部允许的散件 = §1.4 的 4 个接口文件 + README。
+#: 这 4 个位置被代码硬编码（见 §1.4「硬引用点」列），移动即静默断链。
+ROOT_ALLOWED = frozenset({
+    "README.md",
+    "experiments.csv",
+    "all_a_pit_union_2019.json",
+    "intraday_stat_checkup.csv",
+    "mine_im_combos.csv",
+})
 
 #: 必须自建 README 的目录判定：非纯数据/纯产物目录的前缀白名单。
 #: 生产臂目录（`alla_rolling_*`）只有 CSV/parquet，登记进 reports/README 即可。
@@ -158,6 +208,112 @@ def check_dir_registry(index_text: str) -> list[str]:
     return bad
 
 
+def _verdict_rows(index_text: str) -> dict[str, str]:
+    """解析结论表 → {目录名: 判定}。只在 ``VERDICT_SECTIONS`` 区段内解析。
+
+    一行可含多个目录（``a / b``），通配（``x*``）**不计覆盖** —— 这正是要堵的洞。
+    """
+    rows: dict[str, str] = {}
+    weak: dict[str, str] = {}
+    in_section = False
+    in_production = False
+    in_retained = False
+    for line in index_text.splitlines():
+        if line.startswith("#"):
+            in_section = line.startswith(VERDICT_SECTIONS)
+            in_production = line.startswith(PRODUCTION_SECTION)
+            in_retained = line.startswith(RETAINED_SECTION)
+            continue
+        if not line.startswith("|") or not (in_section or in_production or in_retained):
+            continue
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if not cells or set("".join(cells)) <= set("-: "):
+            continue  # 分隔行
+        if in_production or in_retained:
+            tag = "生产" if in_production else "工具保留"
+            for name in re.findall(r"`([^`]+)`", cells[0]):
+                weak.setdefault(name.rstrip("/"), tag)
+            continue
+        if len(cells) < 3:
+            continue
+        verdict = next(
+            (c for c in cells[2:] if any(c.startswith(v) for v in VERDICTS)), None
+        )
+        if verdict is None:
+            continue
+        for name in re.findall(r"`([^`]+)`", cells[0]):
+            for part in re.split(r"\s*(?:/|\s)\s*", name):
+                part = part.strip().rstrip("/")
+                if part and "*" not in part:
+                    rows.setdefault(part, verdict)
+    # 强判定（结论表的采纳/判负/归档）覆盖弱判定（生产/工具保留）
+    for k, v in weak.items():
+        rows.setdefault(k, v)
+    return rows
+
+
+def load_verdict_todo() -> set[str]:
+    """读 ``docs/待补判定清单.md`` 里的目录名（``- `name` `` 或 ``- name``）。"""
+    if not VERDICT_TODO.is_file():
+        return set()
+    names = set()
+    for line in VERDICT_TODO.read_text(encoding="utf-8", errors="replace").splitlines():
+        m = re.match(r"\s*[-*]\s+`?([A-Za-z0-9_.\-]+)`?", line)
+        if m and not m.group(1).startswith(("2026-", "2025-")):
+            names.add(m.group(1))
+    return names
+
+
+def check_verdicts(index_text: str) -> list[str]:
+    """规则 5：每个目录都要有一行判定（存量见待补清单）。"""
+    known = _verdict_rows(index_text)
+    todo = load_verdict_todo()
+    bad = []
+    for d in sorted(p for p in REPORTS.iterdir() if p.is_dir()):
+        if d.name in todo or d.name in known or d.name in DIR_REGISTRY_SKIP:
+            continue
+        bad.append(f"{d.name}/ — 结论表无判定行（判定 ∈ {' / '.join(VERDICTS)}）")
+    return bad
+
+
+def check_root_files() -> list[str]:
+    """规则 6：根部只允许 §1.4 接口文件 + README。"""
+    return [
+        f"reports/{p.name} — 根部只允许 README + §1.4 的 4 个接口文件"
+        for p in sorted(REPORTS.iterdir())
+        if p.is_file() and p.name not in ROOT_ALLOWED
+    ]
+
+
+def check_pending(index_text: str, days: int = PENDING_DAYS) -> list[str]:
+    """规则 7：断言 `进行中` 的实验不能长期挂着（否则等于永久豁免）。
+
+    判定值 `进行中` 必须带日期，超过 ``days`` 天未收口即报错：
+    要么补结论改成 采纳/判负/归档/工具保留，要么说明为什么还没跑完。
+    """
+    today = dt.date.today()
+    bad = []
+    in_section = False
+    for line in index_text.splitlines():
+        if line.startswith("#"):
+            in_section = line.startswith(VERDICT_SECTIONS)
+            continue
+        if not in_section or not line.startswith("|") or "进行中" not in line:
+            continue
+        m = DATE_FULL.search(line)
+        if not m:
+            bad.append(f"{line.strip()[:48]}… — `进行中` 缺日期，无法判超期")
+            continue
+        try:
+            started = dt.date.fromisoformat(m.group(1))
+        except ValueError:
+            continue
+        age = (today - started).days
+        if age > days:
+            bad.append(f"{line.strip()[:48]}… — `进行中` 已 {age} 天（>{days}），需收口")
+    return bad
+
+
 def check_readme(d: Path, baseline_mtime: float | None) -> tuple[list[str], list[str], bool]:
     """返回 (缺要素, 其它问题, 是否受基线约束)。"""
     readme = d / "README.md"
@@ -198,6 +354,9 @@ def run(verbose: bool = False) -> int:
     corpus = _corpus()
 
     unregistered = check_dir_registry(index_text)
+    no_verdict = check_verdicts(index_text)
+    root_files = check_root_files()
+    pending = check_pending(index_text)
     baseline_mtime = BASELINE.stat().st_mtime if BASELINE.is_file() else None
     no_readme, missing_el, no_date = [], [], []
     audited = 0
@@ -239,6 +398,9 @@ def run(verbose: bool = False) -> int:
         ("规则 2 四要素不全", missing_el),
         ("规则 3 标题缺日期", no_date),
         ("规则 4 孤儿文档", orphans),
+        ("规则 5 目录无判定", no_verdict),
+        ("规则 6 根部越界文件", root_files),
+        ("规则 7 进行中超期", pending),
         ("建议补 README 的实验目录", no_readme),
     ]
     failed = 0

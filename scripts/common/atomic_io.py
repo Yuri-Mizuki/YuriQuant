@@ -29,9 +29,42 @@ from pathlib import Path
 
 import pandas as pd
 
-#: 重试次数与退避基数（秒）：0.4 / 0.8 / 1.6 / 3.2 ... 累计 ~6s，远超杀软扫描窗口。
+#: 原子改名阶段的重试与退避基数（秒）：0.4 / 0.8 / 1.6 / 3.2 ...，累计 ~6s。
+#: 这一阶段只为扛「瞬时」占用而设；改名被**持续**拒绝在本机是常态（文件守护拦删除），
+#: 所以不必给更长预算——尽快降级才是不浪费算力的做法。
 RETRIES = 5
 BACKOFF = 0.4
+
+#: 降级就地覆写阶段的重试预算（秒上限，不是次数）：每次退避不超过 ``FALLBACK_MAX_SLEEP``，
+#: 总等待不超过 ``FALLBACK_BUDGET``。
+#:
+#: 🚨 2026-11-05 两连崩的根因：本机 Defender 实时防护开着，每个 57MB 的
+#: ``panels_neu_fundind/*.parquet`` 写完都要被扫一遍；6 个 worker 并发写时扫描队列
+#: 积压，文件占用时长**远超**原定的 ~6s 预算（实测 5 次重试后仍被拒，两次崩在
+#: 不同的随机文件上：``alpha101_042`` / ``alpha101_005``）。改名被拒本身正是
+#: 「有人正打开着这个文件」的信号，紧随其后的覆写几乎必然撞锁。
+FALLBACK_BUDGET = 40.0
+FALLBACK_MAX_SLEEP = 4.0
+
+
+def _fallback(df: pd.DataFrame, path: Path, last_exc: Exception | None,
+              **kwargs) -> None:
+    """降级就地覆写，按时间预算重试（Defender 扫描窗口可长达数十秒）。"""
+    waited = 0.0
+    sleep_s = BACKOFF
+    while waited < FALLBACK_BUDGET:
+        try:
+            df.to_parquet(path, **kwargs)
+            return
+        except PermissionError as exc:
+            last_exc = exc
+            time.sleep(sleep_s)
+            waited += sleep_s
+            sleep_s = min(sleep_s * 2, FALLBACK_MAX_SLEEP)
+    raise PermissionError(
+        f"就地覆写 {waited:.0f}s 内重试仍被拒：{path}"
+        f"（最后一次：{last_exc}）—— 通常是杀软实时扫描占用，"
+        f"可把 {path.parent} 加入扫描排除项") from last_exc
 
 
 def write_parquet_atomic(df: pd.DataFrame, path: Path | str, **kwargs) -> None:
@@ -39,9 +72,10 @@ def write_parquet_atomic(df: pd.DataFrame, path: Path | str, **kwargs) -> None:
 
     ``kwargs`` 透传给 ``DataFrame.to_parquet``。
 
-    🚨 **降级路径**：若重试耗尽仍被拒（本环境实测：文件守护拦删除，单次 ~6.7s、
-    并发下 10s 超时，累计十余秒仍不放行），则退回**就地覆写**（``to_parquet`` 直接
-    写目标，不产生任何删除操作）。代价 = 丢掉"进程被杀不留截断文件"的保证，换来
+    🚨 **降级路径**：若改名重试耗尽仍被拒（本环境实测：文件守护拦删除，批量下**几乎
+    每次**都会被拒），则退回**就地覆写**（``to_parquet`` 直接写目标，不产生任何删除
+    操作），并按**时间预算**重试（见 ``FALLBACK_BUDGET``，Defender 扫描 57MB
+    parquet 的占用窗口可达数十秒）。代价 = 丢掉"进程被杀不留截断文件"的保证，换来
     "整批不因单点而中断"。仓库既有同款模式：`alla_daily_rank._atomic_or_direct`
     （`MEMORY-engineering.md` §B4：「写盘须原子优先 + 占用降级」）。
     """
@@ -63,7 +97,7 @@ def write_parquet_atomic(df: pd.DataFrame, path: Path | str, **kwargs) -> None:
         pass
     print(f"[atomic_io] 原子改名重试 {RETRIES} 次仍被拒（{last_exc}）⇒ 降级就地覆写 "
           f"{path.name}", file=sys.stderr, flush=True)
-    df.to_parquet(path, **kwargs)
+    _fallback(df, path, last_exc, **kwargs)
 
 
 def sweep_stale_tmp(directory: Path | str, *, min_age_seconds: float = 600.0) -> int:

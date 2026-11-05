@@ -52,6 +52,7 @@ import warnings
 
 import numpy as np
 import pandas as pd
+import torch
 
 warnings.filterwarnings("ignore", message="invalid value encountered in reduce")
 
@@ -140,6 +141,10 @@ def main():
                     help="评估段终点 YYYYMMDD（默认：启用 im 时 = im 最后有值日）")
     ap.add_argument("--select-cor", type=float, default=0.4,
                     help="入选因子与已入选因子 spearman 相关上限（研报=0.4）")
+    ap.add_argument("--oos-k", dest="oos_k", type=int, default=0,
+                    help="OOS |IC| 只取入选集前 K 个（0=全部，改动前行为）。"
+                         "**臂间比较必须传正数**：入选个数由各臂自身多样性决定，"
+                         "「入选集均值」会把「多入选→边际因子更弱」混进比较里")
     ap.add_argument("--min-autocorr", type=float, default=0.0,
                     help="RRE 秩稳定性门槛（截面排名自相关下限，0=关闭）")
     ap.add_argument("--no-mc", action="store_true", help="关闭市值中性化奖励")
@@ -148,10 +153,21 @@ def main():
     ap.add_argument("--no-barra", action="store_true",
                     help="关闭 Barra 风格时序相关惩罚")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--encoder", choices=["gru", "rgcn"], default="gru",
+                    help="状态编码器：gru=改动前行为（默认）；rgcn=部分 AST 图卷积"
+                         "（AlphaSAGE 探针，见 factor/gflownet/gnn.py）。"
+                         "两臂输出同宽、其余全部共享 ⇒ 单变量对照")
+    ap.add_argument("--enc-dim", dest="enc_dim", type=int, default=32,
+                    help="编码器隐藏维度（两臂共用该参数；默认 32 = 改动前 GRU 宽度）")
+    ap.add_argument("--gnn-layers", dest="gnn_layers", type=int, default=2,
+                    help="RGCN 层数（仅 --encoder rgcn 生效，论文取 2）")
     ap.add_argument("--init-logz", type=float, default=0.0,
                     help="logZ 经验初始化（≈log(ΣR)，真实数据建议 9~11，加速收敛）")
     ap.add_argument("--jobs", type=int, default=1,
                     help="reward 并行求值进程数（>1 用进程池，需 spawn 可 pickle）")
+    ap.add_argument("--jobs-cache", dest="jobs_cache", type=int, default=200,
+                    help="每个 worker 的子树缓存条数（每条约 6MB，200 条≈1.2GB/进程；"
+                         "进程数多时必须调小，否则 OOM）")
     ap.add_argument("--ckpt", type=str, default=None,
                     help="TB checkpoint 路径（每 log_every iters 保存；存在时自动续训）")
     ap.add_argument("--offline", action="store_true",
@@ -167,6 +183,7 @@ def main():
     panel, close, market_cap, _mask = build_real_panel(
         args.train_begin, args.test_end,
         cache_root=args.cache_root, sdk_cache=args.sdk_cache, offline=args.offline)
+    t_panel = time.time()
 
     # ---- 终端特征集：raw 6 字段 ± 因子库 im_* 分钟特征（国金22 × 国金24） ----
     panel, features, im_index = attach_im_features(
@@ -268,6 +285,7 @@ def main():
     # ---- 均匀基线（训练段同口径） ----
     base = sample_uniform(mdp, reward_fn, 60, seed=args.seed)
     base_r = [r for _, r in base]
+    t_base = time.time()
     print(f"均匀基线 R 均值={np.mean(base_r):.4f} 中位数={np.median(base_r):.4f}")
 
     # ---- 并行 reward 池（可选，--jobs > 1） ----
@@ -282,18 +300,29 @@ def main():
         reward_pool = RewardPool(train_panel, market_cap=mc_arg, returns=rets,
                                  returns_rank=rets.rank(axis=1),
                                  features=features, n_jobs=args.jobs,
+                                 cache_maxsize=args.jobs_cache,
                                  long_ir_lambda=args.long_ir_lambda,
                                  barra_mu=0.0 if args.no_barra else 0.5)
-        print(f"并行 reward 池: {args.jobs} 进程")
+        print(f"并行 reward 池: {args.jobs} 进程（每进程缓存 {args.jobs_cache} 条）")
 
     # ---- TB 训练 ----
-    tb_net = TBPolicy(mdp.n_actions, init_logz=args.init_logz)
+    # 固定网络初始化：改动前此处未设种子，权重随进程熵变化 ⇒ 同 --seed 重跑不可复现，
+    # 「3 seed」也只是换了轨迹采样而非真正的独立初始化。探针要判「编码器带来的差异」，
+    # 必须让 seed 同时控制初始化。
+    torch.manual_seed(args.seed)
+    tb_net = TBPolicy(mdp.n_actions, d=args.enc_dim, init_logz=args.init_logz,
+                      encoder=args.encoder, gnn_layers=args.gnn_layers)
+    n_par = sum(p.numel() for p in tb_net.parameters())
+    print(f"编码器: {args.encoder} d={args.enc_dim}"
+          f"{' layers=' + str(args.gnn_layers) if args.encoder == 'rgcn' else ''}"
+          f" | 参数量 {n_par}")
     print(f"\n=== TB 训练（{args.iters} iters x {args.batch}） ===")
     train_tb(mdp, reward_fn, tb_net, n_iters=args.iters, batch_size=args.batch,
              seed=args.seed, reward_pool=reward_pool,
              ckpt_path=args.ckpt, resume=bool(args.ckpt))
     if reward_pool is not None:
         reward_pool.close()
+    t_train = time.time()
     print(f"奖励缓存: {len(cache)}")
 
     # ---- 测试段采样 + 低相关筛选（研报 §2.3） ----
@@ -317,8 +346,9 @@ def main():
     test_returns = test_panel["close"].pct_change(args.horizon).shift(-args.horizon)
     from factor.formula import formula_builder
     from factor.gflownet.reward import neutralize_market_cap, rank_ic_series
+    n_oos = args.oos_k if args.oos_k > 0 else 40
     oos_rows = []
-    for f, r in selected[:40]:
+    for f, r in selected[:n_oos]:
         fp = formula_builder(f, features=features)(test_panel)
         if mc_arg is not None:
             fp = neutralize_market_cap(fp, market_cap.loc[test_mask])
@@ -328,12 +358,18 @@ def main():
         oos_ic = [x[2] for x in oos_rows if np.isfinite(x[2])]
         n_nan = len(oos_rows) - len(oos_ic)
         print(f"\n=== 测试段 OOS |IC|（样本外，{len(oos_rows)} 个入选因子"
+              f"{' [前 ' + str(args.oos_k) + ' 只，臂间可比口径]' if args.oos_k > 0 else ''}"
               f"{'，' + str(n_nan) + ' 个测试段无有效截面' if n_nan else ''}） ===")
         if oos_ic:
             print(f"OOS |IC| 均值={np.mean(oos_ic):.4f} 中位数={np.median(oos_ic):.4f} "
                   f"top={max(oos_ic):.4f}")
 
-    print(f"\n耗时: {time.time() - t0:.0f}s")
+    # 分段计时：回答「换编码器贵不贵」时必须看 reward 求值占比，而不是总耗时
+    t_end = time.time()
+    per_iter = (t_train - t_base) / args.iters if args.iters else 0.0
+    print(f"\n耗时: {t_end - t0:.0f}s | 面板构建 {t_panel - t0:.0f}s | "
+          f"均匀基线 {t_base - t_panel:.0f}s | TB 训练 {t_train - t_base:.0f}s"
+          f"（{per_iter:.2f}s/iter） | 采样+筛选+OOS {t_end - t_train:.0f}s")
 
 
 if __name__ == "__main__":

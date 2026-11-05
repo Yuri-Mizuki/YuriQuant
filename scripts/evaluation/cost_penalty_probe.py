@@ -219,7 +219,9 @@ def main():
         alpha_scale = float(args.alpha_scale)
 
     begin = args.begin if args.begin is not None else int(WINDOWS["prod"])
-    window = "iso2019" if begin >= 20190101 else "prod"
+    # window 只决定 describe 的标签与掩码分支；begin 已显式给出时以 begin 为准。
+    # 2026-11-05：prod 改指 2019 起，begin 早于 2019 必须标 prod2018（含无掩码年份）。
+    window = "prod" if begin >= 20190101 else "prod2018"
     ctx = load_context(signal=args.signal, window=window, begin=begin, end=args.end)
     print(caliber.describe(ctx, "impact"))
 

@@ -90,6 +90,8 @@ AQR + JFE 复核）同向收口；LLM-MCTS 是唯一产出超门槛因子的挖�
 - **因子库面板月度重建**：定版口径的慢信号读**离线**面板（`panels_neu` / `panels_neu_fundind`，批处理产物、不随新数据更新）⇒ 守卫式月度重建（`scripts/pipelines/rebuild_panel_library.py`：已覆盖上月即空转，并避开 16:00–20:00 出榜窗口）
 - **生产口径 IC 台账**：每日 IC / 中性化 IC / 风格暴露持续记录，信号衰减一眼可见；历史种子由 `scripts/reporting/build_monitor_seed.py` 现场构造（与出榜同口径，含慢信号）
 - **报告自动化**：自包含 HTML（Chart.js，A 股红涨绿跌）+ XLSX + 邮件日报，一键端到端汇总
+- **因子看板**：聚宽式全 A 因子看板（`scripts/reporting/factor_dashboard.py`）——950 因子
+  筛选 / 排序 / 点行看详情，ICIR / NW-t / 月度 IC 由 `ic_h*.parquet` 现场计算，单文件零后端
 - **调度单点管理**：Windows 计划任务 XML 导入式注册 + `doctor` 体检（登记↔系统漂移检测）
 
 ## 🏗️ 目录结构
