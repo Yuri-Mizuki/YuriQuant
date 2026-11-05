@@ -22,8 +22,10 @@ factor_stats jsonl 文件名与两处小开关）、``ffill_pit_multi`` 4 份、
 from __future__ import annotations
 
 import json
+import sys
 import time
 from concurrent.futures import ProcessPoolExecutor
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -359,6 +361,22 @@ def neutralize_one(task: tuple[str, str, str, bool]) -> tuple[str, float]:
     return name, cov
 
 
+def _safe_neutralize(task: tuple[str, str, str, bool]
+                     ) -> tuple[str, float | None, str | None]:
+    """``neutralize_one`` 的包装：把单点失败变成可记录的结果而不是异常。
+
+    🚨 2026-11-05：本机 Defender 实时防护会把刚写完的 57MB parquet 占用数十秒
+    （实测重试 42s 仍被拒），一次占用就让 932 个因子的批处理整批中止、后续步骤
+    全跳过 —— 已经为此重跑三次。单文件被锁不该让另外 900 多个白跑：
+    失败的因子单独落盘记录，由调用方汇总并在下次深检中被发现。
+    """
+    try:
+        name, cov = neutralize_one(task)
+        return name, cov, None
+    except Exception as e:                                        # noqa: BLE001
+        return task[0], None, f"{type(e).__name__}: {e}"
+
+
 def run_neutralization(ds: Path, out_subdir: str, *,
                        workers: int = 6,
                        only: list[str] | None = None,
@@ -395,16 +413,27 @@ def run_neutralization(ds: Path, out_subdir: str, *,
 
     t0 = time.time()
     stats = []
+    failed: list[dict] = []
     tasks = [(n, str(ds), out_subdir, n in industry_only) for n in todo]
     if workers > 1 and len(tasks) > 1:
         with ProcessPoolExecutor(max_workers=workers) as ex:
-            for i, (name, cov) in enumerate(ex.map(neutralize_one, tasks), 1):
+            for i, (name, cov, err) in enumerate(ex.map(_safe_neutralize, tasks), 1):
+                if err is not None:
+                    failed.append({"name": name, "error": err})
+                    print(f"[{i}/{len(tasks)}] {name} 写盘失败：{err}",
+                          file=sys.stderr, flush=True)
+                    continue
                 stats.append({"name": name, "set": set_name, "coverage": cov})
                 print(f"[{i}/{len(tasks)}] {name} cov={cov:.3f} "
                       f"({time.time()-t0:.0f}s)", flush=True)
     else:
         for i, task in enumerate(tasks, 1):
-            _name, cov = neutralize_one(task)
+            _name, cov, err = _safe_neutralize(task)
+            if err is not None:
+                failed.append({"name": _name, "error": err})
+                print(f"[{i}/{len(tasks)}] {_name} 写盘失败：{err}",
+                      file=sys.stderr, flush=True)
+                continue
             stats.append({"name": _name, "set": set_name, "coverage": cov})
             print(f"[{i}/{len(tasks)}] {_name} cov={cov:.3f} "
                   f"({time.time()-t0:.0f}s)", flush=True)
@@ -413,4 +442,20 @@ def run_neutralization(ds: Path, out_subdir: str, *,
         "w", encoding="utf-8").write(
         "\n".join(json.dumps(s, ensure_ascii=False) for s in stats) + "\n")
     print(f"{label}面板完成 {len(stats)} 个因子 ({time.time()-t0:.0f}s)", flush=True)
+
+    if failed:
+        # 失败清单单独落盘：深检只看日期，不会告诉你「这批少了哪个」。
+        list_path = ds / f"{label}_failed_{datetime.now():%Y%m%d_%H%M}.txt"
+        list_path.write_text(
+            "\n".join(f"{f['name']}\t{f['error']}" for f in failed) + "\n",
+            encoding="utf-8")
+        rate = len(failed) / max(len(tasks), 1)
+        print(f"⚠️ {label}写盘失败 {len(failed)}/{len(tasks)}（{rate:.1%}）"
+              f"，清单：{list_path}", file=sys.stderr, flush=True)
+        # 少量失败是可容忍的文件占用；大面积失败说明是系统性故障（路径/权限/磁盘），
+        # 继续跑只会把整库写成半旧半新，必须让调用方中断。
+        if rate > 0.1:
+            raise RuntimeError(
+                f"{label}失败率 {rate:.1%} 超过 10%，判定为系统性故障，"
+                f"中止以免产出半旧半新的面板库：{list_path}")
     return len(stats)
