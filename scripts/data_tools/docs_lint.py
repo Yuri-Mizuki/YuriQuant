@@ -145,7 +145,12 @@ INDEX_PAGE_READMES = {
 }
 
 #: 规则 2/3 的时间基线：mtime 严格大于它视为「新写或刚改」，必须合规。
-BASELINE = DOCS / "TEMPLATE_实验README.md"
+#: 优先本地副本（``reports/docs/`` 允许个人改），否则用**随 git 跟踪**的内置模板——
+#: 2026-11-06 修：原先只认本地副本，而 ``reports/*`` 被 gitignore ⇒ 干净 clone 上
+#: 基线恒缺、规则 2/3 静默退化为全量豁免（只打一行 ⚠️，rc 仍是 0）。
+BASELINE_LOCAL = DOCS / "TEMPLATE_实验README.md"
+BASELINE_PACKAGED = ROOT / "scripts" / "data_tools" / "templates" / "实验README.md"
+BASELINE = BASELINE_LOCAL if BASELINE_LOCAL.is_file() else BASELINE_PACKAGED
 
 #: 明知旧但要求合规的例外（**只减不增，当前为空**）。
 GRANDFATHERED: dict[str, list[str]] = {}
@@ -391,7 +396,7 @@ def run(verbose: bool = False) -> int:
     print(f"规则 2/3 受基线约束（新写或刚改）的 README：{audited} 个")
     print(f"语料 {len(corpus)} 个文件")
     if baseline_mtime is None:
-        print("⚠️ 未找到基线文件 docs/TEMPLATE_实验README.md ⇒ 规则 2/3 退化为全量豁免")
+        print(f"⚠️ 未找到基线文件 {BASELINE.relative_to(ROOT)} ⇒ 规则 2/3 退化为全量豁免")
 
     groups = [
         ("规则 1 目录未登记", unregistered),

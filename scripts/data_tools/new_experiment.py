@@ -30,7 +30,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 REPORTS = ROOT / "reports"
 INDEX = REPORTS / "README.md"
-TEMPLATE = REPORTS / "docs" / "TEMPLATE_实验README.md"
+#: 模板：优先用 ``reports/docs/`` 下的本地副本（允许个人改），否则用**随 git 跟踪**的
+#: 内置版。2026-11-06 修：模板原先只在 ``reports/docs/`` 下，而 ``reports/*`` 是被
+#: gitignore 的 ⇒ 干净 clone 上这个工具第一句 ``read_text`` 就 FileNotFoundError，
+#: 于是「建目录 + 登记」这条原子操作根本没人能走通（工具存在的唯一理由就是防这个）。
+TEMPLATE_PACKAGED = Path(__file__).resolve().parent / "templates" / "实验README.md"
+TEMPLATE_LOCAL = REPORTS / "docs" / "TEMPLATE_实验README.md"
 SECTION = "### 结论速查"
 
 VALID_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
@@ -76,8 +81,14 @@ def insert_row(lines: list[str], name: str, desc: str, verdict: str, date: str) 
     return end
 
 
-def render_readme(name: str, desc: str, script: str, date: str) -> str:
-    text = TEMPLATE.read_text(encoding="utf-8")
+def template_path() -> Path:
+    """本地覆盖优先，其次内置模板（保证干净 clone 上可用）。"""
+    return TEMPLATE_LOCAL if TEMPLATE_LOCAL.is_file() else TEMPLATE_PACKAGED
+
+
+def render_readme(name: str, desc: str, script: str, date: str,
+                  template: Path | None = None) -> str:
+    text = (template or template_path()).read_text(encoding="utf-8")
     text = re.sub(r"<!--.*?-->\s*", "", text, flags=re.S)
     text = text.replace("<实验名>", name).replace("<一句话判定>", desc)
     text = text.replace("YYYY-MM-DD", date)
