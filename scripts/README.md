@@ -63,6 +63,7 @@
 |---|---|
 | `evaluation/backtest_two_periods.py` | sig_composite_pca 两时段样本外回测：2025 全年 vs 2026 上半年。 |
 | `evaluation/blend_weight_920.py` | 定版信号快慢融合权重 λ 网格（h1020 底座，2026-11-06）：补上历史只在 `ens_h1h5` 扫过、投产底座只测过一个点的缺口；锚 λ=0.5 逐位自检。 |
+| `evaluation/horizon_verdict_920.py` | h20-only 正式裁决（2026-11-06）：把 horizon 维搬到**生产壳**（buffer 15/40 + T+1 open）并与慢腿组合，**门槛写死在 `GATES` 里先定后看**；含 naive 壳对拍（复现归档口径）、horizon×λ 2×2 因子格、锚 `h1020_s0.5` 逐位自检。 |
 | `evaluation/vol_target_920.py` | 目标波动 overlay 在定版信号上复验（2026-11-06）：含**恒定仓位对照臂**，用来把「长期半仓」的水平效应与择时信息效应拆开；锚满仓逐位自检。 |
 | `evaluation/buffer_arm_920.py` | 批次 1.4：定版信号（h1020）的 buffer(20/30) 臂 vs naive top20。 |
 | `evaluation/buffer_tune.py` | 执行阻尼实验：排名缓冲带 vs 硬切 Top20%（2026-09-01） |
