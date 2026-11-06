@@ -62,6 +62,8 @@
 | 脚本 | 说明 |
 |---|---|
 | `evaluation/backtest_two_periods.py` | sig_composite_pca 两时段样本外回测：2025 全年 vs 2026 上半年。 |
+| `evaluation/blend_weight_920.py` | 定版信号快慢融合权重 λ 网格（h1020 底座，2026-11-06）：补上历史只在 `ens_h1h5` 扫过、投产底座只测过一个点的缺口；锚 λ=0.5 逐位自检。 |
+| `evaluation/vol_target_920.py` | 目标波动 overlay 在定版信号上复验（2026-11-06）：含**恒定仓位对照臂**，用来把「长期半仓」的水平效应与择时信息效应拆开；锚满仓逐位自检。 |
 | `evaluation/buffer_arm_920.py` | 批次 1.4：定版信号（h1020）的 buffer(20/30) 臂 vs naive top20。 |
 | `evaluation/buffer_tune.py` | 执行阻尼实验：排名缓冲带 vs 硬切 Top20%（2026-09-01） |
 | `evaluation/caliber.py` | 统一评估口径 —— 全项目**唯一真源**（2026-10-13 建立）。 |
