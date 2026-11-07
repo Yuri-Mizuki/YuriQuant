@@ -188,6 +188,9 @@ SOURCE_PREFIXES: frozenset[str] = frozenset({
     "disc_holder_dyn", "holder_dyn", "significant_synthesis", "p5",
     # 另类数据因子集（2026-10-09 首次入库；insider/macro/news 三族）
     "altf",
+    # 构造/搜索产出的两个集（2026-11-07 补登：两者在 registry 里都有 15/14 行，
+    # 但集名一直不在册，`source_for` 每次调用都会告警，family 只能留空）
+    "e4x", "llmmcts",
 })
 
 #: 无法识别产出脚本时 ``source_for`` 的默认 producer 段。
@@ -212,6 +215,11 @@ SET_TO_FAMILY: dict[str, str] = {
     "moneyflow": "资金流", "margin": "资金流",
     # 其余
     "status": "状态",
+    # 构造型：E4 = 基本面分桶 × 量价因子的组内 zscore，本质是**两个父因子的组合**
+    # （与 synthesize 同性质）；LLM-MCTS 是**公式搜索**产物（与 gp/gflownet 同性质）。
+    # 两个集名 2026-11-07 才补进册，此前 29 行只能留空。
+    "e4x": "合成",
+    "llmmcts": "非线性组合",
     # 另类数据三族统一归「事件」（增减持公告 / 宏观日历 surprise / 快讯情绪，
     # 2026-10-09 首次入库；此前 merge_outputs 传 family_tag="其他"）
     "altf": "事件",
