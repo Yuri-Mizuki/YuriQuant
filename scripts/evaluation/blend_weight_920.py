@@ -59,7 +59,7 @@ def build_ctx(pred_dir: Path, *, ic_months: int = 24, embargo_months: int = 2,
     fast = AC.rank_average([h1, h5, h10, h20])
 
     base = AC.load_base()
-    slow, _slow_max, _w = build_slow_panel(
+    slow, _slow_max, weights = build_slow_panel(
         base, fast.index, ic_months, embargo_months, min_cov, min_months, log=log.info)
     log.info("slow 面板 %d 日", slow.shape[0])
 
@@ -82,6 +82,7 @@ def build_ctx(pred_dir: Path, *, ic_months: int = 24, embargo_months: int = 2,
     return {
         "fr": fast.rank(axis=1, pct=True),
         "sr": slow.rank(axis=1, pct=True),
+        "slow": slow, "weights": weights,          # 重建前后对比要用原始面板与权重表
         "close": close,
         "fwd": fwd, "mask_oos": mask_oos, "oos_days": oos_days,
         "bench_idx": base["bench_index"].reindex(oos_days).fillna(0.0),
@@ -90,11 +91,14 @@ def build_ctx(pred_dir: Path, *, ic_months: int = 24, embargo_months: int = 2,
 
 
 def run_arms(ctx: dict, lams, *, entry: float = 0.15, exit_frac: float = 0.40,
-             cost_mult: float = 1.0) -> tuple[pd.DataFrame, dict[float, pd.Series]]:
+             cost_mult: float = 1.0, keep_weights: bool = False):
     """在 ``build_ctx`` 的底座上扫一批 λ，返回（指标表, {λ: 日收益}）。
 
     ``cost_mult`` 只缩放费率（佣金/印花/滑点），用于「成本抬升后 λ 的排序会不会翻」
     这类稳健性检查；佣金最低 5 元不缩放（它是撮合规则，不是费率）。
+
+    ``keep_weights=True`` 时追加第三项 ``{λ: weights_history}``——重建前后要对比
+    **实际持仓**而不只是信号排名，持仓只有回测过程里才有。
     """
     from backtest.costs import default_costs
     from backtest.engine import VectorBacktest
@@ -109,7 +113,7 @@ def run_arms(ctx: dict, lams, *, entry: float = 0.15, exit_frac: float = 0.40,
                             slippage_bp=costs.slippage_bp * cost_mult,
                             impact=costs.impact)
 
-    rows, daily = [], {}
+    rows, daily, held = [], {}, {}
     for lam in [float(x) for x in lams]:
         sig = (1.0 - lam) * ctx["fr"] + lam * ctx["sr"]
         sig_in = sig.reindex(index=ctx["oos_days"], columns=ctx["close"].columns)
@@ -120,6 +124,8 @@ def run_arms(ctx: dict, lams, *, entry: float = 0.15, exit_frac: float = 0.40,
         m = AC.res_metrics(res.daily_returns, ctx["bench_idx"], res.turnover_series)
         dr = res.daily_returns.dropna()
         daily[lam] = dr
+        if keep_weights:
+            held[lam] = res.weights_history
         row = {"lam": lam, "annual": m["annual"], "sharpe": m["sharpe"],
                "ir": m["ir"], "max_dd": m["max_dd"],
                "excess_idx": m["excess"], "turnover": m["turnover"]}
@@ -129,6 +135,8 @@ def run_arms(ctx: dict, lams, *, entry: float = 0.15, exit_frac: float = 0.40,
         log.info("λ=%.2f | 年化=%.2f%% Sharpe=%.3f 回撤=%.1f%% 换手=%.1f%%",
                  lam, m["annual"] * 100, m["sharpe"], m["max_dd"] * 100,
                  m["turnover"] * 100)
+    if keep_weights:
+        return pd.DataFrame(rows), daily, held
     return pd.DataFrame(rows), daily
 
 

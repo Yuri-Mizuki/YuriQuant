@@ -372,15 +372,49 @@
   四条证据：`_off` 最近 4 个报告期非空率 0.000 / 000001.SZ 2023-12 逐值 +17.73 亿 = `sq(2023)−sq(2024)` /
   代码 `p == q−1y` / 对照臂把方向改回来 IS 超额 **+12.86%(t 3.54) → −1.45%(t −0.45)**，
   8 期 σ、4 期 σ、|d| 分母、TTM 四变体全部归零。
-  - [x] **代码修复**：`lag["report_period"] + 1y`（复验 `_off(2023-12) = −19.47 亿`，尾部非空率 0.90+）
-  - [ ] **P0-A 重建受污染面板**：`sue_q` / `asset_growth_yoy` / `piotroski_f` / `inv_rev_gap` /
-    `np_accel`（经 `NP_SQ_YOY`）/ `GM_RATIO` 同比 / 研报线 SUE 共 6 类。
-    🚨 **`RebuildPanels` 每日 06:00 会自动跑 ⇒ 必须先拍板时机**，否则生产排名会在某早无故跳变。
-  - [ ] **P0-B 重建后重跑**：行业轮动主表、`report_factors` 57 因子、`industry_factor_lib` 全库扫描
-  - [ ] **P0-C 加单测**：单调递增序列断言 `_off(p) = v(p) − v(p−1y)`，且最近 4 期非空
-  - [ ] **P0-D 全库体检**：其余 ~940 个面板做「头空尾满」检查
-    （`groupby(period).notna().mean().head(4)/.tail(4)`）。
-    🔑 **铁律**：同比/错位类因子，取过去必然「头空尾满」，取未来必然「头满尾空」
+  - [x] **代码修复**：`lag["report_period"] + 1y`（2026-11-07 复验见下）
+    - **方向**：`_off(2023-12)` = `NP_SQ(2023Q4) 69.73 − NP_SQ(2022Q4) 290.62` = **−220.89 亿**；
+      bug 版 = `69.73 − NP_SQ(2024Q4)(−87.71)` = **+157.44 亿**。**符号相反、两种写法都"出数"**，
+      所以肉眼与覆盖率都发现不了。
+    - **尾部**：数据到 2026-06-30，修复版最新可算期 = **2026-06-30**；bug 版停在 **2025-06-30**，
+      **整整少一年**（拿不到 `p+1y`）—— 这才是"尾部冻结"的真正签名。
+    - ⚠️ 与 11-04 记的 −19.47 亿**不同量级**：本轮把 `income.parquet` 冻结回 2026-06-30
+      （见 `reports/panel_leak_audit/README.md` §三），基数变了。**方向与尾部期数不受影响**，
+      11-04 那个数的单位换算待查（两次偏差比例稳定在 ~10 倍）。
+    - 回归由 `tests/test_year_offset.py`（7 项，改回 bug 版则 5 条断言全红）守住。
+  - [x] **P0-A 重建受污染面板**（2026-11-07 完成，见 `reports/panel_leak_audit/README.md` §三）：
+    `sue_q` / `asset_growth_yoy` / `piotroski_f` / `inv_rev_gap` / `np_accel`（经 `NP_SQ_YOY`）/
+    `margin_delta_ttm` + 研报线 SUE 共 6 类。
+    **实际做法是定向重跑而非全链**：`rebuild_panel_library --run` 会重算 965 个 alpha 面板
+    （数小时），而数据只到 09-23、无新增行情 ⇒ 只重跑受影响的 7 个基本面族 + 事件族 +
+    59 个因子的 `panels/` 与 `panels_neu/`（`--force --only`，**304 秒**）。
+    🚨 原记「`RebuildPanels` 每日 06:00 会自动跑」**是假的**：该计划任务因 `YQ_REPO`/`YQ_PYTHON`
+    两个默认路径在本机都不存在，**从未成功执行过**（`logs/` 里没有任何 `rebuild_panels_task_*.log`）。
+    这正是面板能停更一个半月没人发现的原因 —— 修 bug 不等于修好维护链。
+  - [x] **P0-C 加单测**：`tests/test_year_offset.py` 用**单调递增序列**断言
+    `_off(p) = v(p) − v(p−1y)` 且最近 4 期非空（反向验证：改回 bug 版 5 条断言全红）；
+    另加 `tests/test_date_parsing.py`（9 项，三形态日期 + NaN 分母）与
+    `tests/test_panel_leak_audit.py`（6 项，守住静态污染清单与判据阈值）。
+  - [x] **P0-D 全库体检**（2026-11-07）：**965 → 970 面板实测，同判据冻结 39 → 11，
+    修复 28、回归 0**。`scripts/factors/panel_leak_audit.py`。
+    🔑 **改判据**：原计划的 `groupby(period).notna().mean()` 头空尾满**测不出来** ——
+    PIT 的 `ffill` 让覆盖率不掉，掉的是"值不动了"。改用**停滞天数 + 相对自身节奏的 `jump`**。
+    🔑 **铁律（保留）**：同比/错位类因子，取过去必然「头空尾满」，取未来必然「头满尾空」。
+    ⚠️ 剩余 11 块里只有 **3 块真缺陷**（`div_yield_ttm` 全空 / `alpha101_096` 仅 34 只有值 /
+    `bonus_freq_3y` 一年零变动），另 8 块是覆盖率规则对**稀疏构造**面板的误报。
+  - [ ] **P0-B 重建后重跑**（部分完成）：
+    - [x] 920 定版口径影响对比 → `reports/rebuild_impact_920/README.md`
+    - [ ] 行业轮动主表、`report_factors` 57 因子、`industry_factor_lib` 全库扫描 —— **未做**
+  - [ ] **P0-E 定版是否切换（待拍板）**：重建后年化 16.31% → **14.96%**（−1.34pp）、
+    Sharpe 0.738 → **0.681**（−0.056）。四道预注册门槛**挂两道**（持仓重合率中位 0.794 < 0.90、
+    Sharpe −0.056 < −0.05）⇒ 按预注册规则**不得直接切换**。方向与"前视泄漏被删"一致，
+    旧读数是虚高的，但"下台阶之后还值不值得维持定版参数"需要人判断。
+  - [ ] **P0-F 重注册三个失效的计划任务**：`.env` 已补 `YQ_REPO=D:\project\YuriQuant` 与
+    `YQ_PYTHON=D:\project\YuriQuant\.venv\Scripts\python.exe`（`task_scheduler show` 已能正确展开），
+    但 `schtasks` 在沙箱里被禁 ⇒ 需手工跑 `python -m scripts.common.task_scheduler install rebuild_panels`
+    （同病的还有 `alla_daily_rank`、`fetch_altdata_daily`）。
+  - [ ] **P0-G 基线重登记**：`config/baselines.yaml` 的 `v1-dingban` 与 λ / h20 / buffer 三份裁决的
+    收益读数**全部建立在重建前基座**上，需按新基线重跑才有资格引用（结论方向暂不受影响）。
 - [x] **⑩ RAFT 式「按状态相似度给训练样本加权」在全A 主模型上已判负（11-01 深夜完成）**
   ⇒ `reports/raft_weight/README.md`。**勿再提「检索相似片段决定训练样本/窗口」这条线**。
   9 年 2118 天四臂：`time`（半衰 125 日）ΔIC **+0.0000/t 0.03**、`sim1` −0.0004/t −0.81、
