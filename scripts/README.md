@@ -62,7 +62,8 @@
 | 脚本 | 说明 |
 |---|---|
 | `evaluation/backtest_two_periods.py` | sig_composite_pca 两时段样本外回测：2025 全年 vs 2026 上半年。 |
-| `evaluation/blend_weight_920.py` | 定版信号快慢融合权重 λ 网格（h1020 底座，2026-11-06）：补上历史只在 `ens_h1h5` 扫过、投产底座只测过一个点的缺口；锚 λ=0.5 逐位自检。 |
+| `evaluation/blend_verdict_920.py` | 慢腿权重 λ **正式裁决**（2026-11-07）：0.05 步长密集网格 + **预注册七门**（收益/风险/回撤/逐年/换手/平台/可分辨）+ 费率 ×1/×2/×3 敏感性；七门写死在 `GATES` 里先定后看，产物 `lam_dense.csv` / `gate_check.csv` / `cost_sens.csv` |
+| `evaluation/blend_weight_920.py` | 定版信号快慢融合权重 λ 网格（h1020 底座，2026-11-06）：补上历史只在 `ens_h1h5` 扫过、投产底座只测过一个点的缺口；锚 λ=0.5 逐位自检。装配抽成 `build_ctx()` / `run_arms()` 供裁决脚本复用（同一份快慢信号+执行切分+成本，避免两处口径漂移）。 |
 | `evaluation/horizon_verdict_920.py` | h20-only 正式裁决（2026-11-06）：把 horizon 维搬到**生产壳**（buffer 15/40 + T+1 open）并与慢腿组合，**门槛写死在 `GATES` 里先定后看**；含 naive 壳对拍（复现归档口径）、horizon×λ 2×2 因子格、锚 `h1020_s0.5` 逐位自检。 |
 | `evaluation/vol_target_920.py` | 目标波动 overlay 在定版信号上复验（2026-11-06）：含**恒定仓位对照臂**，用来把「长期半仓」的水平效应与择时信息效应拆开；锚满仓逐位自检。 |
 | `evaluation/buffer_arm_920.py` | 批次 1.4：定版信号（h1020）的 buffer(20/30) 臂 vs naive top20。 |
@@ -137,6 +138,7 @@
 | `factors/build_paper_factors.py` | 论文复现因子构建与入库（awesome-systematic-trading 21 式） |
 | `factors/build_top10_factors.py` | 「中国因子十强」（JKP 口径）11 个因子的复现与入库（独立数据集，2026-11-02） |
 | `factors/dup_audit.py` | 全库冗余审计（签名→相关矩阵→重复簇→registry 回填）；`--reuse` 复用矩阵只重写报告、`--apply` 回填、`--query` 查某因子最像谁（2026-11-03） |
+| `factors/backfill_metadata.py` | registry `formula`/`family` 回填（2026-11-07）：`family` 走库内 `SET_TO_FAMILY`、`formula` 填**定义引用**（alpha 论文编号 / E4 组内 zscore / LLM-MCTS 原始公式 / 兄弟库手写定义 / label 自带定义式）；只补空缺、集级护栏（族标签已人工细化的集不提案）、默认 dry-run，`--apply` 写盘后自检 59 个统计列零漂移 + 不许造行 |
 | `factors/promote_maturity.py` | 成熟度晋升：按 `MATURITY_GATES` 九道门把库分成 `active`/`oos_verified`/`experimental`/`retired`，做「相关 <0.85 + 同族 ≤2」双闸去重；默认 dry-run，`--apply` 写回，`--gate k=v` 做敏感性扫描（2026-11-05） |
 | `factors/build_technical_factors.py` | 技术面迭代/累积类指标 → 日频因子构建与入库 |
 | `factors/factor_library.py` | 因子库 CLI |
