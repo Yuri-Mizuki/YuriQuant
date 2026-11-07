@@ -100,7 +100,7 @@ def _pit_notice(notice: pd.DataFrame, cal_idx, codes) -> dict:
     if notice is None or notice.empty:
         return {}
     n = notice.copy()
-    n["ann_date"] = pd.to_datetime(n["ann_date"], errors="coerce")
+    n["ann_date"] = common.to_datetime_col(n["ann_date"])
     n = _to_num(n, ["p_change_max", "p_change_min", "net_profit_max",
                     "net_profit_min"])
     # 公告日必须可见
@@ -125,7 +125,7 @@ def _pit_express(express: pd.DataFrame, cal_idx, codes,
     if express is None or express.empty:
         return {}
     e = express.copy()
-    e["ann_date"] = pd.to_datetime(e["ann_date"], errors="coerce")
+    e["ann_date"] = common.to_datetime_col(e["ann_date"])
     e = _to_num(e, ["yoy_gr_net_profit_parent", "yoy_gr_gross_rev"])
     e = e.dropna(subset=["code", "ann_date"])
     e["eff"] = e["ann_date"]
@@ -161,7 +161,7 @@ def _pit_restricted(restricted: pd.DataFrame, cal_idx, codes) -> dict:
     if restricted is None or restricted.empty:
         return {}
     r = restricted.copy()
-    r["list_date"] = pd.to_datetime(r["list_date"], errors="coerce")
+    r["list_date"] = common.to_datetime_col(r["list_date"])
     r = _to_num(r, ["share_ratio", "share_lst"])
     r = r.dropna(subset=["code", "list_date", "share_lst"])
     r = r[r["list_date"].isin(cal_idx)]     # 只保留落在交易日历的解禁

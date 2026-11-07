@@ -65,6 +65,18 @@ def year_offset(df: pd.DataFrame, field: str, mode: str = "delta") -> pd.DataFra
     mode: delta = 当期 - 上年同期；ratio = 当期/上年同期 - 1。
     用于毛利率同比变化、单季盈利加速度、应收同比等——必须报告期精确对齐，
     不能用日频 shift（公告日不规则）。
+
+    ⚠️ **错位方向是唯一的，写反就是前视**（2026-11-07 复盘：11-04 那次"已修复"
+    其实没进代码，全库白跑一轮）。join key 的构造方式决定了方向：
+
+    * 给 ``lag`` 的 report_period **+1y** ⇒ 上年那一行的 key 落在今年 ⇒ 匹配到的是
+      ``p − 1y`` ⇒ ``_off(p) = v(p) − v(p−1y)`` ✅
+    * 给 ``lag`` 的 report_period **−1y** ⇒ 明年那一行的 key 落在今年 ⇒ 匹配到的是
+      ``p + 1y`` ⇒ ``_off(p) = v(p) − v(p+1y)``（用了未来一年报表）❌
+
+    两种写法在**正常年份上都能算出数**（都非空、都"像"同比），差别只在最近一年：
+    写错时最近 4 个报告期永远缺 ``p+1y`` ⇒ 面板尾部冻结。所以肉眼与覆盖率都发现不了，
+    只能靠 :mod:`tests.test_year_offset` 的递增序列断言兜住。
     """
     if field not in df.columns:
         return df
@@ -73,7 +85,8 @@ def year_offset(df: pd.DataFrame, field: str, mode: str = "delta") -> pd.DataFra
     d = d.dropna(subset=["report_period", field])
     d["_k"] = (d["code"].astype(str) + "_" + d["report_period"].dt.strftime("%Y-%m-%d"))
     lag = d[["code", "report_period", field]].copy()
-    lag["report_period"] = lag["report_period"] - pd.DateOffset(years=1)
+    # +1y（不是 −1y）：上年那一行要"冒充"今年，才会被今年的 key 匹配到。见 docstring。
+    lag["report_period"] = lag["report_period"] + pd.DateOffset(years=1)
     lag["_k"] = (lag["code"].astype(str) + "_" + lag["report_period"].dt.strftime("%Y-%m-%d"))
     lag = lag.drop_duplicates(subset=["_k"], keep="last").rename(
         columns={field: "_lag"})

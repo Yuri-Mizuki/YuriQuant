@@ -61,7 +61,7 @@ def load_panels() -> tuple[pd.DataFrame, pd.DataFrame]:
 def _pit_margin(margin: pd.DataFrame, cal_idx, codes) -> dict:
     """两融因子：逐股票长表 → 各因子 date×code 宽表（位移差分，T日启用）。"""
     m = margin.copy()
-    m["trade_date"] = pd.to_datetime(m["trade_date"], errors="coerce")
+    m["trade_date"] = common.to_datetime_col(m["trade_date"])
     # 归一化余额（两融明细列，单位：元）
     m["loan_bal"] = pd.to_numeric(m["margin_trade_balance"], errors="coerce")
     m["fin_bal"] = pd.to_numeric(m["borrow_money_balance"], errors="coerce")

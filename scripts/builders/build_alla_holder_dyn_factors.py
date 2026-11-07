@@ -125,24 +125,20 @@ def load_alt_tables() -> dict[str, pd.DataFrame]:
 # PIT helper：事件长表 → 滚动窗口面板
 # ---------------------------------------------------------------------------
 def ann_to_datetime(s: pd.Series) -> pd.Series:
-    """``ann_date`` → ``datetime64``，**对三种 dtype 都成立**。
+    """``ann_date`` → ``datetime64``，**对所有 dtype 都成立**（委托 :func:`data.financials.to_datetime_col`）。
 
-    🚨 为什么必须有这个函数（2026-09-20 实测事故）：
-    各数据源的 ``ann_date`` **dtype 不统一** —— akshare 系给 ``datetime64``，
-    而本项目自建的 ``cninfo_holder`` 按口径要求给 **int YYYYMMDD**。
-    直接 ``pd.DatetimeIndex(ev["ann_date"])`` 遇到 int 会把它当 **纳秒时间戳**
-    （项目既有 PIT 铁律），于是 26 万条事件全部落到 1970 → ``searchsorted``
-    一律返回 0 → **所有事件被塞进日历第一天**，产出一个人造尖峰面板。
-    **全程不抛异常**，只在覆盖率指标上留下一个不起眼的数字。
+    🚨 2026-09-20 实测事故：各数据源的 ``ann_date`` dtype 不统一（datetime64 /
+    int YYYYMMDD / **epoch 微秒**），而 ``pd.to_datetime(int)`` 只按纳秒解释 ⇒
+    26 万条事件全落到 1970 ⇒ ``searchsorted`` 恒返 0 ⇒ 所有事件被塞进日历第一天，
+    产出一个人造尖峰面板且**全程不抛异常**。
 
-    ⇒ 任何把 ``ann_date`` 变成时间轴的地方**都必须过这个函数**。
+    2026-11-07 复查：同样的错在**九张事件表**上重演，且症状换成"整块面板恒定"
+    （事件全在 1970、PIT ffill 把最后一个截面铺满全历史）—— 31 块面板中招。
+    判据（µs/ms/s/YYYYMMDD）现在只有一个实现，见 ``data.financials.to_datetime_col``。
     """
-    if pd.api.types.is_datetime64_any_dtype(s):
-        return pd.to_datetime(s)
-    if pd.api.types.is_numeric_dtype(s):
-        return pd.to_datetime(s.astype("Int64").astype(str), format="%Y%m%d", errors="coerce")
-    return pd.to_datetime(s.astype(str).str.replace("-", "", regex=False).str[:8],
-                          format="%Y%m%d", errors="coerce")
+    from data.financials import to_datetime_col
+
+    return to_datetime_col(s)
 
 
 def apply_lag(events: pd.DataFrame, lag_days: int, cal_idx) -> pd.DataFrame:

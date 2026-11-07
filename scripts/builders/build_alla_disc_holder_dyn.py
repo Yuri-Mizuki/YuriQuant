@@ -74,7 +74,7 @@ def _event_rolling(events: pd.DataFrame, cal_idx, codes,
                    value_col: str, agg: str = "sum") -> dict[str, pd.DataFrame]:
     """事件长表 → 各 code 在交易日历上的滚动窗口聚合（rolling sum）。"""
     e = events.dropna(subset=["code", "eff", value_col]).copy()
-    e["eff"] = pd.to_datetime(e["eff"])
+    e["eff"] = common.to_datetime_col(e["eff"])
     e = e[e["eff"].isin(cal_idx)]
     if e.empty:
         return {value_col: pd.DataFrame(np.nan, index=cal_idx, columns=codes)}
@@ -102,7 +102,7 @@ def _build_block_disc(block: pd.DataFrame, daily_close: pd.DataFrame,
     if block is None or block.empty:
         return {}
     b = block.copy()
-    b["trade_date"] = pd.to_datetime(b["trade_date"], errors="coerce")
+    b["trade_date"] = common.to_datetime_col(b["trade_date"])
     b = _to_num(b, ["b_share_price", "b_share_amount", "b_share_volume"])
     b = b.dropna(subset=["code", "trade_date", "b_share_price"])
     b["eff"] = b["trade_date"]
@@ -149,7 +149,7 @@ def _build_holder_dyn(share_holder: pd.DataFrame, cal_idx,
         return {}
     sh = share_holder.copy()
     for c in ("ann_date", "holder_end_date"):
-        sh[c] = pd.to_datetime(sh[c], errors="coerce")
+        sh[c] = common.to_datetime_col(sh[c])
     sh = _to_num(sh, ["holder_pct"])
     sh = sh.dropna(subset=["code", "holder_end_date", "holder_pct"])
     sh["pct"] = sh["holder_pct"]

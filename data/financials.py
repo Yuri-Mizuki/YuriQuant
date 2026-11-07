@@ -69,6 +69,52 @@ CASH_FLOW_FIELDS = (
 )
 
 
+def to_datetime_col(s: pd.Series) -> pd.Series:
+    """日期列 → ``datetime64``，三种落盘形态都能吃。
+
+    SDK 的日期列传进来可能是：
+
+    * ``datetime64``（income / balance / cash_flow 这类）；
+    * **epoch 整数**（``profit_notice`` / ``margin_detail`` / ``block_trading`` 等
+      事件表的 ``ann_date`` / ``trade_date``，实测单位是**微秒**，如
+      ``1_453_334_400_000_000`` = 2016-01-21）；
+    * ``YYYYMMDD`` 整数/字符串（``calendar``、``alt_cninfo_holder``）。
+
+    ``pd.to_datetime(int)`` 只按**纳秒**解释整数，于是微秒值落到 **1970-01-17**、
+    YYYYMMDD 落到 1970-01-01。这个错**不抛异常**：所有事件日期都早于任何交易日，
+    PIT 的 ``reindex(method="ffill")`` 就把每只股票的**最后一个值**一路前填到面板
+    第一天 —— 整块面板变成"一个截面复制 N 遍"（2026-11-07 体检发现 31 块面板如此，
+    其中 4 个还进了 920 模型的特征清单）。
+
+    单位按**中位数**判（首值可能是 0/NaT，不可靠）：2026 年附近秒 1.8e9 /
+    毫秒 1.8e12 / 微秒 1.8e15，三档相差三个数量级。
+    """
+    if s.empty:
+        return pd.to_datetime(s, errors="coerce")
+    if pd.api.types.is_datetime64_any_dtype(s):
+        return s
+
+    num = pd.to_numeric(s, errors="coerce")
+    valid = s.notna()
+    # 判据的分母必须是非空值：日期列常年带 NaN（没发过公告的股票），
+    # 用整列比例会把 [1.45e15, NaN, NaN] 这种正常列误判成字符串列。
+    if valid.any() and float(num[valid].notna().mean()) > 0.99:
+        med = float(np.nanmedian(num.to_numpy(dtype="float64")))
+        if med > 1e14:                       # epoch 微秒
+            return pd.to_datetime(num, unit="us", errors="coerce")
+        if med > 1e11:                       # epoch 毫秒
+            return pd.to_datetime(num, unit="ms", errors="coerce")
+        if med > 1e8:                        # epoch 秒
+            return pd.to_datetime(num, unit="s", errors="coerce")
+        return pd.to_datetime(num.astype("Int64").astype(str), format="%Y%m%d",
+                              errors="coerce")
+
+    txt = s.astype(str).str.strip()
+    if float(txt.str.fullmatch(r"\d{8}").mean()) > 0.99:
+        return pd.to_datetime(txt, format="%Y%m%d", errors="coerce")
+    return pd.to_datetime(txt, errors="coerce")
+
+
 def build_pit_panel(
     report_df: pd.DataFrame,
     calendar: list[int] | pd.DatetimeIndex,
@@ -95,7 +141,7 @@ def build_pit_panel(
         cal = pd.to_datetime(pd.Series(cal_list))
 
     df = report_df[["code", "ann_date", field]].copy()
-    df["ann_date"] = pd.to_datetime(df["ann_date"], errors="coerce")
+    df["ann_date"] = to_datetime_col(df["ann_date"])
     df = df.dropna(subset=["ann_date", "code"])
     df[field] = pd.to_numeric(df[field], errors="coerce")
     df = df.dropna(subset=[field])

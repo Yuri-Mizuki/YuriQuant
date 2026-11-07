@@ -31,6 +31,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from data.financials import to_datetime_col as to_datetime_col  # noqa: E402,F401
 from scripts.common.cli_common import setup_logging
 
 log = setup_logging("builders.common")
@@ -73,6 +74,9 @@ def load_close_adj(with_raw: bool = False):
     close_adj = (close_raw * bf).astype(np.float32)
     return (close_adj, close_raw) if with_raw else close_adj
 
+
+# 日期列解析的唯一实现在 data.financials（PIT 展开也走它），这里只转出口；
+# 用 `X as X` 的写法让 linter 明白这是刻意重导出而不是未使用的 import。
 
 def ffill_pit_multi(series_long: pd.DataFrame, cal_idx: pd.DatetimeIndex,
                     codes: pd.Index, value_cols: list[str]) -> dict[str, pd.DataFrame]:

@@ -81,7 +81,7 @@ def _event_window_cum(series_long, cal_idx, codes, value_col: str) -> pd.DataFra
     用于 SUE 这类"公告后短期有效、过后衰减"的事件因子——避免 PIT ffill 永久残留。
     """
     e = series_long.dropna(subset=["eff", value_col]).copy()
-    e["eff"] = pd.to_datetime(e["eff"])
+    e["eff"] = common.to_datetime_col(e["eff"])
     e = e[e["eff"].isin(cal_idx)]
     if e.empty:
         return pd.DataFrame(np.nan, index=cal_idx, columns=codes)
@@ -135,7 +135,7 @@ def _build_sue(notice, express, cal_idx, codes) -> dict[str, pd.DataFrame]:
         d = df.dropna(subset=["code", ann_col, value_col]).copy()
         d = _to_num(d, [value_col])
         d = d.dropna(subset=[value_col])
-        d[ann_col] = pd.to_datetime(d[ann_col], errors="coerce")
+        d[ann_col] = common.to_datetime_col(d[ann_col])
         d = d.dropna(subset=[ann_col])
         d["_week"] = d[ann_col].dt.to_period("W")
         sizes = d.groupby("_week")["code"].nunique()
@@ -182,7 +182,7 @@ def _build_pledge_depth(pledge, close_raw, cal_idx, codes) -> dict[str, pd.DataF
     if pledge is None or pledge.empty:
         return {}
     p = pledge.copy()
-    p["ann_date"] = pd.to_datetime(p["ann_date"], errors="coerce")
+    p["ann_date"] = common.to_datetime_col(p["ann_date"])
     p = _to_num(p, ["total_pledge_shr", "fro_shares", "FRO_SHR_TO_TOTAL_HOLDING_RATIO",
                     "total_holding_shr_ratio"])
     p = p.dropna(subset=["code", "ann_date"])

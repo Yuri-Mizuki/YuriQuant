@@ -98,7 +98,7 @@ def _pit_lhb(lhb: pd.DataFrame, cal_idx, codes) -> dict:
     if lhb is None or lhb.empty:
         return {}
     l = lhb.copy()
-    l["trade_date"] = pd.to_datetime(l["trade_date"], errors="coerce")
+    l["trade_date"] = common.to_datetime_col(l["trade_date"])
     l["buy"] = pd.to_numeric(l.get("buy_amount"), errors="coerce")
     l["sell"] = pd.to_numeric(l.get("sell_amount"), errors="coerce")
     l = l.dropna(subset=["code", "trade_date", "buy"])
@@ -119,7 +119,7 @@ def _pit_block(block: pd.DataFrame, cal_idx, codes) -> dict:
     if block is None or block.empty:
         return {}
     b = block.copy()
-    b["trade_date"] = pd.to_datetime(b["trade_date"], errors="coerce")
+    b["trade_date"] = common.to_datetime_col(b["trade_date"])
     b["amt"] = pd.to_numeric(b.get("b_share_amount"), errors="coerce")
     b["vol"] = pd.to_numeric(b.get("b_share_volume"), errors="coerce")
     b = b.dropna(subset=["code", "trade_date", "amt"])
