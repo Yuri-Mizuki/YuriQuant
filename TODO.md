@@ -405,16 +405,33 @@
   - [ ] **P0-B 重建后重跑**（部分完成）：
     - [x] 920 定版口径影响对比 → `reports/rebuild_impact_920/README.md`
     - [ ] 行业轮动主表、`report_factors` 57 因子、`industry_factor_lib` 全库扫描 —— **未做**
-  - [ ] **P0-E 定版是否切换（待拍板）**：重建后年化 16.31% → **14.96%**（−1.34pp）、
-    Sharpe 0.738 → **0.681**（−0.056）。四道预注册门槛**挂两道**（持仓重合率中位 0.794 < 0.90、
-    Sharpe −0.056 < −0.05）⇒ 按预注册规则**不得直接切换**。方向与"前视泄漏被删"一致，
-    旧读数是虚高的，但"下台阶之后还值不值得维持定版参数"需要人判断。
+  - [x] **P0-E 定版切换已拍板（2026-11-08）**：定版方案（λ=0.5 / h1020 / buffer 15/40）**一律不动**，
+    只把报数窗口定为 **2019 起**，登记为 `v2-dingban`（`status: production`），`v1-dingban` 转
+    `superseded`。caliber 实测（`--window prod --profile production`）：buffer 臂
+    **21.57% / 0.997**（top10pct 21.45% / 0.964），换手 0.210、成本 1555bp、回撤 27.7%、
+    Sharpe t_NW **2.78**（过 1.96，余量 42%）。同窗口重建前为 **23.15% / 1.062** ⇒ 前视修复的
+    代价是 **−1.58pp / −0.065**。
+    ⚠️ **门槛未过仍采纳，须知情**：四道预注册门槛挂两道（重合率 0.794 < 0.90、Sharpe −0.065 < −0.05）。
+    采纳理由是对"为什么挂"的判断而非放宽门槛 —— 差额 100% 落在 2019–2021（重合率 55–62% 的三年），
+    重合率 85–88% 的 2018/2022–2026 近乎持平 ⇒ 形态是"污染被删"而非"alpha 衰减"。
+    此判断的**失效条件**：若 2019–2021 之外的年份也开始掉，即视为衰减。
+  - [x] **P0-E′ 修正一处口径错误（2026-11-08）**：此前 `by_window.csv` 的 `prod` 行是
+    **截断日收益**得到的（23.08 → 21.45），而 buffer 策略首月持仓取决于冷启动日 ⇒ 截断 ≠ 重跑，
+    实测差 0.12pp。已改为 `caliber --window` 重跑；`prod2018` 那行恰好逐位相同（14.96/0.681），
+    因为全窗本来就起于 2018。caliber 新增 `--signal-path` 用于数据态对照（重建前信号重跑）。
   - [ ] **P0-F 重注册三个失效的计划任务**：`.env` 已补 `YQ_REPO=D:\project\YuriQuant` 与
     `YQ_PYTHON=D:\project\YuriQuant\.venv\Scripts\python.exe`（`task_scheduler show` 已能正确展开），
     但 `schtasks` 在沙箱里被禁 ⇒ 需手工跑 `python -m scripts.common.task_scheduler install rebuild_panels`
     （同病的还有 `alla_daily_rank`、`fetch_altdata_daily`）。
-  - [ ] **P0-G 基线重登记**：`config/baselines.yaml` 的 `v1-dingban` 与 λ / h20 / buffer 三份裁决的
-    收益读数**全部建立在重建前基座**上，需按新基线重跑才有资格引用（结论方向暂不受影响）。
+  - [x] **P0-G 基线重登记（2026-11-08 完成）**：`config/baselines.yaml` v4 —— 新增 `v2-dingban`
+    （caliber 实测，`reproducible_local: true`，指纹 `2bc26c866512`），`v1-dingban` 转 `superseded`。
+    表头加**规则 9**：重建面板后必须先 `buffer_arm_920 --save-sig` 重构造信号再报数
+    （caliber 读落盘面板，不会自动跟着 `panels_neu` 变）；信号落盘**不要 shift**；
+    窗口对照**不许截断日收益**，要换窗口就重跑。
+    - [x] `v1-dingban` 的 18.07% 已在 `notes` 里标死为"income 4383 补齐前 + 执行价修复前"，
+      与 v2 的 14.96%（prod2018）/ 21.57%（prod）**不可直接相减**
+    - [ ] λ / h20 / buffer 三份裁决仍在重建前基座上：本轮按"方案不动"指令**不重跑**，
+      但其收益差不得再被引用；若要做参数再优化，须在新基座上重扫
 - [x] **⑩ RAFT 式「按状态相似度给训练样本加权」在全A 主模型上已判负（11-01 深夜完成）**
   ⇒ `reports/raft_weight/README.md`。**勿再提「检索相似片段决定训练样本/窗口」这条线**。
   9 年 2118 天四臂：`time`（半衰 125 日）ΔIC **+0.0000/t 0.03**、`sim1` −0.0004/t −0.81、

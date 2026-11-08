@@ -33,6 +33,15 @@
 #    只有 `years_to_prove_arith` 与 t 统计量同口径；`years_to_prove`（几何）仅在
 #    **正收益**时偏保守（v1w 实测虚高 31%），负收益/近零时反而虚短 ⇒
 #    **跨策略比较一律用 `_arith`**。推导与反例见 `backtest/metrics.py::sharpe_arithmetic`。
+# 9. **重建面板后必须先重构造信号，再报数**（2026-11-08 新增）：`caliber.SIGNALS` 读的是
+#    **落盘的** predict 面板，定版信号里慢信号那一半来自 `panels_neu` —— 面板重算后
+#    信号面板不会自己变，caliber 会静默读到旧数据态。重建流程固定为：
+#    `buffer_arm_920 --variant defv --save-sig <SIGNALS.path> --sig-only` → `caliber`。
+#    🔑 信号落盘时**不要 shift**：T+1 由 `run_once` 内部 `shift(1)` 实现，落盘前 shift
+#    等于 T+2 成交（比生产慢一天，且数字看起来仍然"合理"）。
+#    🔑 窗口对照**不能靠截断日收益**：buffer 策略的首月持仓取决于"从哪天冷启动"，
+#    截断 2019 前的收益得到的是"2018 起跑再扔掉前一年"，不是"2019 起跑"（实测差 0.12pp）。
+#    要换窗口就重跑 `caliber --window`；要对比数据态就 `--signal-path` 换面板重跑。
 #
 # 每个 baseline 的字段
 # --------------------
@@ -51,8 +60,8 @@
 #   source             数字出处（报告路径 / 命令）
 # =============================================================================
 
-version: 3
-updated: "2026-11-05"
+version: 4
+updated: "2026-11-08"
 
 # 评估口径的规范值（caliber.py 的硬编码副本，供快速查阅；改 caliber 时同步）
 conventions:
@@ -83,8 +92,9 @@ baselines:
   # ---------------------------------------------------------------------------
   - id: v1-dingban
     created: "2026-10-02"
-    updated: "2026-10-19"
-    status: production
+    updated: "2026-11-08"
+    status: superseded        # 2026-11-08 被 v2-dingban 取代（前视修复重建 + 主口径改 2019）
+    superseded_by: v2-dingban
     label: "定版主模型 v1（920 fundind 快信号 h1020 ⊕ 慢信号 s0.5 + buffer(15/40)）"
     signal_key: dingban_fundind
     window: prod2018          # 2018 起；该起点缺可执行性掩码，2026-11-05 起降为历史口径
@@ -155,6 +165,124 @@ baselines:
          故不要按 `pred/ens_h1020__h1.parquet` 去找 —— 该文件永远不会生成。
     source: "reports/batch1_920_收尾对照表.md §⑭⑯（好机器产物，本机无副本）"
     verified_local: false
+
+  # ---------------------------------------------------------------------------
+  # v2-dingban —— 现行生产基线（2026-11-08 由莉酱拍板：定版方案不变，窗口改 2019 起）
+  #   与 v1-dingban 是**同一信号、同一执行层、同一费率、同一 buffer**，三处不同：
+  #     ① 数据态：2026-11-07 面板前视修复重建（`year_offset` 方向 + 事件表 epoch
+  #        日期解析），慢信号 72 因子里 6 个污染因子换了值；
+  #     ② 窗口：`prod2018` → `prod`（2019 起，含可执行性掩码）；
+  #     ③ 数字：第一次本机可复算（v1 的 18.07% 是旧数据态记载值）。
+  #   🚨 **拍板依据不是"数字更好"**：重建让年化从 23.15% 降到 21.57%（−1.58pp）、
+  #      Sharpe 1.062 → 0.997（−0.065），是往下走的。选它的理由只有一条 ——
+  #      旧读数的慢信号有一部分是**用未来报表算出来的**，删掉后剩下的才是真账。
+  # ---------------------------------------------------------------------------
+  - id: v2-dingban
+    created: "2026-11-08"
+    updated: "2026-11-08"
+    status: production
+    label: "定版主模型 v2（920 fundind h1020 ⊕ 慢信号 s0.5 + buffer(15/40)；前视修复后，窗口 2019 起）"
+    signal_key: dingban_fundind
+    window: prod
+    signal:
+      preproc: ortho_fundind
+      panel_source: all_a_2018_2026/panels_neu_fundind
+      ensemble: h1020
+      horizons: [1, 5, 10, 20]
+      slow_blend: 0.5
+      slow_panels_subdir: panels_neu          # 2026-11-07 已按前视修复重算（59 个因子）
+      selection_dir: reports/alla_rolling_ortho920fundind/selection
+      tradable_labels: true
+      n_factors: 920
+    execution:
+      strategy: BufferedTopFracLongOnly
+      buffer_entry: 0.15
+      buffer_exit: 0.40
+      rebalance_freq: M
+      benchmark: "000300.SH"
+    caliber:
+      profile: production
+      cost: "固定 10bp（Config.costs()，impact_model=none）"
+      execution: "open（T+1 开盘）"
+      capital: 1.0e6
+      mask: "信号预掩码 sig.shift(1).where(mask)；掩码自 2019 起有状态表"
+      source_script: "scripts/evaluation/caliber.py"
+    data_state:
+      registered: "2026-11-07 面板前视修复重建后"
+      detail: >
+        慢信号读 `panels_neu`，其中 6 个 `year_offset` 污染因子（`np_accel_sq` /
+        `margin_delta_ttm` / `sue_q` / `asset_growth_yoy` / `piotroski_f` /
+        `inv_rev_gap`）与 5 个事件族面板已重算；`defv_sig__h1.parquet` 随之重构造
+        （月均秩相关 0.933 vs 重建前）。
+      caveats: >
+        ⚠️ pred 面板止 **2026-09-23**（快腿未重建，36 份年度特征清单无污染因子 ⇒ 不受影响）；
+        `income.parquet` 冻结在 **2026-06-30**（Q3 部分入库已回滚）。
+        ⇒ 本条覆盖 2019-01-02..2026-09-23 共 1876 个交易日，**不含 9 月末之后的行情**。
+    metrics:
+      window_label: "2019-01-02..2026-09-23（1876 日 / 7.44 年）"
+      fingerprint: 2bc26c866512
+      profiles:
+        production:
+          eqw_top10pct:
+            ann: 0.2145
+            sharpe: 0.9643
+            sharpe_arith: 0.986
+            sharpe_t_stat: 2.709        # NW 校正，过 1.96 但余量 38%
+            turnover: 0.5481
+            cost_bp: 4125
+            max_dd: 0.2895
+            n_active: 419
+            years_to_prove_arith: 4.0
+          eqw_buf0.15_0.4:
+            ann: 0.2157
+            sharpe: 0.9974
+            sharpe_arith: 1.0124
+            sharpe_t_stat: 2.784        # NW 校正，余量 42%
+            turnover: 0.2103
+            cost_bp: 1555
+            max_dd: 0.2768
+            n_active: 628
+            years_to_prove_arith: 3.7
+      # 回溯口径：prod2018（2018 起，含缺掩码年份）仅用于对齐 v1 的 18.07%，不可并列
+      hist_profile:
+        window: prod2018
+        window_label: "2018-01-02..2026-09-23（2119 日）"
+        eqw_buf0.15_0.4: {ann: 0.1496, sharpe: 0.681}
+        eqw_top10pct: {ann: 0.1504, sharpe: 0.665}
+      # 同窗口、同执行层的**重建前**读数（用备份信号重跑），差值即前视修复的代价
+      prerebuild_same_window:
+        signal: "reports/frontier_audit_920_reval/defv_sig__h1.parquet.bak_20261021_prerebuild"
+        fingerprint: 8eaa608968ef
+        eqw_buf0.15_0.4: {ann: 0.2315, sharpe: 1.0621, sharpe_t_stat: 2.927,
+                          turnover: 0.2010, cost_bp: 1601, max_dd: 0.2803}
+        eqw_top10pct: {ann: 0.2270, sharpe: 1.0125, sharpe_t_stat: 2.819}
+        delta_buf_arm: {ann_pp: -1.58, sharpe: -0.065}
+    fingerprint: 2bc26c866512
+    reproducible_local: true
+    regen_cmd: >
+      ① 重构造定版信号（慢信号随 panels_neu 变 ⇒ **重建后必跑**，否则 caliber 读到旧信号）：
+         D:/project/YuriQuant/.venv/Scripts/python.exe -m scripts.evaluation.buffer_arm_920
+         --pred-dir reports/alla_rolling_ortho920fundind --variant defv
+         --save-sig reports/frontier_audit_920_reval/defv_sig__h1.parquet --sig-only
+      ② 报数：
+         D:/project/YuriQuant/.venv/Scripts/python.exe -m scripts.evaluation.caliber
+         --signal dingban_fundind --window prod --profile production
+         --json reports/rebuild_impact_920/caliber_v2_prod.json
+    source: "reports/rebuild_impact_920/caliber_v2_prod.json（2026-11-08 caliber 产出）；重建影响与逐年拆解见 reports/rebuild_impact_920/README.md"
+    verified_local: true
+    notes: >
+      **拍板记录（2026-11-08，由莉酱）**：定版方案（λ=0.5 混合、h1020、buffer 15/40）一律不动，
+      只把报数窗口定为 2019 起，此后引用"定版收益"即本条。
+      ⚠️ **预注册门槛未过而仍采纳**，须知情：`reports/rebuild_impact_920` 在重建前写死四门，
+      重合率（中位 0.794 < 0.90）与 Sharpe（−0.056 < −0.05，本条重跑后 −0.065）两道挂掉。
+      采纳的理由是对"门槛为什么没过"的判断，不是门槛被放宽：差额 100% 集中在 2019–2021
+      （重合率仅 55–62% 的三年），重合率 85–88% 的 2018/2022–2026 几乎是平的
+      ⇒ 形态是"污染被删"，不是"alpha 衰减"。若日后 2019–2021 之外的年份也开始掉，此判断即失效。
+      ⚠️ **未做的验证**：λ=0.5 / h20 / buffer(15/40) 三份裁决都在**重建前**基座上做的，
+      本轮按"方案不动"的指令没有重跑。慢腿权重变化约 7% 量级，最优 λ 理论上可能微移 ——
+      若将来做参数再优化，须在新基座上重扫，不得直接引用旧裁决的收益差。
+      ✅ 顺带修正：v1 的 `18.07%` 是 income 4383 补齐**前**的旧数据态，且是执行价修复前的
+      open 产物；本条 14.96%（prod2018）/ 21.57%（prod）都是修复后本机实测，两者不可直接相减。
 
   # ---------------------------------------------------------------------------
   # v1w —— 本机工作基线（882 ortho 的定版执行层形态）
