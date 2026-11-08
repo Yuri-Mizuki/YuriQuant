@@ -42,6 +42,14 @@ log = logging.getLogger("rebuild_impact_920")
 LAM = 0.5
 ENTRY, EXIT_FRAC = 0.15, 0.40
 
+#: 并列报数的窗口起点（与 ``baselines.yaml`` 的 ``conventions.windows`` 对齐）。
+#: `prod2018` 是历史口径（缺可执行性掩码），`prod` 是 2026-11-05 起的主口径。
+WINDOWS = (
+    ("prod2018", "2018-01-01"),
+    ("prod", "2019-01-01"),
+    ("since2021", "2021-01-01"),
+)
+
 #: 预注册门槛：四项全过才算「重建可无争议切换」。
 GATES = {
     "holdings_overlap_med": (">=", 0.90, "持仓重合率中位数"),
@@ -123,6 +131,57 @@ def _slow_rank_corr(old: pd.DataFrame, new: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def _by_year(joined: pd.DataFrame, ov: pd.DataFrame) -> pd.DataFrame:
+    """逐年拆解：前后各自复利收益、差额、以及当年的持仓重合率中位数。
+
+    只看全窗年化（16.31 → 14.96）回答不了"是策略退化了还是口径变诚实了"。逐年看
+    才能分辨：如果差额集中在某几年、而那几年恰好是重合率最低的年份，那就是**修掉了
+    在那几年生效的污染**，不是收益来源整体衰减；如果差额平摊到每一年，才更像退化。
+    """
+    idx = pd.DatetimeIndex(joined.index)
+    rows = []
+    for y, g in joined.groupby(idx.year):
+        o = float(np.prod(1.0 + g["old"].to_numpy()) - 1.0)
+        n = float(np.prod(1.0 + g["new"].to_numpy()) - 1.0)
+        ov_y = ov[pd.DatetimeIndex(ov["date"]).year == y] if len(ov) else ov
+        rows.append({
+            "year": int(y),
+            "annual_old": o,
+            "annual_new": n,
+            "delta_pp": (n - o) * 100,
+            "overlap_med": float(ov_y["overlap_min"].median()) if len(ov_y) else float("nan"),
+        })
+    return pd.DataFrame(rows)
+
+
+def _by_window(joined: pd.DataFrame) -> pd.DataFrame:
+    """同一份日收益、不同起点重算 —— 让"窗口选择比修复本身影响更大"这件事可见。
+
+    2018 是 −24% 的一年，而 `baselines.yaml` 自 2026-11-05 起把主口径改成 `prod` = 2019 起
+    （2018 缺可执行性掩码，已降为 `prod2018` 历史口径）。若报告只给 2018 起的数字，
+    读者会把"换了窗口"误读成"策略退化"，故这里把三条起点并列出来。
+    """
+    from backtest.metrics import sharpe_ratio
+
+    rows = []
+    for label, start in WINDOWS:
+        rec = {"window": label, "start": start}
+        for tag in ("old", "new"):
+            r = joined[tag][joined.index >= pd.Timestamp(start)].dropna()
+            if len(r) < 60:
+                rec[f"{tag}_annual"] = float("nan")
+                rec[f"{tag}_sharpe"] = float("nan")
+                rec[f"{tag}_days"] = len(r)
+                continue
+            n = len(r)
+            rec[f"{tag}_annual"] = float(np.prod(1.0 + r.to_numpy()) ** (252.0 / n) - 1.0)
+            rec[f"{tag}_sharpe"] = float(sharpe_ratio(r))
+            rec[f"{tag}_days"] = n
+        rec["delta_pp"] = (rec["new_annual"] - rec["old_annual"]) * 100
+        rows.append(rec)
+    return pd.DataFrame(rows)
+
+
 def do_compare(args) -> None:
     base = _snapshot_dir(Path(args.out))
     if not (base / "metrics.csv").exists():
@@ -138,6 +197,13 @@ def do_compare(args) -> None:
            "holdings": got["holdings"], "slow": got["slow"]}
 
     dest = Path(args.out)
+    # 重建后的日收益也落盘：一次 _collect 约 2.5 分钟，不存就得为了改一个派生统计重跑。
+    aft = dest / "after"
+    aft.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame([got["metrics"]]).to_csv(aft / "metrics.csv", index=False,
+                                          encoding="utf-8-sig")
+    got["daily"].rename("ret").to_frame().to_parquet(aft / "daily_returns.parquet")
+    got["holdings"].to_parquet(aft / "holdings.parquet", index=False)
     ov = _holdings_overlap(old["holdings"], new["holdings"])
     ov.to_csv(dest / "holdings_overlap.csv", index=False, encoding="utf-8-sig")
     sc = _slow_rank_corr(old["slow"], new["slow"])
@@ -178,6 +244,10 @@ def do_compare(args) -> None:
     gate_tab = pd.DataFrame(rows)
     gate_tab.to_csv(dest / "gate_check.csv", index=False, encoding="utf-8-sig")
     pd.DataFrame([metrics]).to_csv(dest / "summary.csv", index=False, encoding="utf-8-sig")
+    by_year = _by_year(joined, ov)
+    by_year.to_csv(dest / "by_year.csv", index=False, encoding="utf-8-sig")
+    by_win = _by_window(joined)
+    by_win.to_csv(dest / "by_window.csv", index=False, encoding="utf-8-sig")
 
     print()
     print("== 重建前后（λ=0.5 定版口径）")
@@ -191,6 +261,23 @@ def do_compare(args) -> None:
     print(f"   持仓重合率 中位 {metrics['holdings_overlap_med']:.3f} / 最低 "
           f"{metrics['holdings_overlap_min']:.3f}（{metrics['n_rebalances']} 个调仓日）")
     print(f"   慢信号秩相关 中位 {metrics['slow_rank_corr_med']:.3f}")
+    print("\n-- 逐年（复利；overlap = 当年持仓重合率中位数）--")
+    ytab = by_year.copy()
+    for c in ("annual_old", "annual_new", "overlap_med"):
+        ytab[c] = ytab[c].map(lambda v: f"{v*100:6.1f}%")
+    ytab["delta_pp"] = ytab["delta_pp"].map(lambda v: f"{v:+6.2f}")
+    print(ytab.to_string(index=False))
+    print("   ↑ 差额集中在 overlap 最低的年份 ⇒ 是修掉了那几年生效的污染，不是收益整体衰减")
+    print("\n-- 同一份收益、不同窗口起点 --")
+    wtab = by_win.copy()
+    for c in ("old_annual", "new_annual"):
+        wtab[c] = wtab[c].map(lambda v: f"{v*100:6.2f}%")
+    wtab["old_sharpe"] = wtab["old_sharpe"].map(lambda v: f"{v:.3f}")
+    wtab["new_sharpe"] = wtab["new_sharpe"].map(lambda v: f"{v:.3f}")
+    wtab["delta_pp"] = wtab["delta_pp"].map(lambda v: f"{v:+6.2f}")
+    print(wtab[["window", "start", "old_annual", "new_annual", "delta_pp",
+                "old_sharpe", "new_sharpe", "old_days"]].to_string(index=False))
+    print("   ↑ 窗口起点的影响大于重建本身；2018（−24%）属 prod2018 历史口径")
     print("\n-- 预注册门槛 --")
     print(gate_tab[["label", "threshold", "value", "pass"]].to_string(index=False))
     if gate_tab["pass"].all():
