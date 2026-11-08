@@ -182,6 +182,43 @@ def _by_window(joined: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+#: 窗口对照的**权威**来源：caliber 四份产物（窗口 × 数据态）。
+#: 🚨 不许用截断日收益代替 —— 见 :func:`_by_window_rerun` 的注释。
+CALIBER_WINDOW_JSONS: dict[str, tuple[str, str]] = {
+    "prod": ("caliber_v1_prod_prerebuild.json", "caliber_v2_prod.json"),
+    "prod2018": ("caliber_v1_prod2018_prerebuild.json", "caliber_v2_prod2018.json"),
+}
+CALIBER_WINDOW_START: dict[str, str] = {"prod": "2019-01-01", "prod2018": "2018-01-01"}
+
+
+def _by_window_rerun(dest: Path) -> pd.DataFrame | None:
+    """从 caliber 产物拼窗口对照表（**重跑**口径，非截断）。
+
+    为什么不能用 :func:`_by_window`：buffer 策略的首月持仓取决于"从哪天冷启动"。
+    截断日收益得到的是「2018 起跑、扔掉 2018 的收益」，与「2019 起跑」差 0.12pp
+    （实测：截断 21.45%/0.993 vs 重跑 21.57%/0.997）——数字都"看着合理"，
+    正是这种口径错误最难被发现的地方。窗口差异必须重跑 ``caliber --window``。
+
+    Returns:
+        读完的表；若四份 JSON 不齐返回 ``None``（调用方保留截断表并告警）。
+    """
+    rows = []
+    for window, (old_f, new_f) in CALIBER_WINDOW_JSONS.items():
+        po, pn = dest / old_f, dest / new_f
+        if not (po.exists() and pn.exists()):
+            return None
+        rec: dict = {"window": window, "start": CALIBER_WINDOW_START.get(window, "")}
+        for tag, path in (("old", po), ("new", pn)):
+            blob = json.loads(path.read_text(encoding="utf-8"))
+            arm = blob["arms"].get("eqw_buf0.15_0.4") or {}
+            rec[f"{tag}_annual"] = float(arm.get("ann", float("nan")))
+            rec[f"{tag}_sharpe"] = float(arm.get("sharpe", float("nan")))
+            rec[f"{tag}_days"] = int(blob["context"].get("n_days", 0))
+        rec["delta_pp"] = (rec["new_annual"] - rec["old_annual"]) * 100
+        rows.append(rec)
+    return pd.DataFrame(rows)
+
+
 def do_compare(args) -> None:
     base = _snapshot_dir(Path(args.out))
     if not (base / "metrics.csv").exists():
@@ -246,7 +283,14 @@ def do_compare(args) -> None:
     pd.DataFrame([metrics]).to_csv(dest / "summary.csv", index=False, encoding="utf-8-sig")
     by_year = _by_year(joined, ov)
     by_year.to_csv(dest / "by_year.csv", index=False, encoding="utf-8-sig")
-    by_win = _by_window(joined)
+    by_win = _by_window_rerun(dest)
+    if by_win is None:
+        by_win = _by_window(joined)
+        by_win["source"] = "truncated"
+        log.warning("窗口对照缺 caliber 产物 ⇒ 退回**截断**日收益（冷启动不同，"
+                    "prod 行会偏低约 0.1pp）。补齐方式见 README「窗口」一节")
+    else:
+        by_win["source"] = "caliber rerun"
     by_win.to_csv(dest / "by_window.csv", index=False, encoding="utf-8-sig")
 
     print()

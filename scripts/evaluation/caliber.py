@@ -626,6 +626,11 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--signal", default="ens_h1h5", choices=sorted(SIGNALS))
     ap.add_argument("--window", default=DEFAULT_WINDOW, choices=sorted(WINDOWS))
+    ap.add_argument("--signal-path", default="",
+                    help="直接指定信号面板，覆盖 --signal 的登记路径。用途："
+                         "同一构造在**不同数据态**下的对照（如重建前后各存一份信号，"
+                         "分别跑同一窗口），或未登记的临时面板。"
+                         "⚠️ 用此参数时结果**不是**登记信号，不得当作条目值")
     ap.add_argument("--profile", default=DEFAULT_PROFILE,
                     choices=sorted(PROFILES) + ["custom"],
                     help="口径组合：production（生产口径，默认）/ fair（研究压力）/ custom")
@@ -657,9 +662,13 @@ def main() -> int:
         prof_name, cost_kind, execution, capital, note = (
             p.name, p.cost, p.execution, p.capital, p.note)
 
-    ctx = load_context(signal=args.signal, window=args.window, execution=execution)
+    ctx = load_context(signal=args.signal, window=args.window, execution=execution,
+                       pred_path=args.signal_path or None)
     cost = cost_profile(cost_kind)
     print(describe(ctx, cost_kind, capital, prof_name))
+    if args.signal_path:
+        print(f"  ⚠️ 信号面板被 --signal-path 覆盖：{args.signal_path}"
+              "（非同登记面板，结果仅作数据态对照）")
     print(f"  profile 说明：{note}")
     out = {}
     for tag, strat in _arm_strategies(args.buffer, ""):

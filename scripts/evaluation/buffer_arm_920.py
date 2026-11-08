@@ -39,6 +39,12 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--variant", default="h1020", choices=["h1020", "defv"],
                     help="h1020=四 horizon 秩平均；defv=定版 h1020⊕s0.5"
                          "（0.5·rank(h1020)+0.5·rank(slow)，E3 口径复刻）")
+    ap.add_argument("--save-sig", default="",
+                    help="把构造出的信号面板落盘（caliber 的 SIGNALS 路径用）。"
+                         "慢信号随 panels_neu 重建而变 ⇒ 重建后必须重构造，"
+                         "否则 caliber 读到的是旧数据态的定版信号")
+    ap.add_argument("--sig-only", action="store_true",
+                    help="只构造并落盘信号，不跑回测（省掉两个臂的等待）")
     args = ap.parse_args(argv)
 
     from backtest.costs import default_costs
@@ -64,6 +70,18 @@ def main(argv: list[str] | None = None) -> None:
             base, sig.index, 24, 2, 0.5, 12, log=print)
         sig = 0.5 * sig.rank(axis=1, pct=True) + 0.5 * slow.rank(axis=1, pct=True)
         log.info("定版变体：h1020⊕s0.5 构造完成（slow 面板 %d 日）", slow.shape[0])
+
+    if args.save_sig:
+        # 落盘的是**未 shift 的信号**（date × code，收日收盘可得）——与 caliber
+        # 的 ``ctx.pred`` 语义一致：T+1 口径由 ``run_once`` 内部 shift(1) 实现。
+        # 如在这里就 shift，caliber 会再 shift 一次，等于 T+2 成交。
+        p = ROOT / args.save_sig
+        p.parent.mkdir(parents=True, exist_ok=True)
+        sig.to_parquet(p)
+        log.info("信号已落盘：%s  (%d 日 × %d 股)", p, sig.shape[0], sig.shape[1])
+    if args.sig_only:
+        log.info("--sig-only：跳过回测（%.1fs）", time.time() - t0)
+        return
 
     close = base["close"]
     mask = base["mask"].astype(bool)
