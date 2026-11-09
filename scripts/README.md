@@ -188,6 +188,7 @@
 | 脚本 | 说明 |
 |---|---|
 | `portfolio/compare_portfolio_methods.py` | 组合优化方法对比脚本（P2，2026-08-14） |
+| `portfolio/corr_sector.py` | 相关性行业归属面板（"长得像谁"）：β 残差相关 + 季度 PIT 刷新，配套与申万的重合率/迁移报告。 |
 | `portfolio/etf_breaker_h2h.py` | ETF 轮动 · 熔断触发后「降档五衡」能不能救：条件前瞻头对头 |
 | `portfolio/etf_breaker_probe.py` | ETF 轮动 · 熔断降仓实验：「回撤触 −15% 就减仓」到底划不划算 |
 | `portfolio/etf_champ_maxw_scan.py` | ETF 磐石（``champ``）· 单只权重上限 ``max_weight`` 扫描（相位平均口径）。 |
@@ -217,8 +218,10 @@
 | `portfolio/etf_weight_probe.py` | 权重层质疑核查（2026-10-29） |
 | `portfolio/etf_weight_source.py` | 收益来源分解：选标、集中、池子各自贡献多少（README §4.5）。 |
 | `portfolio/generate_signals.py` | 每日交易信号生成脚本（P3，2026-08-20） |
+| `portfolio/industry_neff_probe.py` | 31 个申万一级的「有效独立方向数」诊断：参与率 / 有效秩 / 零假设对照 / Top5 跨簇。 |
 | `portfolio/industry_rotation.py` | 行业池轮动线（独立实验线，不与 ETF 三锋混跑）。 |
 | `portfolio/multi_period_backtest.py` | 多期组合执行回测脚本（P3，2026-08-20） |
+| `portfolio/neutralize_group_ab.py` | 分组哑变量 A/B：申万 / 相关性簇 / 随机分组安慰剂，看因子可交易 IC 变不变。 |
 | `portfolio/report_replica.py` | 研报复现线（国泰海通 2026-10-29《七维共振》）· 只做可行的部分。 |
 | `portfolio/run_etf_rotation.py` | ETF 轮动最小闭环回测脚本 |
 
