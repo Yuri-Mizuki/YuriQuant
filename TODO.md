@@ -365,7 +365,7 @@
   - [ ] **⑨·补·4·P2 holdings-based 归因**：`panels_barra/*.parquet` 有个股 13 风格暴露，
     聚合到 31 行业再乘权重可把 R² 抬几个点；但 return-based 已 R² 0.45/t 4.35，只在升级风险模型时才做。
 
-- [x] **⑨·补·6 分组口径探针（2026-11-09，判负）** → `reports/industry_rotation/README.md` §七
+- [x] **⑨·补·6 分组口径探针（2026-11-09，判负）** → `reports/industry_rotation/README.md` §八
   起点：映翡量化 2026-11-09 转述《Synthetic Sector Classification for Statistical Relative
   Valuation》——用「个股与行业 ETF 的相关性」替代官方行业标签当分组哑变量。两问：
   ① 31 个行业是不是"假截面"（到底几注独立赌注）；② 换哑变量能不能换出 IC。
