@@ -353,41 +353,84 @@ def fit_diagnostic(pred: pd.Series, ret: pd.Series) -> pd.DataFrame:
     ])
 
 
+def ar_r2(ret: pd.Series, k: int) -> tuple[float, int]:
+    """AR(``k``) 对日收益的**样本内** R²（含截距，最小二乘）。返回 (R², n)。"""
+    y = ret.to_numpy()
+    x = np.column_stack([ret.shift(i).to_numpy() for i in range(1, k + 1)]
+                        + [np.ones(len(ret))])
+    ok = np.isfinite(x).all(axis=1) & np.isfinite(y)
+    beta, *_ = np.linalg.lstsq(x[ok], y[ok], rcond=None)
+    p = x[ok] @ beta
+    n = int(ok.sum())
+    return float(1 - ((y[ok] - p) ** 2).sum()
+                 / ((y[ok] - y[ok].mean()) ** 2).sum()), n
+
+
+def oos_ar_r2(ret: pd.Series, k: int, win: int = 250) -> tuple[float, int]:
+    """AR(``k``) 的**滚动样本外** R²（用过去 ``win`` 天估参，预测次日）。
+
+    这才是「能用的可预测性」：样本内 R² 会随 k 单调增长（纯噪声也增长），
+    只有样本外 R² 才能区分「真信号」与「过拟合」。
+    """
+    y = ret.to_numpy()
+    pred = np.full(len(y), np.nan)
+    for t in range(win, len(y)):
+        x = np.column_stack([ret.shift(i).to_numpy()[:t] for i in range(1, k + 1)])
+        ok = np.isfinite(x).all(axis=1)
+        if ok.sum() < win // 2:
+            continue
+        xs = np.column_stack([x[ok], np.ones(int(ok.sum()))])
+        beta, *_ = np.linalg.lstsq(xs, y[:t][ok], rcond=None)
+        xt = np.array([ret.iloc[t - i] for i in range(1, k + 1)] + [1.0])
+        if np.isfinite(xt).all():
+            pred[t] = float(xt @ beta)
+    ok = np.isfinite(pred) & np.isfinite(y)
+    return float(1 - ((y[ok] - pred[ok]) ** 2).sum()
+                 / ((y[ok] - y[ok].mean()) ** 2).sum()), int(ok.sum())
+
+
 def predictability_ceiling(feat: pd.DataFrame, ret: pd.Series) -> pd.DataFrame:
-    """「大盘方向预测效果差」的**定量**版本（2026-11-11 由莉酱追问后补算）。
+    """「大盘方向预测效果差」的**定量**版本（2026-11-11，两轮修正后）。
 
-    ``timing_probe`` 的结论「择时不行」缺一个参照系——「差」是相对什么差？
-    本节把它落成三个可判定的数：
+    ⚠️ **修正史（重要）**：第一版把「AR(1) 样本内 R² = ρ² = 0.00194」写成
+    「R² 天花板」——**这是错的**（由莉酱 2026-11-11 指出）。样本内 R² **随 lag
+    数单调增长**（实测 AR(120) 达 0.0552），因为每加一个参数都能"解释"掉一点噪声。
+    正确的三个量是：
 
-    1. **R² 天花板**：lag1 自相关 ρ ⇒ 最优线性 R² = ρ²；lag1~5 自回归的
-       **样本内** R²（用了未来信息，所以是任何样本外模型的严格上界）。
-    2. **Grinold IR = IC·√breadth**：同一公式算选股与择时，看量级是否对得上实测。
-       选股 IC 0.1038（`pool_scope_probe` 全A 实测）/ 择时 ρ。
-    3. **盈亏平衡 R²**：月频执行成本 / 波动 ⇒ 所需 ρ ⇒ 所需 R²，与现实的比。
+    1. **噪声地板**：零假设（纯噪声）下 ``E[R²] = k/n``。样本内 R² 必须减掉它
+       才是「真信号」。实测各阶扣噪声后 **稳定在 0.0015~0.0023**、不随 k 增长
+       ⇒ 这才是真正的可预测性量级。
+    2. **样本外 R²**：唯一能直接用的量。AR(1..60) 实测 **全部为负**
+       （−0.0016 ~ −0.0872）⇒ 连那点样本内信号都估不出来。
+    3. **盈亏平衡 R²**：月频成本 / 波动 ⇒ 所需 R²，与现实比。
 
     ⚠️ ``XS_IC`` 来自 ``reports/README.md`` 的 `pool_scope_probe` 条目（全A 0.1038），
     **不是本脚本算出**，仅作对照用的外部锚点；其余全部由本函数实测。
     """
     vol = float(ret.std() * np.sqrt(252))
     ac1 = float(ret.corr(ret.shift(1)))
-    r2_ac1 = ac1 ** 2
-
-    x = np.column_stack([ret.shift(k).to_numpy() for k in range(1, 6)]
-                        + [np.ones(len(ret))])
-    y = ret.to_numpy()
-    ok = np.isfinite(x).all(axis=1) & np.isfinite(y)
-    beta, *_ = np.linalg.lstsq(x[ok], y[ok], rcond=None)
-    pred = x[ok] @ beta
-    r2_ar5 = float(1 - ((y[ok] - pred) ** 2).sum()
-                   / ((y[ok] - y[ok].mean()) ** 2).sum())
+    r2_1, n_1 = ar_r2(ret, 1)
+    r2_5, n_5 = ar_r2(ret, 5)
+    r2_20, n_20 = ar_r2(ret, 20)
+    r2_120, n_120 = ar_r2(ret, 120)
 
     rows = [
         {"item": "市场年化波动", "value": vol},
         {"item": "lag1 自相关 rho", "value": ac1},
-        {"item": "R2 天花板(rho^2)", "value": r2_ac1},
-        {"item": "R2 lag1~5 自回归(样本内)", "value": r2_ar5},
-        {"item": "每日可解释幅度_bp(lag1~5)", "value": ret.std() * np.sqrt(r2_ar5) * 1e4},
+        {"item": "AR(1) 样本内 R2", "value": r2_1},
+        {"item": "AR(1) 噪声地板(k/n)", "value": 1.0 / n_1},
+        {"item": "AR(1) 扣噪声真信号", "value": r2_1 - 1.0 / n_1},
+        {"item": "AR(5) 样本内 R2", "value": r2_5},
+        {"item": "AR(5) 噪声地板(k/n)", "value": 5.0 / n_5},
+        {"item": "AR(5) 扣噪声真信号", "value": r2_5 - 5.0 / n_5},
+        {"item": "AR(20) 样本内 R2", "value": r2_20},
+        {"item": "AR(20) 扣噪声真信号", "value": r2_20 - 20.0 / n_20},
+        {"item": "AR(120) 样本内 R2", "value": r2_120},
+        {"item": "AR(120) 扣噪声真信号", "value": r2_120 - 120.0 / n_120},
     ]
+    for k in (1, 5, 20, 60):
+        r2o, no = oos_ar_r2(ret, k)
+        rows.append({"item": f"AR({k}) 样本外 R2", "value": r2o})
 
     # Grinold：同一公式，两个目标
     ic_xs = XS_IC
@@ -453,6 +496,21 @@ def self_check() -> None:
     lo, h = 100, 21
     end = max(0, lo - h + 1)
     assert dates[end - 1] <= dates[lo - h], "训练标签窗口越界（会泄漏未来收益）"
+
+    # 🚨 口径守卫（2026-11-11 由莉酱指出后补）：样本内 R² 随 lag 数**单调增长**，
+    # 任何单一 lag 的样本内 R² 都**不是**"天花板"。用纯噪声验证这一点。
+    rng = np.random.default_rng(7)
+    noise = pd.Series(rng.standard_normal(3000), index=pd.bdate_range("2010-01-01",
+                                                                    periods=3000))
+    r2_1, _ = ar_r2(noise, 1)
+    r2_20, _ = ar_r2(noise, 20)
+    assert r2_20 > r2_1, "样本内 R2 应随 lag 数增长；若不增长说明实现有误"
+    # 且纯噪声的样本内 R² 应贴近噪声地板 k/n（±3 个地板以内）
+    assert r2_20 < 5 * 20 / 3000, f"纯噪声 AR(20) R2 异常偏大：{r2_20:.4f}"
+
+    # 样本外 R² 在纯噪声上应 <= 0 附近（不得系统性为正）
+    r2o, _ = oos_ar_r2(noise, 5, win=250)
+    assert r2o < 0.002, f"纯噪声样本外 R2 不应为正：{r2o:.5f}"
     print("[self_check] OK")
 
 
