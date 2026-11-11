@@ -121,6 +121,7 @@
 | `evaluation/tabpfn_rolling_compare.py` | 批次 8：表格基础模型对照（TabPFN-3.5 / TabICL 2.2 vs LightGBM）滚动 runner |
 | `evaluation/text_factor_probe.py` | 论文族 `pap_*` / 情绪族 `txt_*` 的生产口径收尾评估（P0）。 |
 | `evaluation/timing_probe.py` | 大盘择时（市场状态 → 仓位乘数）探针。 |
+| `evaluation/timing_daily_train_probe.py` | 择时第三格：**日频训练 + 月频执行**（含 R²/命中率/错位诊断、恒定仓位对照、安慰剂）。 |
 | `evaluation/views_arm_920.py` | 批次 12④：观点注入三臂对照（BL 优化层 vs 预测层 vs 不注入）。 |
 | `evaluation/walk_forward.py` | 三段样本外验证（walk-forward）：train 挖 → valid 选 → test 验 |
 | `evaluation/walk_forward_model.py` | 模型层滚动训练 —— Predictor 的 walk-forward 编排 |
