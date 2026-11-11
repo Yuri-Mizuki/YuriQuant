@@ -84,6 +84,18 @@ FEATS = ("mom5", "mom20", "mom60", "vol20", "disp20", "sizesp", "breadth", "draw
 #: 相位：月频调仓日在月内的第 n 个交易日（定版 = 0）。
 PHASES = tuple(range(6))
 
+#: 成本与换手锚点（全部来自本项目实测，非假设）：
+#: ``COST_BP`` = 单边 36bp 往返（``Config.costs()``）；
+#: ``TURNOVER_MONTHLY`` = 11.6 次/年（`solo_weekly` 月频实测）；
+#: ``TURNOVER_DAILY`` = 178.8 次/年（`solo_weekly` 日频实测）。
+COST_BP = 36.0
+TURNOVER_MONTHLY = 11.6
+TURNOVER_DAILY = 178.8
+
+#: 选股横截面 IC 的外部锚点：``pool_scope_probe`` 全A 实测 0.1038
+#: （见 ``reports/README.md``）。**不是本脚本算出**，仅作 Grinold 对照。
+XS_IC = 0.1038
+
 
 # ---------------------------------------------------------------------------
 # 数据
@@ -341,6 +353,72 @@ def fit_diagnostic(pred: pd.Series, ret: pd.Series) -> pd.DataFrame:
     ])
 
 
+def predictability_ceiling(feat: pd.DataFrame, ret: pd.Series) -> pd.DataFrame:
+    """「大盘方向预测效果差」的**定量**版本（2026-11-11 由莉酱追问后补算）。
+
+    ``timing_probe`` 的结论「择时不行」缺一个参照系——「差」是相对什么差？
+    本节把它落成三个可判定的数：
+
+    1. **R² 天花板**：lag1 自相关 ρ ⇒ 最优线性 R² = ρ²；lag1~5 自回归的
+       **样本内** R²（用了未来信息，所以是任何样本外模型的严格上界）。
+    2. **Grinold IR = IC·√breadth**：同一公式算选股与择时，看量级是否对得上实测。
+       选股 IC 0.1038（`pool_scope_probe` 全A 实测）/ 择时 ρ。
+    3. **盈亏平衡 R²**：月频执行成本 / 波动 ⇒ 所需 ρ ⇒ 所需 R²，与现实的比。
+
+    ⚠️ ``XS_IC`` 来自 ``reports/README.md`` 的 `pool_scope_probe` 条目（全A 0.1038），
+    **不是本脚本算出**，仅作对照用的外部锚点；其余全部由本函数实测。
+    """
+    vol = float(ret.std() * np.sqrt(252))
+    ac1 = float(ret.corr(ret.shift(1)))
+    r2_ac1 = ac1 ** 2
+
+    x = np.column_stack([ret.shift(k).to_numpy() for k in range(1, 6)]
+                        + [np.ones(len(ret))])
+    y = ret.to_numpy()
+    ok = np.isfinite(x).all(axis=1) & np.isfinite(y)
+    beta, *_ = np.linalg.lstsq(x[ok], y[ok], rcond=None)
+    pred = x[ok] @ beta
+    r2_ar5 = float(1 - ((y[ok] - pred) ** 2).sum()
+                   / ((y[ok] - y[ok].mean()) ** 2).sum())
+
+    rows = [
+        {"item": "市场年化波动", "value": vol},
+        {"item": "lag1 自相关 rho", "value": ac1},
+        {"item": "R2 天花板(rho^2)", "value": r2_ac1},
+        {"item": "R2 lag1~5 自回归(样本内)", "value": r2_ar5},
+        {"item": "每日可解释幅度_bp(lag1~5)", "value": ret.std() * np.sqrt(r2_ar5) * 1e4},
+    ]
+
+    # Grinold：同一公式，两个目标
+    ic_xs = XS_IC
+    rows += [
+        {"item": "选股 IC(外部锚点 pool_scope_probe)", "value": ic_xs},
+        {"item": "选股 IR(5000x12)", "value": ic_xs * np.sqrt(5000 * 12)},
+        {"item": "选股 IR(实持 8 只 x12)", "value": ic_xs * np.sqrt(8 * 12)},
+        {"item": "择时 IR 日频(rho*sqrt252)", "value": ac1 * np.sqrt(252)},
+        {"item": "择时 IR 月频(rho_m*sqrt12)", "value": np.sqrt(0.00105) * np.sqrt(12)},
+    ]
+
+    # 盈亏平衡
+    cost_m = TURNOVER_MONTHLY * COST_BP / 1e4
+    need_ir = cost_m / vol
+    need_r2 = (need_ir / np.sqrt(12)) ** 2
+    r2_real = 0.00105
+    rows += [
+        {"item": "月频成本(11.6x36bp)", "value": cost_m},
+        {"item": "所需月频 IR", "value": need_ir},
+        {"item": "所需月频 R2", "value": need_r2},
+        {"item": "现实月频 R2", "value": r2_real},
+        {"item": "现实/所需", "value": r2_real / need_r2},
+        {"item": "需再强倍数", "value": need_r2 / r2_real},
+        {"item": "日频毛年化(IR*vol)", "value": ac1 * np.sqrt(252) * vol},
+        {"item": "日频成本(178.8x36bp)", "value": TURNOVER_DAILY * COST_BP / 1e4},
+        {"item": "日频每单位换手可承受_bp",
+         "value": ac1 * np.sqrt(252) * vol / TURNOVER_DAILY * 1e4},
+    ]
+    return pd.DataFrame(rows)
+
+
 def single_factor_ic(feat: pd.DataFrame, ret: pd.Series) -> pd.DataFrame:
     """单因子 vs 次日收益的 rank IC（判断「模型差」还是「特征没用」）。"""
     fwd = ret.shift(-1)
@@ -529,6 +607,11 @@ def main() -> None:
         fd.to_csv(OUT / "fit_diag.csv", index=False)
         log.info("\n=== 拟合诊断（模型学到东西了吗）===\n%s",
                  fd.round(6).to_string(index=False))
+
+    pc = predictability_ceiling(mkt, mkt["ret"])
+    pc.to_csv(OUT / "ceiling.csv", index=False)
+    log.info("\n=== 可预测性天花板 / Grinold / 盈亏平衡 ===\n%s",
+             pc.round(6).to_string(index=False))
 
     if args.skip_arms:
         log.info("产物 → %s", OUT)
