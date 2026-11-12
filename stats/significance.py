@@ -134,6 +134,34 @@ def benjamini_hochberg(pvalues: Sequence[float], q: float = 0.05) -> np.ndarray:
     return out
 
 
+def mean_t(series: Sequence[float]) -> float:
+    """单序列均值 t（`H0: mean = 0`），与旧脚本里的**内联写法逐位等价**。
+
+    存在的理由：2026-11-12 把全仓 13 处内联 ``m / (sd / sqrt(n))`` 收口到本模块，
+    但那些脚本的输出是要与历史报告并列的诊断数字，**不能有一次漂移**。
+    ``mean_inference`` 会先剔 NaN、且 ``sd == 0`` 时返回 0，两者都会改变结果：
+    含缺失的序列它给出有效 t，内联写法给出 NaN。因此这里单列一个边界语义相同
+    的入口 —— 含非有限值、或 ``n < 2``、或 ``sd == 0`` 一律 NaN。
+
+    新代码请直接用 ``mean_inference``（还带 Newey-West 稳健那一列）；本函数只为
+    替换存量内联公式而存在，不是它更准。
+
+    Args:
+        series: 一维数值序列。
+
+    Returns:
+        OLS t 值（ddof=1 的标准误）；样本不足或含缺失时返回 NaN。
+    """
+    s = np.asarray(series, dtype=float).ravel()
+    n = int(s.size)
+    if n < 2 or not np.isfinite(s).all():
+        return float("nan")
+    sd = float(np.std(s, ddof=1))
+    if not sd > 0:
+        return float("nan")
+    return float(s.mean() / (sd / np.sqrt(n)))
+
+
 def mean_inference(
     series: Sequence[float],
     robust: bool = True,

@@ -50,6 +50,8 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from stats.significance import mean_t  # noqa: E402
+
 OUT = ROOT / "reports" / "market_direction_probe"
 DATA = OUT / "data"
 
@@ -220,7 +222,7 @@ def _oos_sign(state: pd.Series, target: pd.Series, min_train: int = 60) -> dict:
     hit = float((np.sign(preds) == np.sign(actual)).mean())
     # 方向能力的 t：把"预测符号×实际收益"当成一条策略收益序列检验均值>0
     edge = preds * actual
-    t = float(edge.mean() / (edge.std(ddof=1) / np.sqrt(len(edge)))) if len(edge) > 2 else np.nan
+    t = mean_t(edge) if len(edge) > 2 else np.nan
     return {"oos_n": int(len(edge)), "oos_hit": hit, "oos_t": t}
 
 

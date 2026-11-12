@@ -46,6 +46,7 @@ from scripts.portfolio.etf_rotation_probe import (
     load_bundle,
     run_variant,
 )
+from stats.significance import mean_t
 
 BEGIN = 20200101
 ROOT = Path(__file__).resolve().parents[2]
@@ -100,11 +101,11 @@ def paired(a: pd.Series, b: pd.Series) -> dict:
     d = (a[idx] - b[idx]).to_numpy()
     n = len(d)
     mean, sd = float(d.mean()), float(d.std(ddof=1))
-    t = mean / (sd / np.sqrt(n)) if sd > 0 else float("nan")
+    t = mean_t(d) if sd > 0 else float("nan")
     boot = np.array([RNG.choice(d, n, replace=True).mean() for _ in range(10000)])
     # 非重叠敏感性：每 2 窗取 1（相邻窗共享 1 个月）
     d2 = d[::2]
-    t2 = float(d2.mean() / (d2.std(ddof=1) / np.sqrt(len(d2)))) if len(d2) > 2 else float("nan")
+    t2 = mean_t(d2) if len(d2) > 2 else float("nan")
     return {"n": n, "mean": mean, "t": t, "t_nonoverlap": t2,
             "ci_lo": float(np.percentile(boot, 2.5)),
             "ci_hi": float(np.percentile(boot, 97.5)),

@@ -53,6 +53,7 @@ from scripts.evaluation.solo_freq_probe import (
     price_panel,
     stats,
 )
+from stats.significance import mean_t
 from strategy.cross_section import BufferedTopKLongOnly, SectorCappedBufferedTopKLongOnly
 
 N_PHASE = 21
@@ -86,8 +87,8 @@ def _dedup(top: list, sec: pd.Series) -> tuple[list, list]:
 
 
 def _t(a) -> float:
-    a = np.asarray(a, dtype=float)
-    return float(a.mean() / (a.std(ddof=1) / np.sqrt(len(a)))) if len(a) > 1 else np.nan
+    """均值 t。走 ``stats.significance.mean_t``：含缺失 / 样本不足 ⇒ NaN（与旧内联一致）。"""
+    return mean_t(a)
 
 
 def mechanism(ctx, ind: pd.DataFrame) -> pd.DataFrame:

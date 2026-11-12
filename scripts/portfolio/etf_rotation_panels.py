@@ -24,6 +24,7 @@ import numpy as np
 import pandas as pd
 
 from config import Config
+from stats.significance import mean_t
 
 CACHE_ROOT = Path(str(Config.cache()["root"]))
 
@@ -166,7 +167,7 @@ def share_ic_table(close: pd.DataFrame, signals: dict[str, pd.DataFrame],
         rows.append({
             "signal": name, "n_periods": n, "mean_ic": mean,
             "icir": (mean / std) if std and std > 0 else float("nan"),
-            "t_stat": (mean / (std / np.sqrt(n))) if std and std > 0 and n > 1 else float("nan"),
+            "t_stat": (mean_t(s) if std and std > 0 and n > 1 else float("nan")),
             "pos_rate": float((s > 0).mean()) if n else float("nan"),
             "placebo_max_abs_mean_ic": max(placebo_means) if placebo_means else float("nan"),
             "n_placebo": len(placebo_means),

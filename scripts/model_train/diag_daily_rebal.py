@@ -46,6 +46,7 @@ import numpy as np
 import pandas as pd
 
 from config import Config
+from stats.significance import mean_t
 
 PQ = Path(Config.paths()["cache_root"])
 DL_DIR = Path("reports/report_replica/dl")
@@ -280,7 +281,7 @@ def main() -> None:
     for c, name in (("week", "整周 S2"), ("day1", "首日 T+1开→T+1收"),
                     ("rest", "后 4 天")):
         x = d[c] / 1e4
-        t = x.mean() / (x.std(ddof=1) / np.sqrt(len(x)))
+        t = mean_t(x)
         print(f"  {name:16s} 期均 {x.mean()*1e4:+6.2f}bp t {t:+5.2f} "
               f"折年 {((1+x.mean())**52-1)*100:+6.2f}%  n={len(x)}")
 

@@ -40,6 +40,7 @@ import numpy as np
 import pandas as pd
 
 from config import Config
+from stats.significance import mean_t
 
 PQ = Path(Config.paths()["cache_root"])
 DL_DIR = Path("reports/report_replica/dl")
@@ -138,7 +139,7 @@ def weekly_turnover(picks: pd.Series) -> float:
 def geo_tstat(s: pd.Series) -> tuple[float, float]:
     n = len(s)
     geo = (1 + s).prod() ** (52 / n) - 1
-    return geo, s.mean() / (s.std(ddof=1) / np.sqrt(n))
+    return geo, mean_t(s)
 
 
 def main() -> None:
@@ -197,7 +198,7 @@ def main() -> None:
             continue
         n = len(s)
         print(f"  {grp} {label:34s} 期均 {s.mean()*100:+.4f}%  t "
-              f"{s.mean()/(s.std(ddof=1)/np.sqrt(n)):+6.2f}  n={n}  "
+              f"{mean_t(s):+6.2f}  n={n}  "
               f"折年（每周一次）{((1+s.mean())**52-1)*100:+6.2f}%")
 
     if keep:

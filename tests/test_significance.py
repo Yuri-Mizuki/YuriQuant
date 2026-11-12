@@ -241,15 +241,37 @@ def test_load_significant_features_correction_switch(tmp_path):
 # ===========================================================================
 _INLINE_T = re.compile(r"/\s*\(.*?/\s*np\.sqrt\(")
 
+#: 内联 ``X / (Y / np.sqrt(n))`` 的两类**合法例外**，键为 (文件相对路径, 行内唯一子串)。
+#: 用「文件 + 子串」而不是行号：改上下文不会让豁免静默失效，而子串还在就说明
+#: 那行没被换掉。**条目必须仍然命中**，否则守卫失败 —— 豁免表不许腐烂。
+_INLINE_T_EXEMPT: tuple[tuple[str, str, str], ...] = (
+    ("strategy/etf_rotation.py", "(1.0 / np.sqrt(var)).sum()",
+     "ERC 的逆波动率权重初始化，不是 t 统计量（正则假阳性）"),
+    ("scripts/evaluation/residual_overlay_probe.py", "sub[hist].std(axis=1)",
+     "面板逐行 t（每只股票跨年份 IC 的排序分数），向量化不可逐行 apply"),
+    ("scripts/model_train/diag_daily_rebal.py", 'r["std"] / np.sqrt(r["count"])',
+     "groupby 分组 t（按星期几分组），同上：向量化而非单序列"),
+)
+
 
 def test_no_inline_ols_t_left_in_repo():
     """全仓不得再有"均值 / 标准误"的内联写法——必须走统一实现。
 
     注意：标准误 ``sd / np.sqrt(n)``（如 ``attribution`` 的 ``se_ols``）是合法
     写法，本守卫只匹配``X / (Y / np.sqrt(n))``这种除法嵌套形式。
+
+    2026-11-12：本守卫长期是红的（13 处存量，11-07 的提交上已复现），
+    红守卫等于没有守卫。真违规 13 处已全部换成 ``stats.significance.mean_t``
+    （与内联写法逐位等价的入口；用 ``mean_inference`` 会剔 NaN ⇒ 历史诊断
+    数字漂移）；剩下 3 处属正则假阳性或向量化计算，登进 ``_INLINE_T_EXEMPT``
+    （带理由、且必须仍命中）。
     """
     root = Path(__file__).resolve().parents[1]
     source_of_truth = root / "stats" / "significance.py"   # 真源自身当然含该公式
+    exempt: dict[str, list[str]] = {}
+    for mod, line_marker, _reason in _INLINE_T_EXEMPT:
+        exempt.setdefault(mod, []).append(line_marker)
+    hit: set[tuple[str, str]] = set()
     offenders: list[str] = []
     for pkg in ("factor", "research", "scripts", "model", "monitoring", "stats",
                 "backtest", "optimize", "data", "strategy"):
@@ -258,11 +280,21 @@ def test_no_inline_ols_t_left_in_repo():
                 continue
             if p == source_of_truth:
                 continue
+            rel = str(p.relative_to(root)).replace("\\", "/")
             for i, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1):
-                if _INLINE_T.search(line):
-                    offenders.append(f"{p.relative_to(root)}:{i}: {line.strip()}")
+                if not _INLINE_T.search(line):
+                    continue
+                markers = [m for m in exempt.get(rel, ()) if m in line]
+                if markers:
+                    hit.update((rel, m) for m in markers)
+                    continue
+                offenders.append(f"{p.relative_to(root)}:{i}: {line.strip()}")
+    stale = {(mod, m) for mod, ms in exempt.items() for m in ms} - hit
+    assert not stale, (
+        "豁免表条目已不再命中任何行（代码已改掉），请从 _INLINE_T_EXEMPT 删除：\n"
+        + "\n".join(f"  {mod} :: {m}" for mod, m in sorted(stale)))
     assert not offenders, (
-        "发现内联 OLS t 公式（应改用 stats.significance.mean_inference）:\n"
+        "发现内联 OLS t 公式（应改用 stats.significance.mean_t）:\n"
         + "\n".join(offenders))
 
 

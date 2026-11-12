@@ -41,6 +41,7 @@ from scripts.portfolio.etf_rotation_probe import (  # noqa: E402
     load_bundle,
     run_variant,
 )
+from stats.significance import mean_t  # noqa: E402
 
 
 def load_env():
@@ -745,7 +746,7 @@ def mode_attr(env, spec):
     for k, lab in (("fwd_maxw", "HRP 实际押注"), ("fwd_mincorr", "押最不相关"),
                    ("fwd_maxcorr", "押最相关"), ("fwd_rank1", "押动量第一")):
         v = per[k] - per["fwd_mean3"]
-        t = v.mean() / (v.std(ddof=1) / np.sqrt(len(v))) if v.std(ddof=1) > 0 else np.nan
+        t = mean_t(v) if v.std(ddof=1) > 0 else np.nan
         print(f"  {lab:<16}{per[k].mean():>+13.2%}{v.mean():>+13.2%}"
               f"{(v > 0).mean():>9.1%}{t:>7.2f}")
     print(f"  三只等权基准期均 {per['fwd_mean3'].mean():+.2%}")

@@ -46,6 +46,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.common.cli_common import setup_logging  # noqa: E402
+from stats.significance import mean_t  # noqa: E402
 
 log = setup_logging("blend_verdict_920")
 
@@ -92,7 +93,8 @@ def _paired(cand: pd.Series, anc: pd.Series) -> dict:
     a, b = cand.align(anc, join="inner")
     d = (a - b).dropna()
     sd = float(d.std(ddof=1))
-    t = float(d.mean() / (sd / np.sqrt(len(d)))) if sd > 0 and len(d) > 2 else np.nan
+    # 单序列均值 t 走统一实现（stats.significance.mean_t），不在这里内联
+    t = mean_t(d) if sd > 0 and len(d) > 2 else np.nan
     return {"n": len(d), "corr": float(a.corr(b)),
             "diff_ann": float(d.mean() * 252), "t": t,
             "tracking_error": float(sd * np.sqrt(252))}

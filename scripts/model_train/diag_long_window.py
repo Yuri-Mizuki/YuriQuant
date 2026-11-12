@@ -35,6 +35,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from stats.significance import mean_t
+
 OUT_DIR = Path("reports/report_replica")
 
 
@@ -61,8 +63,7 @@ def _linear_long(sig: pd.DataFrame, P: dict, dates) -> tuple[float, float, int]:
         w = w / w.sum()
         rows.append(float(w @ r[ok] - r[ok].mean()))
     s = pd.Series(rows)
-    return float((1 + s).prod() ** (52 / len(s)) - 1), float(
-        s.mean() / (s.std(ddof=1) / np.sqrt(len(s)))), len(s)
+    return (float((1 + s).prod() ** (52 / len(s)) - 1), mean_t(s), len(s))
 
 
 def main() -> None:
@@ -120,7 +121,7 @@ def main() -> None:
         for lo, hi in ((2018, 2021), (2022, 2026)):
             x = s[(idx.year >= lo) & (idx.year <= hi)]
             x = x[np.isfinite(x)]
-            parts.append(f"{lo}-{hi} IC {x.mean():+.4f} (t {x.mean()/(x.std(ddof=1)/np.sqrt(len(x))):+.2f})")
+            parts.append(f"{lo}-{hi} IC {x.mean():+.4f} (t {mean_t(x):+.2f})")
         print(f"  {tag:8s} " + "  ".join(parts))
 
     # 4) 组合层：TopN 敏感性 + 连续分权
