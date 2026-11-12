@@ -5,7 +5,7 @@
 
 * ``is_st``：``.replace(0.0, np.nan)`` 把「非 ST」当缺失 ⇒ 面板只剩全 1
 * ``express_reporting``：只 ffill 出「已披露 = 1」，其余留 NaN ⇒ 值域恒 {1}
-* ``float_mktcap``：全族 ``clip(-1e4, 1e4)`` 把单位元的市值整列削成常数
+* ``float_mktcap``：全族 ``clip(-1e4, 1e4)`` 把单位万元的市值整列削成常数
 """
 from __future__ import annotations
 
@@ -104,6 +104,13 @@ def test_express_reporting_without_listed_mask_degrades_to_fill_zero():
 # ---------------------------------------------------------------------------
 # float_mktcap：水平量不能被比率裁剪界削平
 # ---------------------------------------------------------------------------
+#: ``float_mktcap`` 面板实测量级（2026-11-12 复核 ``panels/float_mktcap.parquet``）：
+#: p50 = 4.48e5 万元（≈44.8 亿）、max = 3.27e8 万元（≈3270 亿）。**单位是万元**，
+#: 与 ``CLIP_RATIO``（无量纲比率界）不同口径 —— 混用就是 2026-11-05 那次假面板。
+_MKTCAP_WAN_P50 = 4.4e5
+_MKTCAP_WAN_MAX = 3.3e8
+
+
 def test_level_factor_clip_is_not_ratio_clip():
     from scripts.builders.build_alla_fundamental_factors import (
         CLIP_LEVEL,
@@ -113,21 +120,29 @@ def test_level_factor_clip_is_not_ratio_clip():
 
     assert "float_mktcap" in LEVEL_FACTORS
     assert CLIP_LEVEL[0] >= 0.0, "市值不可能为负"
-    assert CLIP_LEVEL[1] > 1e12, "上界须高于 A 股单只流通市值量级（~1e12 元）"
+    # 单位万元：上界须覆盖全 A 单只流通市值实测最大值（3.27e8 万元），
+    # 否则最大盘股被削到界上 —— 与 2026-11-05 假面板同一种失败形态，只是幅度小。
+    assert CLIP_LEVEL[1] > _MKTCAP_WAN_MAX, (
+        f"上界 {CLIP_LEVEL[1]:.3g} 万元须高于实测单只最大 {_MKTCAP_WAN_MAX:.3g} 万元"
+        "（≈3270 亿元）"
+    )
     assert CLIP_RATIO == 1e4
     # 修复前的 bug 形态：水平量套用比率界 ⇒ 整列被钉在上限
     assert CLIP_LEVEL[1] != CLIP_RATIO
 
 
 def test_float_mktcap_survives_level_clip():
-    """量级 1e10 的市值面板经物理边界裁剪后仍有上千个截面唯一值。"""
+    """万元量级的市值面板（覆盖实测 p50≈4.4e5 ~ max≈3.3e8）经裁剪后原样保留。"""
     from scripts.builders.build_alla_fundamental_factors import CLIP_LEVEL
 
     rng = np.random.default_rng(0)
+    # 万元口径：1e4 万元（1 亿）~ 1e9 万元（1 万亿），横跨实测 p50 与 max
     cap = pd.DataFrame(
-        10 ** rng.uniform(9, 13, size=(3, 500)),
+        10 ** rng.uniform(4, 9, size=(3, 500)),
         index=CAL[:3], columns=[f"{i:06d}.SZ" for i in range(500)],
     )
+    assert cap.to_numpy().max() > _MKTCAP_WAN_MAX, "测试面板须覆盖到实测最大量级之上"
     clipped = cap.clip(*CLIP_LEVEL)
     assert (clipped.to_numpy() == cap.to_numpy()).all(), "正常量级不应被裁剪"
     assert np.median([np.unique(r).size for r in clipped.to_numpy()]) > 400
+
