@@ -87,12 +87,15 @@ class TestBuildMacroStateFeatures:
         assert (rows.nunique(axis=1) == 1).all()
 
     def test_not_cross_sectional_zscored(self):
-        """不做截面 zscore：行内 std=0（FeatureStore 通道会把整行变 NaN）。"""
+        """不做截面 zscore：行内唯一值 = 1（FeatureStore 通道会把整行变 NaN）。"""
         d, codes = _biz_days(400), ["c0", "c1", "c2"]
         panel = _broadcast_panel(d, codes, _wave(400))
         out = build_macro_state_features({"alt_macro_z": panel}, d, codes)["mac_z"]
         rows = out.dropna(how="any")
-        assert (rows.std(axis=1) == 0).all()
+        # 用 nunique 而不是 ``std(axis=1) == 0``：面板是 float32，三列**逐位相同**
+        # 时 std 仍给出 1.8e-08 级噪声（实测 400 行里 44 行非零），断言恒假。
+        # 要验的是"行内没有截面差异"，不是"浮点减法恰好为 0"。
+        assert (rows.nunique(axis=1) == 1).all()
 
     def test_partial_nan_columns_still_extracted(self):
         """部分列缺值（覆盖差异）时市场序列仍正确（mean 忽略 NaN）。"""
