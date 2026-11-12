@@ -27,7 +27,8 @@ def warmup_begin(begin: int) -> int:
 
 
 def register_panels(lib, panels, defs, returns_panel, source, *,
-                    names=None, kind="raw", on_fail=None):
+                    names=None, kind="raw", on_fail=None,
+                    check_dup: bool = True, dup_corr: float = 0.7):
     """批量入库：对每个定义名做 standardize_zscore + FactorLibrary.register。
 
     Args:
@@ -35,6 +36,12 @@ def register_panels(lib, panels, defs, returns_panel, source, *,
         names: 注册子集（None=全部）。
         source: register 的 source 字段。
         on_fail: 可选回调 ``on_fail(name, exc)``，缺省打印告警继续。
+        check_dup: 入库时查冗余（2026-11-12 起默认 True）。此前不传该参数，
+            于是 registry 的 ``dup_checked`` 全靠事后 ``dup_audit`` 补，
+            **入库那一刻不知道自己在造重复**。查重只记账不拒收
+            （``reject_dup`` 仍为 False）——重复判定留给人看报告再决定。
+            索引缺失时会回退逐面板比对，库大时慢；构建脚本可显式传 False。
+        dup_corr: 触发"疑似冗余"告警的相关阈值。
 
     Returns:
         注册成功的 ``row`` 列表。
@@ -56,6 +63,7 @@ def register_panels(lib, panels, defs, returns_panel, source, *,
             row = lib.register(
                 name=name, panel=std, returns_panel=returns_panel,
                 kind=kind, formula=defs[name], source=source,
+                check_dup=check_dup, dup_corr=dup_corr,
             )
         except Exception as e:  # noqa: BLE001
             if on_fail:
@@ -64,9 +72,11 @@ def register_panels(lib, panels, defs, returns_panel, source, *,
                 log.warning("注册失败 %s: %s（继续其余因子）", name, e)
             continue
         reg_rows.append(row)
-        log.info("  已入库 %s（IC=%.4f, t_nw=%.2f, best_sharpe=%.3f@%s）",
+        log.info("  已入库 %s（IC=%.4f, t_nw=%.2f, best_sharpe=%.3f@%s, dup=%s←%s）",
                  name, row["ic_mean"], row["t_stat_nw"],
-                 row["best_sharpe"], row["best_config"])
+                 row["best_sharpe"], row["best_config"],
+                 row.get("dup_corr_max") if row.get("dup_corr_max") not in ("", None) else "—",
+                 row.get("dup_top") or "—")
     return reg_rows
 
 

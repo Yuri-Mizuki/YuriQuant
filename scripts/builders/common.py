@@ -246,13 +246,112 @@ def gate_stats_rows(rows: list[dict], ds_dir: Path, family: str, *,
     return kept, rejected
 
 
+def tag_dup_rows(rows: list[dict], ds_dir: Path, lib, *,
+                 panels_subdir: str = "panels",
+                 only_new: bool = True,
+                 topk: int = 1,
+                 time_budget: float = 600.0) -> dict:
+    """入库前冗余预检：给**新因子**打上 ``dup_checked`` / ``dup_corr_max`` 等标记。
+
+    为什么只查新增
+    --------------
+    已有因子的 ``dup_*`` 由 ``scripts.factors.dup_audit --apply`` 全库统一回填
+    （950 个约 11 分钟）；每次构建都重算既浪费又会和全库口径打架。增量通常
+    只有几个到几十个，单个耗时 **0.15~0.41 s**（与全库相关 <0.85 时只做一次
+    签名矩阵乘），只有疑似重复（ρ≥0.85）才额外跑残差回归（**8~13 s**）。
+
+    这是"记账 + 告警"，**不是入库闸**
+    --------------------------------
+    索引缺失、读盘失败、样本不重叠一律**放行并告警**——查重不能阻塞构建，
+    更不能让一次索引过期把整批因子挡在库外。要硬拒收，走
+    ``FactorLibrary.ingest(reject_dup=True)``（那是单因子通道）。
+
+    Args:
+        rows: ``read_stats`` 读出的统计行（含 ``name``）。
+        ds_dir: 数据集根目录，其下 ``panels_subdir`` 是面板。
+        lib: ``FactorLibrary`` 实例。
+        only_new: True 时只查 registry 里没有的因子。
+        time_budget: 总耗时上限（秒）；超了停止并告警，剩余留待 ``dup_audit``。
+
+    Returns:
+        dict: ``checked`` / ``dups``（判为重复的名） / ``skipped`` / ``secs``。
+    """
+    import time as _time
+
+    import pandas as pd
+
+    if lib is None or lib.dup_index() is None:
+        log.warning("冗余索引不存在，跳过入库前查重（%d 个待查；"
+                    "重建索引：python -m scripts.factors.dup_audit --dataset %s）",
+                    len(rows), ds_dir.name)
+        return {"checked": 0, "dups": [], "skipped": len(rows), "secs": 0.0}
+
+    existing: set[str] = set()
+    if only_new:
+        try:
+            existing = set(lib._load_registry()["name"].astype(str))
+        except Exception as e:                                  # noqa: BLE001
+            log.warning("读 registry 失败，按全量查重：%s", e)
+
+    todo = [r for r in rows if r.get("name")
+            and (not only_new or str(r["name"]) not in existing)]
+    if not todo:
+        log.info("入库前查重：本批 %d 个因子均已在库，跳过（dup_* 由 dup_audit 统一维护）",
+                 len(rows))
+        return {"checked": 0, "dups": [], "skipped": len(rows), "secs": 0.0}
+
+    t0 = _time.time()
+    checked, dups, skipped = 0, [], 0
+    panel_dir = ds_dir / panels_subdir
+    for r in todo:
+        if _time.time() - t0 > time_budget:
+            log.warning("入库前查重超时（%.0fs），剩余 %d 个未查——"
+                        "跑 dup_audit 补齐（超时不影响入库）",
+                        time_budget, len(todo) - checked - skipped)
+            break
+        name = str(r["name"])
+        p = panel_dir / f"{name}.parquet"
+        if not p.exists():
+            skipped += 1
+            continue
+        try:
+            res = lib.precheck_dup(pd.read_parquet(p), name=name, topk=topk)
+        except Exception as e:                                  # noqa: BLE001
+            log.warning("入库前查重失败 %s：%s（放行）", name, e)
+            skipped += 1
+            continue
+        if not res.get("available"):
+            skipped += 1
+            continue
+        ric, rit = res["resid_ic"], res["resid_t"]
+        r["dup_checked"] = True
+        r["dup_corr_max"] = res["top_corr"]
+        r["dup_top"] = res["top_name"]
+        r["resid_ic"] = "" if ric is None or pd.isna(ric) else ric
+        r["resid_t_nw"] = "" if rit is None or pd.isna(rit) else rit
+        checked += 1
+        if res["top_corr"] >= 0.95 and (pd.isna(rit) or abs(rit) < 2.0):
+            dups.append({"name": name, "top": res["top_name"],
+                         "corr": res["top_corr"], "resid_t": rit})
+            log.warning("入库前查重：`%s` 与 `%s` 相关 %.3f 且残差无增量 → 疑似重复",
+                        name, res["top_name"], res["top_corr"])
+
+    secs = _time.time() - t0
+    if checked or dups:
+        log.info("入库前查重：查 %d 个（跳过 %d），判重复 %d 个，用 %.1fs",
+                 checked, skipped, len(dups), secs)
+    return {"checked": checked, "dups": dups, "skipped": skipped, "secs": secs}
+
+
 def merge_outputs(ds_dir: Path, family: str, *,
                   horizons: tuple[int, ...] = HORIZONS,
                   close_adj_loader=None, ic_code_stride: int = IC_CODE_STRIDE,
                   skip_existing: bool = False, empty_log: str | None = None,
                   source: str = "", family_tag: str = "", kind: str = "raw",
                   maturity: str = "experimental",
-                  frequency: str = "日频") -> None:
+                  frequency: str = "日频",
+                  dup_check: bool = True,
+                  dup_only_new: bool = True) -> None:
     """本次产出并入 registry + 融合 ic_h{h}——builder 收尾的唯一入口。
 
     Args:
@@ -269,6 +368,11 @@ def merge_outputs(ds_dir: Path, family: str, *,
             前缀判定的，统一前缀会让 gp/model 因子重算被跳过。
         family_tag: 因子族标签（受控词表，见 ``FAMILY_WHITELIST``）。
         kind / maturity / frequency: 轻量登记的默认标签。
+        dup_check: 入库前对**新因子**跑冗余预检（默认开）。查到的
+            ``dup_corr_max`` / ``dup_top`` / ``resid_*`` 写进 registry 行；
+            判为重复只告警，**不拒收**——查重是记账，不是入库闸。
+        dup_only_new: 只查 registry 里没有的因子（默认）。关掉会把整批重算，
+            950 个约十几分钟，一般不需要。
 
     写入统一走 ``FactorLibrary.upsert_rows()``：原子写 + 列序归一 +
     **统计列刷新 / 标签列只补空缺**（见 ``research.factor_library.STAT_COLUMNS``），
@@ -304,6 +408,8 @@ def merge_outputs(ds_dir: Path, family: str, *,
                         "（新增集请同步该表）", family)
     lib = _lib_for(ds_dir)
     if lib is not None:
+        if dup_check:
+            tag_dup_rows(rows, ds_dir, lib, only_new=dup_only_new)
         stat = lib.upsert_rows(rows, source=source, family=family_tag, kind=kind,
                                maturity=maturity, frequency=frequency,
                                set_name=family)
