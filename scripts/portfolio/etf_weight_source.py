@@ -25,7 +25,7 @@ import pandas as pd
 from scripts.portfolio.etf_contest_spec import FINAL
 from scripts.portfolio.etf_weight_probe import (
     BEGIN,
-    _run_cls,
+    run_with_cls,
     hold_matrix,
     load_env,
     run,
@@ -83,7 +83,7 @@ def _summ(r1):
 
 def mode_pool(env, spec):
     print("\n== A. 全池等权基准（当期 mask 内全买）==")
-    _, r1 = _run_cls(env, spec, _PoolEq)
+    _, r1 = run_with_cls(env, spec, _PoolEq)
     s = _summ(r1)
     hw = hold_matrix(r1["weights"])
     print(f"  年化 {s['ann']:.2%}  SR {s['sharpe']:.2f}  MDD {s['mdd']:.2%}"
@@ -100,7 +100,7 @@ def mode_rand(env, spec, n_seed: int):
             sp["weighting"] = wt
             anns, srs, mdds, neff = [], [], [], []
             for sd in range(n_seed):
-                _, r1 = _run_cls(env, sp, _rand_sel_cls(sd, gate))
+                _, r1 = run_with_cls(env, sp, _rand_sel_cls(sd, gate))
                 anns.append(r1["annual_return"])
                 srs.append(r1["sharpe"])
                 mdds.append(r1["max_drawdown"])

@@ -31,7 +31,7 @@ from strategy.base import Strategy
 # ---------------------------------------------------------------------------
 # 确定性 top-k 选取（模块内共用，tie 语义的唯一实现）
 # ---------------------------------------------------------------------------
-def _rank_desc(vals: pd.Series) -> pd.Series:
+def rank_desc(vals: pd.Series) -> pd.Series:
     """降序名次；并列按**列序**（``method="first"``）确定性打破。"""
     return vals.rank(ascending=False, method="first")
 
@@ -44,7 +44,7 @@ def _top_k_indices(vals: pd.Series, k: int) -> pd.Index:
     """
     if k <= 0:
         return vals.index[:0]
-    r = _rank_desc(vals)
+    r = rank_desc(vals)
     return r[r <= k].sort_values().index
 
 
@@ -52,7 +52,7 @@ def _bottom_k_indices(vals: pd.Series, k: int) -> pd.Index:
     """因子值最小的 k 个 index（按值升序返回）；并列时列序靠前者优先。"""
     if k <= 0:
         return vals.index[:0]
-    r = _rank_desc(vals)
+    r = rank_desc(vals)
     n = len(vals)
     return r[r > n - k].sort_values(ascending=False).index
 
@@ -156,7 +156,7 @@ class SectorCappedTopKLongOnly(Strategy):
         sect = (self.sectors.loc[date] if date in self.sectors.index
                 else pd.Series(index=vals.index, dtype=object)).reindex(vals.index)
         # 与全仓唯一 tie-break 口径一致：降序名次（并列按列序）
-        order = _rank_desc(vals).sort_values().index
+        order = rank_desc(vals).sort_values().index
         counts: dict[str, int] = {}
         picked: list = []
         for code in order:
@@ -277,7 +277,7 @@ class SectorCappedBufferedTopKLongOnly(Strategy):
             s = sect.get(code)
             return "__NA__" if s is None or pd.isna(s) else str(s)
 
-        ranks = _rank_desc(vals)
+        ranks = rank_desc(vals)
         n_exit = max(self.k, int(round(self.k * self.exit_mult)))
 
         # 1) 保留：上期持仓中排名仍在缓冲带内、且行业名额未满的
@@ -427,9 +427,9 @@ class BufferedTopFracLongOnly(Strategy):
         n = len(vals)
         n_entry = max(1, min(round(self.frac_entry * n), n))
         n_exit = max(n_entry, min(round(self.frac_exit * n), n))
-        # tie 语义：method="first" 按列序确定性打破，与模块内 _rank_desc 及
+        # tie 语义：method="first" 按列序确定性打破，与模块内 rank_desc 及
         # strategy.constraints.build_signal_weights 完全一致（本类一直是确定的）。
-        ranks = _rank_desc(vals)
+        ranks = rank_desc(vals)
 
         keep = [c for c in self._prev if c in ranks.index and ranks[c] <= n_exit]
         candidates = [c for c in ranks.sort_values().index
@@ -455,7 +455,7 @@ class BufferedTopKLongOnly(Strategy):
     .. note:: 2026-11-10 从 ``scripts/evaluation/portfolio_weighting.py`` 迁入
        （策略定义不该住在评测脚本里），原位置保留同名再导出以兼容既有调用方。
        迁移未改任何逻辑，只把 ``vals.rank(ascending=False, method="first")``
-       换成等价的 :func:`_rank_desc`，与模块内其余策略共用同一个 tie-break。
+       换成等价的 :func:`rank_desc`，与模块内其余策略共用同一个 tie-break。
     """
 
     def __init__(self, k: int = 45, exit_mult: float = 1.5):
@@ -478,7 +478,7 @@ class BufferedTopKLongOnly(Strategy):
             self._prev = set()
             return pd.Series(dtype=float)
         n_exit = max(self.k, int(round(self.k * self.exit_mult)))
-        ranks = _rank_desc(vals)
+        ranks = rank_desc(vals)
         keep = [c for c in self._prev if c in ranks.index and ranks[c] <= n_exit]
         cands = [c for c in ranks.sort_values().index
                  if c not in self._prev and ranks[c] <= self.k]

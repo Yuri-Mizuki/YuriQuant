@@ -45,12 +45,12 @@ TREASURY = {"511010.SH", "511260.SH", "511880.SH", "511990.SH"}
 PHASES = (1, 2, 3, 4, 5)
 
 
-def _monthly(eq: pd.Series) -> pd.Series:
+def monthly_returns(eq: pd.Series) -> pd.Series:
     """月末净值 → 非重叠月度收益。"""
     return eq.resample("ME").last().pct_change().dropna()
 
 
-def _roll_mdd(eq: pd.Series, win: int = 252, step: int = 21) -> pd.Series:
+def rolling_max_drawdown(eq: pd.Series, win: int = 252, step: int = 21) -> pd.Series:
     """每个交易日起未来 12 个月的最差回撤（正数深度）。起点间隔 ``step`` 交易日。"""
     v, idx = eq.to_numpy(), eq.index
     out = {}
@@ -77,7 +77,7 @@ def mode_pair(eq: dict, rules: list[str], base: str) -> None:
         if wt == base:
             continue
         for k in PHASES:
-            a, b = _monthly(eq[(wt, k)]), _monthly(eq[(base, k)])
+            a, b = monthly_returns(eq[(wt, k)]), monthly_returns(eq[(base, k)])
             j = a.index.intersection(b.index)
             d = (a[j] - b[j]).dropna()
             t = d.mean() / d.std(ddof=1) * np.sqrt(len(d))
@@ -89,9 +89,9 @@ def mode_mdd(eq: dict, rules: list[str], base: str) -> None:
     print("\n== ② 12 个月滚动窗口最差回撤分布（每 21 交易日一个起点）==")
     print(f"  {'规则':<13}{'k':>3}{'中位':>8}{'p90':>8}{'最差':>8}{'Δ中位vs定版':>12}")
     for k in PHASES:
-        ref = _roll_mdd(eq[(base, k)])
+        ref = rolling_max_drawdown(eq[(base, k)])
         for wt in rules:
-            r = _roll_mdd(eq[(wt, k)])
+            r = rolling_max_drawdown(eq[(wt, k)])
             j = r.index.intersection(ref.index)
             dm = r[j].median() - ref[j].median()
             print(f"  {wt:<13}{k:>3}{r.median():>8.2%}{r.quantile(0.9):>8.2%}"

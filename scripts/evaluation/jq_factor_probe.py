@@ -146,7 +146,7 @@ def _log1p(x: pd.DataFrame) -> pd.DataFrame:
         return np.log1p(x.where(x > -1))
 
 
-def _ic_stats(ic: pd.Series) -> dict:
+def ic_stats(ic: pd.Series) -> dict:
     """IC 均值 / IR / 胜率 / Newey-West t / 有效天数（与 residual_ic_probe 同口径）。"""
     from stats.robust_stats import nw_tstat
 
@@ -176,11 +176,11 @@ def _yearly(ic: pd.Series) -> dict:
     return out
 
 
-def _rank_panel(x: pd.DataFrame) -> pd.DataFrame:
+def rank_panel(x: pd.DataFrame) -> pd.DataFrame:
     return x.rank(axis=1, pct=True).astype(np.float32)
 
 
-def _cs_ic(x_rank: pd.DataFrame, fwd_rank: pd.DataFrame,
+def cs_ic(x_rank: pd.DataFrame, fwd_rank: pd.DataFrame,
            valid: pd.DataFrame) -> pd.Series:
     """逐日截面 Pearson（两边都已 rank → Spearman）；valid 之外的置 NaN。"""
     a = x_rank.where(valid)
@@ -373,7 +373,7 @@ def _universe_mask(name: str, idx: pd.DatetimeIndex,
 # ---------------------------------------------------------------------------
 # 增量 IC：因子对 lncap + 申万一级取残差（+ 可选库内最相似因子）
 # ---------------------------------------------------------------------------
-def _resid_ic_np(xr: np.ndarray, yr: np.ndarray, ok: np.ndarray,
+def resid_ic_np(xr: np.ndarray, yr: np.ndarray, ok: np.ndarray,
                  ind: np.ndarray, regs: list[np.ndarray],
                  n_ind: int) -> pd.Series:
     """逐日「因子对 size+行业 取残差」后的 IC（残差化**只做在因子侧**）。
@@ -497,13 +497,13 @@ def monthly_ls(panel: pd.DataFrame, close: pd.DataFrame, mask: pd.DataFrame,
 # ---------------------------------------------------------------------------
 # 全库去重（近似 + top1 精确复核）
 # ---------------------------------------------------------------------------
-def _dup_batch(cand_ranks: dict[str, pd.DataFrame], dup_dir: Path,
+def dup_batch(cand_ranks: dict[str, pd.DataFrame], dup_dir: Path,
                stride: int, top_k: int = 3) -> dict[str, list[tuple[float, str]]]:
     """候选面板 vs 库内全部面板的截面秩相关（近似 Spearman，逐日交集 Pearson）。
 
     秩在各面板自身有效域内计算，交集上取 Pearson。与库内 `_run_dup_check`
     的「交集上重排名」在覆盖率接近时差异 <0.02；top1 会再精确复核一次
-    （见 :func:`_dup_exact`）。
+    （见 :func:`dup_exact`）。
     """
     files = sorted(dup_dir.glob("*.parquet"))
     if not files:
@@ -550,7 +550,7 @@ def _dup_batch(cand_ranks: dict[str, pd.DataFrame], dup_dir: Path,
     return {k: sorted(v, reverse=True)[:top_k] for k, v in best.items()}
 
 
-def _dup_exact(panel: pd.DataFrame, dup_dir: Path, name: str) -> float:
+def dup_exact(panel: pd.DataFrame, dup_dir: Path, name: str) -> float:
     """top1 精确复核：交集上重排名后的逐日 Spearman 均值。"""
     p = dup_dir / f"{name}.parquet"
     if not p.exists():
@@ -638,7 +638,7 @@ def main(argv: list[str] | None = None) -> None:
     ind_codes, _ = pd.factorize(ind.to_numpy().ravel())
     ind_np = ind_codes.reshape(ind.shape)
     n_ind = int(ind_np.max()) + 1
-    regs_np = [_rank_panel(size_ln).to_numpy(np.float32)]
+    regs_np = [rank_panel(size_ln).to_numpy(np.float32)]
 
     dup_dir = (Path(args.dup_dir) if args.dup_dir
                else ds_root() / "panels_neu")
@@ -658,7 +658,7 @@ def main(argv: list[str] | None = None) -> None:
         valid = mask_all & fwd.notna()
         if uni is not None:
             valid = valid & uni.reindex(index=idx, columns=cols)
-        fwd_cache[h] = (fwd, _rank_panel(fwd.where(valid)), valid)
+        fwd_cache[h] = (fwd, rank_panel(fwd.where(valid)), valid)
     ok_np = fwd_cache[horizons[0]][2].to_numpy()
 
     rows: list[dict] = []
@@ -679,9 +679,9 @@ def main(argv: list[str] | None = None) -> None:
                      "desc": desc, "coverage": cov}
         for h in horizons:
             fwd, fwd_r, valid = fwd_cache[h]
-            xr = _rank_panel(panel)
-            ic = _cs_ic(xr, fwd_r, valid)
-            st = _ic_stats(ic)
+            xr = rank_panel(panel)
+            ic = cs_ic(xr, fwd_r, valid)
+            st = ic_stats(ic)
             row.update({f"ic_h{h}": st["ic"], f"ir_h{h}": st["ir"],
                         f"t_h{h}": st["nw_t"], f"win_h{h}": st["win"],
                         f"n_h{h}": st["n"]})
@@ -693,10 +693,10 @@ def main(argv: list[str] | None = None) -> None:
         _, fwd_r0, valid0 = fwd_cache[h0]
         sig_ic = row[f"ic_h{h0}"]
         sign0 = int(np.sign(sig_ic)) if np.isfinite(sig_ic) else 1
-        resid_ic = _resid_ic_np(
+        resid_ic = resid_ic_np(
             xr.to_numpy(np.float32), fwd_r0.to_numpy(np.float32),
             ok_np, ind_np, regs_np, n_ind)
-        rst = _ic_stats(resid_ic)
+        rst = ic_stats(resid_ic)
         row.update({"resid_si_ic": rst["ic"], "resid_si_t": rst["nw_t"],
                     "resid_si_n": rst["n"]})
         # 月度十分位多空
@@ -711,7 +711,7 @@ def main(argv: list[str] | None = None) -> None:
                  100 * row.get("ls_mean_m", float("nan")),
                  row.get("ls_windows_pass", -1), time.time() - ts)
         if not args.no_dup:
-            dup_ranks[name] = _rank_panel(panel)
+            dup_ranks[name] = rank_panel(panel)
         del panel
         if i % 4 == 0:
             _flush(rows, out_dir, args, horizons)
@@ -725,12 +725,12 @@ def main(argv: list[str] | None = None) -> None:
 
     if not args.no_dup and dup_ranks:
         log.info("全库去重：%d 候选 × %s", len(dup_ranks), dup_dir)
-        best = _dup_batch(dup_ranks, dup_dir, args.dup_stride)
+        best = dup_batch(dup_ranks, dup_dir, args.dup_stride)
         fwd_r0_np = fwd_cache[horizons[0]][1].to_numpy(np.float32)
         extra = {}
         for name, cands in best.items():
             top1 = cands[0] if cands else (float("nan"), "")
-            exact = (_dup_exact(dup_ranks[name], dup_dir, top1[1])
+            exact = (dup_exact(dup_ranks[name], dup_dir, top1[1])
                      if top1[1] else float("nan"))
             rec = {
                 "dup_top1": top1[1], "dup_corr1": top1[0],
@@ -745,12 +745,12 @@ def main(argv: list[str] | None = None) -> None:
                 try:
                     old = pd.read_parquet(dup_dir / f"{top1[1]}.parquet")
                     old = old.reindex(index=idx, columns=cols)
-                    old_r = _rank_panel(old)
-                    ric = _resid_ic_np(
+                    old_r = rank_panel(old)
+                    ric = resid_ic_np(
                         dup_ranks[name].to_numpy(np.float32), fwd_r0_np,
                         ok_np, ind_np, regs_np + [old_r.to_numpy(np.float32)],
                         n_ind)
-                    st = _ic_stats(ric)
+                    st = ic_stats(ric)
                     rec.update({"resid_dup_ic": st["ic"], "resid_dup_t": st["nw_t"]})
                 except Exception as exc:  # noqa: BLE001
                     log.warning("%s 增量 IC 计算失败：%s", name, exc)

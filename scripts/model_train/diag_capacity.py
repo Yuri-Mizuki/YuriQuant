@@ -27,9 +27,11 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from config import Config
+
 DL_DIR = Path("reports/report_replica/dl")
 OUT_DIR = Path("reports/report_replica")
-SW_FILE = Path("D:/data/parquet/sw_industry_daily.parquet")
+SW_FILE = Path(Config.paths()["cache_root"]) / "sw_industry_daily.parquet"
 
 TRADING_DAYS = 252
 MIN_N = 20
@@ -78,10 +80,10 @@ def main() -> None:
 
     from scripts.model_train.eval_dl_industry import agg_one
     from scripts.portfolio.report_replica import build_ctx
-    # 周频必须用 `diag_exec_timing` 的 `_excess`（`shift=True` 跨期持有）。
+    # 周频必须用 `diag_exec_timing` 的 `head_excess`（`shift=True` 跨期持有）。
     # ⚠️ 不能用 `diag_daily_rebal.tranches`：那是**日频**实现，给它周度 dates 配
     # `hold=5` 会把「5 个交易日」读成「5 个调仓期 = 5 周」，毛年化会从 +5.5% 掉到 −17.7%。
-    from scripts.model_train.diag_exec_timing import _synth_panel, _excess, _turnover
+    from scripts.model_train.diag_exec_timing import synth_panel, head_excess, weekly_turnover
 
     pred = pd.read_parquet(DL_DIR / f"pred_{args.pred}.parquet")
     ctx = build_ctx("W", args.start, weight=args.weight)
@@ -138,9 +140,9 @@ def main() -> None:
           f" / 最差行业 {m['adv_min'].median():.0f} · 日波动率中位数 {m['sig_mean'].median():.2f}%")
 
     # 2) 基准：毛收益与换手（周频 S2 = T+1 开盘 → 下次 T+1 开盘）
-    px = _synth_panel(ctx)
-    s, picks = _excess(px["po1"], px["po1"], fac, dates, inds, shift=True, top_n=args.top)
-    tr = float(_turnover(picks))
+    px = synth_panel(ctx)
+    s, picks = head_excess(px["po1"], px["po1"], fac, dates, inds, shift=True, top_n=args.top)
+    tr = float(weekly_turnover(picks))
     gross = float((1 + s).prod() ** (52 / len(s)) - 1)
     print(f"\n毛年化 {gross*100:+.2f}% · 单边换手 {tr:.3f} · 期数 {len(s)}")
 

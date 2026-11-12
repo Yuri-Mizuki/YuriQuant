@@ -38,7 +38,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.common.cli_common import setup_logging  # noqa: E402
-from research.factor_library import FactorLibrary, _slug  # noqa: E402
+from research.factor_library import FactorLibrary, name_slug  # noqa: E402
 
 log = setup_logging("backfill_library")
 
@@ -158,7 +158,7 @@ def cmd_fill_ic(lib: FactorLibrary, args) -> None:
     是空的——于是「按显著性排序」在半个库上失效。这些因子已经补过 eval，
     ``ic`` 序列就存在 eval 文件里，直接读出来算即可（毫秒级/个）。
     """
-    from research.factor_library import _ic_summary  # noqa: PLC0415
+    from research.factor_library import ic_stats  # noqa: PLC0415
 
     reg = lib._load_registry()
     t = pd.to_numeric(reg["t_stat_nw"], errors="coerce")
@@ -172,13 +172,13 @@ def cmd_fill_ic(lib: FactorLibrary, args) -> None:
     filled: dict[str, dict] = {}
     skipped = 0
     for _, r in todo.iterrows():
-        p = lib._resolve_eval_path(r) or (lib.evals_dir / f"{_slug(r['name'])}.parquet")
+        p = lib._resolve_eval_path(r) or (lib.evals_dir / f"{name_slug(r['name'])}.parquet")
         try:
             ev = pd.read_parquet(p, columns=["ic"])
         except Exception:  # noqa: BLE001
             skipped += 1
             continue
-        filled[r["name"]] = _ic_summary(ev["ic"])
+        filled[r["name"]] = ic_stats(ev["ic"])
 
     if filled:
         # 分批落盘，避免单次 registry 太大 + 中途被杀丢全部
@@ -208,7 +208,7 @@ def cmd_sync_status(lib: FactorLibrary, args) -> None:
 
     payload: dict[str, dict] = {}
     for _, r in todo.iterrows():
-        p = lib._resolve_eval_path(r) or (lib.evals_dir / f"{_slug(r['name'])}.parquet")
+        p = lib._resolve_eval_path(r) or (lib.evals_dir / f"{name_slug(r['name'])}.parquet")
         if not Path(p).exists():
             continue
         ts = _dt.fromtimestamp(Path(p).stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S")

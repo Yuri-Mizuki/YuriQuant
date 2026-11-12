@@ -16,7 +16,7 @@ import pandas as pd
 from strategy.base import Strategy
 
 
-def _erc_weights(cov: np.ndarray) -> np.ndarray:
+def erc_weights(cov: np.ndarray) -> np.ndarray:
     """等风险贡献（ERC）权重：最小化各资产风险贡献的平方偏差。"""
     n = cov.shape[0]
     if n == 1:
@@ -61,7 +61,7 @@ def _quasi_diag(link: np.ndarray) -> list[int]:
     return sort_ix.tolist()
 
 
-def _hrp_weights(cov: np.ndarray) -> np.ndarray:
+def hrp_weights(cov: np.ndarray) -> np.ndarray:
     """层次风险平价（HRP，López de Prado 2016）：单链接聚类 + 递归二分。"""
     n = cov.shape[0]
     if n == 1:
@@ -223,7 +223,7 @@ def _hrp_avg_corr(cov: np.ndarray) -> np.ndarray:
     flat = np.full((n, n), rbar)
     np.fill_diagonal(flat, 1.0)
     cov2 = flat * np.outer(sd, sd)
-    return _hrp_weights(cov2)
+    return hrp_weights(cov2)
 
 
 #: 需要读协方差面板的权重规则（``_risk_parity`` 统一分发）。
@@ -251,7 +251,7 @@ def _hrp_anticorr(cov: np.ndarray) -> np.ndarray:
     n = cov.shape[0]
     if n == 1:
         return np.ones(1)
-    w = _hrp_weights(cov)
+    w = hrp_weights(cov)
     sd = np.sqrt(np.diag(cov))
     if np.any(sd <= 0):
         return w
@@ -435,7 +435,7 @@ class EtfRotationAdvanced(Strategy):
         cov = sub.cov().to_numpy() * 252.0
         rule = self.weighting
         if rule == "erc":
-            w = _erc_weights(cov)
+            w = erc_weights(cov)
         elif rule == "inv_var":
             var = np.diag(cov).copy()
             if np.any(var <= 0):
@@ -453,7 +453,7 @@ class EtfRotationAdvanced(Strategy):
             base = np.arange(len(sel), 0, -1, dtype=float)
             w = _risk_budget_weights(cov, base)
         elif rule == "hrp_shrunk":
-            w = _hrp_weights(_shrunk_cov(cov))
+            w = hrp_weights(_shrunk_cov(cov))
         elif rule == "hrp_avgcorr":
             w = _hrp_avg_corr(cov)
         elif rule == "hrp_ew":
@@ -461,7 +461,7 @@ class EtfRotationAdvanced(Strategy):
         elif rule == "hrp_anticorr":
             w = _hrp_anticorr(cov)
         else:
-            w = _hrp_weights(cov)
+            w = hrp_weights(cov)
         return pd.Series(w, index=sel)
 
     def _cap_weight(self, w: pd.Series) -> pd.Series:

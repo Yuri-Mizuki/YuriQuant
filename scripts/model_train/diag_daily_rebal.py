@@ -45,7 +45,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-PQ = Path("D:/data/parquet")
+from config import Config
+
+PQ = Path(Config.paths()["cache_root"])
 DL_DIR = Path("reports/report_replica/dl")
 OUT_DIR = Path("reports/report_replica")
 TD = 252            # 年化交易日

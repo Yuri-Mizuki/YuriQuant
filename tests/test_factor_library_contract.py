@@ -17,7 +17,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from research.factor_library import FactorLibrary, _slug
+from research.factor_library import FactorLibrary, name_slug
 
 
 def _panel_and_returns(n_dates: int = 260, n_codes: int = 40, seed: int = 0):
@@ -44,7 +44,7 @@ def test_ingest_leaves_canonical_metrics_empty(tmp_path):
     assert np.isnan(float(row.get("sharpe_ls_M", np.nan)))
     assert np.isfinite(row["ic_mean"])
     # 只登记也要有 eval 文件（里面至少要有 ic 列），否则时间段切片无从谈起
-    ev = pd.read_parquet(tmp_path / "t" / "evals" / f"{_slug(row['name'])}.parquet")
+    ev = pd.read_parquet(tmp_path / "t" / "evals" / f"{name_slug(row['name'])}.parquet")
     assert "ic" in ev.columns
     assert "dret_ls_M" not in ev.columns
 
@@ -59,7 +59,7 @@ def test_evaluate_fills_metrics_and_flips_status(tmp_path):
     row = lib.list_all().set_index("name").loc["f_eval"]
     assert row["eval_status"] == "evaluated"
     assert str(row["evaluated_at"]).strip() != ""
-    ev = pd.read_parquet(tmp_path / "t" / "evals" / f"{_slug('f_eval')}.parquet")
+    ev = pd.read_parquet(tmp_path / "t" / "evals" / f"{name_slug('f_eval')}.parquet")
     assert {"ic", "dret_ls_M", "equity_ls_M"} <= set(ev.columns)
 
 
@@ -103,7 +103,7 @@ def test_evaluated_with_missing_eval_file_is_violation(tmp_path):
     lib = FactorLibrary(root=tmp_path, dataset="t")
     panel, rets = _panel_and_returns()
     lib.register("f_y", panel, rets)
-    (tmp_path / "t" / "evals" / f"{_slug('f_y')}.parquet").unlink()
+    (tmp_path / "t" / "evals" / f"{name_slug('f_y')}.parquet").unlink()
 
     rules = {v["rule"] for v in lib.contract_violations()}
     assert "eval_file_missing" in rules

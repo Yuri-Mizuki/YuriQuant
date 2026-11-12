@@ -50,6 +50,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from config import Config
 from data.cache import DataCache
 from data.datasource import create_datasource
 from scripts.portfolio.etf_rotation_panels import build_extra_panels
@@ -155,7 +156,8 @@ def load_cls_daily(begin: int = CLS_BEGIN) -> pd.DataFrame:
         print(f"  [cache] {cf.name} {df.shape}")
         return df
 
-    files = sorted(glob.glob(str(Path("E:/data/parquet/alt_cls") / "cls_*.parquet")))
+    files = sorted(glob.glob(str(Path(Config.paths()["cache_root"]) / "alt_cls"
+                                 / "cls_*.parquet")))
     files = [f for f in files if re.search(r"(\d{8})", Path(f).stem).group(1) >= str(begin)]
     # 同主题多 ETF 合并关键词，避免重复扫描
     sig: dict[str, str] = {}

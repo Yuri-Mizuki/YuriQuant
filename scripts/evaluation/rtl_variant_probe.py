@@ -97,7 +97,7 @@ def _max_dd(dr: pd.Series) -> float:
     return float((eq / eq.cummax() - 1).min())
 
 
-def _ann(dr: pd.Series) -> float:
+def annualized(dr: pd.Series) -> float:
     n_y = len(dr) / 252.0
     return float((1 + dr).prod() ** (1 / n_y) - 1)
 
@@ -106,7 +106,7 @@ def _sr(dr: pd.Series) -> float:
     return float(dr.mean() / dr.std(ddof=1) * np.sqrt(252))
 
 
-def _build(arm: tuple[str, int | None, int, float], ind: pd.DataFrame):
+def build_arm(arm: tuple[str, int | None, int, float], ind: pd.DataFrame):
     _, m, k, buf = arm
     if m is None:
         return BufferedTopKLongOnly(k=k, exit_mult=buf)
@@ -158,7 +158,7 @@ def main(phases: list[int]) -> None:
         rb = cal.rebalance_dates(ctx.pred.index, freq="M", phase=p)
         s = segmented_equal_weight_returns(full_close, rebalance_dates=rb,
                                            index=ctx.pred.index)
-        eqw[p] = _ann(s)
+        eqw[p] = annualized(s)
 
     long_rows, daily, holds, arm_sum = [], {}, {}, {}
     for arm in ARMS:
@@ -167,7 +167,7 @@ def main(phases: list[int]) -> None:
         daily[name], holds[name], rows = {}, {}, []
         for p in phases:
             n_reb = len(cal.rebalance_dates(ctx.pred.index, freq="M", phase=p))
-            bt = cal.VectorBacktest(strategy=_build(arm, ind), rebalance_freq="M",
+            bt = cal.VectorBacktest(strategy=build_arm(arm, ind), rebalance_freq="M",
                                     initial_capital=CAPITAL, costs=cost)
             res = cal.run_once(bt, ctx, "open", freq="M", phase=p,
                                price_panel=px, lot_size=LOT)
@@ -201,7 +201,7 @@ def main(phases: list[int]) -> None:
             "ann_min": df["ann"].min(), "ann_max": df["ann"].max(),
             "sr_mean": df["sr"].mean(), "dd_mean": df["dd"].mean(),
             "excess_mean": df["excess"].mean(),
-            "blend_ann": _ann(blend), "blend_sr": _sr(blend), "blend_dd": _max_dd(blend),
+            "blend_ann": annualized(blend), "blend_sr": _sr(blend), "blend_dd": _max_dd(blend),
             "rtl_te": te_s.mean(),
             "rtl_te_safe": safe["ann"].std(ddof=1),
             "ann_range_safe": safe["ann"].max() - safe["ann"].min(),

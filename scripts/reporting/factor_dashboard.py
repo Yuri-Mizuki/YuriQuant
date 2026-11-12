@@ -37,6 +37,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, ROOT)
 
+from config import Config  # noqa: E402
 from scripts.common.cli_common import setup_logging  # noqa: E402
 
 log = setup_logging("factor_dashboard")
@@ -287,7 +288,7 @@ def main() -> None:
     ap.add_argument("--out", default=None, help="输出 HTML 路径")
     args = ap.parse_args()
 
-    lib_root = Path("e:/data/factor_library") / args.dataset
+    lib_root = Path(Config.paths()["factor_library_root"]) / args.dataset
     reg = pd.read_csv(lib_root / "registry.csv")
     reg = reg.drop_duplicates(subset="name", keep="last").reset_index(drop=True)
     names = reg["name"].tolist()

@@ -5,7 +5,7 @@
 ## ``--mode hrp``：80% 单只是 HRP 的固有输出，还是策略额外放大？
 
 ``§4.4.1`` 已给出 n=3 的解析式 ``alpha = 1 − 1/(3+2ρ)``。本模式补一个**外部验证**：
-从候选池随机抽 (3 只 × 60 日) 组合直接喂 ``_hrp_weights``，看最大权重的分布。
+从候选池随机抽 (3 只 × 60 日) 组合直接喂 ``hrp_weights``，看最大权重的分布。
 若本策略实测的 80.7% 落在该分布中部 ⇒ 集中度来自「HRP + Top3」，不是来自选标。
 
 ## ``--mode begin``：``BEGIN=20200101`` 是暖机边界还是挑出来的窗口？
@@ -38,7 +38,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from strategy.etf_rotation import _hrp_weights
+from strategy.etf_rotation import hrp_weights
 
 ROOT = Path(__file__).resolve().parents[2]
 PHASES_NOTE = "起点敏感性用 T+1 open 口径，与 etf_weight_probe.run 同源"
@@ -70,7 +70,7 @@ def mode_hrp(n_draw: int = 200, seed: int = 7) -> pd.DataFrame:
         if len(sub) < 40:
             continue
         cov = sub.cov().to_numpy() * 252
-        w = _hrp_weights(cov)
+        w = hrp_weights(cov)
         sd = np.sqrt(np.diag(cov))
         corr = cov / np.outer(sd, sd)
         i = int(np.argmax(w))

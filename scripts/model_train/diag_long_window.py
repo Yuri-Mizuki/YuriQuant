@@ -20,7 +20,7 @@
   · 组合层 TopN 敏感性（Top5 的放大倍数是否只在 Top5 成立）
   · 连续 rank 分权（去掉 Top5 的离散选择）
 
-口径：行业指数 → 与主口径同的周度调仓日；收益用合成面板 `_synth_panel`（T+1 开盘，
+口径：行业指数 → 与主口径同的周度调仓日；收益用合成面板 `synth_panel`（T+1 开盘，
 S2 = 本期末 → 下期末）；IC 用 `ic_series(lag=0)`。
 
 用法:
@@ -75,7 +75,7 @@ def main() -> None:
     args = ap.parse_args()
 
     from scripts.model_train.eval_dl_industry import agg_one, DL_DIR
-    from scripts.model_train.diag_exec_timing import _synth_panel, _excess, _turnover, _stat
+    from scripts.model_train.diag_exec_timing import synth_panel, head_excess, weekly_turnover, geo_tstat
     from scripts.portfolio.report_replica import build_ctx, load_px, zrank
 
     px = load_px()
@@ -85,7 +85,7 @@ def main() -> None:
     dl = agg_one(pd.read_parquet(DL_DIR / f"pred_{args.pred}.parquet"), ctx)
     dl = dl.reindex(index=dates, columns=inds)
     mom = (px / px.shift(args.L) - 1).reindex(index=dates, columns=inds)
-    P = _synth_panel(ctx)
+    P = synth_panel(ctx)
 
     print(f"预测 {args.pred} · 长窗 L={args.L} · {len(dates)} 期 · Top{args.top}")
 
@@ -130,12 +130,12 @@ def main() -> None:
         cells = []
         tr = np.nan
         for top in (5, 8, 10, 15):
-            ex, picks = _excess(P["po1"], P["po1"], sig.to_numpy(), dates, inds,
+            ex, picks = head_excess(P["po1"], P["po1"], sig.to_numpy(), dates, inds,
                                 shift=True, top_n=top)
-            g, _ = _stat(ex)
+            g, _ = geo_tstat(ex)
             cells.append(f"{g*100:+8.2f}%")
             if top == 5:
-                tr = _turnover(picks)
+                tr = weekly_turnover(picks)
         print(f"  {label:22s} " + " ".join(cells) + f" {tr:>6.3f}")
 
     print("\n  连续 rank 分权（无 TopN 跳跃）：")
@@ -145,10 +145,10 @@ def main() -> None:
 
     # 5) 净收益（按峰值权重，逐期扣成本复利）
     print(f"\n=== 5. 净收益（合成 {best_w:.1f}/{1-best_w:.1f}，Top{args.top}，逐期扣成本）===")
-    ex, picks = _excess(P["po1"], P["po1"], comb.to_numpy(), dates, inds,
+    ex, picks = head_excess(P["po1"], P["po1"], comb.to_numpy(), dates, inds,
                         shift=True, top_n=args.top)
-    tr = _turnover(picks)
-    g, t = _stat(ex)
+    tr = weekly_turnover(picks)
+    g, t = geo_tstat(ex)
     print(f"  毛 {g*100:+.2f}%  t {t:+.2f}  单边换手 {tr:.3f}")
     for bp in (10, 5, 3):
         net = (1 + ex - tr * 2 * bp / 1e4).prod() ** (52 / len(ex)) - 1

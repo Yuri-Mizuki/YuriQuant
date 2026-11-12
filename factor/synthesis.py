@@ -248,7 +248,7 @@ def long_matrix(
     行序 = **日期优先**（``MultiIndex.from_product([idx, cols])``），即同一交易日的
     全部股票连续排列——时序 CV 按「交易日边界」切折依赖此约定。
 
-    公开接口：模型层 ``model.stacking`` 复用本函数（与 ``model.predictor._long_matrix``
+    公开接口：模型层 ``model.stacking`` 复用本函数（与 ``model.predictor.long_feature_matrix``
     同口径），故不再以 ``_`` 前缀私有化。
     """
     # 取所有因子面板的交集网格

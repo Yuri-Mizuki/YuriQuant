@@ -115,7 +115,7 @@ def main() -> None:
 
     from research.factor_analysis import calc_ir
     from research.factor_library import FactorLibrary
-    from research.factor_library import _METRIC_COLS, CANONICAL_CONFIGS
+    from research.factor_library import METRIC_COLS, CANONICAL_CONFIGS
     from stats.significance import mean_inference
 
     lib = FactorLibrary(dataset=args.dataset)
@@ -225,7 +225,7 @@ def main() -> None:
                     # 超额只对纯多配置算（LS 对基准求超额无经济含义，见 docstring）
                     is_lo = cfg.key.startswith("lo")
                     m = res.metrics(benchmark_returns=bench if is_lo else None)
-                    for mc in _METRIC_COLS:
+                    for mc in METRIC_COLS:
                         if mc in m:
                             reg.at[i, f"{mc}_{cfg.key}"] = m[mc]
                     if is_lo:

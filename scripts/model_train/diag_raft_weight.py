@@ -38,7 +38,7 @@ import pandas as pd
 
 from factor.cv import forward_roll_folds
 from model.labels import build_labels
-from model.predictor import _long_matrix
+from model.predictor import long_feature_matrix
 from scripts.common.alla_common import BASE_DIR, FeatureStore, ds_root, load_base
 
 log = logging.getLogger("raft_weight")
@@ -177,7 +177,7 @@ def run(years: list[int], n_folds: int, max_train: int | None,
                 continue
 
             t0 = time.time()
-            X = _long_matrix(F, names, tr, cols)
+            X = long_feature_matrix(F, names, tr, cols)
             y = labels.loc[tr].values.ravel()
             ok = np.isfinite(y)
             X, y = X[ok], y[ok]
@@ -185,7 +185,7 @@ def run(years: list[int], n_folds: int, max_train: int | None,
 
             st = state.reindex(tr)
             st = st.ffill().bfill()
-            Xte = _long_matrix(F, names, fold.test_days, cols)
+            Xte = long_feature_matrix(F, names, fold.test_days, cols)
 
             preds = {}
             for arm in arms:

@@ -214,13 +214,33 @@ def agg_matrix(panel: pd.DataFrame, ctx: dict, px: pd.DataFrame) -> pd.DataFrame
                         columns=ctx["inds"]).reindex(index=px.index, columns=px.columns)
 
 
+def _load_pred_panel(name: str, universe: pd.Index) -> pd.DataFrame | None:
+    """读预测面板并对齐到 ``ctx`` 的 universe（列名统一为 6 位.SH/SZ）。
+
+    2026-11-12：原实现位于 ``scripts/oneoff/etf_industry_model_ic.py``，而
+    ``scripts/oneoff/`` 被 gitignore —— 入库代码 import 它会让干净 clone 直接
+    ImportError（``test_layering::test_no_tracked_code_imports_gitignored_dirs``）。
+    本函数只用到「按候选路径找面板 + reindex 列」这一步，故内联，不再跨目录依赖。
+    """
+    pred_dir = ROOT / "reports" / "alla_rolling_ortho" / "pred"
+    gru_dir = ROOT / "reports" / "p1b_prod_baseline"
+    for cand in (pred_dir / f"{name}.parquet", gru_dir / f"pred_{name}.parquet",
+                 gru_dir / f"{name}.parquet"):
+        if cand.exists():
+            d = pd.read_parquet(cand)
+            if "date" in d.columns:
+                d = d.set_index("date")
+            d.columns = [str(c) for c in d.columns]
+            return d.reindex(columns=universe)
+    return None
+
+
 def dl_signals(ctx: dict, px: pd.DataFrame, arms: tuple[str, ...] = ("gbdt__h1",)
                ) -> dict[str, pd.DataFrame]:
     """研报「深度学习」维度 → 我们的模型分数聚合（占位替身，见报告§差异）。"""
-    from scripts.oneoff.etf_industry_model_ic import load_model_panel
     out: dict[str, pd.DataFrame] = {}
     for arm in arms:
-        p = load_model_panel(arm, ctx["universe"])
+        p = _load_pred_panel(arm, ctx["universe"])
         if p is None:
             continue
         out[f"dl_{arm.split('__')[0]}"] = agg_matrix(p, ctx, px)

@@ -85,11 +85,17 @@ def _label(p: Path) -> str:
         return p.as_posix()
 
 
+#: 盘符前缀（盘符 + 冒号 + 斜杠）。写成正则而非字符串字面量，是因为本文件同样受
+#: ``tests/test_no_hardcoded_drive_paths`` 审计 —— 那里扫的就是「引号紧跟盘符」的
+#: 形态，直接写死一个盘符前缀会让检测器把自己判成硬编码路径。
+_DRIVE_PREFIX = re.compile(r"^[A-Za-z]:/")
+
+
 def looks_like_path(tok: str) -> bool:
     """反引号内容是否是一个可校验的项目路径（宁缺勿滥，误报会让人放弃守卫）。"""
     if any(s in tok for s in NOT_PATH):
         return False
-    if tok.startswith(("http", "~/", "E:/", "D:/", "C:/")) and "/" in tok:
+    if tok.startswith(("http", "~/")) or _DRIVE_PREFIX.match(tok):
         return True
     if "/" not in tok or tok.startswith(("-", "#")):
         return False

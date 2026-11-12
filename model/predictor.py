@@ -67,7 +67,7 @@ def grid_of(features: Mapping[str, pd.DataFrame],
 _grid = grid_of
 
 
-def _long_matrix(features: Mapping[str, pd.DataFrame], names: list[str],
+def long_feature_matrix(features: Mapping[str, pd.DataFrame], names: list[str],
                  idx: pd.Index, cols: pd.Index) -> np.ndarray:
     """(n_obs, n_feat) 长矩阵，行序 = 日期优先（from_product 约定）。"""
     mats = [features[n].reindex(index=idx, columns=cols).values.ravel() for n in names]
@@ -109,7 +109,7 @@ class RidgePredictor(BasePredictor):
     def fit(self, features: Mapping[str, pd.DataFrame], labels: pd.DataFrame) -> "RidgePredictor":
         idx, cols = _grid(features, labels)
         self.feature_names_ = sorted(features.keys())
-        X = _long_matrix(features, self.feature_names_, idx, cols)
+        X = long_feature_matrix(features, self.feature_names_, idx, cols)
         y = labels.reindex(index=idx, columns=cols).values.ravel()
 
         valid = ~np.isnan(X).any(axis=1) & ~np.isnan(y)
@@ -132,7 +132,7 @@ class RidgePredictor(BasePredictor):
     def predict(self, features: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
         self._check_features(features)
         idx, cols = _grid(features)
-        X = _long_matrix(features, self.feature_names_, idx, cols)
+        X = long_feature_matrix(features, self.feature_names_, idx, cols)
         # 缺失特征按截面均值（z=0 → 0 贡献），对齐 ICL「NaN 填 0 = 保守中性化」惯例。
         # 否则单个特征在数据洞期整体 NaN 会把整块预测变 NaN（2026-09-03 全A桩外发现）。
         Xz = (X - self._mu) / self._sd
@@ -179,7 +179,7 @@ class LGBMPredictor(BasePredictor):
 
         idx, cols = _grid(features, labels)
         self.feature_names_ = sorted(features.keys())
-        X = _long_matrix(features, self.feature_names_, idx, cols)
+        X = long_feature_matrix(features, self.feature_names_, idx, cols)
         y = labels.reindex(index=idx, columns=cols).values.ravel()
 
         # 标签 NaN 必须剔除；特征 NaN 保留（LightGBM 原生处理）
@@ -202,7 +202,7 @@ class LGBMPredictor(BasePredictor):
     def predict(self, features: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
         self._check_features(features)
         idx, cols = _grid(features)
-        X = _long_matrix(features, self.feature_names_, idx, cols)
+        X = long_feature_matrix(features, self.feature_names_, idx, cols)
         pred = self._model.predict(X)
         return standardize_zscore(_to_panel(pred, idx, cols))
 
@@ -222,7 +222,7 @@ class LGBMPredictor(BasePredictor):
         """
         self._check_features(features)
         idx, cols = _grid(features)
-        X = _long_matrix(features, self.feature_names_, idx, cols)
+        X = long_feature_matrix(features, self.feature_names_, idx, cols)
         contrib = self._model.predict(X, pred_contrib=True)  # (n, f+1)
         rows = pd.MultiIndex.from_product([idx, cols], names=["date", "code"])
         return pd.DataFrame(contrib, index=rows,
@@ -261,7 +261,7 @@ class TabICLPredictor(BasePredictor):
 
         idx, cols = _grid(features, labels)
         self.feature_names_ = sorted(features.keys())
-        X = _long_matrix(features, self.feature_names_, idx, cols)
+        X = long_feature_matrix(features, self.feature_names_, idx, cols)
         y = labels.reindex(index=idx, columns=cols).values.ravel()
 
         valid = ~np.isnan(X).any(axis=1) & ~np.isnan(y)
@@ -282,7 +282,7 @@ class TabICLPredictor(BasePredictor):
     def predict(self, features: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
         self._check_features(features)
         idx, cols = _grid(features)
-        X = _long_matrix(features, self.feature_names_, idx, cols)
+        X = long_feature_matrix(features, self.feature_names_, idx, cols)
         X = np.nan_to_num(X, nan=0.0)
 
         out = np.full(X.shape[0], np.nan)
@@ -327,7 +327,7 @@ class LGBRankerPredictor(BasePredictor):
 
         idx, cols = _grid(features, labels)
         self.feature_names_ = sorted(features.keys())
-        X = _long_matrix(features, self.feature_names_, idx, cols)
+        X = long_feature_matrix(features, self.feature_names_, idx, cols)
         y = labels.reindex(index=idx, columns=cols).values.ravel()
 
         # 剔除标签 NaN 行
@@ -382,7 +382,7 @@ class LGBRankerPredictor(BasePredictor):
     def predict(self, features: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
         self._check_features(features)
         idx, cols = _grid(features)
-        X = _long_matrix(features, self.feature_names_, idx, cols)
+        X = long_feature_matrix(features, self.feature_names_, idx, cols)
         pred = self._model.predict(X)
         return standardize_zscore(_to_panel(pred, idx, cols))
 
@@ -423,7 +423,7 @@ class TabPFNPredictor(BasePredictor):
 
         idx, cols = _grid(features, labels)
         self.feature_names_ = sorted(features.keys())
-        X = _long_matrix(features, self.feature_names_, idx, cols)
+        X = long_feature_matrix(features, self.feature_names_, idx, cols)
         y = labels.reindex(index=idx, columns=cols).values.ravel()
 
         valid = ~np.isnan(X).any(axis=1) & ~np.isnan(y)
@@ -446,7 +446,7 @@ class TabPFNPredictor(BasePredictor):
     def predict(self, features: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
         self._check_features(features)
         idx, cols = _grid(features)
-        X = _long_matrix(features, self.feature_names_, idx, cols)
+        X = long_feature_matrix(features, self.feature_names_, idx, cols)
         X = np.nan_to_num(X, nan=0.0)
 
         out = np.full(X.shape[0], np.nan)

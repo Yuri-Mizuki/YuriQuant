@@ -376,15 +376,33 @@ _TESTS_ONLY_PRIVATE: set[tuple[str, str]] = {
     # 白盒单测直连喂临时目录做判据对拍（无生产消费者，doctor 只打印）。
     ("scripts.common.task_scheduler", "_rc_hint"),
     ("scripts.common.task_scheduler", "_check_altdata_tables"),
-    # 2026-10-26 聚宽看板探针：IC / 残差 IC / 秩面板 / 去重批处理是探针内部
-    # 实现细节，白盒单测直连做口径对拍（无生产消费者）。
-    ("scripts.evaluation.jq_factor_probe", "_cs_ic"),
-    ("scripts.evaluation.jq_factor_probe", "_rank_panel"),
-    ("scripts.evaluation.jq_factor_probe", "_resid_ic_np"),
-    ("scripts.evaluation.jq_factor_probe", "_dup_batch"),
+    # 2026-10-26 聚宽看板探针：曾以「无生产消费者」为由放行 4 个名字，但
+    # ``scripts/evaluation/top10_sharpe_eval.py`` 一直在 import 它们（生产探针互引），
+    # 2026-11-12 已公开化为 cs_ic / rank_panel / resid_ic_np / dup_batch，条目移除。
     # 2026-10-26 登记 master 存量红灯（非本次改动引入）：白盒单测直连
     # （caliber._run_once 已改公开名为 caliber.run_once，条目已移除）。
     ("scripts.evaluation.model_state_probe", "_apply_position_cost"),
+    # ---- 2026-11-12 存量红灯收口 -------------------------------------------
+    # 这一批 13 条全部是 **tests 白盒**：生产侧无跨模块消费者（已逐个 grep 核实，
+    # 名字只在「定义模块内部」出现），只有单测直连内部实现做口径对拍。
+    # 同批的生产侧 20 个名字已公开化（rank_desc / name_slug / ic_stats /
+    # METRIC_COLS / metrics_row / pool_mask / pool_bench / annualized / build_arm /
+    # synth_panel / head_excess / weekly_turnover / geo_tstat / long_feature_matrix /
+    # monthly_returns / rolling_max_drawdown / run_backtest / run_with_cls /
+    # hrp_weights / erc_weights），本字典只保留「确实只给测试看」的那部分。
+    ("research.factor_library", "_row_rank_zscore"),
+    ("research.factor_library", "_collapse_duplicate_names"),
+    ("research.factor_library", "_count_changed"),
+    ("research.factor_library", "_family_key"),
+    ("research.factor_library", "_window_stats"),
+    ("scripts.builders.build_alla_alpha_panels", "_upsert_registry"),
+    ("scripts.factors.panel_leak_audit", "_staleness"),
+    ("scripts.factors.backfill_metadata", "_alpha_formula"),
+    ("scripts.factors.backfill_metadata", "_e4_formula"),
+    ("scripts.builders.build_alla_event_factors", "_pit_express"),
+    ("data.datasource", "_call_with_timeout"),
+    ("data.datasource", "_candidate_hosts"),
+    ("data.status_guard", "_normalize_date"),
 }
 
 #: 暂豁免的**被引用方**前缀：

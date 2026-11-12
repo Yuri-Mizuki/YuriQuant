@@ -34,7 +34,7 @@ from strategy.examples import (
     TopFracLongOnly,
     TopKLongOnly,
     TopKLongShort,
-    _rank_desc,
+    rank_desc,
     build_strategy,
 )
 
@@ -48,5 +48,5 @@ __all__ = [
     "BufferedTopKLongOnly",
     "QuantileLongShort",
     "build_strategy",
-    "_rank_desc",
+    "rank_desc",
 ]

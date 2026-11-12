@@ -75,7 +75,7 @@ from scripts.portfolio.etf_long_sample import (  # noqa: E402
     NEAR_END,
     NEAR_START,
     WARMUP,
-    _run,
+    run_backtest,
     load_env,
 )
 
@@ -310,12 +310,12 @@ def main(argv=None) -> int:
             env = load_env(cache, LONG_CODES, WARMUP, LONG_END, args.min_amount)
             start = LONG_START
             name = f"2014–2019（{len(LONG_CODES)} 只，含 2015 崩盘 / 2018 熊市）"
-            r1 = _run(env, dict(FINAL))
+            r1 = run_backtest(env, dict(FINAL))
         elif tag == "near":
             env = load_env(cache, LONG_CODES, 20180101, NEAR_END, args.min_amount)
             start = NEAR_START
             name = f"2020–2026（同 {len(LONG_CODES)} 只，旧探针样本区的同池版）"
-            r1 = _run(env, dict(FINAL))
+            r1 = run_backtest(env, dict(FINAL))
         elif tag == "near45":
             from scripts.portfolio.etf_contest5_eval import BEGIN
             from scripts.portfolio.etf_weight_probe import load_env as wp_load_env

@@ -109,7 +109,7 @@ def load_env(cache, codes, begin: int, end: int, min_amount: float = 3e7,
                 open_adj=open_, amount=amount, bench=bench, mfs=mfs)
 
 
-def _run(env, spec: dict, cls=None, begin: int | None = None) -> dict:
+def run_backtest(env, spec: dict, cls=None, begin: int | None = None) -> dict:
     """单次回测，T+1 open 口径，与 probe.run 同源。
 
     ``begin`` 非 None 时按生产口径在计分起点切片（`slice_bundle`），代价是
@@ -233,14 +233,14 @@ def main(argv=None) -> int:
             for wt in ("hrp", "equal"):
                 sp = dict(FINAL)
                 sp["weighting"] = wt
-                r = _run(env, sp, begin=b0)
+                r = run_backtest(env, sp, begin=b0)
                 m = _eq_metrics(r["equity"], start)
                 rows.append({"window": tag, "arm": wt, **m,
                              "holdings": float(r["avg_holdings"]),
                              "rebal": int(r["n_rebalance"])})
                 print(f"  [{tag}] {wt:<6} 年化 {m['ann']:>7.2%} SR {m['sharpe']:>5.2f} "
                       f"MDD {m['mdd']:>7.2%} 持仓 {r['avg_holdings']:.2f}")
-            r = _run(env, dict(FINAL), _PoolEq, begin=b0)
+            r = run_backtest(env, dict(FINAL), _PoolEq, begin=b0)
             m = _eq_metrics(r["equity"], start)
             rows.append({"window": tag, "arm": "pool_eq", **m,
                          "holdings": float(r["avg_holdings"]), "rebal": int(r["n_rebalance"])})
@@ -254,8 +254,8 @@ def main(argv=None) -> int:
             print(f"  {w}: HRP−等权 = {(hrp - eq) * 100:+.2f}pp；"
                   f"等权−全池 = {(eq - pool) * 100:+.2f}pp；HRP−全池 = {(hrp - pool) * 100:+.2f}pp")
         out["core"] = d
-        y = pd.DataFrame({"2013–2019": _yearly(_run(env_l, dict(FINAL))["equity"], LONG_START),
-                          "2020–2026": _yearly(_run(env_n, dict(FINAL))["equity"], NEAR_START)})
+        y = pd.DataFrame({"2013–2019": _yearly(run_backtest(env_l, dict(FINAL))["equity"], LONG_START),
+                          "2020–2026": _yearly(run_backtest(env_n, dict(FINAL))["equity"], NEAR_START)})
         print("\n  == HRP 分年 ==")
         print((y * 100).round(1).to_string())
         out["yearly"] = y.reset_index()
@@ -293,7 +293,7 @@ def main(argv=None) -> int:
                           else (base & (pn["age"] >= n_listed)))
             env_x = dict(env_p, panels=pn)
             sp = dict(FINAL)
-            r = _run(env_x, sp, begin=NEAR_START)
+            r = run_backtest(env_x, sp, begin=NEAR_START)
             m = _eq_metrics(r["equity"], NEAR_START)
             print(f"  [{tag:<18}] 年化 {m['ann']:>7.2%} SR {m['sharpe']:>5.2f} "
                   f"MDD {m['mdd']:>7.2%} 持仓 {r['avg_holdings']:.2f}")
@@ -311,7 +311,7 @@ def main(argv=None) -> int:
                 sp["weighting"] = wt
                 a = []
                 for sd in range(args.seeds):
-                    a.append(_eq_metrics(_run(env, sp, _rand_sel_cls(sd))["equity"],
+                    a.append(_eq_metrics(run_backtest(env, sp, _rand_sel_cls(sd))["equity"],
                                          start)["ann"])
                 a = np.array(a)
                 rows.append({"window": tag, "arm": f"rand_{wt}", "ann": float(a.mean()),

@@ -32,7 +32,7 @@ import numpy as np
 import pandas as pd
 
 import scripts.evaluation.caliber as cal
-from scripts.evaluation.rtl_variant_probe import ARMS, OUT, _ann, _build
+from scripts.evaluation.rtl_variant_probe import ARMS, OUT, annualized, build_arm
 from scripts.evaluation.solo_freq_probe import (
     CAPITAL,
     END,
@@ -67,14 +67,14 @@ def _tranch_rtl(daily: dict[int, pd.Series], n_legs: int, rng) -> dict:
     if len(subs) > N_DRAW:
         idx = rng.choice(len(subs), size=N_DRAW, replace=False)
         subs = [subs[i] for i in idx]
-    anns = [_ann(R[list(s)].mean(axis=1)) for s in subs]
+    anns = [annualized(R[list(s)].mean(axis=1)) for s in subs]
     full = R.mean(axis=1)
     return {"n_legs": n_legs, "n_subset": len(subs),
             "rtl_subset_std": float(np.std(anns, ddof=1)),
             "ann_mean": float(np.mean(anns)), "ann_min": float(np.min(anns)),
             "ann_max": float(np.max(anns)),
             "ann_range": float(np.max(anns) - np.min(anns)),
-            "ann_21legs": _ann(full)}
+            "ann_21legs": annualized(full)}
 
 
 def main() -> None:
@@ -91,7 +91,7 @@ def main() -> None:
         name = arm[0]
         daily[name] = {}
         for p in range(N_PHASE):
-            bt = cal.VectorBacktest(strategy=_build(arm, ind), rebalance_freq="M",
+            bt = cal.VectorBacktest(strategy=build_arm(arm, ind), rebalance_freq="M",
                                     initial_capital=CAPITAL, costs=cost)
             res = cal.run_once(bt, ctx, "open", freq="M", phase=p,
                                price_panel=px, lot_size=LOT)

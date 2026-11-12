@@ -32,7 +32,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-SW_FILE = Path("D:/data/parquet/sw_industry_daily.parquet")
+from config import Config
+
+SW_FILE = Path(Config.paths()["cache_root"]) / "sw_industry_daily.parquet"
 OUT_DIR = Path("reports/report_replica")
 START = "2013-01-01"
 

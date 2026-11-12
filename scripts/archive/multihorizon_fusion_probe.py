@@ -107,7 +107,7 @@ def stack_long(arrays: dict[str, np.ndarray], names: list[str],
                lo: int, hi: int) -> np.ndarray:
     """把 108 张 (n_days, n_codes) float32 数组按 [lo:hi) 行拼成 (n, n_feat) 长矩阵。
 
-    行序 = 日期优先（与 ``model.predictor._long_matrix`` 的 ``from_product`` 约定一致）。
+    行序 = 日期优先（与 ``model.predictor.long_feature_matrix`` 的 ``from_product`` 约定一致）。
     ⚠️ 不能用 ``reindex``：那会为每张面板复制一次整个面板（108 × 1.3GB）。
     """
     n_rows = (hi - lo) * arrays[names[0]].shape[1]

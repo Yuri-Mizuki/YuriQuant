@@ -20,7 +20,7 @@ import pytest
 
 from backtest.metrics import sharpe_ratio
 from research.factor_library import (MATURITY_GATES, FactorLibrary, _family_key,
-                                     _window_stats, _slug)
+                                     _window_stats, name_slug)
 
 N = 800          # 约 3.2 年；后段 30% = 240 天，够"近 250 日"窗口取不满时退化
 
@@ -65,7 +65,7 @@ def _build(root, specs: dict, *, matrix: tuple | None = None) -> FactorLibrary:
                      n=sp.get("n", N)) * 0.1
         if not sp.get("no_eval_file"):
             pd.DataFrame({"ic": ic, "dret_ls_M": dret}).to_parquet(
-                lib.evals_dir / f"{_slug(name)}.parquet")
+                lib.evals_dir / f"{name_slug(name)}.parquet")
         rows.append({
             "name": name,
             "eval_status": sp.get("eval_status", "evaluated"),

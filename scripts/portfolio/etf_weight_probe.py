@@ -444,7 +444,7 @@ def mode_wf(env, spec, rules=None, min_train: int = 8, metric: str = "sharpe"):
     return d
 
 
-def _run_cls(env, spec: dict, cls):
+def run_with_cls(env, spec: dict, cls):
     """``run()`` 的变体：允许替换策略类（安慰剂用）。口径完全一致。"""
     r0 = run_variant(env["bundle"], env["panels"], spec, BEGIN, None,
                      strategy_cls=cls)
@@ -546,7 +546,7 @@ def mode_placebo(env, spec, n_seed: int = 20, rules=None):
                           (("single"), _rand_single_cls, "随机押一只（不干净，仅供参考）")):
         res = []
         for sd in range(n_seed):
-            _a, r1 = _run_cls(env, spec, fn(sd))
+            _a, r1 = run_with_cls(env, spec, fn(sd))
             w2 = two_month_windows(r1["equity"], env["mfs"])
             res.append({"seed": sd, "ann": r1["annual_return"],
                         "sharpe": r1["sharpe"], "mdd": r1["max_drawdown"],

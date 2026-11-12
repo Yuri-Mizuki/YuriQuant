@@ -39,13 +39,15 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-PQ = Path("D:/data/parquet")
+from config import Config
+
+PQ = Path(Config.paths()["cache_root"])
 DL_DIR = Path("reports/report_replica/dl")
 TOP_Q = 0.8          # Top20%
 MIN_N = 20           # 一期至少多少个行业才计入
 
 
-def _synth_panel(ctx: dict) -> dict[str, np.ndarray]:
+def synth_panel(ctx: dict) -> dict[str, np.ndarray]:
     """按每期 PIT 权重合成行业价格：d 收盘 / d+1 开盘 / d+1 收盘。
 
     Returns:
@@ -82,7 +84,7 @@ def _synth_panel(ctx: dict) -> dict[str, np.ndarray]:
     return {k: np.vstack(v) for k, v in out.items()}
 
 
-def _excess(num: np.ndarray, den: np.ndarray, fac: np.ndarray,
+def head_excess(num: np.ndarray, den: np.ndarray, fac: np.ndarray,
             dates: pd.DatetimeIndex, inds: np.ndarray,
             *, shift: bool, top_n: int | None) -> tuple[pd.Series, pd.Series]:
     """逐期「头部组 − 全体平均」超额，返回 (超额序列, 每期成分)。
@@ -114,7 +116,7 @@ def _excess(num: np.ndarray, den: np.ndarray, fac: np.ndarray,
     return pd.Series(ex).sort_index(), pd.Series(picks)
 
 
-def _turnover(picks: pd.Series) -> float:
+def weekly_turnover(picks: pd.Series) -> float:
     """周均**单边**换手 = `0.5·(卖出比例 + 买入比例)`，与 `port_backtest` 的
     `0.5·Σ|Δw|` 同量纲。
 
@@ -133,7 +135,7 @@ def _turnover(picks: pd.Series) -> float:
     return float(np.mean(t)) if t else np.nan
 
 
-def _stat(s: pd.Series) -> tuple[float, float]:
+def geo_tstat(s: pd.Series) -> tuple[float, float]:
     n = len(s)
     geo = (1 + s).prod() ** (52 / n) - 1
     return geo, s.mean() / (s.std(ddof=1) / np.sqrt(n))
@@ -161,7 +163,7 @@ def main() -> None:
 
     print(f"预测 {args.pred} · 加权 {args.weight} · {len(dates)} 期 "
           f"({dates[0].date()}~{dates[-1].date()}) · 分组 {grp}")
-    px = _synth_panel(ctx)
+    px = synth_panel(ctx)
 
     print("\n=== 整周持有：三种成交时点 ===")
     arms = {
@@ -171,11 +173,11 @@ def main() -> None:
     }
     keep = {}
     for name, (nk, dk) in arms.items():
-        s, picks = _excess(px[nk], px[dk], fac, dates, inds, shift=True, top_n=args.top)
+        s, picks = head_excess(px[nk], px[dk], fac, dates, inds, shift=True, top_n=args.top)
         if len(s) < 10:
             continue
-        geo, t = _stat(s)
-        tr = _turnover(picks)
+        geo, t = geo_tstat(s)
+        tr = weekly_turnover(picks)
         print(f"  {grp} {name:30s} 年化 {geo*100:+7.2f}%  t {t:+6.2f}  n={len(s)}"
               f"  周单边换手 {tr:.2f}")
         # 净值必须**逐期扣成本再复利**：`geo − 成本年化` 会把波动拖累算两遍
@@ -190,7 +192,7 @@ def main() -> None:
     for nk, dk, label in (("pc1", "pc", "d收→d+1收（1天，需尾盘）"),
                           ("po1", "pc", "隔夜 d收→d+1开"),
                           ("pc1", "po1", "日内 d+1开→d+1收（可执行）")):
-        s, _ = _excess(px[nk], px[dk], fac, dates, inds, shift=False, top_n=args.top)
+        s, _ = head_excess(px[nk], px[dk], fac, dates, inds, shift=False, top_n=args.top)
         if len(s) < 10:
             continue
         n = len(s)

@@ -53,8 +53,8 @@ from scripts.portfolio.etf_contest_spec import FINAL, POOL  # noqa: E402
 from scripts.portfolio.etf_weight_probe import load_env  # noqa: E402
 from strategy.etf_rotation import (  # noqa: E402
     EtfRotationAdvanced,
-    _erc_weights,
-    _hrp_weights,
+    erc_weights,
+    hrp_weights,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -74,9 +74,9 @@ def cov3(sd: tuple[float, float, float], rho: float = 0.9,
 
 def _w3(cov: np.ndarray) -> dict[str, np.ndarray]:
     return {
-        "hrp": _hrp_weights(cov),
+        "hrp": hrp_weights(cov),
         "inv_var": (lambda v: v / v.sum())(1.0 / np.diag(cov)),
-        "erc": _erc_weights(cov),
+        "erc": erc_weights(cov),
     }
 
 
@@ -190,14 +190,14 @@ def mode_real(lines: list[str]) -> pd.DataFrame:
         c_pair0 = corr.copy()                     # ① 配对腿之间相关置 0
         c_pair0[others[0], others[1]] = 0.0
         c_pair0[others[1], others[0]] = 0.0
-        w_pair0 = _hrp_weights(_sd2cov(c_pair0, sd))[j]
+        w_pair0 = hrp_weights(_sd2cov(c_pair0, sd))[j]
 
         c_top0 = corr.copy()                      # ② 最大腿与另两只相关置 0
         for i in others:
             c_top0[j, i] = c_top0[i, j] = 0.0
-        w_top0 = _hrp_weights(_sd2cov(c_top0, sd))[j]
+        w_top0 = hrp_weights(_sd2cov(c_top0, sd))[j]
 
-        w_flat = _hrp_weights(_sd2cov(corr, np.full(3, float(np.exp(np.log(sd).mean())))))[j]
+        w_flat = hrp_weights(_sd2cov(corr, np.full(3, float(np.exp(np.log(sd).mean())))))[j]
 
         rs = _risk_share(cov, w)
         rows.append({

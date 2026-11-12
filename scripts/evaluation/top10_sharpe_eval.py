@@ -31,7 +31,7 @@ from config import Config  # noqa: E402
 from scripts.common.alla_common import ds_root, load_base  # noqa: E402
 from scripts.common.cli_common import setup_logging  # noqa: E402
 from scripts.evaluation.jq_factor_probe import (  # noqa: E402
-    _cs_ic, _dup_batch, _dup_exact, _ic_stats, _rank_panel, _resid_ic_np,
+    cs_ic, dup_batch, dup_exact, ic_stats, rank_panel, resid_ic_np,
     monthly_ls,
 )
 
@@ -67,7 +67,7 @@ def main():
     fwd = (close.pct_change(h, fill_method=None).shift(-h)
            .replace([np.inf, -np.inf], np.nan).astype(np.float32))
     valid = mask & fwd.notna()
-    fwd_r = _rank_panel(fwd.where(valid))
+    fwd_r = rank_panel(fwd.where(valid))
 
     # 残差化协变量：lncap 截面秩（行业以去均值方式进入）
     size_ln = np.log(base["market_cap"].where(base["market_cap"] > 0))
@@ -75,7 +75,7 @@ def main():
     ind_codes, _ = pd.factorize(ind.to_numpy().ravel())
     ind_np = ind_codes.reshape(ind.shape)
     n_ind = int(ind_np.max()) + 1
-    regs_np = [_rank_panel(size_ln).to_numpy(np.float32)]
+    regs_np = [rank_panel(size_ln).to_numpy(np.float32)]
     ok_np = valid.to_numpy()
 
     dup_dir = Path(args.dup_dir) if args.dup_dir else ds_root() / "panels"
@@ -89,13 +89,13 @@ def main():
         p = pd.read_parquet(str(r["panel_path"])).reindex(index=idx, columns=cols)
         p = p.replace([np.inf, -np.inf], np.nan).astype(np.float32)
         cov = float(p.notna().to_numpy(dtype=float).mean())
-        xr = _rank_panel(p)
-        st = _ic_stats(_cs_ic(xr, fwd_r, valid))
+        xr = rank_panel(p)
+        st = ic_stats(cs_ic(xr, fwd_r, valid))
         row = {"name": name, "coverage": round(cov, 3),
                f"ic_h{h}": round(st["ic"], 4), f"t_h{h}": round(st["nw_t"], 2),
                f"ir_h{h}": round(st["ir"], 3), f"win_h{h}": round(st["win"], 3),
                f"n_h{h}": st["n"]}
-        rst = _ic_stats(_resid_ic_np(xr.to_numpy(np.float32), fwd_r.to_numpy(np.float32),
+        rst = ic_stats(resid_ic_np(xr.to_numpy(np.float32), fwd_r.to_numpy(np.float32),
                                      ok_np, ind_np, regs_np, n_ind))
         row["resid_si_ic"] = round(rst["ic"], 4)
         row["resid_si_t"] = round(rst["nw_t"], 2)
@@ -114,14 +114,14 @@ def main():
     df = pd.DataFrame(rows)
     if not args.no_dup:
         log.info("全库去重（对照 %d 个面板）...", len(list(dup_dir.glob("*.parquet"))))
-        top = _dup_batch(ranks, dup_dir, args.dup_stride)
+        top = dup_batch(ranks, dup_dir, args.dup_stride)
         dup1, who = [], []
         for name in df["name"]:
             t = top.get(name) or []
             if not t:
                 dup1.append(np.nan); who.append("")
                 continue
-            exact = _dup_exact(ranks[name], dup_dir, t[0][1])
+            exact = dup_exact(ranks[name], dup_dir, t[0][1])
             dup1.append(round(float(exact), 3)); who.append(t[0][1])
         df["dup_top1"] = dup1
         df["dup_with"] = who
@@ -137,9 +137,9 @@ def main():
                 inc_ic.append(np.nan); inc_t.append(np.nan)
                 continue
             mate_p = pd.read_parquet(p).reindex(index=idx, columns=cols)
-            mate_r = _rank_panel(mate_p.replace([np.inf, -np.inf], np.nan)).to_numpy(np.float32)
+            mate_r = rank_panel(mate_p.replace([np.inf, -np.inf], np.nan)).to_numpy(np.float32)
             regs2 = [regs_np[0], mate_r]
-            st2 = _ic_stats(_resid_ic_np(ranks[r["name"]].to_numpy(np.float32),
+            st2 = ic_stats(resid_ic_np(ranks[r["name"]].to_numpy(np.float32),
                                          fwd_r.to_numpy(np.float32),
                                          ok_np32, ind_np, regs2, n_ind))
             inc_ic.append(round(st2["ic"], 4)); inc_t.append(round(st2["nw_t"], 2))

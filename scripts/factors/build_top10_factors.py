@@ -48,7 +48,7 @@ if str(ROOT) not in sys.path:
 from data.cache_helpers import load_daily, load_financial_tables  # noqa: E402
 from data.financials import build_pit_panel  # noqa: E402
 from factor.paper_factors import (  # noqa: E402
-    PaperData, _month_end_panel, _to_daily, pap_mom_residual,
+    PaperData, month_end_panel, to_daily, pap_mom_residual,
 )
 from research.factor_library import FactorLibrary  # noqa: E402
 from scripts.builders.common import load_close_adj  # noqa: E402
@@ -203,17 +203,17 @@ def build_price_panels(cadj: pd.DataFrame, amount: pd.DataFrame,
     out["t10_smallcap"] = -np.log(market_cap.clip(lower=1.0))
 
     # ---- 月度因子 ----
-    m_close = _month_end_panel(cadj, how="last")
+    m_close = month_end_panel(cadj, how="last")
     m_ret = m_close.pct_change(fill_method=None)
 
     # 历史非当月反转：窗口 [t-60, t-13] 共 48 个月，剔除同月 4 期 ⇒ 44 期均值
     win_sum = m_ret.rolling(48, min_periods=36).sum().shift(12)
     same_m = (m_ret.shift(12) + m_ret.shift(24) + m_ret.shift(36) + m_ret.shift(48))
     mean44 = (win_sum - same_m) / 44.0
-    out["t10_offmonth_rev"] = -_to_daily(mean44, grid.index)
+    out["t10_offmonth_rev"] = -to_daily(mean44, grid.index)
 
     # 去年同月收益
-    out["t10_same_month_ret"] = _to_daily(m_ret.shift(12), grid.index)
+    out["t10_same_month_ret"] = to_daily(m_ret.shift(12), grid.index)
 
     if resid_mom is not None:
         out["t10_resid_mom"] = resid_mom.reindex(index=grid.index, columns=grid.columns)

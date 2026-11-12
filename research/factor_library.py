@@ -102,8 +102,8 @@ CANONICAL_CONFIGS: list = [
 #: （复权价最大差 3.5%，``ic_h20`` 逐因子相关 0.983）。引用时必须写明用哪一份。
 IC_HORIZONS: tuple[int, ...] = (1, 5, 10, 20)
 
-_METRIC_COLS = ["annual_return", "sharpe", "sortino", "max_drawdown", "calmar", "win_rate", "avg_turnover",
-                "avg_margin_usage", "borrow_fee_drag_annual"]
+METRIC_COLS = ["annual_return", "sharpe", "sortino", "max_drawdown", "calmar",
+               "win_rate", "avg_turnover", "avg_margin_usage", "borrow_fee_drag_annual"]
 
 #: 因子族（family）受控词表——**唯一真源**（2026-09-12 统一规范）。
 #:
@@ -323,7 +323,7 @@ CANONICAL_COLUMNS: list[str] = [
     "monotonicity", "pfs",
     # —— 入库前冗余预检（check_dup）——
     "dup_checked", "dup_corr_max", "dup_top", "resid_ic", "resid_t_nw",
-] + [f"{m}_{c.key}" for c in CANONICAL_CONFIGS for m in _METRIC_COLS] + [
+] + [f"{m}_{c.key}" for c in CANONICAL_CONFIGS for m in METRIC_COLS] + [
     "best_sharpe", "best_config", "panel_path", "eval_path",
     # —— 评估状态（2026-11-02 两段式入库）——
     # ``eval_status``: ingested（只登记+IC）/ evaluated（跑过 canonical）
@@ -373,7 +373,7 @@ STAT_COLUMNS: frozenset[str] = frozenset([
     "best_sharpe", "best_config",
     # 评估状态（两段式入库：ingest/evaluate 之间的状态机）
     "eval_status", "evaluated_at",
-]).union({f"{m}_{c.key}" for c in CANONICAL_CONFIGS for m in _METRIC_COLS})
+]).union({f"{m}_{c.key}" for c in CANONICAL_CONFIGS for m in METRIC_COLS})
 
 
 #: **人工可编辑的标签列**——与 :data:`STAT_COLUMNS` 互补。
@@ -487,7 +487,7 @@ def _collapse_duplicate_names(reg: pd.DataFrame, *, where: str = "") -> pd.DataF
     return out
 
 
-def _slug(name: str) -> str:
+def name_slug(name: str) -> str:
     """把因子名（可能是长公式）映射为安全的文件名片段。"""
     return hashlib.md5(name.encode("utf-8")).hexdigest()[:12]
 
@@ -667,7 +667,7 @@ def _forward_returns(returns_panel: pd.DataFrame, horizon: int) -> pd.DataFrame:
     return np.expm1(g.rolling(horizon, min_periods=horizon).sum().shift(-(horizon - 1)))
 
 
-def _ic_summary(ic: pd.Series) -> dict:
+def ic_stats(ic: pd.Series) -> dict:
     """IC 序列 → registry 的检验统计列（均值/IR/显著性/胜率）。
 
     从 ``_panel_ic_stats`` 抽出，供两处复用：ingest（算完就写）与
@@ -713,7 +713,7 @@ def _panel_ic_stats(panel: pd.DataFrame, returns_panel: pd.DataFrame, *,
     时不计算、置 NaN——批量入库靠这个开关把 109 s 压到 7 s。
     """
     ic = calc_ic_series(panel, returns_panel, method=ic_method)
-    summary = _ic_summary(ic)
+    summary = ic_stats(ic)
     ic_mean = summary["ic_mean"]
 
     if evidence:
@@ -911,7 +911,7 @@ class FactorLibrary:
         family, frequency, maturity = normalize_tags(
             family=family, frequency=frequency, maturity=maturity,
             where=f"ingest({name})")
-        slug = _slug(name)
+        slug = name_slug(name)
         panel_path = self.panels_dir / f"{slug}.parquet"
         eval_path = self.evals_dir / f"{slug}.parquet"
 
@@ -1036,7 +1036,7 @@ class FactorLibrary:
         eval_cols, metric_rows, best_sharpe, best_config = self._canonical_eval(
             eval_panel, rp, short_costs=short_costs, deleverage=deleverage)
 
-        eval_path = self.evals_dir / f"{_slug(name)}.parquet"
+        eval_path = self.evals_dir / f"{name_slug(name)}.parquet"
         # 保留 ingest 阶段落的 ic 列；回填的老因子没有 ic 列，现算一次补上
         # （3 s 级），保证「eval 文件一定有 ic」这个不变量对两条路径都成立。
         # ``recompute_ic`` 用于口径迁移：换收益面板后旧 ic 已经不是同一个数。
@@ -1060,10 +1060,10 @@ class FactorLibrary:
         # 顺手把 IC 检验统计写回 registry：老因子（builder 通道）的
         # ic_mean / t_stat_nw 一直是空的，只有 ic_mean_h*，导致"按显著性
         # 排序"在半个库上失效。ic 序列就在手上，重算代价可忽略。
-        ic_stats = _ic_summary(ic_series) if ic_series is not None else {}
+        ic_fields = ic_stats(ic_series) if ic_series is not None else {}
 
         upd = {
-            **ic_stats,
+            **ic_fields,
             **metric_rows,
             "best_sharpe": best_sharpe,
             "best_config": best_config,
@@ -1138,7 +1138,7 @@ class FactorLibrary:
             eval_cols[f"dret_{cfg.key}"] = dret
             eval_cols[f"equity_{cfg.key}"] = res.equity_curve
             m = res.metrics()
-            for mc in _METRIC_COLS:
+            for mc in METRIC_COLS:
                 if mc in m:
                     metric_rows[f"{mc}_{cfg.key}"] = m[mc]
             if m["sharpe"] > best_sharpe:
@@ -1290,7 +1290,7 @@ class FactorLibrary:
         """
         reg = self._load_registry()
         bad: list[dict] = []
-        metric_cols = [f"{m}_{c.key}" for c in CANONICAL_CONFIGS for m in _METRIC_COLS]
+        metric_cols = [f"{m}_{c.key}" for c in CANONICAL_CONFIGS for m in METRIC_COLS]
         for _, r in reg.iterrows():
             name = r["name"]
             status = str(r.get("eval_status") or "").strip()
@@ -1298,7 +1298,7 @@ class FactorLibrary:
             evaluated = evaluated not in ("", "nan", "None")
 
             if evaluated:
-                p = self._resolve_eval_path(r) or (self.evals_dir / f"{_slug(name)}.parquet")
+                p = self._resolve_eval_path(r) or (self.evals_dir / f"{name_slug(name)}.parquet")
                 if not Path(p).exists():
                     bad.append({"name": name, "rule": "eval_file_missing",
                                 "detail": str(p)})
@@ -1334,7 +1334,7 @@ class FactorLibrary:
         name = str(row.get("name") or "")
         p = self._resolve_eval_path(row)
         if p is None:
-            p = self.evals_dir / f"{_slug(name)}.parquet"
+            p = self.evals_dir / f"{name_slug(name)}.parquet"
         if not Path(p).exists():
             return None
         try:

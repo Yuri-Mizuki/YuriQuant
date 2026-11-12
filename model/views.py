@@ -49,7 +49,7 @@ def inject_by_feature_duplication(
             多 1 份副本（共出现 2 次）。
     Returns:
         新特征 dict（原面板对象不复制——副本引用同一 DataFrame，内存开销
-        只是引用；下游 `_long_matrix` 按列拼接，副本列独立占位）。
+        只是引用；下游 `long_feature_matrix` 按列拼接，副本列独立占位）。
         副本命名 ``<name>__dup<i>``（i = 2..k）。
     """
     if k < 1:

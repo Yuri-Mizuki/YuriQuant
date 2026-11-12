@@ -1,10 +1,10 @@
 """聚宽候选探针的口径测试（2026-10-26）。
 
 锁四件事：
-1. `_cs_ic` 与 `stats.ic.calc_ic_series` 同口径（掩码 + Spearman）逐位一致；
+1. `cs_ic` 与 `stats.ic.calc_ic_series` 同口径（掩码 + Spearman）逐位一致；
 2. `monthly_ls` 的多空方向随 `sign` 翻转（含成本扣减）；
-3. `_resid_ic_np` 能把 size 代理剔干净（因子=市值 → 残差 IC≈0）；
-4. `_dup_batch` 能把「完全复制」的面板识别为 dup_corr≈1。
+3. `resid_ic_np` 能把 size 代理剔干净（因子=市值 → 残差 IC≈0）；
+4. `dup_batch` 能把「完全复制」的面板识别为 dup_corr≈1。
 """
 from __future__ import annotations
 
@@ -13,10 +13,10 @@ import pandas as pd
 import pytest
 
 from scripts.evaluation.jq_factor_probe import (
-    _cs_ic,
-    _dup_batch,
-    _rank_panel,
-    _resid_ic_np,
+    cs_ic,
+    dup_batch,
+    rank_panel,
+    resid_ic_np,
     monthly_ls,
 )
 from stats.ic import calc_ic_series
@@ -35,7 +35,7 @@ def test_cs_ic_matches_calc_ic_series():
     fwd = _panel(rng)
     mask = pd.DataFrame(True, index=x.index, columns=x.columns)
     mask.iloc[0, :5] = False
-    got = _cs_ic(_rank_panel(x), _rank_panel(fwd.where(mask)), mask).mean()
+    got = cs_ic(rank_panel(x), rank_panel(fwd.where(mask)), mask).mean()
     ref = calc_ic_series(x, fwd, tradable=mask).mean()
     assert got == pytest.approx(ref, abs=1e-5)
 
@@ -77,7 +77,7 @@ def test_resid_ic_removes_size_proxy():
     xr = size.rank(axis=1, pct=True).to_numpy(np.float32)
     yr = fwd_rank.to_numpy(np.float32)
     regs = [size.rank(axis=1, pct=True).to_numpy(np.float32)]
-    ic = _resid_ic_np(xr, yr, ok, ind, regs, int(ind.max()) + 1)
+    ic = resid_ic_np(xr, yr, ok, ind, regs, int(ind.max()) + 1)
     assert abs(float(ic.dropna().mean())) < 1e-6
 
 
@@ -93,7 +93,7 @@ def test_dup_batch_flags_exact_copy(tmp_path):
     base.to_parquet(tmp_path / "lib_base.parquet")
     other.to_parquet(tmp_path / "lib_other.parquet")
     cand = {"jq_copy": base.rank(axis=1, pct=True)}
-    best = _dup_batch(cand, tmp_path, stride=2)
+    best = dup_batch(cand, tmp_path, stride=2)
     top = best["jq_copy"][0]
     assert top[1] == "lib_base"
     assert top[0] == pytest.approx(1.0, abs=1e-3)

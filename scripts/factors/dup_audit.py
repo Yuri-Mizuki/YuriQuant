@@ -58,7 +58,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.common.cli_common import setup_logging  # noqa: E402
-from research.factor_library import FactorLibrary, _slug  # noqa: E402
+from research.factor_library import FactorLibrary, name_slug  # noqa: E402
 
 log = setup_logging("dup_audit")
 

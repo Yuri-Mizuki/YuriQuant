@@ -49,7 +49,7 @@ from scripts.portfolio.etf_champ_phase_matrix import (
     month_phase_rebalance_days,
     run_champ,
 )
-from scripts.portfolio.etf_champ_phase_robust import _monthly, _roll_mdd
+from scripts.portfolio.etf_champ_phase_robust import monthly_returns, rolling_max_drawdown
 from scripts.portfolio.etf_champ_signals import PROFILES
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -124,7 +124,7 @@ def print_judge(eq: dict, tvols: tuple[float, ...], base: float) -> None:
         if np.isclose(t, base):
             continue
         for k in PHASES:
-            a, b = _monthly(eq[(t, k)]), _monthly(eq[(base, k)])
+            a, b = monthly_returns(eq[(t, k)]), monthly_returns(eq[(base, k)])
             j = a.index.intersection(b.index)
             dv = (a[j] - b[j]).dropna()
             if len(dv) < 10:
@@ -136,9 +136,9 @@ def print_judge(eq: dict, tvols: tuple[float, ...], base: float) -> None:
     print(f"\n== ② 12 个月滚动最差回撤（vs 定版 tvol={base}）==")
     print(f"  {'tvol':>6}{'k':>3}{'中位':>8}{'p90':>8}{'最差':>8}{'Δ中位':>10}")
     for k in PHASES:
-        ref = _roll_mdd(eq[(base, k)])
+        ref = rolling_max_drawdown(eq[(base, k)])
         for t in tvols:
-            r = _roll_mdd(eq[(t, k)])
+            r = rolling_max_drawdown(eq[(t, k)])
             j = r.index.intersection(ref.index)
             dm = r[j].median() - ref[j].median()
             tag = "" if np.isclose(t, base) else f"{dm * 100:>+9.2f}pp"

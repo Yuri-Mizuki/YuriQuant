@@ -63,12 +63,12 @@ def _cs_rank(df: pd.DataFrame) -> pd.DataFrame:
     return df.rank(axis=1, pct=True)
 
 
-def _to_daily(monthly: pd.DataFrame, daily_index: pd.DatetimeIndex) -> pd.DataFrame:
+def to_daily(monthly: pd.DataFrame, daily_index: pd.DatetimeIndex) -> pd.DataFrame:
     """月度面板 → 日频（ffill，月初才可见上月末值，无未来函数）。"""
     return monthly.reindex(daily_index, method="ffill")
 
 
-def _month_end_panel(df: pd.DataFrame, how: str = "last") -> pd.DataFrame:
+def month_end_panel(df: pd.DataFrame, how: str = "last") -> pd.DataFrame:
     """日频面板 → 月末面板（last 取月末值 / sum 月内加总 / mean 月均 / max 月内最大）。"""
     g = df.groupby(df.index.to_period("M"))
     if how == "last":
@@ -428,14 +428,14 @@ def pap_value_bp(d: PaperData) -> pd.DataFrame:
 def _monthly_volume(d: PaperData) -> pd.DataFrame:
     if d.volume is None:
         raise ValueError("事件类因子需要 volume")
-    return _month_end_panel(d.volume.fillna(0.0), how="sum")
+    return month_end_panel(d.volume.fillna(0.0), how="sum")
 
 
 def _ann_month_flag(d: PaperData) -> pd.DataFrame:
     """月×code bool：该月内有财报公告。"""
     if d.ann_flag is None:
         raise ValueError("事件类因子需要 ann_flag")
-    return _month_end_panel(d.ann_flag.fillna(False).astype(float), how="max") > 0.5
+    return month_end_panel(d.ann_flag.fillna(False).astype(float), how="max") > 0.5
 
 
 def pap_ann_premium(d: PaperData) -> pd.DataFrame:
@@ -454,8 +454,8 @@ def pap_ann_premium(d: PaperData) -> pd.DataFrame:
     # 本月预期公告：去年同月有公告
     expected = is_ann.shift(12, fill_value=False)
     daily_idx = d.close.index
-    vcr_d = _to_daily(vcr, daily_idx)
-    exp_d = _to_daily(expected.astype(float), daily_idx) > 0.5
+    vcr_d = to_daily(vcr, daily_idx)
+    exp_d = to_daily(expected.astype(float), daily_idx) > 0.5
     factor = _cs_rank(vcr_d) * exp_d.astype(float)
     return factor.where(exp_d & vcr_d.notna())
 
@@ -489,11 +489,11 @@ def pap_mom_residual(d: PaperData) -> pd.DataFrame:
     if p.get("EQUITY") is None or d.market_cap is None:
         raise ValueError("pap_mom_residual 需要 EQUITY PIT 面板与 market_cap")
     c = d.close
-    m_close = _month_end_panel(c, how="last")
+    m_close = month_end_panel(c, how="last")
     m_ret = m_close.pct_change(fill_method=None)
-    m_cap = _month_end_panel(d.market_cap, how="last")
+    m_cap = month_end_panel(d.market_cap, how="last")
     bp = (p["EQUITY"] / d.market_cap.replace(0.0, np.nan))
-    m_bp = _month_end_panel(bp, how="last")
+    m_bp = month_end_panel(bp, how="last")
 
     def _fac_ret(ret_m: pd.DataFrame, char_m: pd.DataFrame) -> pd.Series:
         """低特征组均值 − 高特征组均值（20%/80% 分位）。"""
@@ -531,7 +531,7 @@ def pap_mom_residual(d: PaperData) -> pd.DataFrame:
     alpha_df = pd.DataFrame(alpha, index=F.index, columns=R.columns)
     resid_mom = (alpha_df.rolling(12, min_periods=9).sum()
                  / alpha_df.rolling(12, min_periods=9).std())
-    return _to_daily(resid_mom, c.index)
+    return to_daily(resid_mom, c.index)
 
 
 # ===========================================================================
