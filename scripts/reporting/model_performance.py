@@ -35,6 +35,7 @@ if str(ROOT) not in sys.path:
 
 from backtest.engine import VectorBacktest  # noqa: E402
 from research.benchmarks import segmented_equal_weight_returns  # noqa: E402
+from research.html_report import page  # noqa: E402
 from scripts.evaluation import caliber as cal  # noqa: E402
 
 OUT_DIR = ROOT / "reports" / "model_performance"
@@ -273,9 +274,8 @@ def render_html(payload: dict) -> str:
                 '<code>buffer_arm_920 --variant defv --save-sig</code>，'
                 '见 baselines.yaml 的 regen_cmd。</div>')
 
-    return f"""<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">
-<title>主模型回测表现 — {meta['signal']} / {meta['window']}</title>
-{CHART_CDN}<style>{_CSS}</style></head><body><div class="wrap">
+    # 外壳统一走 research.html_report.page（守卫 test_report_shell 要求全仓只有一份）
+    body_html = f"""<div class="wrap">
 <h1>主模型回测表现 — {meta['signal']}</h1>
 <div class="sub">{meta['signal_desc']} ｜ 窗口 {meta['window_label']}（{meta['n_days']} 日）
 ｜ 指纹 <code>{meta['fingerprint']}</code> ｜ 口径 <b>{meta['profile']}</b>
@@ -315,8 +315,9 @@ def render_html(payload: dict) -> str:
 ④ 全 A 含退市回补，但**因子面板**里约 4.8% 的股票整列无值（见
 reports/factor_dashboard/README.md 边界），策略池因此不含它们；
 ⑤ 本页只做展示，不是新实验，判改进一律回 <code>caliber --check</code>。</div>
-</div>
-<script>const D = {json.dumps(payload['chart'], ensure_ascii=False)};
+</div>"""
+
+    charts_js = f"""const D = {json.dumps(payload['chart'], ensure_ascii=False)};
 const fmtPct = v => (v*100).toFixed(1) + '%';
 const baseOpt = {{responsive:true,maintainAspectRatio:false,
   interaction:{{mode:'index',intersect:false}},
@@ -346,8 +347,16 @@ new Chart(document.getElementById('cYr'), {{type:'bar',
     font:{{size:11}}}}}}, tooltip:{{callbacks:{{label:c=>c.dataset.label+': '+
     fmtPct(c.parsed.y)}}}}}},
     scales:{{x:{{ticks:{{font:{{size:10}}}}}},
-      y:{{ticks:{{callback:v=>fmtPct(v),font:{{size:10}}}}}}}}}})}});
-</script></body></html>"""
+      y:{{ticks:{{callback:v=>fmtPct(v),font:{{size:10}}}}}}}}}})}});"""
+
+    return page(
+        title=f"主模型回测表现 — {meta['signal']} / {meta['window']}",
+        body=body_html,
+        css=_CSS,
+        header="",
+        head_extra=CHART_CDN,
+        scripts=f"<script>{charts_js}</script>",
+    )
 
 
 # ---------------------------------------------------------------- 主流程

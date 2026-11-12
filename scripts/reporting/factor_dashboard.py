@@ -38,6 +38,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, ROOT)
 
 from config import Config  # noqa: E402
+from research.html_report import page  # noqa: E402
 from scripts.common.cli_common import setup_logging  # noqa: E402
 
 log = setup_logging("factor_dashboard")
@@ -791,9 +792,9 @@ def render(dataset: str, n: int, reg: pd.DataFrame, payload: dict, months: list)
 <script>
 {js}
 </script>"""
-    return (f"<!DOCTYPE html><html lang='zh'><head><meta charset='utf-8'>"
-            f"<title>YuriQuant 因子看板 — {dataset}</title>"
-            f"<style>{_CSS}</style></head><body>{body}</body></html>")
+    # 外壳统一走 research.html_report.page（守卫 test_report_shell 要求全仓只有一份）
+    return page(title=f"YuriQuant 因子看板 — {dataset}",
+                body=body, css=_CSS, header="")
 
 
 if __name__ == "__main__":
