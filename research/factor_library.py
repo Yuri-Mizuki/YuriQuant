@@ -88,6 +88,20 @@ CANONICAL_CONFIGS: list = [
     _Config("ls_W", "TopK多空·周", TopKLongShort, "W", 30),
 ]
 
+#: 因子库**预计算的多周期截面 IC 面板**（``ic_h{h}.parquet``，date × factor）。
+#:
+#: builder 每次入库时由 ``scripts.builders.common`` 的 IC 融合步骤写入，
+#: **是已落盘的事实**：全A 库 936 因子 × 2511 日，四个 horizon 合计读盘 **0.34 s**。
+#:
+#: 🔑 **要 IC 先读这里，不要重算**。2026-11-11 踩过：问「因子周频 IC」时从
+#: ``panels_neu`` 逐因子重算，花了 37 分钟，而库里有现成的（0.34 s）。
+#: 同口径重算的正当理由只有两个：要 t 值/非重叠对照，或要换一份复权价。
+#:
+#: ⚠️ 与 :meth:`FactorLibrary.evaluate` 现算的 IC **不同源**：库版用
+#: ``IC_CODE_STRIDE=3`` 把截面抽稀到 1/3 只股票、且 close_adj 是另一份
+#: （复权价最大差 3.5%，``ic_h20`` 逐因子相关 0.983）。引用时必须写明用哪一份。
+IC_HORIZONS: tuple[int, ...] = (1, 5, 10, 20)
+
 _METRIC_COLS = ["annual_return", "sharpe", "sortino", "max_drawdown", "calmar", "win_rate", "avg_turnover",
                 "avg_margin_usage", "borrow_fee_drag_annual"]
 
@@ -1799,6 +1813,87 @@ class FactorLibrary:
             return None
         p = self._resolve_eval_path(hit.iloc[0])
         return pd.read_parquet(p) if p is not None else None
+
+    # ---- 多周期 IC 面板（库内预计算，见 IC_HORIZONS） ----
+    def ic_matrix(self, horizon: int, *, names=None) -> pd.DataFrame | None:
+        """读库内预计算的**逐日截面 Rank IC** 面板（date × factor），不重算。
+
+        这是"库里本来就有"的那份东西：builder 入库时顺手融合好的
+        ``ic_h{1,5,10,20}.parquet``。全库四个 horizon 读盘合计约 0.34 s，
+        而按同口径从 ``panels_neu`` 重算是分钟级。
+
+        Parameters
+        ----------
+        horizon : IC 的前瞻期数（交易日）。取 :data:`IC_HORIZONS` 里的值，
+            非库内预计算的期限会抛 ``KeyError``（不静默返回空表）。
+        names : 只取指定因子列；缺列的因子**补 NaN 列**（不丢列、不报错），
+            便于直接与 registry 名单对齐。
+
+        Returns
+        -------
+        面板；该 horizon 文件不存在时返回 ``None``。
+
+        Notes
+        -----
+        引用数字时必须写明口径：库版 = ``IC_CODE_STRIDE=3`` 抽稀 + 库内 close_adj；
+        与 :meth:`evaluate` 现算的 IC 有 ~3.5% 复权价差，两者不可互换。
+        """
+        if int(horizon) not in IC_HORIZONS:
+            raise KeyError(
+                f"ic_h{horizon}.parquet 不是库内预计算的期限，可用 {IC_HORIZONS}；"
+                "其他期限请用 factor_analysis / stats.ic 现算")
+        p = self.root / f"ic_h{int(horizon)}.parquet"
+        if not p.exists():
+            log.warning("缺 %s（该数据集未建多周期 IC）", p)
+            return None
+        df = pd.read_parquet(p)
+        if names is not None:
+            missing = [n for n in names if n not in df.columns]
+            if missing:
+                df = df.reindex(columns=[*df.columns, *missing])
+            df = df[list(dict.fromkeys(names))]
+        return df
+
+    def ic_summary(self, horizons: tuple[int, ...] | None = None, *,
+                   window: tuple[str, str] | None = None) -> pd.DataFrame:
+        """逐因子 × horizon 的 IC 均值 / IR / 正占比 / 有效天数（秒级）。
+
+        「周频 IC 是什么水平」这类问题**一行答完**，不必逐因子重算：
+
+        >>> lib = FactorLibrary(dataset="all_a_2018_2026")
+        >>> lib.ic_summary().sort_values("ic_h5", ascending=False).head()
+
+        Parameters
+        ----------
+        horizons : 默认全取 :data:`IC_HORIZONS`。
+        window : ``(start, end)`` 日期切片（含端点，字符串或 Timestamp）。
+            默认用面板全段——**跨数据态引用时务必显式给窗口**。
+
+        Returns
+        -------
+        DataFrame，index = 因子名，列：``ic_h{h}`` / ``ir_h{h}``（IC 均值 ÷ IC 标准差）
+        / ``pos_h{h}``（IC 为正的交易日占比）/ ``n_h{h}``（有效天数）。
+        """
+        hs = tuple(horizons or IC_HORIZONS)
+        mats = {}
+        for h in hs:
+            m = self.ic_matrix(h)
+            if m is None:
+                continue
+            if window is not None:
+                m = m.loc[window[0]:window[1]]
+            mats[h] = m
+        if not mats:
+            raise RuntimeError(f"{self.root} 下没有任何 ic_h*.parquet，库未建多周期 IC")
+
+        out = {}
+        for h, m in mats.items():
+            mean, std = m.mean(), m.std()
+            out[f"ic_h{h}"] = mean
+            out[f"ir_h{h}"] = mean / std.replace(0.0, np.nan)
+            out[f"pos_h{h}"] = (m > 0).sum() / m.notna().sum().replace(0, np.nan)
+            out[f"n_h{h}"] = m.notna().sum()
+        return pd.DataFrame(out)
 
     def load_library_features(self, kind: str | None = None) -> dict:
         """返回 {name: panel}，作为下一轮挖掘的特征集（迭代用）。

@@ -126,3 +126,62 @@ def test_dataset_isolation(tmp_path):
     # 默认（无 dataset）库独立、不含任一因子
     lib_default = FactorLibrary(root=base)
     assert len(lib_default.list_all()) == 0
+
+
+def _write_ic_panels(lib, panels):
+    """把 ic_h{h} 面板写到库根，模拟 builder 的 IC 融合产物。"""
+    for h, df in panels.items():
+        df.to_parquet(lib.root / f"ic_h{h}.parquet")
+
+
+def test_ic_summary_reads_precomputed_panels(tmp_path):
+    """ic_summary 直读库内 ic_h*.parquet，数值与手算一致（不重算 IC）。"""
+    lib = _tmp_lib(tmp_path)
+    idx = pd.date_range("2023-01-02", periods=10, freq="B")
+    panels = {
+        1: pd.DataFrame({"a": [0.1] * 10, "b": [-0.1] * 10}, idx),
+        5: pd.DataFrame({"a": [0.2, 0.4] * 5, "b": [0.1, -0.3] * 5}, idx),
+        10: pd.DataFrame({"a": [0.3] * 10, "b": [0.0] * 10}, idx),
+        20: pd.DataFrame({"a": [0.5] * 10, "b": [0.2] * 10}, idx),
+    }
+    _write_ic_panels(lib, panels)
+
+    s = lib.ic_summary()
+    assert list(s.index) == ["a", "b"]
+    # 均值逐位等于手算
+    assert s.loc["a", "ic_h5"] == 0.30000000000000004 or abs(s.loc["a", "ic_h5"] - 0.3) < 1e-12
+    assert abs(s.loc["b", "ic_h5"] - (-0.1)) < 1e-12
+    # 正占比：b 在 h5 上 5/10 为正
+    assert abs(s.loc["b", "pos_h5"] - 0.5) < 1e-12
+    # 有效天数
+    assert s.loc["a", "n_h20"] == 10
+    # IR = mean / std
+    assert abs(s.loc["a", "ir_h5"] - s.loc["a", "ic_h5"] / panels[5]["a"].std()) < 1e-12
+
+
+def test_ic_matrix_window_and_names(tmp_path):
+    """ic_matrix 支持窗口切片与列对齐（缺列补 NaN，不丢列）。"""
+    lib = _tmp_lib(tmp_path)
+    idx = pd.date_range("2023-01-02", periods=6, freq="B")
+    _write_ic_panels(lib, {5: pd.DataFrame({"a": range(6)}, idx, dtype=float)})
+
+    m = lib.ic_matrix(5)
+    assert m.shape == (6, 1)
+    m2 = lib.ic_matrix(5, names=["a", "ghost"])
+    assert list(m2.columns) == ["a", "ghost"]
+    assert m2["ghost"].isna().all()          # 缺列补 NaN，不 KeyError
+
+    s = lib.ic_summary(window=("2023-01-03", "2023-01-04"))
+    assert s.loc["a", "n_h5"] == 2           # 窗口内只有 2 个交易日
+
+
+def test_ic_matrix_rejects_unknown_horizon(tmp_path):
+    """非库内预计算的 horizon 必须显式报错，不得静默返回空表。"""
+    import pytest
+
+    lib = _tmp_lib(tmp_path)
+    _write_ic_panels(lib, {5: pd.DataFrame({"a": [0.1]}, pd.date_range("2023-01-02", periods=1))})
+    with pytest.raises(KeyError, match="ic_h3"):
+        lib.ic_matrix(3)
+    # 库内已登记的期限缺文件时返回 None + warning（不是崩）
+    assert lib.ic_matrix(20) is None
