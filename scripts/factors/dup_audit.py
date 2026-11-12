@@ -541,11 +541,26 @@ def write_report(lib: FactorLibrary, nb: pd.DataFrame, cl: pd.DataFrame,
         ii = [names.index(m) for m in members]
         sub = corr[np.ix_(ii, ii)].copy()
         np.fill_diagonal(sub, np.nan)
+        # 代表的多级回退（2026-11-12 修）：原先只看 sharpe_ls_M，而全 A 库该列
+        # **0/950 有值**（evals 只覆盖 26 个因子），`sh.notna().any()` 恒 False ⇒
+        # `best` 退化成字母序第一个成员，"每簇留最好的那个"实际变成"留名字最靠前的"，
+        # 而报告仍显示表头「最高 sharpe」+ nan 值，看不出已经退化。
+        # 现按 可用性 降级：sharpe → |ic_mean_h20|（942/950 有值）→ 字母序，并写明用了哪级。
         sh = pd.Series(_metric("sharpe_ls_M", members), index=members)
-        best = sh.idxmax() if sh.notna().any() else members[0]
+        icm = pd.Series(np.abs(_metric("ic_mean_h20", members)), index=members)
+        if sh.notna().any():
+            best, rep_by = sh.idxmax(), "sharpe_ls_M"
+            rep_sharpe = float(sh.get(best, np.nan))
+        elif icm.notna().any():
+            best, rep_by = icm.idxmax(), "abs(ic_h20)"
+            rep_sharpe = float("nan")
+        else:
+            best, rep_by = members[0], "字母序（无任何质量列）"
+            rep_sharpe = float("nan")
         rows.append({
             "cluster": int(cid), "size": len(members),
-            "rep": best, "rep_sharpe": float(sh.get(best, np.nan)),
+            "rep": best, "rep_by": rep_by, "rep_sharpe": rep_sharpe,
+            "rep_ic_h20": float(icm.get(best, np.nan)),
             "min_corr": float(np.nanmin(sub)), "max_corr": float(np.nanmax(sub)),
             "members": "|".join(members),
         })
@@ -587,13 +602,17 @@ def write_report(lib: FactorLibrary, nb: pd.DataFrame, cl: pd.DataFrame,
     lines.append(f"共 {len(big)} 个簇、覆盖 {int(sizes[sizes >= 2].sum())} 个因子"
                  f"（占全库 {sizes[sizes >= 2].sum()/n:.0%}）；"
                  f"其中被簇「吸收」的冗余因子 {int(sizes[sizes >= 2].sum()) - len(big)} 个。")
-    lines += ["", "| 簇 | 成员数 | 代表（最高 sharpe） | 代表 sharpe | 簇内相关 |",
-              "|---:|---:|---|---:|---|"]
+    lines += ["", "| 簇 | 成员数 | 代表 | 依据 | 依据值 | 簇内相关 |",
+              "|---:|---:|---|---|---:|---|"]
     for _, r in clu.head(20).iterrows():
+        val = (f"{r['rep_sharpe']:.2f}" if r.get("rep_by") == "sharpe_ls_M"
+               else (f"{r['rep_ic_h20']:.4f}" if r.get("rep_by") == "abs(ic_h20)"
+                     else "—"))
         lines.append(f"| {r['cluster']} | {r['size']} | `{r['rep']}` | "
-                     f"{r['rep_sharpe']:.2f} | [{r['min_corr']:.2f}, {r['max_corr']:.2f}] |")
+                     f"{r.get('rep_by', '?')} | {val} | "
+                     f"[{r['min_corr']:.2f}, {r['max_corr']:.2f}] |")
     if len(clu) > 20:
-        lines.append(f"| … | 其余 {len(clu)-20} 个簇见 `dup_clusters.csv` | | | |")
+        lines.append(f"| … | 其余 {len(clu)-20} 个簇见 `dup_clusters.csv` | | | | |")
 
     lines += ["", "## 三、最像的 25 对", "", "| 因子 | 最像的 | 相关 | 该因子 sharpe |",
               "|---|---|---:|---:|"]
