@@ -29,6 +29,8 @@ output/
 # 一次性诊断输出（非日志）：stale panel 清单 / probe 摘要
 logs/*.txt
 logs/*.lst
+# 后台跑批的 stdout 落盘（logs 是本地运行目录，不进版本库）
+logs/*.out
 
 # SDK cache (user-specific)
 AmazingData/
