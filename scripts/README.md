@@ -143,7 +143,9 @@
 | `factors/build_minute_panel.py` | 分钟面板构建入口 |
 | `factors/build_paper_factors.py` | 论文复现因子构建与入库（awesome-systematic-trading 21 式） |
 | `factors/build_top10_factors.py` | 「中国因子十强」（JKP 口径）11 个因子的复现与入库（独立数据集，2026-11-02） |
-| `factors/dup_audit.py` | 全库冗余审计（签名→相关矩阵→重复簇→registry 回填）；`--reuse` 复用矩阵只重写报告、`--apply` 回填、`--query` 查某因子最像谁（2026-11-03） |
+| `factors/dup_audit.py` | 全库冗余审计（签名→相关矩阵→重复簇→registry 回填）；`--reuse` 复用矩阵只重写报告、`--apply` 回填、`--query` 查某因子最像谁（2026-11-03；**11-12 修簇代表退化**——`sharpe_ls_M` 全空时改按 `\|ic_mean_h20\|` 选，原先退化成字母序） |
+| `factors/library_dedup_plan.py` | 去重**决策表**（只出清单不删）：贪心最大独立集 + 残差增量门槛 + 定版 selection 依赖，出 `safe_drop`/`review`/`keep_prod` 五类动作（2026-11-12） |
+| `evaluation/dup_caliber_probe.py` | 判重**口径探针**：同一批因子在 `panels/`、`panels_neu_fundind/`、`ic_h20` 三口径下的相关一致性（11-12 实测秩一致 0.993 / 移植率 92.1%，证明判重层无需改） |
 | `factors/backfill_metadata.py` | registry `formula`/`family` 回填（2026-11-07）：`family` 走库内 `SET_TO_FAMILY`、`formula` 填**定义引用**（alpha 论文编号 / E4 组内 zscore / LLM-MCTS 原始公式 / 兄弟库手写定义 / label 自带定义式）；只补空缺、集级护栏（族标签已人工细化的集不提案）、默认 dry-run，`--apply` 写盘后自检 59 个统计列零漂移 + 不许造行 |
 | `factors/promote_maturity.py` | 成熟度晋升：按 `MATURITY_GATES` 九道门把库分成 `active`/`oos_verified`/`experimental`/`retired`，做「相关 <0.85 + 同族 ≤2」双闸去重；默认 dry-run，`--apply` 写回，`--gate k=v` 做敏感性扫描（2026-11-05） |
 | `factors/build_technical_factors.py` | 技术面迭代/累积类指标 → 日频因子构建与入库 |
