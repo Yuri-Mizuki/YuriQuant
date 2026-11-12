@@ -634,9 +634,12 @@ def signal_day_tradable(close_raw: pd.DataFrame, predict_date: pd.Timestamp,
                     st.index.get_level_values("date").max().date(),
                     fresh.missing_days, fresh.severity)
         stale_st = _latest_state_flag(st, "is_st", codes)
+        stale_susp = _latest_state_flag(st, "is_suspended", codes)
         est = _limit_from_daily(close_raw, predict_date, cache_root)
         if est is None:
-            return (~stale_st).fillna(True).astype(bool)
+            # 当日行情也取不到 ⇒ 涨跌停无从推断，但**停牌与 ST 都是持续状态**，
+            # 最近可得值已是当日最优信息（见 data.tradability 的同一约定）。
+            return (~(stale_st | stale_susp)).fillna(True).astype(bool)
         hi, lo, susp = est
         raw = pd.to_numeric(close_raw.loc[predict_date],
                             errors="coerce").reindex(codes)

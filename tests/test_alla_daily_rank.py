@@ -190,7 +190,8 @@ def test_signal_day_tradable(tmp_path):
     assert mask2.all()
 
     # 状态表存在但预测日无行 → 降级日线推断（行情有该日则推断，见 fallback 测试）；
-    # 行情也无该日（降级不可用）→ 全放行
+    # 行情也无该日（降级不可用）→ **停牌与 ST 沿用最近可得值**（2026-11-10 事故口径：
+    # 二者是持续状态，直接 fillna(False) 等于把 ST/停牌整批放行），其余放行。
     cache2 = tmp_path / "cache2"
     cache2.mkdir()
     _make_status(cache2 / "history_stock_status.parquet", d)
@@ -201,7 +202,9 @@ def test_signal_day_tradable(tmp_path):
                  index=idx).to_parquet(cache2 / "daily_all_a.parquet")
     mask3 = signal_day_tradable(close_raw, d + pd.Timedelta(days=1),
                                 cache_root=str(cache2))
-    assert mask3.all()
+    assert not mask3["c1"], "断更后应沿用最近可得的停牌状态"
+    assert not mask3["c2"], "断更后应沿用最近可得的 ST 状态"
+    assert mask3[["c0", "c3", "c4", "c5"]].all(), "无状态记录的股票放行（不臆造风险）"
 
 
 def test_build_ranking():

@@ -728,8 +728,11 @@ def test_build_tradable_mask_rules(tmp_path):
     assert not mask.loc[d1, "D"], "T+1 封跌停应剔除"
     assert not mask.loc[d1, "E"], "T+1 ST 应剔除"
     assert mask.loc[d1, "C"], "正常股票应保留"
-    # 状态缺失的日子补 True
-    assert bool(mask.loc[idx[3]].all())
+    # 状态表止于 d2：idx[3] 起属**断更之后**，ST/停牌是持续状态 ⇒ 沿用最近可得值
+    # （2026-11-10 事故口径；原来这里断言"补 True"= 把 ST/停牌整批放行）
+    assert not mask.loc[idx[3], "B"], "断更后应沿用最近可得的停牌状态"
+    assert not mask.loc[idx[3], "E"], "断更后应沿用最近可得的 ST 状态"
+    assert mask.loc[idx[3], ["A", "C", "D"]].all(), "其余股票放行（不臆造风险）"
 
 
 def testls_net_stats_tradable_filter():
