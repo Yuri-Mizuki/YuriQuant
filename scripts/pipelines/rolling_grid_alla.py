@@ -580,8 +580,13 @@ def select_features_for_year(year: int, horizon: int, ic_cache: pd.DataFrame,
     reserved: list[str] = []
     _extra: list[str] = []
     if INCLUDE_FUNDAMENTAL:
+        # ``n in cov_ok.index`` 这个守卫是必须的：``quality.index`` 来自 ic
+        # 缓存、``cov_ok`` 来自 registry，两者可以不一致（2026-11-12 退登记
+        # 129 个因子后，ic 缓存仍留着它们的列 ⇒ 无守卫直接 KeyError 崩）。
+        # 另类族那条分支本来就有守卫，这里漏了。
         ab_ok = [n for n in quality.index
-                 if n in FUNDAMENTAL_FAMILY_SETS and cov_ok[n] >= MIN_COVERAGE]
+                 if n in FUNDAMENTAL_FAMILY_SETS and n in cov_ok.index
+                 and cov_ok[n] >= MIN_COVERAGE]
         reserved = ab_ok[:min(len(ab_ok), RESERVED_FUNDAMENTAL_SLOTS)]
         _extra = [n for n in cov_ok.index
                   if n in FUNDAMENTAL_FAMILY_SETS and cov_ok[n] >= MIN_COVERAGE
