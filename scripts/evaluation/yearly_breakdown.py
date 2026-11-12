@@ -43,8 +43,8 @@ from scripts.evaluation.caliber import (  # noqa: E402
 )
 from scripts.evaluation.pool_scope_probe import (  # noqa: E402
     POOLS,
-    _pool_bench,
-    _pool_mask,
+    pool_bench,
+    pool_mask,
 )
 from strategy.cross_section import BufferedTopFracLongOnly  # noqa: E402
 
@@ -87,7 +87,7 @@ def main() -> int:
     if args.pool == "all_a":
         mask = pd.DataFrame(True, index=ctx.pred.index, columns=ctx.pred.columns)
     else:
-        mask = _pool_mask(POOLS[args.pool], ctx.pred.index, ctx.pred.columns)
+        mask = pool_mask(POOLS[args.pool], ctx.pred.index, ctx.pred.columns)
     bj = [c for c in ctx.pred.columns if c.endswith(".BJ")]
     sig = ctx.pred.where(mask)
     if bj:
@@ -111,7 +111,7 @@ def main() -> int:
     ).reindex(columns=ctx.pred.columns)
     fwd = close_full.pct_change(fill_method=None).shift(-1).reindex(ctx.pred.index)
     ic = _ic_by_year(sig, fwd, mask)
-    bench = _pool_bench(mask, ctx.pred.index)
+    bench = pool_bench(mask, ctx.pred.index)
 
     rows = []
     for y in sorted(dr_long.index.year.unique()):

@@ -33,7 +33,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.evaluation.pool_scope_probe import POOLS, _pool_mask  # noqa: E402
+from scripts.evaluation.pool_scope_probe import POOLS, pool_mask  # noqa: E402
 
 BASE_DIR = ROOT / "reports" / "alla_rolling" / "_base"
 
@@ -69,7 +69,7 @@ def main() -> int:
     idx, cols = pred.index, pred.columns
     masks = {"all_a": pd.DataFrame(True, index=idx, columns=cols)}
     for k, c in POOLS.items():
-        masks[k] = _pool_mask(c, idx, cols)
+        masks[k] = pool_mask(c, idx, cols)
     masks["idx_union"] = (masks["hs300"] | masks["zz500"]
                           | masks["zz1000"] | masks["zz2000"])
     masks["non_index"] = ~masks["idx_union"]

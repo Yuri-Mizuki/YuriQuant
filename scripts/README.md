@@ -78,6 +78,8 @@
 | `evaluation/cpcv_h1_eval.py` | h=1 模型 CPCV 无偏评估 |
 | `evaluation/cvar_arm_920.py` | 批次 12⑤：CVaR 约束组合臂 vs Top10% 等权 vs buffer 形态（production 口径）。 |
 | `evaluation/deliverable_portfolio.py` | 可交付组合：集中度 × 行业约束（P0 落地，2026-10-10 固化）。 |
+| `evaluation/factor_half_life_probe.py` | 因子信息半衰期探针（2026-11-11）：算 952 个中性化因子的 h∈{1,5,10,20} 截面 IC。🔑 **先跑 `--from-library`**（**0.5 秒**，直读因子库现成的 `ic_h*.parquet`，只支持 G0/G1/G2 三关）；需要 t 值/非重叠对照才重算（8 worker 37 分钟，断点续跑），那版用**定向配对差** `sign(ic_h20)×(ic_h5−ic_h20)`，并落 v1 带符号差 / v2 逐日绝对值差两列作诊断（**v2 已证为方差假象**：`E\|IC_t\|≈σ√(2/π)` ⇒ 必须用定向差）。两版产物分开存、**不可混用**（库版 `stride 3` 只取 1/3 票 + 不同 close_adj，复权价差 3.5%）。产物 `reports/factor_half_life/` |
+| `evaluation/factor_half_life_verdict.py` | 半衰期**判定**（读上一行的 CSV，不重算 IC）：181 族去重 + BH-FDR + **G0 方差假象守卫**（`\|corr(d,Δstd)\|>0.70` 判假）+ G1 符号检验（主判据，二项不依赖重叠结构）+ G2 中位数 + G3 族覆盖 + G4 非重叠符号。产出 `verdict.json`（判定真源）。改门槛须同步改 `reports/factor_half_life/README.md` §三 |
 | `evaluation/factor_pool_composition.py` | 因子池构成体检：量价占比到底多少、口径在哪、哪些族是真被用上了。 |
 | `evaluation/freq_tune.py` | 调仓频率补充精修：horizon ∈ {1,5} × rebalance ∈ {D,W,M} |
 | `evaluation/fundamental_blend.py` | E3 基本面慢信号 ⊕ 快信号双层融合（信达式分域建模 + 预测层 λ 加权）。 |
@@ -122,6 +124,9 @@
 | `evaluation/text_factor_probe.py` | 论文族 `pap_*` / 情绪族 `txt_*` 的生产口径收尾评估（P0）。 |
 | `evaluation/timing_probe.py` | 大盘择时（市场状态 → 仓位乘数）探针。 |
 | `evaluation/timing_daily_train_probe.py` | 择时第三格：**日频训练 + 月频执行**（含 R²/命中率/错位诊断、恒定仓位对照、安慰剂）。 |
+| `evaluation/timing_conditioned_probe.py` | P0 条件化择时：**newsy 月（A股 `{4,8,10}`）** × 12 月动量交互（复现 Guo 2025）。含基准自洽守卫、12-seed 噪声守卫、恒定仓位对照、安慰剂。 |
+| `evaluation/sop_timing_probe.py` | P1 **SOP 收益分解**（复现 Ferreira-Santa-Clara 2011）：`D/P + ΔE/E`，零自由参数。含分红/净利 TTM 量级守卫、**量纲守卫**（年化→月度）、循环平移置换。 |
+| `evaluation/solo_signal_probe.py` | **solo 真实执行层下的周期组合再检验**（14 臂 × 8 格 × 6 相位）：A 组 = 行业去重+整手100+1e5（solo 实际形态），B 组 = 无行业约束+无整手+1e6（复现 `focus_upgrade` 原裁定，逐位一致守卫）。含「构造 vs 落盘 ρ>0.99」守卫、逐相位配对、跨格胜格数统计。结论：`mid13` **6/8 格第一**（K=10 两格被 `drop_h10` 反超）、两周期臂 **0/8**。⚠️ **IC 期限必须对齐持有期**：h=1 日频 IC 的 ρ(IC,组合)=−0.066（p=0.82，无关系，首版误读成"反向 −0.9"已撤），改为月频非重叠口径后 ρ=**+0.648（p=0.012，显著正）**；配对差 6 对里 4 对与组合同号，异号两对均落 IC 不显著带（`drop_h5`/`h20`）⇒ 月频 IC 只作第一道筛。 |
 | `evaluation/views_arm_920.py` | 批次 12④：观点注入三臂对照（BL 优化层 vs 预测层 vs 不注入）。 |
 | `evaluation/walk_forward.py` | 三段样本外验证（walk-forward）：train 挖 → valid 选 → test 验 |
 | `evaluation/walk_forward_model.py` | 模型层滚动训练 —— Predictor 的 walk-forward 编排 |

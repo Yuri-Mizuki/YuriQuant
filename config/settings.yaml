@@ -157,9 +157,13 @@ monitoring:
 #    （backtest_two_periods / e2e_backtest / multiyear_oos / gp_tune_budget /
 #     optimize.multi_period / research.factor_library 的 canonical 回测等）。
 costs:
-  commission_rate: 0.0003    # 双边佣金万3
+  commission_rate: 0.0001    # 双边佣金万1（2026-11-11 由万3修正，账户实际）
   commission_min: 5.0        # 单笔最低佣金5元
-  stamp_duty: 0.001          # 印花税卖出千1
+  # 印花税卖出单边。**引擎按调仓日时变取值**（backtest/costs.py:stamp_duty_on）：
+  # 2023-08-28 前千1、之后万5（财政部 税务总局公告 2023 年第 39 号）。
+  # 这里的值是「现行税率」，仅在调用方**没传 date** 时兜底 —— 跨政策窗口的回测
+  # 必须走 date 参数，否则 2019~2023 段会被按万5 计算（偏乐观）。
+  stamp_duty: 0.0005
   slippage_bp: 10            # 滑点 10bp（固定假设；impact_model=sqrt 时被逐股冲击替代）
   # 空头腿成本（修正空头腿乐观偏差：多空策略借券费按日计提、保证金占用报告）
   short_borrow_rate: 0.08    # 年化借券费率（A股融券常见 8%~10%；0=关闭）

@@ -152,34 +152,9 @@ class VolWeightedTopKLongOnly(Strategy):
         return pd.Series(w, index=codes)
 
 
-class BufferedTopKLongOnly(Strategy):
-    """固定 K 多头的排名缓冲带（**有状态**，每回测须用新实例）。
-
-    与 `strategy.cross_section.BufferedTopFracLongOnly` 同规则，但目标持仓数固定为 K
-    （集中组合口径 45 只），而非按截面比例。保留门槛 = 排名 ≤ K×exit_mult。
-    """
-
-    def __init__(self, k: int = 45, exit_mult: float = 1.5):
-        self.k = k
-        self.exit_mult = exit_mult
-        self._prev: set = set()
-        self.name = f"buffered_topk_lo_{k}_{exit_mult}"
-
-    def get_weights(self, factor_values: pd.Series) -> pd.Series:
-        vals = factor_values.dropna()
-        if len(vals) == 0:
-            self._prev = set()
-            return pd.Series(dtype=float)
-        n_exit = max(self.k, int(round(self.k * self.exit_mult)))
-        ranks = vals.rank(ascending=False, method="first")
-        keep = [c for c in self._prev if c in ranks.index and ranks[c] <= n_exit]
-        cands = [c for c in ranks.sort_values().index
-                 if c not in self._prev and ranks[c] <= self.k]
-        port = keep + cands[:max(0, self.k - len(keep))]
-        if len(port) > self.k:
-            port = sorted(port, key=lambda c: ranks[c])[:self.k]
-        self._prev = set(port)
-        return pd.Series(1.0 / max(len(port), 1), index=port)
+#: 2026-11-10 迁移：实现搬到 ``strategy.examples``（策略定义不该住在评测脚本里），
+#: 此处同名再导出以兼容既有调用方。**单一实现、两个入口**，勿在两边都改。
+from strategy.examples import BufferedTopKLongOnly  # noqa: E402,F401
 
 
 def main(argv: list[str] | None = None) -> None:

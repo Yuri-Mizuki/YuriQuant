@@ -1,7 +1,8 @@
 """统一评估口径（``scripts/evaluation/caliber.py`` + ``config/baselines.yaml``）回归。
 
 2026-10-13 建立。锁死三件事：
-1. 定版登记表的 schema 与不变量（有且仅有 1 条 production；不可复现须给重建命令）；
+1. 定版登记表的 schema 与不变量（无 family 的 production 仅 1 条；同族档位 tier 唯一且
+   恰有一个 default；不可复现须给重建命令）；
 2. 口径原语的口径方向（几何 ≤ 算术 Sharpe；指纹确定且敏感；调仓日 = 每月首个交易日）；
 3. **协方差暖机** —— ``ret_hist`` 必须比回测窗口长（防「窗口起点=数据起点」静默空仓）。
 """
@@ -33,7 +34,39 @@ def test_registry_schema_and_invariants():
             assert b.get("regen_cmd"), f"{b['id']} 非本机可复现则必须给 regen_cmd"
 
     prod = [b for b in bl if b["status"] == "production"]
-    assert len(prod) == 1, "有且仅有一条 production 定版"
+
+    # 不变量（2026-11-10 精确化，原为「有且仅有一条 production」）：
+    # `yqcore` 立档后，一个策略族可以有多条并列 production 的**档位**（按资金规模
+    # 分档，互不取代，见 baselines.yaml 规则 10）。所以约束拆成两层：
+    plain = [b for b in prod if not b.get("family")]
+    assert len(plain) == 1, (
+        "无 family 的 production 定版有且仅有一条（v1→v2 这种线性更替）；"
+        f"实际 {[b['id'] for b in plain]}")
+
+    from collections import defaultdict
+    fams = defaultdict(list)
+    for b in prod:
+        if b.get("family"):
+            fams[b["family"]].append(b)
+    for fam, items in fams.items():
+        assert len(items) >= 2, f"{fam} 只有一档，不该用 family（直接做普通条目即可）"
+        tiers = [b.get("tier") for b in items]
+        assert all(tiers), f"{fam} 的每条都必须给 tier"
+        assert len(set(tiers)) == len(tiers), f"{fam} 的 tier 必须唯一"
+        assert sum(1 for b in items if b.get("default")) == 1, (
+            f"{fam} 必须恰好一档 default: true（规则 3 的「基线取 production 那条」"
+            "在同族多档时必须能唯一定位）")
+
+
+def test_registry_family_entries_are_consistent():
+    """有 family 的条目必须给 tier；无 family 的不该有 tier（防半迁移状态）。"""
+    from scripts.evaluation.caliber import load_registry
+
+    for b in load_registry().get("baselines") or []:
+        if b.get("family"):
+            assert b.get("tier"), f"{b['id']} 有 family 但缺 tier"
+        else:
+            assert not b.get("tier"), f"{b['id']} 无 family 却写了 tier"
 
 
 def test_registry_conventions_match_code():
@@ -188,6 +221,45 @@ def test_next_day_rebalance_is_trading_day_after_month_first():
         assert prev == same_month[0]          # 前一天是当月首个交易日
 
 
+@pytest.mark.parametrize("freq", ["D", "W", "2W", "M"])
+def test_rebalance_dates_match_engine_for_all_freqs(freq):
+    """``rebalance_dates(freq)`` 必须与引擎 ``_get_rebalance_days`` 逐位一致。
+
+    2026-11-10 新增：频率参数化（周频实验）后，两套实现一旦漂移，回测会静默退化为
+    「恒用最后一期权重」（2026-10-13 踩过），且**不会报错**。
+    """
+    from backtest.engine import VectorBacktest
+    from scripts.evaluation.caliber import rebalance_dates
+
+    idx = pd.bdate_range("2019-01-02", "2026-09-07")
+    bt = VectorBacktest.__new__(VectorBacktest)      # 只借用纯函数，不构造完整对象
+    bt.rebalance_freq = freq
+    assert set(rebalance_dates(idx, freq=freq)) == bt._get_rebalance_days(idx)
+
+
+def test_rebalance_dates_phase_takes_nth_trading_day():
+    """``phase=p`` = 周期内第 p 个交易日，且每周/每月恰好一只（节假日回退末日）。"""
+    from scripts.evaluation.caliber import rebalance_dates
+
+    # 含春节缺口：2024-02-05..02-09 整周只有 02-05、02-06、02-07、02-08 四个交易日
+    idx = pd.DatetimeIndex(pd.to_datetime(
+        ["2024-02-01", "2024-02-02", "2024-02-05", "2024-02-06",
+         "2024-02-07", "2024-02-08", "2024-02-19", "2024-02-20"]))
+    got = rebalance_dates(idx, freq="W", phase=1)
+    assert list(got) == [pd.Timestamp("2024-02-02"), pd.Timestamp("2024-02-06"),
+                         pd.Timestamp("2024-02-20")]
+    # 该周只有 1 个交易日时，phase 应回退到那唯一一天而不是丢整周
+    only = pd.DatetimeIndex(pd.to_datetime(["2024-02-09", "2024-02-19", "2024-02-20"]))
+    assert list(rebalance_dates(only, freq="W", phase=2))[0] == pd.Timestamp("2024-02-09")
+
+
+def test_rebalance_dates_rejects_unknown_freq():
+    from scripts.evaluation.caliber import rebalance_dates
+
+    with pytest.raises(KeyError):
+        rebalance_dates(pd.bdate_range("2020-01-01", periods=10), freq="X")
+
+
 def test_execution_open_without_fill_raises():
     """未加载成交价面板却要求 T+1 执行 → 必须明确报错（而非静默用 close）。"""
     from scripts.evaluation.caliber import (
@@ -209,3 +281,61 @@ def test_execution_open_without_fill_raises():
 
     with pytest.raises(ValueError, match="ctx.fill"):
         evaluate_strategy(_Noop(), ctx, cost_profile("production"), 1e6)
+
+
+# ---------------------------------------------------------------------------
+# 复合信号（多面板加权秩平均，2026-11-10 新增）
+# ---------------------------------------------------------------------------
+def test_composite_signals_are_declared_without_path():
+    """复合信号靠 components 现场构造，**不能**同时写 path（两个真相源会分叉）。"""
+    from scripts.evaluation.caliber import SIGNALS
+
+    comps = {k: v for k, v in SIGNALS.items() if v.get("components")}
+    assert comps, "至少应有 gbdt_avg4 / gbdt_mid13 两条复合信号"
+    for name, spec in comps.items():
+        assert "path" not in spec, f"{name} 是复合信号，不该有 path"
+        assert spec["components"], name
+        for sub, w in spec["components"].items():
+            assert sub in SIGNALS, f"{name} 的分量 {sub} 未登记"
+            assert SIGNALS[sub].get("path"), f"{name} 的分量 {sub} 必须有落盘面板"
+            assert float(w) > 0, f"{name} 的分量 {sub} 权重须为正"
+        assert spec.get("reproducible") is True, name
+
+
+def test_weighted_rank_average_matches_experiment():
+    """向量化加权实现必须与实验侧逐日实现**逐位一致**（重复面板 = 整数权重）。"""
+    from scripts.common.alla_common import rank_average
+    from scripts.evaluation.caliber import weighted_rank_average
+
+    rng = np.random.default_rng(7)
+    idx = pd.bdate_range("2020-01-01", periods=6)
+    cols = [f"s{i:03d}" for i in range(40)]
+    panels = [pd.DataFrame(rng.normal(size=(6, 40)), index=idx, columns=cols)
+              for _ in range(3)]
+    panels[1].iloc[2, 5] = np.nan            # 交集语义：一格缺 ⇒ 该格不进结果
+
+    fast = weighted_rank_average(panels, [2.0, 1.0, 1.0])
+    slow = rank_average([panels[0], panels[0], panels[1], panels[2]])
+    pd.testing.assert_frame_equal(fast.astype("float64"), slow.astype("float64"),
+                                  check_names=False, rtol=1e-9, atol=1e-9)
+
+
+def test_weighted_rank_average_weights_and_nan():
+    from scripts.evaluation.caliber import weighted_rank_average
+
+    idx = pd.bdate_range("2020-01-01", periods=2)
+    a = pd.DataFrame([[1.0, 2.0, 3.0], [3.0, 1.0, 2.0]], index=idx,
+                     columns=list("abc"))
+    b = pd.DataFrame(a.values[:, ::-1], index=idx, columns=list("abc"))
+
+    eq = weighted_rank_average([a, b])
+    # b 是 a 的逐行反序 ⇒ 两者秩逐位互补，等权平均恒为 2/3
+    assert np.allclose(eq.iloc[0].values, 2.0 / 3.0)
+    only_a = weighted_rank_average([a, b], [1.0, 0.0])
+    assert np.allclose(only_a.iloc[0].values, a.rank(axis=1, pct=True).iloc[0])
+
+    b_nan = b.copy()
+    b_nan.iloc[0, 0] = np.nan
+    out = weighted_rank_average([a, b_nan])
+    assert np.isnan(out.iloc[0, 0]), "任一分量缺失 ⇒ 该格不输出（取交集）"
+    assert not np.isnan(out.iloc[0, 1])

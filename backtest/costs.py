@@ -4,7 +4,7 @@
 
 支持:
 - 佣金: 费率制 + 最低5元
-- 印花税: 卖出千1
+- 印花税: 卖出单边，**支持按日期时变**（2023-08-28 减半，见 ``STAMP_DUTY_CHANGES``）
 - 滑点: 按基点扣除，**或**逐股冲击成本模型（ImpactCostModel，P0-1）
 - 空头成本（ShortCostModel）: 借券费率按日计提 + 融券保证金占用
 
@@ -15,6 +15,10 @@
 
     # 逐股冲击（需逐股 ADV/波动率）：滑点项由 ImpactCostModel 替代固定 slippage_bp
     cost = costs.calc(old_w, new_w, turnover, capital, adv=adv_i, vol=vol_i)
+
+    # 时变印花税（2026-11-11 P0 修正）：传 date 才按当时税率，
+    # 不传则用构造时给的 stamp_duty（向后兼容，但跨政策窗口的窗口需显式传）
+    cost = costs.calc(old_w, new_w, turnover, capital, date=dates[i])
 """
 from __future__ import annotations
 
@@ -23,6 +27,41 @@ from dataclasses import dataclass
 import numpy as np
 
 from backtest.metrics import PERIODS_PER_YEAR
+
+
+# 证券交易印花税历史税率（卖出单边）—— 财政部/税务总局公告为准。
+# 2023-08-28 起减半：千1 → 万5（财政部 税务总局公告 2023 年第 39 号）。
+# 只列**有变更**的时点，取「该日期起生效」；查找时取 <= date 的最后一条。
+STAMP_DUTY_CHANGES: tuple[tuple[str, float], ...] = (
+    ("2008-09-19", 0.001),   # 由双边改单边征收，税率千1
+    ("2023-08-28", 0.0005),  # 减半至万5
+)
+
+
+def stamp_duty_on(date) -> float:
+    """返回 ``date`` 当日适用的证券交易印花税税率（卖出单边）。
+
+    Args:
+        date: 交易日（8 位 int YYYYMMDD / str / datetime / Timestamp / None）。
+
+    Returns:
+        税率（小数）。``date`` 为 None 时返回现行税率（万5）。
+    """
+    if date is None:
+        return STAMP_DUTY_CHANGES[-1][1]
+    # 日历是 int YYYYMMDD（PIT 口径）：int→Timestamp 必须先转 str，否则落 1970
+    if isinstance(date, (int, np.integer)):
+        key = str(int(date))
+        stamp = f"{key[:4]}-{key[4:6]}-{key[6:8]}"
+    elif hasattr(date, "strftime"):
+        stamp = date.strftime("%Y-%m-%d")
+    else:
+        stamp = str(date)[:10]
+    rate = STAMP_DUTY_CHANGES[0][1]
+    for eff, r in STAMP_DUTY_CHANGES:
+        if stamp >= eff:
+            rate = r
+    return rate
 
 
 @dataclass
@@ -110,9 +149,10 @@ class TransactionCosts:
         self,
         commission_rate: float = 0.0001,
         commission_min: float = 5.0,
-        stamp_duty: float = 0.001,
+        stamp_duty: float = 0.0005,
         slippage_bp: float = 5.0,
         impact: ImpactCostModel | None = None,
+        stamp_duty_schedule: bool = False,
     ):
         self.commission_rate = commission_rate
         self.commission_min = commission_min
@@ -120,6 +160,11 @@ class TransactionCosts:
         self.slippage_bp = slippage_bp
         # 逐股冲击模型（可选）：挂上且调用方传了逐股 adv/vol 时，滑点项改走它。
         self.impact = impact
+        # 印花税是否按调仓日时变。**默认关闭**：`stamp_duty` 是显式给定的固定值，
+        # 不能被日期悄悄覆盖 —— 否则 `default_costs(factor_cost=False)` 这类
+        # 「显式置零」的无成本对照会被重新收上税（2026-11-11 踩过：两个引擎
+        # 单测因净收益被扣税而失败）。只有 `default_costs()` 生产口径才显式开启。
+        self.stamp_duty_schedule = stamp_duty_schedule
 
     def calc(
         self,
@@ -129,6 +174,7 @@ class TransactionCosts:
         capital: float,
         adv=None,
         vol=None,
+        date=None,
     ) -> float:
         """计算单期交易成本（金额）。
 
@@ -140,6 +186,8 @@ class TransactionCosts:
             adv: 可选，逐股日均成交额（元）。与 ``vol`` 同给、且挂了 ``impact``
                 模型时，滑点项改为逐股冲击成本。
             vol: 可选，逐股日波动率（小数）。
+            date: 可选，调仓日。给了则印花税按当日税率（时变，见
+                ``stamp_duty_on``）；不给则用构造时传入的固定 ``stamp_duty``。
 
         Returns:
             成本总额（元）
@@ -159,8 +207,12 @@ class TransactionCosts:
         # 简化: 按总交易额算佣金，实际每笔单独算最低5元
         commission = max(two_sided_value * self.commission_rate, self.commission_min)
 
-        # 印花税: 仅卖出方（单边）
-        stamp = single_sided_value * self.stamp_duty
+        # 印花税: 仅卖出方（单边）。仅当对象显式开启时变（`stamp_duty_schedule=True`）
+        # 且调用方给了 date 时才按当时税率，否则一律用构造时的固定 `stamp_duty`。
+        duty = (stamp_duty_on(date)
+                if (date is not None and self.stamp_duty_schedule)
+                else self.stamp_duty)
+        stamp = single_sided_value * duty
 
         # 滑点: 逐股冲击（挂在 impact 且给了 adv/vol）优先，否则固定基点
         if self.impact is not None and adv is not None and vol is not None:
@@ -275,4 +327,7 @@ def default_costs(factor_cost: bool = True) -> TransactionCosts:
                             commission_min=cfg["commission_min"],
                             stamp_duty=cfg["stamp_duty"],
                             slippage_bp=cfg["slippage_bp"],
+                            # 生产口径开启时变印花税：窗口跨 2023-08-28 政策变更，
+                            # 单一常数必然导致一半窗口错（见 stamp_duty_on）。
+                            stamp_duty_schedule=True,
                             impact=impact_from_config(cfg))

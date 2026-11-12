@@ -48,7 +48,7 @@ from config import Config  # noqa: E402
 from data.universe import Universe  # noqa: E402
 from research.benchmarks import segmented_equal_weight_returns  # noqa: E402
 from scripts.evaluation.caliber import (  # noqa: E402
-    _metrics,  # 汇总指标唯一实现（含 NW t / years_to_prove），避免另写一份
+    metrics_row,  # 汇总指标唯一实现（含 NW t / years_to_prove），避免另写一份
     cost_profile,
     describe,
     get_profile,
@@ -56,7 +56,7 @@ from scripts.evaluation.caliber import (  # noqa: E402
     run_once,
 )
 from strategy.base import Strategy  # noqa: E402
-from strategy.cross_section import BufferedTopFracLongOnly, _rank_desc  # noqa: E402
+from strategy.cross_section import BufferedTopFracLongOnly, rank_desc  # noqa: E402
 
 
 class BufferedFixedNLongOnly(Strategy):
@@ -80,7 +80,7 @@ class BufferedFixedNLongOnly(Strategy):
         if len(vals) == 0:
             self._prev = set()
             return pd.Series(dtype=float)
-        ranks = _rank_desc(vals)
+        ranks = rank_desc(vals)
         keep = [c for c in self._prev if c in ranks.index and ranks[c] <= self.n_exit]
         candidates = [c for c in ranks.sort_values().index
                       if c not in set(keep) and c not in self._prev
@@ -124,7 +124,7 @@ class _LocalOnlyCache:
         return pd.read_parquet(p)
 
 
-def _pool_mask(index_code: str, dates: pd.DatetimeIndex,
+def pool_mask(index_code: str, dates: pd.DatetimeIndex,
                columns: pd.Index) -> pd.DataFrame:
     """按日 PIT 归属矩阵（date × code，bool），对齐到信号面板的列。"""
     uni = Universe(_LocalOnlyCache())
@@ -147,7 +147,7 @@ def _full_close() -> pd.DataFrame:
     return pd.read_parquet(BASE_DIR / "close_adj.parquet")
 
 
-def _pool_bench(mask: pd.DataFrame, window: pd.DatetimeIndex) -> pd.Series:
+def pool_bench(mask: pd.DataFrame, window: pd.DatetimeIndex) -> pd.Series:
     """同池等权、月首重置的日收益基准。
 
     实现走 ``research.benchmarks.segmented_equal_weight_returns``（**唯一真源**）。
@@ -207,7 +207,7 @@ def main() -> int:
         else:
             if pool not in POOLS:
                 raise KeyError(f"未知池子 {pool!r}，可选 all_a / {sorted(POOLS)}")
-            m = _pool_mask(POOLS[pool], ctx.pred.index, ctx.pred.columns)
+            m = pool_mask(POOLS[pool], ctx.pred.index, ctx.pred.columns)
 
         sig = ctx.pred.where(m)
         if not args.keep_bj:
@@ -230,10 +230,10 @@ def main() -> int:
                       else BufferedTopFracLongOnly(args.entry, args.exit)),
             rebalance_freq="M", initial_capital=float(prof.capital), costs=cost)
         res = run_once(bt, ctx, prof.execution, signal=sig)
-        m_tr = _metrics(res, prof.capital)
+        m_tr = metrics_row(res, prof.capital)
         dr = res.daily_returns
 
-        bench = _pool_bench(m, ctx.pred.index)
+        bench = pool_bench(m, ctx.pred.index)
         bm = _bench_metrics(bench)
         excess = dr - bench.reindex(dr.index).fillna(0.0)
 

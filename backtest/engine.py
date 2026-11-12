@@ -456,9 +456,11 @@ class VectorBacktest:
                         current_weights, new_arr, capital, adv_values[i], vol_values[i]
                     )
                     cost = self.costs.calc(current_weights, new_arr, turnover, capital,
-                                           adv=adv_values[i], vol=vol_values[i])
+                                           adv=adv_values[i], vol=vol_values[i],
+                                           date=dates[i])
                 else:
-                    cost = self.costs.calc(current_weights, new_arr, turnover, capital)
+                    cost = self.costs.calc(current_weights, new_arr, turnover, capital,
+                                           date=dates[i])
                 cost_arr[i] = cost
                 capital -= cost
 
