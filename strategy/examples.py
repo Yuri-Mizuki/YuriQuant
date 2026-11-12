@@ -176,6 +176,172 @@ class SectorCappedTopKLongOnly(Strategy):
         return sub / sub.abs().sum()
 
 
+class SectorCappedBufferedTopKLongOnly(Strategy):
+    """TopK 等权 + **排名缓冲带** + **每行业最多 N 只**（小资金集中组合）。
+
+    2026-11-10 新增。三个约束叠加，各管一件事：
+
+    - ``k`` / ``exit_mult``：控制**换手**。保留门槛 = 排名 ≤ ``k·exit_mult``，
+      新进门槛 = 排名 ≤ ``k``（与 :class:`BufferedTopKLongOnly` 同规则）。
+    - ``max_per_sector``：控制**行业押注**。分数从高到低贪心纳入，行业已满则跳过；
+      设为 1 即「每个申万一级行业只留最强的一只」。实测这一步在 10 万整手组合上
+      把年化从 31.3% 提到 38.3%（同持仓数），且通过随机行业标签安慰剂
+      （10 次打乱 max 34.6%，真实 38.3%，100% 分位）。
+    - ``min_holdings``：控制**尾部集中**。行业去重会让实际持仓少于 ``k``
+      （TopK 内常有 2~3 只同行业），若某期只剩 2 只，等权就是单票 50%。
+      设 ``min_holdings=m`` 后，持仓数 < m 时每只按 ``1/m`` 配、差额**留现金**，
+      不硬凑满仓。m=8 时回撤从 36% 降到 26%，代价是年化同比例降。
+    - ``gross_exposure``：整体仓位系数（``<1`` 即常驻现金）。与 ``min_holdings``
+      不同，它是**无条件**按比例降杠杆 ⇒ Sharpe 基本不变、回撤与收益等比缩。
+
+    .. note:: 行业截面需按 date 定位，故实现 :meth:`get_weights_at`。
+       ``__NA__``（无行业分类，约 10%）**共用一个名额** —— 实测这些股票从不进
+       TopK（把它们直接排除后数字逐位相同），故不影响结论。
+
+    - ``fill_to_k``：被行业挡掉的空缺要不要往下补满 k。默认 ``False``（只在 TopK 内选）。
+
+    - ``min_sectors``：控制**行业数下限**（2026-11-10 新增）。``max_per_sector=1``
+      只保证「同行业不重复」，**不保证行业数**——TopK 内可能只剩 2~3 个行业，
+      行业 beta 暴露不受控。设 ``min_sectors=n`` 后，若去重后行业数 < n，则从
+      TopK **之外**（排名 ≤ ``k·sector_rank_mult``）按排名补「新行业」各 1 只，
+      补到达标或持仓达到 ``k`` 为止。默认 0 = 关闭（与历史数字逐位一致）。
+
+    .. note:: **被行业挡掉的空缺默认不往下补**（只在 TopK 内选，所以实际持仓 < k）。
+       2026-11-10 实测过「补满 k」的版本（候选放宽到 ``k·exit_mult``）：K=6 b1.5
+       38.30%→36.38%、**K=8 b2.0 35.08%→29.04%**（持仓 5.9→7.7）⇒ TopK 之外的
+       alpha 衰减很快，欠仓比凑数好。故保留「不补」语义。``min_sectors`` 是**例外但受限**
+       的补位：只补「行业数缺口」，不补「持仓数缺口」，且候选有排名上限
+       （``sector_rank_mult``），不会去捞全市场第 2000 名。
+
+    实测口径见 ``reports/focus_micro/README.md``。
+    """
+
+    def __init__(self, sectors: pd.DataFrame, k: int = 8, exit_mult: float = 1.0,
+                 max_per_sector: int = 1, min_holdings: int = 1,
+                 gross_exposure: float = 1.0, fill_to_k: bool = False,
+                 min_sectors: int = 0, sector_rank_mult: float = 3.0):
+        if k <= 0:
+            raise ValueError(f"k 必须为正: {k}")
+        if exit_mult < 1.0:
+            raise ValueError(f"exit_mult 必须 ≥ 1: {exit_mult}")
+        if max_per_sector <= 0:
+            raise ValueError(f"max_per_sector 必须为正: {max_per_sector}")
+        if min_holdings <= 0:
+            raise ValueError(f"min_holdings 必须为正: {min_holdings}")
+        if not 0 < gross_exposure <= 1.0:
+            raise ValueError(f"gross_exposure 必须在 (0,1]: {gross_exposure}")
+        if min_sectors < 0:
+            raise ValueError(f"min_sectors 不能为负: {min_sectors}")
+        if min_sectors > k:
+            raise ValueError(f"min_sectors({min_sectors}) 不能超过 k({k})")
+        if sector_rank_mult < 1.0:
+            raise ValueError(f"sector_rank_mult 必须 ≥ 1: {sector_rank_mult}")
+        self.sectors = sectors
+        self.k = int(k)
+        self.exit_mult = float(exit_mult)
+        self.max_per_sector = int(max_per_sector)
+        self.min_holdings = int(min_holdings)
+        self.gross_exposure = float(gross_exposure)
+        self.fill_to_k = bool(fill_to_k)
+        self.min_sectors = int(min_sectors)
+        self.sector_rank_mult = float(sector_rank_mult)
+        self._prev: set = set()
+        self.name = (f"sector_buffered_topk_{k}_{exit_mult}_m{max_per_sector}"
+                     f"_h{min_holdings}_g{gross_exposure:g}"
+                     f"{'_fillk' if fill_to_k else ''}"
+                     f"{f'_ms{min_sectors}x{sector_rank_mult:g}' if min_sectors else ''}")
+
+    def seed_holdings(self, codes) -> None:
+        """把上一期的实际持仓灌入缓冲带状态（**仅单期推理/生产出榜用**）。
+
+        回测由引擎按时序逐次调用 :meth:`get_weights_at` 自动维护 ``_prev``；生产
+        只跑一个截面、没有时序驱动，故须由调用方从上一期落盘的持仓显式灌入。
+        ⚠️ 回测中不要调用 —— 会覆盖引擎已建立的时序持仓，等价于制造前视。
+        """
+        self._prev = set(codes)
+
+    def get_weights(self, factor_values: pd.Series) -> pd.Series:
+        raise NotImplementedError(
+            "行业约束需按日期定位行业截面，请用 get_weights_at(date, vals)")
+
+    def get_weights_at(self, date: pd.Timestamp,
+                       factor_values: pd.Series) -> pd.Series:
+        vals = factor_values.dropna()
+        if vals.empty:
+            self._prev = set()
+            return pd.Series(dtype=float)
+        sect = (self.sectors.loc[date] if date in self.sectors.index
+                else pd.Series(index=vals.index, dtype=object)).reindex(vals.index)
+
+        def _key(code):
+            s = sect.get(code)
+            return "__NA__" if s is None or pd.isna(s) else str(s)
+
+        ranks = _rank_desc(vals)
+        n_exit = max(self.k, int(round(self.k * self.exit_mult)))
+
+        # 1) 保留：上期持仓中排名仍在缓冲带内、且行业名额未满的
+        counts: dict[str, int] = {}
+        keep: list = []
+        for code in sorted(self._prev, key=lambda c: ranks.get(c, float("inf"))):
+            if code not in ranks.index or ranks[code] > n_exit:
+                continue
+            key = _key(code)
+            if counts.get(key, 0) >= self.max_per_sector:
+                continue
+            counts[key] = counts.get(key, 0) + 1
+            keep.append(code)
+            if len(keep) >= self.k:
+                break
+
+        # 2) 补位：从排名最高开始贪心，行业已满则跳过。
+        #    候选上限默认 = k（只在 TopK 内选）；fill_to_k=True 时放宽到保留带外沿
+        #    ``k·exit_mult`` —— 实测更差（k8 b2.0: 35.08%→29.04%），默认关。
+        limit = n_exit if self.fill_to_k else self.k
+        fills: list = []
+        for code in ranks.sort_values().index:
+            if len(keep) + len(fills) >= self.k:
+                break
+            if ranks[code] > limit:
+                break
+            if code in self._prev and ranks[code] <= n_exit:
+                continue                    # 已在 keep 名单（或刚被行业约束拒掉）
+            key = _key(code)
+            if counts.get(key, 0) >= self.max_per_sector:
+                continue
+            counts[key] = counts.get(key, 0) + 1
+            fills.append(code)
+
+        port = keep + fills
+
+        # 3) 行业数地板：``max_per_sector`` 管「同质」，不管「只剩几个行业」。
+        #    去重后行业数 < min_sectors 时，从 TopK 之外按排名补「新行业」各 1 只，
+        #    候选上限 k·sector_rank_mult（不无限下探），补到行业达标或持仓满 k 为止。
+        #    默认 min_sectors=0 ⇒ 整段不执行，历史数字逐位不变。
+        if self.min_sectors > 0:
+            have = {_key(c) for c in port}
+            if len(have) < self.min_sectors:
+                cap = int(round(self.k * self.sector_rank_mult))
+                for code in ranks.sort_values().index:
+                    if len(have) >= self.min_sectors or len(port) >= self.k:
+                        break
+                    if ranks[code] > cap:
+                        break
+                    if code in port:
+                        continue
+                    key = _key(code)
+                    if key in have:
+                        continue
+                    have.add(key)
+                    port.append(code)
+
+        self._prev = set(port)
+        if not port:
+            return pd.Series(dtype=float)
+        per = self.gross_exposure / max(len(port), self.min_holdings)
+        return pd.Series(per, index=port)
+
+
 class TopFracLongOnly(Strategy):
     """Top-Frac 重仓多头: 按比例 selected top-股做等权多头。
 
@@ -274,6 +440,53 @@ class BufferedTopFracLongOnly(Strategy):
 
         self._prev = set(portfolio)
         return pd.Series(1.0 / len(portfolio), index=portfolio)
+
+
+class BufferedTopKLongOnly(Strategy):
+    """固定 K 多头的排名缓冲带（低换手变体；**有状态**，每回测须用新实例）。
+
+    与 :class:`BufferedTopFracLongOnly` 同规则，但目标持仓数**固定为 K**，而非按截面
+    比例 —— 截面数从 2019 年的 3400 只涨到 2025 年的 4900 只时，Top-Frac 的只数会跟着
+    漂（411→734 只），TopK 不会。集中组合（小资金）用它。
+
+    保留门槛 = 排名 ≤ K×``exit_mult``；新进候选门槛 = 排名 ≤ K。
+    ``exit_mult=1.0`` 即无缓冲带（等价硬切 TopK，但实现仍有状态，可安全替换）。
+
+    .. note:: 2026-11-10 从 ``scripts/evaluation/portfolio_weighting.py`` 迁入
+       （策略定义不该住在评测脚本里），原位置保留同名再导出以兼容既有调用方。
+       迁移未改任何逻辑，只把 ``vals.rank(ascending=False, method="first")``
+       换成等价的 :func:`_rank_desc`，与模块内其余策略共用同一个 tie-break。
+    """
+
+    def __init__(self, k: int = 45, exit_mult: float = 1.5):
+        if k < 1:
+            raise ValueError(f"k 必须 ≥ 1: {k}")
+        if exit_mult < 1.0:
+            raise ValueError(f"exit_mult 必须 ≥ 1: {exit_mult}")
+        self.k = int(k)
+        self.exit_mult = float(exit_mult)
+        self._prev: set = set()
+        self.name = f"buffered_topk_lo_{k}_{exit_mult}"
+
+    def seed_holdings(self, codes) -> None:
+        """把上一期实际持仓灌入缓冲带（仅生产单期推理用，回测勿调，否则制造前视）。"""
+        self._prev = set(codes)
+
+    def get_weights(self, factor_values: pd.Series) -> pd.Series:
+        vals = factor_values.dropna()
+        if len(vals) == 0:
+            self._prev = set()
+            return pd.Series(dtype=float)
+        n_exit = max(self.k, int(round(self.k * self.exit_mult)))
+        ranks = _rank_desc(vals)
+        keep = [c for c in self._prev if c in ranks.index and ranks[c] <= n_exit]
+        cands = [c for c in ranks.sort_values().index
+                 if c not in self._prev and ranks[c] <= self.k]
+        port = keep + cands[:max(0, self.k - len(keep))]
+        if len(port) > self.k:
+            port = sorted(port, key=lambda c: ranks[c])[:self.k]
+        self._prev = set(port)
+        return pd.Series(1.0 / max(len(port), 1), index=port)
 
 
 class QuantileLongShort(Strategy):

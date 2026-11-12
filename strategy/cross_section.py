@@ -23,25 +23,29 @@
 """
 from __future__ import annotations
 
+# ``pool_scope_probe`` 直接用这个确定性排序（并列按列序打破），是模块私有名但
+# 被跨模块消费，故在兼容层显式透出，避免调用方各自重写一遍排序。
 from strategy.examples import (
     BufferedTopFracLongOnly,
+    BufferedTopKLongOnly,
     QuantileLongShort,
+    SectorCappedBufferedTopKLongOnly,
     SectorCappedTopKLongOnly,
     TopFracLongOnly,
     TopKLongOnly,
     TopKLongShort,
+    _rank_desc,
     build_strategy,
 )
-# ``pool_scope_probe`` 直接用这个确定性排序（并列按列序打破），是模块私有名但
-# 被跨模块消费，故在兼容层显式透出，避免调用方各自重写一遍排序。
-from strategy.examples import _rank_desc
 
 __all__ = [
     "TopKLongShort",
     "TopKLongOnly",
+    "SectorCappedBufferedTopKLongOnly",
     "SectorCappedTopKLongOnly",
     "TopFracLongOnly",
     "BufferedTopFracLongOnly",
+    "BufferedTopKLongOnly",
     "QuantileLongShort",
     "build_strategy",
     "_rank_desc",

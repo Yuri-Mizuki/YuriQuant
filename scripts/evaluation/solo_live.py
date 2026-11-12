@@ -9,8 +9,8 @@
 ``scripts/pipelines/alla_daily_rank.py`` 的执行层只有两种产物：①
 ``picks``（top-frac + 分位缓冲带）②``--deliverable-k``（**无行业约束**的
 可交易 TopN）。而 ``yqcore-solo`` 的定义是
-``SectorCappedBufferedTopKLongOnly(k=8, exit_mult=1.0, max_per_sector=1)``
-**+ 整手 100 股** —— 两者都不在出榜链里（2026-11-10 复核：见
+``SectorCappedBufferedTopKLongOnly``（参数取登记表 ``yqcore-solo``）**+ 整手 100 股**
+—— 两者都不在出榜链里（2026-11-10 复核：见
 ``reports/yq_core/README.md`` §未做项）。
 
 本脚本把**回测用的同一个策略类**接到出榜链的排名上：不另写一套选股逻辑，
@@ -25,8 +25,9 @@
   正是这个语义，``shift(1)`` 是无前视的关键）。
 - 可交易性取 ``ranking.tradable``（信号日停牌 / ST / 收盘封板 = 买不进），
   与回测的 ``sig.shift(1).where(mask)`` 同为「进候选前先掩码」。
-- 缓冲带状态：``exit_mult=1.0`` ⇒ 保留门槛 ``k·1.0`` = 建仓门槛 ``k``，
-  **退化为无缓冲**；但上一期持仓仍要喂进去 —— 同行业撞车时「谁先占名额」
+- 缓冲带状态：登记值 ``exit_mult=1.0`` ⇒ 保留门槛 ``k·1.0`` = 建仓门槛 ``k``，
+  **退化为无缓冲**（若登记表改成 >1，这里自动跟着变，无需改代码）；但上一期持仓
+  仍要喂进去 —— 同行业撞车时「谁先占名额」
   依赖它（Rank 6 的旧仓会挤掉 Rank 3 的同行业新丁）。故用 ``seed_holdings``
   按 ``holdings_*.csv`` 时序链式传递，冷启动 = 空集（等价回测首期）。
 
@@ -55,6 +56,12 @@ if str(ROOT) not in sys.path:
 
 from config import Config  # noqa: E402
 from strategy.examples import SectorCappedBufferedTopKLongOnly  # noqa: E402
+from strategy.registry import get_tier  # noqa: E402
+
+#: solo 档参数**真源**：``config/baselines.yaml`` 的 ``yqcore-solo.execution``
+#: （经 ``strategy.registry.tier_wiring`` 解析）。本文件不再写死 k / exit_mult /
+#: max_per_sector —— 2026-11-12 消双真源，改口径只改登记表。
+_SOLO = get_tier("yqcore-solo").params
 
 LIVE_DIR = ROOT / "reports" / "yq_core" / "live"
 
@@ -115,10 +122,18 @@ def refresh_tradable(ranking: pd.DataFrame,
             .reindex(ranking.index).fillna(False).astype(bool))
 
 
-def solo_weights(ranking: pd.DataFrame, date: pd.Timestamp, k: int = 8,
-                 max_per_sector: int = 1, prev: set | None = None,
-                 gross_exposure: float = 1.0) -> pd.Series:
-    """solo 目标权重（等权，行业去重，缓冲带由 ``prev`` 驱动）。"""
+def solo_weights(ranking: pd.DataFrame, date: pd.Timestamp, k: int | None = None,
+                 max_per_sector: int | None = None, prev: set | None = None,
+                 gross_exposure: float | None = None) -> pd.Series:
+    """solo 目标权重（等权，行业去重，缓冲带由 ``prev`` 驱动）。
+
+    ``k`` / ``max_per_sector`` / ``gross_exposure`` 缺省取登记表（``_SOLO``）；
+    显式传入即覆盖（消融/敏感性分析用）。
+    """
+    k = _SOLO["k"] if k is None else k
+    max_per_sector = _SOLO["max_per_sector"] if max_per_sector is None else max_per_sector
+    gross_exposure = (_SOLO.get("gross_exposure", 1.0)
+                      if gross_exposure is None else gross_exposure)
     scores = ranking["score"].dropna()
     if "tradable" in ranking.columns:
         scores = scores.where(ranking.loc[scores.index, "tradable"].fillna(False))
@@ -126,9 +141,11 @@ def solo_weights(ranking: pd.DataFrame, date: pd.Timestamp, k: int = 8,
               .astype(str) if "industry_l1" in ranking.columns
               else pd.Series("未知", index=scores.index))
     sectors = pd.DataFrame([sector], index=pd.DatetimeIndex([date]))
+    # 整套用登记参数构造（含 min_sectors）：live 与回测必须同一条代码路径。
+    # min_sectors 在 k=8 上 93 期从未触发（见 registry notes），故与不传时逐位相同。
     strat = SectorCappedBufferedTopKLongOnly(
-        sectors, k=k, exit_mult=1.0, max_per_sector=max_per_sector,
-        gross_exposure=gross_exposure)
+        sectors, **{**_SOLO, "k": k, "max_per_sector": max_per_sector,
+                    "gross_exposure": gross_exposure})
     strat.seed_holdings(prev or set())
     return strat.get_weights_at(date, scores)
 
@@ -174,9 +191,10 @@ def main() -> None:
     ap.add_argument("--ranking", required=True, help="出的榜 ranking_<ds>.csv")
     ap.add_argument("--date", required=True, help="信号日 YYYYMMDD")
     ap.add_argument("--capital", type=float, default=100000.0, help="资金（元）")
-    ap.add_argument("--k", type=int, default=8, help="目标只数（solo 定版 8）")
-    ap.add_argument("--max-per-sector", type=int, default=1,
-                    help="每申万一级最多几只（solo 定版 1）")
+    ap.add_argument("--k", type=int, default=_SOLO["k"],
+                    help=f"目标只数（缺省 = 登记表 {_SOLO['k']}）")
+    ap.add_argument("--max-per-sector", type=int, default=_SOLO["max_per_sector"],
+                    help=f"每申万一级最多几只（缺省 = 登记表 {_SOLO['max_per_sector']}）")
     ap.add_argument("--lot", type=int, default=100, help="最小交易单位")
     ap.add_argument("--prev", default=None,
                     help="显式指定上期持仓 CSV（缺省 = 自动取最近一期）")

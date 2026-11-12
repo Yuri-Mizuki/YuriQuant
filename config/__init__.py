@@ -22,6 +22,7 @@ from dotenv import load_dotenv
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _CONFIG_PATH = _PROJECT_ROOT / "config" / "settings.yaml"
 _LOCAL_CONFIG_PATH = _PROJECT_ROOT / "config" / "settings_local.yaml"
+_BASELINES_PATH = _PROJECT_ROOT / "config" / "baselines.yaml"
 
 # Real-data credentials are kept in the repository-local .env file.  Loading
 # it here keeps command-line runs and IDE runs consistent; existing process
@@ -92,6 +93,40 @@ def load_config(path: Path | str | None = None) -> dict:
         if isinstance(local, dict) and local:
             raw = _deep_merge(raw or {}, local)
     return _expand_env(raw)
+
+
+def baselines_path() -> Path:
+    """定版登记表路径（``config/baselines.yaml``）。"""
+    return _BASELINES_PATH
+
+
+def load_baselines(path: Path | str | None = None) -> dict:
+    """加载定版登记表。
+
+    这是 **baselines.yaml 的唯一读取入口**：口径数字（构造参数 / 信号键 / 指标）
+    都以它为准，代码里不再留第二份。
+
+    Args:
+        path: 显式路径（测试注入用）。None = 仓库内 ``config/baselines.yaml``。
+
+    Returns:
+        ``{"baselines": [...]}``（文件缺失时返回空列表，不抛错——与
+        :func:`load_config` 的「缺文件即空」一致）。
+    """
+    p = Path(path) if path else _BASELINES_PATH
+    if not p.exists():
+        return {"baselines": []}
+    return yaml.safe_load(p.read_text(encoding="utf-8")) or {"baselines": []}
+
+
+def get_baseline(baseline_id: str, registry: dict | None = None) -> dict:
+    """按 ``id`` 取一条登记（找不到抛 KeyError，列出可选值）。"""
+    reg = registry if registry is not None else load_baselines()
+    for b in reg.get("baselines") or []:
+        if b.get("id") == baseline_id:
+            return b
+    ids = sorted(str(b.get("id")) for b in (reg.get("baselines") or []))
+    raise KeyError(f"未登记的基线 {baseline_id!r}，可选：{ids}")
 
 
 class Config:

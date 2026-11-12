@@ -42,6 +42,22 @@
 #    🔑 窗口对照**不能靠截断日收益**：buffer 策略的首月持仓取决于"从哪天冷启动"，
 #    截断 2019 前的收益得到的是"2018 起跑再扔掉前一年"，不是"2019 起跑"（实测差 0.12pp）。
 #    要换窗口就重跑 `caliber --window`；要对比数据态就 `--signal-path` 换面板重跑。
+# 10. **同族多档位 ≠ 版本更替**（2026-11-10 新增，为 `yqcore` 而立）：一个策略族可以有
+#    多条同时 `status: production` 的档位（`family` 相同、`tier` 不同），适用**不同的资金
+#    规模 / 持仓宽度**，彼此不取代。此时规则 3 的「基线取 production 那条」须指定档位，
+#    不得含糊说「定版」。已有互斥版本关系（v1→v2）仍然逐条 `superseded`。
+#    🔑 分档的**唯一合法依据**是「同一信号在不同持仓宽度下的收益形状不同」，且须有
+#    同口径实测支撑；不得因为「这条数字更好看」而另立一档。
+#    🔑 同族多档时**必须**有一档标 `default: true` —— 规则 3 的「基线取 production 那条」
+#    靠它唯一定位。无 `family` 的老条目仍受「全局仅一条 production」约束（v1→v2 线性更替），
+#    两条约束由 `tests/test_caliber.py::test_registry_schema_and_invariants` 守着。
+#
+# 11. **复合信号必须登记在 `caliber.SIGNALS` 的 `components` 里**（2026-11-10 新增）：
+#    多份 pred 面板的（加权）截面秩平均没有落盘实体，由 `load_context` 现场构造
+#    （`weighted_rank_average`）。**禁止在脚本里另写一套平均** —— 平均口径差一点
+#    （等权 vs 加权、交集 vs 并集、NaN 处理）就会让同一信号在两处给出不同数字。
+#    🔑 复合信号的 `fingerprint` 是**构造后**面板的指纹，与任一分量都不同；引用它的
+#    结论必须同时写构造式（哪些分量、什么权重）。
 #
 # 每个 baseline 的字段
 # --------------------
@@ -60,8 +76,8 @@
 #   source             数字出处（报告路径 / 命令）
 # =============================================================================
 
-version: 4
-updated: "2026-11-08"
+version: 5
+updated: "2026-11-10"
 
 # 评估口径的规范值（caliber.py 的硬编码副本，供快速查阅；改 caliber 时同步）
 conventions:
@@ -550,3 +566,488 @@ baselines:
       本机重建 P5 用补齐后 income 4383，好机器 §⑯ 用 v2 年份数据）；
       ④ 882 侧产物（results.csv/revalidate.csv/baseline_prod.json）10-14 产于
       另一台机，本机无副本——数字以本表与 TODO 记载为准。
+
+  # ===========================================================================
+  # yqcore —— YQ 核心（2026-11-10 建立，由莉酱指令）
+  #
+  #   🔑 **本段是档位参数的唯一真源（2026-11-12）**：`strategy/registry.py` 的
+  #   `tier_wiring()` 从这里的 `signal_key` / `execution` / `requires_panel` 取数，
+  #   代码里不再存第二份。**改口径只改本段**；改完 import registry 即生效，
+  #   若把参数名写错（构造器不认）或缺必填键，import 期直接报错。
+  #   代码侧只保留「有哪些档 / label / notes / 资金边界」。
+  #
+  #   **一条策略族的两个档位，不是版本更替**（规则 10）。立档依据不是"数字更好"，
+  #   而是 2026-11-10 集中度研究测出的**两种 alpha 形状**（同口径、2019 起、1864 日）：
+  #
+  #     · 882 纯量价 = **头部型**：毛收益（无成本）前 0.5%(≈25 只)
+  #       见峰 28.40%，放到 50% 只剩 19.98% ⇒ 头部溢价 +8.4pp，**集中不损失收益**
+  #       （TopK15~35 全在 21.9~24.9% 的平台）。
+  #       ⚠️ 该曲线是在 rev1 信号 `ens_h1h5` 上测的；rev2 换成 `gbdt_mid13` 后，
+  #       「集中不掉收益」的证据改为 K 曲线平坦（K=8~30 全在 28.1~31.2%，极差 3.1pp）。
+  #     · 920 定版（defv）= **广度型**：前 0.2~2%（≈10~100 只）反而只有 22.5~23.1%，
+  #       要放到 **5%（≈250 只）才见峰 24.11%** ⇒ 一集中就丢（25 只掉 3.5~5.6pp）。
+  #
+  #   机制：920 掺了 50% 基本面慢信号，那部分提供的是"很多股票各有一点优势"的广度
+  #   alpha，靠多名字累积；882 的 alpha 挤在最高分那一小撮。
+  #   ⇒ **资金规模决定选哪档**，不是哪个"更新"。两条同窗口/同执行层/同费率，可比。
+  #
+  #   🔁 focus 档 rev2（同日，2026-11-10）：信号 `ens_h1h5` → `gbdt_mid13`（h1:h5:h10:h20
+  #   = 2:1:1:2 秩平均）、K 25 → 15。年化 24.92% → 28.76%（+3.84pp）、Sharpe
+  #   0.961 → 1.080、回撤 38.7% → 38.4%。不是"挑了个更好看的格子"：旧信号只用
+  #   h1+h5 两个短周期，在 K=6..30 的全部 12 格里都被新信号打败（均值 22.1% vs 29.5%）；
+  #   去一臂显示 h1（过滤器）与 h20（选择器）各自不可或缺。证据
+  #   `reports/focus_upgrade/README.md`。
+  #
+  #   🚨 两条档位的窗口都**强制截到 2026-09-07**（882 的 pred 面板末日）。920 重建代理
+  #   原本到 11-04，不对齐会让 2026 年混进 36 个交易日、年化虚低 1.4~1.6pp（已实测）。
+  #   故与 v2-dingban 登记的 1876 日（止 09-23）**差 12 个交易日，数字不可逐位对比**。
+  # ===========================================================================
+  - id: yqcore-breadth
+    family: yqcore
+    tier: breadth
+    default: true             # 族内默认档：规则 3 的「基线取 production 那条」指它
+    created: "2026-11-10"
+    updated: "2026-11-10"
+    status: production
+    label: "YQ 核心 · 广度档（Breadth）：920 defv + buffer(15/40)，~614 只，大资金"
+    signal_key: dingban_fundind
+    signal_key_local: dingban_fundind_local   # 登记路径本机已缺失，复算走重建代理
+    check_arm: eqw_buf0.15_0.4   # 同上（breadth 的 production 键是缓冲带臂名）
+    check_note: >-
+      本机只有重建代理信号 dingban_fundind_local（登记路径
+      reports/frontier_audit_920_reval/ 已不存在，窗口止 2026-11-04、特征清单全部重选）
+      ⇒ 复算 20.21% 与登记 21.66% 的 Δ=+1.45pp 是**数据态差**，不是实现漂移。
+      代理口径的 native 报数为 19.84%，见 metrics.product_line。
+    window: prod
+    signal:
+      preproc: ortho_fundind
+      panel_source: all_a_2018_2026/panels_neu_fundind
+      ensemble: h1020
+      horizons: [1, 5, 10, 20]
+      slow_blend: 0.5
+      slow_panels_subdir: panels_neu
+      selection_dir: reports/alla_rolling_ortho920fundind/selection
+      tradable_labels: true
+      n_factors: 920
+    execution:
+      strategy: BufferedTopFracLongOnly
+      buffer_entry: 0.15
+      buffer_exit: 0.40
+      rebalance_freq: M
+      benchmark: "000300.SH"
+    caliber:
+      profile: production
+      cost: "固定 10bp（Config.costs()，impact_model=none）"
+      execution: "open（T+1 开盘）"
+      capital: 1.0e6
+      source_script: "scripts/evaluation/yq_core_report.py"
+    data_state:
+      registered: "2026-11-09 本机重跑 select(36 份)+predict(4 horizon) 后现场构造的 defv"
+      detail: >
+        pred 覆盖 2019-01-02..2026-11-04（1900 日），报数截到 2026-09-07（1864 日）以与
+        focus 档同末日。特征清单 36 份全部重算（含 y2026 四份指纹失配重算）
+        ⇒ **不是**登记指纹 2bc26c866512 那份数据态。
+      caveats: >
+        ⚠️ 与 v2-dingban 的 21.57% 不可逐位对比：窗口差 12 个交易日 + 数据态不同
+        （本条 21.66% 是同窗口同口径的实测，不是对 v2 的复现）。
+        ⚠️ 明日 18:30 出榜读的是 `selection/`，本次重算已覆盖 y2026 四份清单 ⇒
+        若榜单与近日差异明显，先看这里，不要判为策略失效。
+    metrics:
+      window_label: "2019-01-02..2026-09-07（1864 日 / 7.38 年）"
+      fingerprint: 44a31b8fc51c
+      profiles:
+        production:
+          eqw_buf0.15_0.4:
+            ann: 0.21659
+            sharpe: 1.0061
+            sharpe_arith: 1.0194
+            sharpe_t_stat: 2.82          # NW 校正，过 1.96，余量 44%
+            turnover: 0.1708
+            cost_bp: 1254
+            max_dd: 0.2665
+            n_active: 614
+          # 集中化对照（同信号、同窗口，仅换持仓宽度）——这条是本档存在的理由
+          topk25_buf2: {ann: 0.1936, sharpe: 0.819, max_dd: 0.311, turnover: 0.616}
+          topk45_buf2: {ann: 0.1870, sharpe: 0.808, max_dd: 0.289, turnover: 0.565}
+      # 产品线口径（native）：各自推荐资金 + 整手 100 股 + 无前视成交价 ⇒ **实盘可达成值**
+      # 与上面 production profile 的区别只在「资金 / 整手」两项，信号与成本完全相同。
+      product_line:
+        view: native
+        capital: 2000000.0
+        lot_size: 100
+        price_panel: "close_raw.ffill().shift(1)"
+        ann: 0.1984
+        sharpe: 1.0187
+        sharpe_arith: 1.0276
+        sharpe_t_stat: 2.84
+        max_dd: 0.2464
+        calmar: 0.805
+        turnover: 0.1686
+        invest_mean: 0.8989          # 整手实投率（引擎算，非折算）
+        invest_min: 0.8061
+        nhold_mean: 605.0
+        nhold_min: 457
+      # 容量上限 = 单票 ADV × 参与率 / 单票权重。**产品线按此分界，不按收益**。
+      capacity:
+        participation_assumed: 0.10
+        weight_median: 0.0014
+        adv_median: 49500000.0
+        adv_p10: 15300000.0
+        capacity_median: 3448000000.0
+        capacity_p10: 971000000.0
+        source: "python -m scripts.evaluation.yq_core_report --view capacity"
+    fingerprint: 44a31b8fc51c
+    reproducible_local: true
+    regen_cmd: >
+      ① 重构造定版信号（重建面板后必跑）：
+         /d/Python/Python312/python -m scripts.evaluation.buffer_arm_920
+         --pred-dir reports/alla_rolling_ortho920fundind --variant defv
+         --save-sig reports/alla_rolling_ortho920fundind/pred/defv__h1.parquet --sig-only
+      ② 报数（两档一起，保证同末日）：
+         /d/Python/Python312/python -m scripts.evaluation.yq_core_report --view uniform
+    source: "reports/yq_core/report.json（--view uniform = 1e6 无整手；产品线口径见 report_native.json）"
+    verified_local: true
+    notes: >
+      适用 **≥ 200 万**。选它的理由：same-window 回撤 26.6% vs focus 档 38.7%（低 12.1pp），
+      代价是年化少 3.3pp、换手低 5.1 倍（17.1% vs 87.3%）⇒ 容量与可操作性远好于 focus。
+      ⚠️ **alpha 宽度是这条档位的硬约束**：它靠"很多名字各有一点优势"累积，任何把持仓
+      压到 100 只以内的操作都会立刻损失 2~5pp（见 metrics 里的 topk25/topk45 对照），
+      所以**不要用它做小资金集中**，那是 focus 档的场景。
+
+  - id: yqcore-focus
+    family: yqcore
+    tier: focus
+    revision: 2               # rev1（2026-11-10）= ens_h1h5 + K25；数字见下方 history
+    created: "2026-11-10"
+    updated: "2026-11-10"
+    status: production
+    label: "YQ 核心 · 集中档（Focus）：882 四周期融合（2:1:1:2）+ TopK15 + buffer(×2)，小资金"
+    signal_key: gbdt_mid13
+    check_arm: topk15_buf2        # --check 复算时对照 metrics.profiles.production 里的哪条臂
+    window: prod
+    signal:
+      preproc: ortho
+      ensemble: composite           # 复合信号：多份 pred 秩平均，无落盘实体
+      components:
+        gbdt_h1: 2.0
+        gbdt_h5: 1.0
+        gbdt_h10: 1.0
+        gbdt_h20: 2.0
+      weights_rationale: >
+        h1 / h20 各占 1/3、两个中期（h5、h10）合计 1/3。中期占 0（1+20 = 28.90）
+        与占 1/2（avg4 = 28.24）都偏低、占 1/3 偏高（≈29.5），但「选 h5 还是 h10」
+        差 1.5pp 且无机制 ⇒ 在两者间均分，不引入这个自由度。
+      panel_source: reports/alla_rolling_ortho/pred
+      n_factors: 882
+    execution:
+      strategy: BufferedTopKLongOnly
+      k: 15
+      exit_mult: 2.0
+      rebalance_freq: M
+      benchmark: "000300.SH"
+    caliber:
+      profile: production
+      cost: "固定 10bp（Config.costs()，impact_model=none）"
+      execution: "open（T+1 开盘）"
+      capital: 1.0e6
+      source_script: "scripts/evaluation/yq_core_report.py"
+    data_state:
+      registered: "882 ortho 四周期 pred，止 2026-09-07"
+      caveats: >
+        ⚠️ pred 面板末日 2026-09-07（比 920 线早 36 个交易日）⇒ 与 v1w-ortho882-2019
+        的 23.57%（锚点 buf15/40，1864 日同窗口）同源可比，但**不可与 v2-dingban
+        的 1876 日数字并列**。
+        🚨 复合信号无落盘实体：`caliber.load_context` 每次现场构造（~1s），指纹是
+        **构造后**面板的指纹，与任一分量不同。
+    metrics:
+      window_label: "2019-01-02..2026-09-07（1864 日 / 7.38 年）"
+      fingerprint: 79bdbbcc8fb9
+      profiles:
+        production:
+          topk15_buf2:
+            ann: 0.28756
+            sharpe: 1.0804
+            sharpe_arith: 1.0842
+            sharpe_t_stat: 2.99          # NW 校正，过 1.96，余量 52%
+            turnover: 0.8763
+            cost_bp: 9079
+            max_dd: 0.3837
+            n_active: 15
+          # K 网格（同信号、同执行层）——U 形，不是单调；按 28~29% 预期
+          k8_buf2:  {ann: 0.3094, sharpe: 1.108, max_dd: 0.349, turnover: 0.895}
+          k10_buf2: {ann: 0.2880, sharpe: 1.055, max_dd: 0.359, turnover: 0.886}
+          k12_buf2: {ann: 0.2958, sharpe: 1.094, max_dd: 0.367, turnover: 0.884}
+          k18_buf2: {ann: 0.2947, sharpe: 1.115, max_dd: 0.390, turnover: 0.869}
+          k25_buf2: {ann: 0.3092, sharpe: 1.184, max_dd: 0.382, turnover: 0.850}
+          k30_buf2: {ann: 0.3122, sharpe: 1.213, max_dd: 0.382, turnover: 0.830}
+          # 同 K 对照：rev1 的旧信号（本档升级的理由）
+          rev1_ens_h1h5_k15: {ann: 0.2207, sharpe: 0.833, max_dd: 0.379}
+          rev1_ens_h1h5_k25: {ann: 0.2492, sharpe: 0.961, max_dd: 0.387}
+      # 产品线口径（native）：各自推荐资金 + 整手 100 股 + 无前视成交价 ⇒ **实盘可达成值**
+      # 与上面 production profile 的区别只在「资金 / 整手」两项，信号与成本完全相同。
+      product_line:
+        view: native
+        capital: 500000.0
+        lot_size: 100
+        price_panel: "close_raw.ffill().shift(1)"
+        ann: 0.2852
+        sharpe: 1.0803
+        sharpe_arith: 1.084
+        sharpe_t_stat: 2.98
+        max_dd: 0.3812
+        calmar: 0.748
+        turnover: 0.8689
+        invest_mean: 0.9917          # 整手实投率（引擎算，非折算）
+        invest_min: 0.9709
+        nhold_mean: 15.0
+        nhold_min: 15
+      # 容量上限 = 单票 ADV × 参与率 / 单票权重。**产品线按此分界，不按收益**。
+      capacity:
+        participation_assumed: 0.10
+        weight_median: 0.0664
+        adv_median: 25700000.0
+        adv_p10: 9790000.0
+        capacity_median: 38800000.0
+        capacity_p10: 14800000.0
+        source: "python -m scripts.evaluation.yq_core_report --view capacity"
+    diagnostics:                  # 非 caliber 产出（探针），只作机制证据，不进判改进基线
+      source: "reports/focus_upgrade/grid.csv（scripts/evaluation/focus_upgrade_probe.py）"
+      metric: "K=6..30 共 11~12 格年化均值（同窗口同执行层，仅信号不同）"
+      arms:
+        gbdt_mid13: 0.2953
+        avg4: 0.2824
+        drop_h5_1_10_20: 0.3023    # 均值最高；不采纳（h5 vs h10 无机制，见 README §〇-6）
+        drop_h10_1_5_20: 0.2894
+        drop_both_mid_1_20: 0.2887
+        drop_h20_1_5_10: 0.2504    # 去掉长周期 ⇒ 塌
+        drop_h1_5_10_20: 0.2288    # 去掉短周期过滤器 ⇒ 塌
+        rev1_ens_h1h5: 0.2213
+    fingerprint: 79bdbbcc8fb9
+    reproducible_local: true
+    regen_cmd: >
+      /d/Python/Python312/python -m scripts.evaluation.yq_core_report --view uniform --tiers yqcore-focus
+    source: "reports/yq_core/report.json（--view uniform = 1e6 无整手；产品线口径见 report_native.json）"
+    verified_local: true
+    history:
+      - revision: 1
+        date: "2026-11-10"
+        spec: "ens_h1h5 + TopK25 + buffer(×2)"
+        fingerprint: 0a0b6b7acc6b
+        ann: 0.24917
+        sharpe: 0.9614
+        sharpe_arith: 0.9893
+        max_dd: 0.3872
+        n_active: 25
+        superseded_by_reason: >
+          只用 h1+h5 两个短周期，把 h20（长周期选择器）漏在外面。K=6..30 的 11 格
+          年化均值 22.14%，而任何含 h20 的组合都在 28~30%。换信号不是「数字更好看」，
+          是补上缺失的周期；且新旧信号在同一 K 网格上 12/12 格全胜。
+    notes: >
+      🚨 **K 按资金配，不按年化配**（2026-11-10 实测修正，旧文案已作废）。
+      配对 bootstrap 证明 K∈[5,25] 年化**无显著差异**（vs K=15：K=5 +2.32pp
+      CI[−4.13,+9.06]、K=8 +1.94pp CI[−3.05,+6.96]、K=20 −0.82pp CI[−3.15,+1.53]，
+      九个区间全含 0）；真正确定的是**整手约束的实投率**：10 万本金下 K=15 只能建
+      **82.3%** 仓位（等效年化 23.7%）、K=8 建 92.3%（等效 28.6%）、K=5 建 96.6%
+      （等效 30.2%）；20 万时分别为 90.2 / 97.6 / 97.7%，50 万以上都 ≥96%。
+      ⇒ **10 万用 k=8**（单票 12.5%）、20 万+ 用默认 15、50 万+ 可到 25、
+      10 万且能承受单票 20% 才用 k=5。旧文案「10 万用 k=15、整手偏差 ~6%」是
+      「6667 元 ÷ 2200 元/手 ≈ 3 手」的手算，实测 −17.7%，**差 3 倍**。
+      证据 `reports/focus_holding/README.md` §2.4。
+      **权重维持等权**：9 种加权方案 × 5 个 K 全在 ±2pp、配对 bootstrap 全不显著
+      （最强候选 `tier` K=10 +1.17pp CI[−1.79,+3.97]，且 K=5 反向 −4.7pp）；
+      把权重压给信号头部（`softmax` 给第一名 40%、`rank_over` 给 30%）反而亏
+      2.7~14.9pp，`inv_vol` 随强度单调恶化（−0.56 → −1.09 → −2.11pp）
+      ⇒ **等权已接近最优，有实测与机制双重支撑，不是默认值**。
+      🚨 另：去掉中间期的两条臂 IS/OOS 跨格秩相关 −0.71 / −0.66（p<0.02）；
+      本臂 ρ=+0.27（不显著，但不反向）⇒ 仍不许按历史最优格挑 K。
+      🚨 **验证边界**：随机选 15 只为 6.76%±3.66pp（20 次）⇒ 本档 +6.0σ；逐年 8/8 正。
+      但**没有**做过「按 2019-2023 定参、2024-2026 验证」的完整滚动窗口 —— 信号与
+      权重都是在全样本上选的（权重只有 1 个自由度，且有去一臂机制支撑，非网格搜索）。
+      ⚠️ 成交额分位仅 **0.186**、股价中位 21.1 元 ⇒ 组合系统性偏小盘；15 只等权意味
+      单票 6.7%，一只暴雷 −6.7%。回测的 ST/退市掩码挡不住突发财务造假。
+
+  - id: yqcore-solo
+    family: yqcore
+    tier: solo
+    created: "2026-11-10"
+    updated: "2026-11-11"
+    status: production
+    label: "YQ 核心 · 独苗档（Solo）：882 四周期信号 + TopK8 + 每申万一级 ≤1 只"
+    signal_key: gbdt_mid13
+    window: prod
+    requires_panel: industry      # 申万一级截面（date × code），由调用方注入
+    check_arm: solo_k8_b1.0       # --check 复算时对照 metrics.profiles.production 里的哪条臂
+    signal:
+      preproc: ortho
+      ensemble: "h1:h5:h10:h20 = 2:1:1:2 秩平均"
+      horizons: [1, 5, 10, 20]
+      n_factors: 882
+    execution:
+      strategy: SectorCappedBufferedTopKLongOnly
+      k: 8
+      exit_mult: 1.0
+      max_per_sector: 1
+      min_sectors: 3            # 行业数硬下限（k=8 上 93 期从未触发 ⇒ 数字与不设时逐位相同）
+      gross_exposure: 1.0
+      rebalance_freq: M
+      benchmark: "000300.SH"
+    caliber:
+      profile: production
+      cost: "往返 27bp 时变（佣金万1双边2bp + 印花税万5单向5bp + 滑点10bp双边20bp）"
+      execution: "open（T+1 开盘）"
+      capital: 100000.0        # 写成浮点：YAML 1.1 把 `1.0e5` 当字符串
+      lot_size: 100
+      price_panel: "close_raw.ffill().shift(1)"
+      source_script: "scripts/evaluation/focus_micro_probe.py"
+    data_state:
+      registered: "882 ortho gbdt_mid13 + close_raw 未复权价，止 2026-09-07"
+      caveats: >
+        🚨 **本条是 1e5 + 整手(100) 口径**，与同族 yqcore-focus（1e6、无整手）**不可逐位比**：
+        整手本身会丢 0.78pp（实投 97.8%）。要横向比收益请用 yqcore-focus 的 1e6 数字。
+    metrics:
+      window_label: "2019-01-02..2026-09-07（1864 日 / 7.38 年）"
+      fingerprint: 79bdbbcc8fb9
+      profiles:
+        # 口径键沿用 production（成本/执行层与同族一致），**资金与整手不同**：
+        # 本条是 1e5 + lot100，focus/breadth 是 1e6 无整手。
+        production:
+          # 🚨 2026-11-11 成本口径修正后重算（关税 千1→万5、佣金 万3→万1，往返 36bp→27bp 且
+          # 印花税按调仓日时变）。旧值 ann 0.35566 / sharpe 1.2360 / sharpe_arith 1.2029 /
+          # calmar 0.978 / max_dd 0.3636 已作废，**禁止再引用**（同一策略跨成本口径不可并列）。
+          solo_k8_b1.0:
+            ann: 0.36575               # 旧 0.35566（+1.01pp，来自成本下修）
+            sharpe: 1.2709             # 几何口径（年化/年化波动），旧 1.2360
+            sharpe_arith: 1.2286       # 算术口径 mean/std·√252，旧 1.2029
+            sharpe_t_stat: 3.39        # NW 校正（算术 Sharpe × √T）
+            vol: 0.2878
+            max_dd: 0.3626
+            calmar: 1.0087             # 旧 0.978
+            turnover: 0.9236
+            cost_bp: 9749.4            # 全期累计扣费（bp）
+            invest_mean: 0.983           # 引擎实测（按当期 capital 取整，利润再投入口径）
+            invest_fixed: 0.963          # 利润每月取走、始终 10 万（invest_fixed.csv，年化约 -0.7pp）
+            invest_min: 0.895            # 最差单期实投率
+            nhold_mean: 5.88             # 名义 k=8，实际平均 5.88 只（行业去重）
+            nhold_le3: 0.043             # 93 期里 4 期只有 3 只（从未 2 只）
+            nsector_min: 3               # max_per_sector=1 ⇒ 持仓数 ≡ 行业数
+            year_worst: 0.0869           # 最差年 2022 +8.69%
+            years_positive: 8            # 8/8 年正
+            yearly: {2019: 0.2621, 2020: 0.7317, 2021: 0.4464, 2022: 0.0869,
+                     2023: 0.2030, 2024: 0.1778, 2025: 0.7362, 2026: 0.1866}
+          # 成本敏感性（P0，2026-11-10）：同臂只换成本模型 ⇒ impact 比固定成本更便宜，
+          # 说明 production 对小资金偏保守，收益不靠乐观成本假设。
+          # ⚠️ 本条仍是**旧 36bp 基数**下的 impact 旁证，未随 2026-11-11 修正重算。
+          solo_k8_b1.0_impact:
+            ann: 0.36917
+            sharpe_arith: 1.2369
+            max_dd: 0.3626
+            calmar: 1.018
+            note: "impact 口径（eta 0.4 / 买 1.5x / 滑点 0），仅压力旁证，不改判据；旧成本基数"
+          # K / buffer 网格（同口径）
+          # ⚠️ 以下三行同属**旧 36bp 基数**，未随 2026-11-11 修正重算 —— 只可用于「同基数下横向
+          # 比较 K/buffer 的相对优劣」，禁止与上方 solo_k8_b1.0 的 36.58% 相减。
+          solo_k6_b1.5: {ann: 0.38297, sharpe_arith: 1.2322, max_dd: 0.3631, nhold_mean: 4.78, year_worst: 0.1095, cost_base: "36bp 旧口径"}
+          solo_k10_b1.0: {ann: 0.33745, sharpe_arith: 1.1828, max_dd: 0.3610, nhold_mean: 6.97, cost_base: "36bp 旧口径"}
+          # 要稳：仓位系数（线性缩放，Sharpe 不变）
+          solo_k6_b1.5_g0.75: {ann: 0.28409, sharpe_arith: 1.2316, max_dd: 0.2820, invest_mean: 0.735}
+          # 对照：同信号去掉行业约束（本档存在的理由）
+          plain_k8_b1.0: {ann: 0.29084, sharpe_arith: 1.0750, max_dd: 0.3419}
+          plain_k5_b1.0: {ann: 0.31040, sharpe_arith: 1.0780, max_dd: 0.3526}
+          # 行业数下限（min_sectors）：修「只剩 2~3 只」的尾部 —— 补股
+          solo_minsec_k8_ms3: {ann: 0.35566, sharpe_arith: 1.2029, nhold_min: 3, note: "从未触发 ⇒ 与基线逐位相同"}
+          solo_minsec_k8_ms4: {ann: 0.35095, sharpe_arith: 1.1936, nhold_min: 4, note: "-0.47pp，回撤不变（36.35%）"}
+          solo_minsec_k6b1.5_ms3: {ann: 0.38479, sharpe_arith: 1.2346, nhold_min: 3, year_worst: 0.1211, note: "k6 上真触发 1 期：+0.18pp、最差年 +10.9→+12.1%"}
+          # 同一缺口的另一种修法：min_holdings（留现金，不补股）⇒ 更差
+          solo_minh_k8_mh4: {ann: 0.34194, sharpe_arith: 1.1763, max_dd: 0.3630, note: "留现金版 −1.37pp，比补股差"}
+          solo_minh_k8_mh5: {ann: 0.32416, sharpe_arith: 1.1647, max_dd: 0.3640}
+      # 参数滚动重估（每年按 IS Sharpe 重选 k/buf，2021-2026）—— 判负
+      reoptimization:
+        eval_window: "2021-01-02..2026-09-07（重估只能在 2021 起，需 ≥1.5 年 IS）"
+        expanding: {ann: 0.30023, sharpe_arith: 1.026, max_dd: 0.3633, calmar: 0.826}
+        rolling3y: {ann: 0.27412, sharpe_arith: 0.979, max_dd: 0.3629, calmar: 0.755}
+        fixed_k8_b1.0: {ann: 0.31005, sharpe_arith: 1.054, max_dd: 0.3641, calmar: 0.852}
+        oracle_k6_b1.5: {ann: 0.34839, sharpe_arith: 1.120, max_dd: 0.3629, calmar: 0.960}
+        conclusion: "重选跑输固定 −0.98pp（expanding）/−3.59pp（3y），回撤零改善 ⇒ 不重估"
+      # 安慰剂（随机行业标签，10 次）
+      placebo_random_industry:
+        ann_mean: 0.2890
+        ann_std: 0.0273
+        ann_max: 0.3375
+        sharpe_mean: 1.003
+        sharpe_max: 1.134
+        real_percentile: "100%（ann 与 Sharpe 均 ≥ 全部 10 次）"
+      # 产品线口径（native）：各自推荐资金 + 整手 100 股 + 无前视成交价 ⇒ **实盘可达成值**
+      # 与上面 production profile 的区别只在「资金 / 整手」两项，信号与成本完全相同。
+      product_line:
+        view: native
+        capital: 100000.0
+        lot_size: 100
+        price_panel: "close_raw.ffill().shift(1)"
+        ann: 0.3557
+        sharpe: 1.236
+        sharpe_arith: 1.2029
+        sharpe_t_stat: 3.32
+        max_dd: 0.3636
+        calmar: 0.978
+        turnover: 0.9233
+        invest_mean: 0.9829          # 整手实投率（引擎算，非折算）
+        invest_min: 0.8957
+        nhold_mean: 5.88
+        nhold_min: 3
+      # 容量上限 = 单票 ADV × 参与率 / 单票权重。**产品线按此分界，不按收益**。
+      capacity:
+        participation_assumed: 0.10
+        weight_median: 0.1635
+        adv_median: 26400000.0
+        adv_p10: 9980000.0
+        capacity_median: 15950000.0
+        capacity_p10: 5730000.0
+        source: "python -m scripts.evaluation.yq_core_report --view capacity"
+    fingerprint: 79bdbbcc8fb9
+    reproducible_local: true
+    regen_cmd: >
+      ① 消融/安慰剂/滚动重估（本档全部判定依据）：
+         /d/Python/Python312/python -m scripts.evaluation.focus_micro_probe
+      ② 产品线口径（10 万 + 整手，report_native.json 里本档那一行）：
+         /d/Python/Python312/python -m scripts.evaluation.yq_core_report --view native --tiers yqcore-solo
+    source: "reports/focus_micro/grid.csv + reports/yq_core/report_native.json"
+    verified_local: true
+    notes: >
+      focus 档 + **行业去重**（每个申万一级只留最强的一只）。2026-11-10 实测（**同参数对照**
+      k=8 b=1.0）：年化 29.08%→35.57%、Sharpe 1.075→1.203（+6.48pp / +0.128），且**通过随机
+      行业标签安慰剂**（10 次打乱 28.90%±2.73pp、最高 33.75%，真实值 100% 分位、效应量 3.4σ，
+      置换 p≤0.091）。
+      🚨 **2026-11-11 成本口径修正（本条数字变化的唯一原因）**：由莉酱指出两项口径错误 ——
+      ① 证券交易印花税 2023-08-28 起已由千1减半至万5（财政部 税务总局公告 2023 年第 39 号），
+      项目原用千1；② 账户实际佣金是万1，项目原用万3。修正后往返成本 36bp→27bp
+      （佣金 2bp + 印花税 5bp + 滑点 20bp），**且印花税按调仓日时变**（跨政策窗口的单窗口
+      回测用单一常数必然错一半，见 `backtest.costs.stamp_duty_on`）。同臂重算：
+      年化 35.57%→**36.58%**、Sharpe 算术 1.203→**1.229**、Calmar 0.978→**1.0087**、
+      最差年 +8.15%→+8.69%，8/8 年正不变。**修正前后不可相减**（同策略跨成本口径）。
+      按新成本重跑频率主轴：月 36.58% / 双周 27.24% / 周 18.95%，差距 19.49pp→17.63pp，
+      但**关键结论未变 —— 毛口径月频 41.26% 仍高于周频 36.39%，零成本也追不上**
+      （见 `reports/solo_weekly/`）。
+      🚨 早期口径「31.04%→38.30%、+7.3pp、Sharpe +0.15」是**跨 buffer 混比**（plain k5 b1.0
+      vs solo k6 b1.5），高估约 0.8pp，**已作废，禁止再引用**。
+      排除两个平凡解释：① 把「无行业分类（NaN，约 10%）」股票直接排除后 plain 数字**逐位
+      不变** ⇒ 不是顺手过滤垃圾股；② 随机标签不会提升、反而 −2.1pp ⇒ 不是「分散」本身。
+      🚨 **实际持仓少于 k**：TopK8 内常有 2~3 只同行业，实测平均 **5.88 只、最少 3 只**；
+      93 期分布 = 3只×4 / 4只×8 / 5只×24 / 6只×24 / 7只×25 / 8只×8（≤3 只占 4.3%）。
+      🚨 `max_per_sector=1` ⇒ **持仓数 ≡ 行业数**（每只必属不同行业），故「行业数」不是独立维度，
+      它只是「持仓数」的另一种说法。下单前必须看当期实际只数，不能按 k=8 备资金。
+      🔑 **行业数地板 `min_sectors`**：k=8 上 **93 期从未触发**（最少也有 3 个行业）⇒ 设为 3 后
+      所有数字与不设时逐位相同，纯尾部保险；k=6 上真触发 1 期（2→3 只），年化 +0.18pp、
+      最差年 +10.9%→+12.1%。设到 4/5 则 binding 并损失 0.47/1.45pp，**且回撤一点不降**
+      ⇒ 「只剩 3 只」不是回撤的来源，别指望补位买来稳定性。
+      🔑 **同一缺口的另一种修法（留现金）更差**：`min_holdings=4/5` 给 34.19%/32.42%
+      （−1.37/−3.14pp）⇒ 要补就补股，不要留现金。
+      ❌ **参数滚动重估判负**：每年按 IS Sharpe 重选 k/buf，2021-2026 年化 30.02%（expanding）/
+      27.41%（rolling 3y），**均低于固定 k8 b1.0 的 31.00%**，回撤同为 36.3~36.4%（零改善）；
+      事后最优（oracle k6 b1.5）34.84% 说明「选对参数」只值 +3.8pp，而这 3.8pp 抓不到
+      ⇒ **固定参数本身就是对参数不确定性的防御**，不要每年调参。
+      🔑 **「要稳」只能靠 gross_exposure 线性降仓**：×0.85/0.75/0.60 给 31.6%/28.2%/23.0%
+      回撤，年化 32.07/28.41/22.41%，**Sharpe 恒在 1.22~1.23**（不产生也不毁灭 alpha）。
+      ❌ **波动率目标判负**：目标 20% 把回撤压到 31.4%，但年化 35.57→24.97%、Calmar
+      0.98→0.80、最差年 +8.1%→+0.8% ⇒ 比线性降仓差，不进策略层。
+      ⚠️ 换手 92.3%（高于 focus 档的 87.6%），成本假设仍是固定 10bp —— 本档持仓更集中在
+      小行业龙头，真实滑点风险高于 focus 档。成交额分位**未单独测**（focus 档是 0.186）。
