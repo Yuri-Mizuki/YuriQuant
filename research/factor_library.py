@@ -949,7 +949,9 @@ class FactorLibrary:
             "ret_basis": ret_basis,
             **stats,
             **dup_row,
-            "panel_path": str(panel_path),
+            # write_panel=False 时不落 slug 文件，写空串让 _resolve_panel_path
+            # 走「panels/<name>.parquet」回退（builder 通道的落盘口径）。
+            "panel_path": str(panel_path) if write_panel else "",
             "eval_path": str(eval_path),
         }
         if persist:
@@ -1582,6 +1584,7 @@ class FactorLibrary:
         dup_corr: float = 0.7,
         reject_dup: bool = False,
         dup_include_builder_rows: bool = False,
+        write_panel: bool = True,
     ) -> dict:
         """完整登记 = :meth:`ingest` + :meth:`evaluate`（**兼容入口**，行为不变）。
 
@@ -1590,12 +1593,17 @@ class FactorLibrary:
 
         参数含义见两个被调方法；``ic_method`` 只影响 ingest，``short_costs``
         与 ``deleverage`` 只影响 evaluate。
+
+        ``write_panel=False``（2026-11-12 新增）用于**调用方已按 builder 惯例
+        写好 ``panels/<name>.parquet``** 的场景：跳过 ``panels/<slug>.parquet``
+        落盘，避免同一份 58MB 面板在库里存两份，也让中性化 / ic 融合这些按
+        原名找文件的 builder 侧工具能直接命中。
         """
         row = self.ingest(
             name, panel, returns_panel, kind=kind, formula=formula, parents=parents,
             source=source, ic_method=ic_method, family=family, frequency=frequency,
             maturity=maturity, note=note, check_dup=check_dup, dup_corr=dup_corr,
-            reject_dup=reject_dup,
+            reject_dup=reject_dup, write_panel=write_panel,
             dup_include_builder_rows=dup_include_builder_rows, persist=True)
         upd = self.evaluate(name, returns_panel, panel=panel,
                             short_costs=short_costs, deleverage=deleverage,

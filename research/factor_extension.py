@@ -28,7 +28,8 @@ def warmup_begin(begin: int) -> int:
 
 def register_panels(lib, panels, defs, returns_panel, source, *,
                     names=None, kind="raw", on_fail=None,
-                    check_dup: bool = True, dup_corr: float = 0.7):
+                    check_dup: bool = True, dup_corr: float = 0.7,
+                    write_panel: bool = True):
     """批量入库：对每个定义名做 standardize_zscore + FactorLibrary.register。
 
     Args:
@@ -42,6 +43,8 @@ def register_panels(lib, panels, defs, returns_panel, source, *,
             （``reject_dup`` 仍为 False）——重复判定留给人看报告再决定。
             索引缺失时会回退逐面板比对，库大时慢；构建脚本可显式传 False。
         dup_corr: 触发"疑似冗余"告警的相关阈值。
+        write_panel: ``False`` 表示调用方已按 builder 惯例写好
+            ``panels/<name>.parquet``，不再落 ``panels/<slug>.parquet`` 副本。
 
     Returns:
         注册成功的 ``row`` 列表。
@@ -64,6 +67,7 @@ def register_panels(lib, panels, defs, returns_panel, source, *,
                 name=name, panel=std, returns_panel=returns_panel,
                 kind=kind, formula=defs[name], source=source,
                 check_dup=check_dup, dup_corr=dup_corr,
+                write_panel=write_panel,
             )
         except Exception as e:  # noqa: BLE001
             if on_fail:
