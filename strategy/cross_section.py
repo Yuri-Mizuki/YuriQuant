@@ -34,9 +34,16 @@ from strategy.examples import (
     TopFracLongOnly,
     TopKLongOnly,
     TopKLongShort,
-    rank_desc,
     build_strategy,
+    rank_desc,
 )
+
+#: 向后兼容别名（2026-11-12 临时）。``scripts/evaluation/pool_scope_probe.py`` 仍
+#: ``from strategy.cross_section import _rank_desc``，而该文件因依赖一条尚未入库的
+#: 成本线（``caliber.py`` 的 ``stamp_duty_schedule``）无法同批提交 —— 不留这个别名，
+#: 干净 clone 上 ``pool_scope_probe`` 会直接 ImportError。
+#: 🚨 等 pool_scope_probe 与成本线一并入库后**删除本行**。
+_rank_desc = rank_desc
 
 __all__ = [
     "TopKLongShort",
