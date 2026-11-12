@@ -220,3 +220,54 @@ def test_returns_basis_survives_cache_hit(monkeypatch):
     finally:
         fl._RP_CACHE.pop("FAKE_ROOT", None)
         fl._RP_BASIS.pop("FAKE_ROOT", None)
+
+
+# ---------------------------------------------------------------------------
+# 6. 面板落盘口径（2026-11-12：两条入库通道必须都能被 builder 侧工具找到）
+# ---------------------------------------------------------------------------
+def test_register_write_panel_false_leaves_no_slug_file(tmp_path):
+    """``write_panel=False`` 不落 slug 副本，``panel_path`` 留空走原名回退。
+
+    背景：builder 通道写 ``panels/<name>.parquet``（中性化 / ic 融合按原名找
+    文件），而 ``register()`` 写 ``panels/<slug>.parquet``。同一个库因此出现
+    两种布局，走库入口登记的因子拿不到中性化面板和 ic 列（12 个 ``pap_*``
+    在定版链里"看着在库、实际不可用"就是这么来的）。
+    """
+    lib = FactorLibrary(root=tmp_path, dataset="t")
+    panel, rets = _panel_and_returns()
+    lib.register("f_nopanel", panel, rets, family="量价", frequency="日频",
+                 write_panel=False)
+    assert not (lib.panels_dir / f"{name_slug('f_nopanel')}.parquet").exists()
+    reg = lib._load_registry()
+    row = reg.loc[reg["name"] == "f_nopanel"].iloc[0]
+    v = row.get("panel_path")
+    # CSV 往返会把空串读成 NaN，两种形态都算"留空"
+    assert v is None or pd.isna(v) or not str(v).strip(), \
+        "panel_path 非空会把解析指回不存在的 slug 文件"
+
+
+def test_register_write_panel_true_keeps_slug_behavior(tmp_path):
+    """默认路径不变：写 slug 面板 + panel_path 指向它（900+ 调用点依赖）。"""
+    lib = FactorLibrary(root=tmp_path, dataset="t")
+    panel, rets = _panel_and_returns()
+    lib.register("f_panel", panel, rets, family="量价", frequency="日频")
+    slug_p = lib.panels_dir / f"{name_slug('f_panel')}.parquet"
+    assert slug_p.exists()
+    reg = lib._load_registry()
+    row = reg.loc[reg["name"] == "f_panel"].iloc[0]
+    assert str(row["panel_path"]).endswith(slug_p.name)
+
+
+def test_resolve_panel_file_finds_both_layouts(tmp_path):
+    """builder 侧的 ``resolve_panel_file`` 必须同时认原名与 slug 两种落盘。"""
+    from scripts.builders.common import resolve_panel_file
+
+    ds = tmp_path / "ds"
+    (ds / "panels").mkdir(parents=True)
+    panel, _ = _panel_and_returns(n_dates=5, n_codes=3)
+    panel.to_parquet(ds / "panels" / "by_name.parquet")
+    panel.to_parquet(ds / "panels" / f"{name_slug('by_slug')}.parquet")
+
+    assert resolve_panel_file(ds, "by_name").name == "by_name.parquet"
+    assert resolve_panel_file(ds, "by_slug").name == f"{name_slug('by_slug')}.parquet"
+    assert resolve_panel_file(ds, "missing") is None

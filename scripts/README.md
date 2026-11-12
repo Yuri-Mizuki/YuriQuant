@@ -141,7 +141,9 @@
 | `factors/build_intraday_factors.py` | 日内特征 → 日频因子构建与入库 |
 | `factors/build_intraday_stat_factors.py` | 分钟统计特征 → 因子库体检入库（降维路线第一层） |
 | `factors/build_minute_panel.py` | 分钟面板构建入口 |
-| `factors/build_paper_factors.py` | 论文复现因子构建与入库（awesome-systematic-trading 21 式） |
+| `factors/build_paper_factors.py` | 论文复现因子构建与入库（awesome-systematic-trading 21 式）；`--only`/`--keep-from` 支持单因子全历史重建（**必须显式传 `--begin/--end`**，否则走 `DEFAULT_RANGES["offline"]`=2025 单年，11-12 事故） |
+| `factors/sync_factor_artifacts.py` | **入库后补齐三件套**：`registry.coverage` → 中性化面板 → `ic_h{h}` 列 → `ic_mean_h*`。走 `FactorLibrary.register` 登记的因子没有 neu 面板与 ic 列，看着在库却进不了定版链（12 个 `pap_*` 卡了整轮）；`--fundind-names` 指定只剥行业的口径（2026-11-12） |
+| `factors/audit_panel_window.py` | **按定版窗口核对面板覆盖**（只读）：`registry.coverage` 是「全历史×全代码格点」，分母含未上市代码，答不了「窗口里够不够用」。本脚本查①日期覆盖（缺头/只覆盖一小段）②**有效值覆盖**（分母=当日有行情的股票，排除「索引全、值全空」）。12 个 pap 只覆盖 2025 就是①查出来的；`alpha101_096`（每日中位 1 只）之类是②查出来的。产物 `reports/library_governance/panel_window_coverage.csv`（2026-11-12） |
 | `factors/build_top10_factors.py` | 「中国因子十强」（JKP 口径）11 个因子的复现与入库（独立数据集，2026-11-02） |
 | `factors/dup_audit.py` | 全库冗余审计（签名→相关矩阵→重复簇→registry 回填）；`--reuse` 复用矩阵只重写报告、`--apply` 回填、`--query` 查某因子最像谁（2026-11-03；**11-12 修簇代表退化**——`sharpe_ls_M` 全空时改按 `\|ic_mean_h20\|` 选，原先退化成字母序） |
 | `factors/library_dedup_plan.py` | 去重**决策表**（只出清单不删）：贪心最大独立集 + 残差增量门槛 + 定版 selection 依赖，出 `safe_drop`/`review`/`keep_prod` 五类动作（2026-11-12） |
