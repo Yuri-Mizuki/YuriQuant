@@ -115,6 +115,23 @@ def fetch_status_table(begin: int, target_date: int, cfg, ds=None) -> None:
     if st_begin > target_date:
         log.info("状态表已覆盖至 %s，跳过拉取", target_date)
         return
+
+    # 🚨 断更守卫（2026-11-10 事故后加）：本步是「分离式启动、不等结果」，
+    # 过去的失败完全无声——10-22 之后连续 2.5 周没拉成功，无人知道。
+    # 这里把「缺口多大」按交易日数算出来打日志，至少留下可检索的痕迹。
+    try:
+        from data.status_guard import check_status_freshness
+
+        _fresh = check_status_freshness(target_date, logger=log)
+        log.info("状态表缺口 %d 个交易日（%s）：本次将从 %s 补到 %s",
+                 _fresh.missing_days, _fresh.severity, st_begin, target_date)
+        if _fresh.is_stale:
+            log.error("🚨 状态表已断更 %d 个交易日，本次拉取若再失败，"
+                      "ST/停牌判定将继续不可信（下游会静默降级）",
+                      _fresh.missing_days)
+    except Exception as exc:  # noqa: BLE001 - 守卫不得阻断数据更新
+        log.warning("状态表守卫检查失败（继续拉取）：%s", exc)
+
     batch = int(st_cfg.get("batch", 200))
     cmd = [sys.executable, "-m", "scripts.ingest.fetch_status_batched",
            "--begin", str(st_begin), "--end", str(target_date), "--batch", str(batch)]

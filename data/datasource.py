@@ -15,12 +15,15 @@
 """
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
+import logging
 import os
+from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Iterable
 
 import pandas as pd
+
+log = logging.getLogger(__name__)
 
 
 def _to_datetime_safe(s) -> pd.Series:
@@ -253,6 +256,64 @@ class DataSource(ABC):
 # ---------------------------------------------------------------------------
 # AmazingData 实现
 # ---------------------------------------------------------------------------
+def _candidate_hosts(primary: str) -> list[str]:
+    """登录候选 host 列表：主用在前，额外 VIP 在后（去重、保持顺序）。
+
+    AmazingData 对外提供的是**双 VIP**（主备/双活），SDK 自身的
+    ``mdga.json`` 里就是 ``"Vip": "101.230.159.234;140.206.44.234"``。
+    但 ``ad.login(host=...)`` 只认单个地址——一旦某个 VIP 的网关侧异常，
+    SDK 不会自动换，整个数据链就卡死（2026-11-10 实测：日线/状态接口
+    全部 `Request id <N> is timeout`，而心跳正常、TCP 与登录都成功）。
+
+    因此这里把「多 VIP」提到应用层做 failover。来源两处：
+      - ``AMAZINGDATA_HOST``（主用，必填）
+      - ``AMAZINGDATA_HOST_ALT``（可选，逗号分隔的备用地址）
+
+    用 ``ALT`` 而不是写死在代码里：换账号/换环境时不必改代码。
+    """
+    hosts: list[str] = []
+    for raw in (primary, os.getenv("AMAZINGDATA_HOST_ALT", "")):
+        for part in str(raw or "").replace(";", ",").split(","):
+            h = part.strip()
+            if h and h not in hosts:
+                hosts.append(h)
+    return hosts or [primary]
+
+
+def _call_with_timeout(fn, timeout: float, label: str):
+    """在**守护线程**里跑一次 SDK 调用，超时即放弃并抛 ``TimeoutError``。
+
+    为什么需要：SDK 的查询/日历接口在网关卡死时的表现是 **hang 而非 raise**
+    （2026-11-10 实测：``get_calendar()`` 永不返回，网关日志里 TCP 通、登录成功、
+    心跳正常，只有 ``Request id <N> is timeout``）。如果不加超时，failover
+    这段代码永远不会被执行到——因为第一个 host 就把进程挂住了。
+
+    用守护线程而非 signal：Windows 上 ``signal.alarm`` 不可用，而本项目的
+    生产环境就是 Windows。线程泄漏一个无妨（守护线程，进程退出即回收）。
+    """
+    import threading
+
+    box: dict = {}
+
+    def _runner():
+        try:
+            box["value"] = fn()
+        except BaseException as exc:  # noqa: BLE001 - 原样转交给调用方
+            box["error"] = exc
+
+    th = threading.Thread(target=_runner, daemon=True,
+                          name=f"sdk-timeout-{label}")
+    th.start()
+    th.join(timeout)
+    if th.is_alive():
+        raise TimeoutError(
+            f"{label} 超过 {timeout:g}s 未返回（SDK hang，非异常）"
+        )
+    if "error" in box:
+        raise box["error"]
+    return box.get("value")
+
+
 def _probe_login_failure(cfg: dict) -> str:
     """登录失败后，另起子进程直连 tgw 图层，取服务端的真实拒绝原因。
 
@@ -353,6 +414,7 @@ class AmazingDataSource(DataSource):
         self._base = None     # BaseData 实例
         self._market = None   # MarketData 实例
         self._info = None     # InfoData 实例
+        self._host_in_use = None   # 实际登录成功的 host（failover 后与 cfg 不同）
         self._login(cfg)
 
     # ---- 登录 ----
@@ -369,36 +431,62 @@ class AmazingDataSource(DataSource):
             )
 
         self._ad = ad
-        try:
-            # The SDK calls exit(0) itself when authentication fails.  Convert
-            # that silent successful-looking process exit into an actionable
-            # application error.
-            ad.login(
-                username=cfg["username"],
-                password=cfg["password"],
-                host=cfg["host"],
-                port=int(cfg["port"]),
-            )
-        except SystemExit as exc:
-            # 2026-09-20：SDK 失败时只打印 "login fail" 并 exit(0)，真实原因
-            # （服务端返回的 status/reason）被吞掉，排查时只能看到一句无信息量的
-            # 提示。这里补一次底层探测，把服务端的实际拒绝原因带进异常信息。
-            # 注意：SystemExit 后解释器正在退出，Python 层的 print/stderr 缓冲
-            # 会丢，必须用 os.write 直写 fd=2（stderr）。
-            detail = _probe_login_failure(cfg)
-            if detail:
-                try:
-                    os.write(2, (detail + "\n").encode("utf-8", "replace"))
-                except Exception:
-                    pass
-            raise ConnectionError(
-                "AmazingData login failed. Verify AMAZINGDATA_HOST/PORT, "
-                f"credentials, and network access.{detail}"
-            ) from exc
-        self._base = ad.BaseData()
-        calendar = self._base.get_calendar()
-        self._market = ad.MarketData(calendar)
-        self._info = ad.InfoData()
+        hosts = _candidate_hosts(cfg["host"])
+        last_exc: Exception | None = None
+        for idx, host in enumerate(hosts):
+            try:
+                # The SDK calls exit(0) itself when authentication fails.  Convert
+                # that silent successful-looking process exit into an actionable
+                # application error.
+                ad.login(
+                    username=cfg["username"],
+                    password=cfg["password"],
+                    host=host,
+                    port=int(cfg["port"]),
+                )
+                base = ad.BaseData()
+                # 🚨 get_calendar() 在网关异常时**永不返回**（hang 而非 raise）。
+                # 不给超时，failover 就永远走不到下一个 VIP。
+                cal_timeout = float(os.getenv("AMAZINGDATA_CAL_TIMEOUT", "45"))
+                calendar = _call_with_timeout(base.get_calendar, cal_timeout,
+                                              f"get_calendar@{host}")
+                if not calendar:
+                    # 🚨 2026-11-10：服务端 `get_calendar()` 会静默返回 None/空，
+                    # 随后 `MarketData(calendar)` 才在 SDK 内部炸成
+                    # `TypeError: 'NoneType' object is not subscriptable` ——
+                    # 报错位置离真因很远（在 base_data.py 里），排查极易跑偏。
+                    # 在这里显式拦下并指明是「日历返回空」，同时触发换 VIP 重试。
+                    raise ConnectionError(
+                        f"get_calendar() 返回 {calendar!r}（host={host}）；"
+                        "登录成功但日历接口无数据"
+                    )
+                self._base = base
+                self._market = ad.MarketData(calendar)
+                self._info = ad.InfoData()
+                self._host_in_use = host
+                if idx > 0:
+                    log.warning("AmazingData 已切换到备用 VIP %s（前 %d 个失败）",
+                                host, idx)
+                return
+            except SystemExit as exc:  # SDK 认证失败会 exit(0)
+                last_exc = exc
+                detail = _probe_login_failure({**cfg, "host": host})
+                if detail:
+                    try:
+                        os.write(2, (detail + "\n").encode("utf-8", "replace"))
+                    except Exception:
+                        pass
+                log.warning("AmazingData 登录 %s 失败（VIP %d/%d），尝试下一个",
+                            host, idx + 1, len(hosts))
+            except Exception as exc:  # noqa: BLE001 - 换下一个 VIP 前先记下
+                last_exc = exc
+                log.warning("AmazingData 连接 %s 异常（VIP %d/%d）：%s",
+                            host, idx + 1, len(hosts), exc)
+        raise ConnectionError(
+            "AmazingData login failed on all candidate hosts "
+            f"({', '.join(hosts)}). Verify AMAZINGDATA_HOST/PORT, "
+            f"credentials, and network access. Last error: {last_exc!r}"
+        )
 
     # ---- 登出 ----
     def logout(self) -> None:

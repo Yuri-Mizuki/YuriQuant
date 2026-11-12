@@ -117,13 +117,28 @@ def build_tradable_mask(close_adj: pd.DataFrame,
     if st.empty:
         return pd.DataFrame(True, index=idx, columns=cols)
 
-    def _wide(col: str) -> pd.DataFrame:
+    last_state_date = st.index.get_level_values("date").max()
+
+    def _wide(col: str, *, persist: bool = False) -> pd.DataFrame:
         if col not in st.columns:
             return pd.DataFrame(False, index=idx, columns=cols)
-        return st[col].unstack("code").reindex(index=idx, columns=cols)
+        w = st[col].unstack("code").reindex(index=idx, columns=cols)
+        if persist:
+            # ST / 停牌是**持续状态**，不是逐日独立事件。状态表断更时若直接
+            # ``fillna(False)`` 等于把全市场无条件放行 —— 2026-11-10 实测：
+            # 状态表止于 10-22，面板延到 11-04，从 10-23 起**全市场剔除率
+            # 由 3.4~4.8% 掉到 0.0000**（静默失效，日志里没有任何提示）。
+            #
+            # 但**只在断更之后**沿用：全段 ffill 会把退市前最后一天的停牌状态
+            # 永久延续，实测在状态表覆盖区间内多剔 1.11%（4.506%→5.620%），
+            # 等于悄悄改动已经验证过的回测口径。历史区间必须逐位不变。
+            tail = pd.Series(w.index > last_state_date, index=w.index)
+            if bool(tail.any()):
+                w = w.where(~tail, w.ffill(), axis=0)
+        return w
 
-    susp = _wide("is_suspended").fillna(False)
-    is_st = _wide("is_st").fillna(False)
+    susp = _wide("is_suspended", persist=True).fillna(False)
+    is_st = _wide("is_st", persist=True).fillna(False)
     hi_lim = _wide("high_limited")
     lo_lim = _wide("low_limited")
 

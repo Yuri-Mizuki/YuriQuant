@@ -571,6 +571,29 @@ def _limit_from_daily(close_raw: pd.DataFrame, predict_date: pd.Timestamp,
     return hi, lo, suspended
 
 
+def _latest_state_flag(st: pd.DataFrame, col: str,
+                       codes: pd.Index) -> pd.Series:
+    """每只股票**最近一个可得状态日**的布尔标记（状态表断更时的托底）。
+
+    ST / 停牌是持续状态：状态表停在 10-22 而信号日是 11-02 时，「10-22 仍是 ST」
+    已经是当日最优信息，按 ``False`` 丢弃等价于无条件放行（2026-11-10 事故）。
+    状态表里查不到的股票记 ``False``（不臆造风险）。
+
+    Args:
+        st: ``history_stock_status`` 原始长表（MultiIndex: date × code）。
+        col: 列名（``is_st`` / ``is_suspended``）。
+        codes: 输出索引（信号面板的列）。
+
+    Returns:
+        ``pd.Series(bool)``，index = ``codes``。
+    """
+    if col not in st.columns:
+        return pd.Series(False, index=codes, dtype=bool)
+    last = (st[col].groupby(level="code").last()
+            .reindex(codes).fillna(False))
+    return last.astype(bool)
+
+
 def signal_day_tradable(close_raw: pd.DataFrame, predict_date: pd.Timestamp,
                         cache_root: str | None = None) -> pd.Series:
     """信号日（T 日）已知状态的可交易性估计：非停牌/非ST/收盘未封板。
@@ -596,19 +619,31 @@ def signal_day_tradable(close_raw: pd.DataFrame, predict_date: pd.Timestamp,
     try:
         st_t = st.xs(predict_date, level="date")
     except KeyError:
-        log.warning("状态表无 %s（最新 %s），降级用日线行情推断涨跌停",
+        # 🚨 2026-11-10 修：降级分支原来只判「涨跌停 + 停牌」，**完全丢掉 ST**，
+        # 而 `_limit_from_daily` 按板块估涨跌停（主板一律 10%）也不认 ST 的 5%。
+        # 状态表一断（本次断在 2026-10-22，连续 2.5 周）ST 股就被整批放行：
+        # 2026-11-02 的 Top10 里 5 只是 ST、Top60 里 15 只（基线 3.67%）。
+        # ST 是**持续状态**，不需要当日精确值 —— 用最近可得状态托底即可。
+        from data.status_guard import check_status_freshness
+
+        fresh = check_status_freshness(predict_date, cache_root=cache_root,
+                                       logger=log)
+        log.warning("状态表无 %s（最新 %s，缺 %d 个交易日/%s），"
+                    "降级用日线行情推断涨跌停 + 最近可得 ST",
                     predict_date.date(),
-                    st.index.get_level_values("date").max().date())
+                    st.index.get_level_values("date").max().date(),
+                    fresh.missing_days, fresh.severity)
+        stale_st = _latest_state_flag(st, "is_st", codes)
         est = _limit_from_daily(close_raw, predict_date, cache_root)
         if est is None:
-            return pd.Series(True, index=codes, dtype=bool)
+            return (~stale_st).fillna(True).astype(bool)
         hi, lo, susp = est
         raw = pd.to_numeric(close_raw.loc[predict_date],
                             errors="coerce").reindex(codes)
         tol = 1e-4
         sealed_up = (raw >= hi * (1 - tol)) & hi.notna()
         sealed_dn = (raw <= lo * (1 + tol)) & lo.notna()
-        bad = susp | sealed_up | sealed_dn
+        bad = susp | sealed_up | sealed_dn | stale_st
         return (~bad).fillna(True).astype(bool)
 
     def _row(col: str, default=None):
@@ -1756,6 +1791,29 @@ def run(args) -> dict:
     tail = load_tail(pd.Timestamp(str(args.date)) if args.date else None,
                      tail_n_days(args.window))
     predict_date = tail["predict_date"]
+
+    # 🚨 状态表断更守卫（2026-11-10 事故后加）：状态表一旦断更，ST/停牌/涨跌停
+    # 判定会静默降级，历史上前端无任何提示（10-23~11-04 连续 2.5 周每日混进
+    # 23~24 只 ST）。这里在选股**之前**显式检查一次：ok 放行、warn 提示、
+    # error 打红字告警（但默认不阻断 —— 出榜是每日例行，阻断比降级更糟）。
+    # 严格模式 `--strict-status` 可让 error 直接失败。
+    try:
+        from data.status_guard import check_status_freshness
+
+        _fresh = check_status_freshness(predict_date, logger=log)
+        if _fresh.is_stale:
+            log.error("🚨 本次出榜的 ST/停牌判定不可信：%s", _fresh.message)
+            if getattr(args, "strict_status", False):
+                raise SystemExit(
+                    f"状态表断更（{_fresh.message}），已按 --strict-status 中止出榜。"
+                    f"请先补拉：python -m scripts.ingest.fetch_status_batched "
+                    f"--begin {_fresh.last_date:%Y%m%d} "
+                    f"--end {pd.Timestamp(predict_date):%Y%m%d}")
+    except SystemExit:
+        raise
+    except Exception as exc:  # noqa: BLE001 - 守卫自身故障绝不阻断出榜
+        log.warning("状态表守卫检查失败（继续出榜）：%s", exc)
+
     horizons = tuple(args.horizons)
     exclude = tuple(args.exclude_features)
     out_dir = OUT_DIR if not args.out_tag \
@@ -1898,14 +1956,23 @@ def run(args) -> dict:
         ens_tag = "none"
     else:
         # h1 份额加权（--h1-weight；缺省等权 = 定版口径，逐字走原均值路径）
+        # ``--horizon-weights``（2026-11-10 新增）优先于 ``--h1-weight``：它是
+        # 通用形式（逐 horizon 一个权重），用于复现**非「h1 + 其余均摊」**的复合
+        # 信号 —— 典型是 `yqcore` 族的 `gbdt_mid13` = h1:h5:h10:h20 = 2:1:1:2
+        # （``caliber.SIGNALS["gbdt_mid13"]``）。不给时逐字走原路径。
         _hw = getattr(args, "h1_weight", None)
+        _hws = getattr(args, "horizon_weights", None)
         _wts = None
-        if _hw is not None:
+        if _hws is not None:
+            _wts = [float(w) for w in _hws]
+        elif _hw is not None:
             _rest = (1.0 - _hw) / (len(horizons) - 1)
             _wts = [_hw if h == 1 else _rest for h in horizons]
         scores = _rank_average_single_day(preds, weights=_wts)
         ens_tag = "+".join(f"h{h}" for h in horizons) + "_rank_avg"
-        if _wts is not None:
+        if _hws is not None:
+            ens_tag += "_w" + ":".join(f"{w:g}" for w in _wts)
+        elif _hw is not None:
             ens_tag += f"_h1w{_hw:g}"
         log.info("集成 %s → 单日截面%s秩平均，有效股票 %d（各臂交集口径）",
                  ens_tag, "加权" if _wts is not None else "",
@@ -2138,6 +2205,11 @@ def main() -> None:
                     help="快信号秩平均的 h1 份额（缺省 = 等权）：W·rank(h1) + "
                          "(1-W)·mean(rank(其余 horizon))，交集口径。定版等权 = "
                          "0.25；v1w2-cheap 微调 = 0.125（h1 减半，其余均摊）")
+    ap.add_argument("--horizon-weights", default=None, metavar="W[,W...]",
+                    help="逐 horizon 的秩平均权重（与 --horizons 一一对应、顺序相同；"
+                         "内部自动归一）。**优先于 --h1-weight**，用于复现非「h1+其余"
+                         "均摊」的复合信号：yqcore 族 gbdt_mid13 = --horizons 1,5,10,20 "
+                         "--horizon-weights 2,1,1,2。缺省 = 等权（定版口径）")
     ap.add_argument("--slow-blend", type=float, default=None, metavar="LAMBDA",
                     help="慢信号融合权重 λ（0=关）。定版 λ=0.5："
                          "scores=(1-λ)·rank(快)+λ·rank(慢)，慢信号 = panels_neu "
@@ -2156,6 +2228,10 @@ def main() -> None:
                          "组合（P0 落地；实测甜点 35~45 只）。0=不生成（默认，"
                          "保持 6 文件零回归）。**不加行业约束**："
                          "每申万一级≤2 只是 −2.64pp 净代价")
+    ap.add_argument("--strict-status", action="store_true",
+                    help="状态表断更（缺 >5 个交易日）时中止出榜而非降级出榜。"
+                         "默认关闭：出榜是每日例行，降级 + 显式告警优于不出榜；"
+                         "需要「宁缺毋滥」的场合（如产出可交付组合）再打开")
     ap.add_argument("--tradable-labels", action="store_true",
                     default=DEFAULT_TRADABLE_LABELS,
                     help="训练标签掩掉买不进的样本（T+1 成交口径可交易掩码，"
@@ -2227,6 +2303,15 @@ def main() -> None:
         args.tradable_labels = True
     if args.h1_weight is None:
         args.h1_weight = preset.get("h1_weight")
+    # --horizon-weights（2026-11-10）：通用逐 horizon 权重，优先于 --h1-weight。
+    if args.horizon_weights is not None:
+        _ws = [float(x) for x in str(args.horizon_weights).split(",") if x.strip()]
+        if len(_ws) != len(args.horizons):
+            ap.error(f"--horizon-weights 项数({len(_ws)}) 须与 --horizons"
+                     f"({len(args.horizons)}) 一一对应")
+        if any(w < 0 for w in _ws) or sum(_ws) <= 0:
+            ap.error(f"--horizon-weights 须非负且和 > 0（现 {_ws}）")
+        args.horizon_weights = tuple(_ws)
     if args.h1_weight is not None:
         if not 0.0 <= args.h1_weight <= 1.0:
             ap.error(f"--h1-weight 须在 [0,1]（现 {args.h1_weight}）")
