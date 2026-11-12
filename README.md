@@ -135,6 +135,60 @@ reports/    实验产物、监控台账与设计文档
 `python -m scripts.data_tools.docs_lint --check` 校验目录登记、四要素、标题日期、
 孤儿文档四项，`--verbose` 看完整清单。它只审**新写或刚改**的文档，存量按 mtime 基线豁免。
 
+## 🔎 能力索引（问题 → 一行入口）
+
+> **先查表，再写代码。** 2026-11-12 的教训：问「因子周频 IC」，有人从 `panels_neu`
+> 逐因子重算了 **37 分钟**，而因子库里的 `ic_h{1,5,10,20}.parquet` 早就建好了，
+> 读盘只要 **0.34 秒**。根因不是「不知道有这个文件」，而是**只有脚本索引、没有能力索引**
+> —— [`scripts/README.md`](scripts/README.md) 能查到「有 `xxx_probe.py`」，查不到
+> 「因子 IC 用哪行代码」。本表按**你要解决的问题**组织，不按文件名。
+
+### 因子研究
+
+| 要解决的问题 | 一行入口 | 说明 |
+|---|---|---|
+| 全库因子 IC 排序（任意 horizon） | `FactorLibrary(dataset="all_a_2018_2026").ic_summary()` | 0.57 s 出 936 因子 × 4 horizon；列含 `ic_h*` `ir_h*` `pos_h*` `n_h*` |
+| 单因子逐日 IC 序列 | `.ic_matrix(h)` → `(日期 × 因子)` | h ∈ {1,5,10,20}；未预计算的 h 抛 `KeyError`（不静默返回空） |
+| 库里有因子 / 有哪些族 | `FactorLibrary().list_all()`、`registry.csv` | |
+| 因子是不是「换皮」（实质重复） | `python -m scripts.factors.dup_audit --dataset <ds>` | 判重复的唯一入口，`--apply` 才写库 |
+| 因子半衰期 / 期限怎么选 | `python -m scripts.evaluation.factor_half_life_probe --from-library` | **必须带 `--from-library`**，否则退回逐因子重算 |
+| 面板有没有前视泄漏 | `python -m scripts.factors.panel_leak_audit --layer neu` | 只读；判据随认知增补，跨轮比较要走 diff |
+
+> ⚠️ 库版 IC = `IC_CODE_STRIDE=3` 抽稀 + 库内 `close_adj`，与 `evaluate()` 现算**不同源**
+> （复权价差 3.5%）。引用时必须写明用哪一份；只有要 t 值 / 非重叠对照才值得重算。
+
+### 回测与口径
+
+| 要解决的问题 | 一行入口 | 说明 |
+|---|---|---|
+| 跑一次回测（统一口径） | `python -m scripts.evaluation.caliber --signal <key> --window prod` | 全项目**唯一**评估真源，别自己写 `port_backtest` |
+| 判断「这次改动算不算改进」 | `python -m scripts.evaluation.caliber --check --baseline-id <id>` | 基线只在登记表里，**不得自造** |
+| 某条基线的数字是多少 | `config/baselines.yaml` → `metrics.profiles.production` | 判改进只认 `production`，`fair` 仅旁证 |
+| 成本 / 印花税时变怎么算的 | `backtest/costs.py`（`STAMP_DUTY_CHANGES`） | 往返 27bp；**跨口径禁相减** |
+| 可交易掩码（ST / 停牌 / 封板） | `data/tradability.py` | |
+| 状态表断更了没有 | `data.status_guard.check_status_freshness()` | 返回 `StatusFreshness`，`severity ∈ {ok,warn,error,unknown}` |
+| 数据盘在哪 | `Config.paths()` | 禁硬编码盘符（有守卫测试） |
+
+### 生产与产品线
+
+| 要解决的问题 | 一行入口 | 说明 |
+|---|---|---|
+| yqcore 每日出榜 | `python -m scripts.live.yqcore rank --preset dingban` | 定版预设 = `dingban` |
+| 现在持了什么 | `python -m scripts.live.yqcore holdings`（`--all` 看全期） | 默认只读；`--commit` 有副作用，仅换仓日 |
+| 三档收益 / 容量对照 | `python -m scripts.evaluation.yq_core_report --view native` | `native`=产品线口径，`grid`=资金×档位 |
+| 三档的参数改哪里 | `config/baselines.yaml` → `id: yqcore-*` 的 `execution` | **唯一真源**；`strategy/registry.py` 只读不写 |
+| 全A 每日推理 | `python -m scripts.pipelines.alla_daily_rank --preset dingban` | |
+| 主实验网格 | `python -m scripts.pipelines.rolling_grid_alla` | 实验真源（入口只进不出） |
+
+### 工程与治理
+
+| 要解决的问题 | 一行入口 | 说明 |
+|---|---|---|
+| 文档合规（登记 / 四要素 / 日期） | `python -m scripts.data_tools.docs_lint --check` | `--verbose` 看全量清单 |
+| 记忆体格式与体量 | `python -m scripts.data_tools.memory_lint --check` | |
+| 某个脚本干什么、参数怎么传 | [`scripts/README.md`](scripts/README.md) | 脚本索引，与本表互补 |
+| 某条结论是什么、产物放哪 | [`reports/README.md`](reports/README.md) §一 结论速查 | |
+
 ## 🚀 快速开始
 
 ```bash
