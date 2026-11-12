@@ -12,10 +12,15 @@
 # 3. **任何"改进 vs 基线"的对照，基线必须取本表 `status: production` 那条**
 #    （或 `working` 那条作本机代理），不得临时自造基线 —— 2026-10-13 一天内
 #    三次结论反转全部源于此。
-# 4. **口径组合不可混**（2026-10-14 新增，见 `caliber.PROFILES`）：
-#      production = 固定 10bp + T+1 open + 1e6   ← 与 v1 定版同源，**绝对数字可比**
+# 4. **口径组合不可混**（2026-10-14 新增，见 `caliber.PROFILES`；2026-11-12 成本改 27bp）：
+#      production = **27bp 时变**（佣金万1双边2 + 印花税单边5、2023-08-28 前 10 + 滑点10bp双边20）
+#                   + T+1 open + 1e6   ← 与定版同源，**绝对数字可比**
 #      fair       = 逐股冲击  + T 收盘  + 1e8   ← 成本/容量研究用，**不可与 production 并列**
 #    同一 signal + 同一 arm 在两者间差 ~0.77pp（其中 0.70pp 来自 close vs T+1 open）。
+#    🚨 **2026-11-12 起「固定 10bp」文案全部作废**：此前登记的 10bp/36bp 数字
+#    （v1/v1w*/v2-dingban 与 yqcore 三档的旧值）**不可与新数字相减**；
+#    同一臂 36bp→27bp 约 +0.8~1.0pp，幅度随换手放大（solo 92% 换手 +1.01pp、
+#    focus 87% +0.84pp、breadth 17% +0.15pp）。
 # 5. **数据态必须标注**：v1 的 18.07% 属 income 4383 补齐**前**的 v2 数据态；
 #    同配置当前数据态 ≈ 17.0–17.2%（README:24-26）。**不回退数据换数字。**
 # 6. **掩码口径 = 方案② mask-lag 1**（由莉酱 2026-10-15 拍板）：报数一律
@@ -59,6 +64,15 @@
 #    🔑 复合信号的 `fingerprint` 是**构造后**面板的指纹，与任一分量都不同；引用它的
 #    结论必须同时写构造式（哪些分量、什么权重）。
 #
+# 12. **定版策略只放在 `yqcore` 族里**（2026-11-12 由莉酱拍板）：
+#    `yqcore-solo/focus/breadth` 是**唯一**的定版策略集合，判「改进 vs 基线」的默认对象是
+#    族内 `default: true` 的 `yqcore-breadth`。**不再新增无 `family` 的 production 条目** ——
+#    同一条策略另立一个版本号，只会让"同一批持仓报两个数"（v2-dingban 与 breadth 就是如此：
+#    同信号、同执行层、同 `buffer(15/40)`，只差资金/整手/末窗，21.57% vs 21.66%）。
+#    🔑 历史条目（`superseded` / `working`）保留在 `baselines:` 或 `retired:` 段里做追溯，
+#    但**不得**出现在「定版有哪几个」的答案里。`tests/test_caliber.py` 守着这条不变量
+#    （无 family 的 production 条目数 ≤ 1；`yqcore` 族内必须恰有一档 default）。
+#
 # 每个 baseline 的字段
 # --------------------
 #   id                 唯一标识
@@ -76,8 +90,8 @@
 #   source             数字出处（报告路径 / 命令）
 # =============================================================================
 
-version: 5
-updated: "2026-11-10"
+version: 6
+updated: "2026-11-12"
 
 # 评估口径的规范值（caliber.py 的硬编码副本，供快速查阅；改 caliber 时同步）
 conventions:
@@ -88,10 +102,10 @@ conventions:
   sharpe: "geometric"     # backtest.metrics.sharpe_ratio（几何年化/年化波动）
   rebalance: "monthly_first_trading_day"
   covariance_warmup: "untruncated_history"   # Σ 面板不得截断到回测窗口
-  # --- 口径组合（2026-10-14；对应 caliber.PROFILES）---
+  # --- 口径组合（2026-10-14；对应 caliber.PROFILES；2026-11-12 成本改 27bp）---
   profiles:
     production:
-      cost: "production"        # = backtest.costs.default_costs()（当前=固定 10bp）
+      cost: "production"        # = default_costs()：往返 27bp 时变（万1双边 + 印花万5单边 + 滑点10bp双边）
       execution: "open"         # T+1 开盘（build_execution_split + 信号 shift(1) 预掩码）
       capital: 1.0e6
       comparable_to: "登记表 status:production 条目"
@@ -109,8 +123,8 @@ baselines:
   - id: v1-dingban
     created: "2026-10-02"
     updated: "2026-11-08"
-    status: superseded        # 2026-11-08 被 v2-dingban 取代（前视修复重建 + 主口径改 2019）
-    superseded_by: v2-dingban
+    status: superseded        # 2026-11-08 被 v2-dingban 取代；v2 又于 2026-11-12 并入 yqcore-breadth
+    superseded_by: v2-dingban → yqcore-breadth
     label: "定版主模型 v1（920 fundind 快信号 h1020 ⊕ 慢信号 s0.5 + buffer(15/40)）"
     signal_key: dingban_fundind
     window: prod2018          # 2018 起；该起点缺可执行性掩码，2026-11-05 起降为历史口径
@@ -133,7 +147,7 @@ baselines:
     # 🚨 该条数字对应的**口径组合**（2026-10-14 从产出脚本反查确认）
     caliber:
       profile: production
-      cost: "固定 10bp（Config.costs()，impact_model=none）"
+      cost: "旧文案「固定 10bp」；实收≈36bp（万3佣金+千1印花+10bp滑点），未按 27bp 重算"
       execution: "open（T+1 开盘）"
       capital: 1.0e6
       mask: "信号预掩码 sig.shift(1).where(mask)"
@@ -183,7 +197,8 @@ baselines:
     verified_local: false
 
   # ---------------------------------------------------------------------------
-  # v2-dingban —— 现行生产基线（2026-11-08 由莉酱拍板：定版方案不变，窗口改 2019 起）
+  # v2-dingban —— 已退休（2026-11-08 由莉酱拍板：定版方案不变，窗口改 2019 起；
+  #   2026-11-12 并入 yqcore-breadth ⇒ 本条只作历史追溯，不再参与任何"判改进"）
   #   与 v1-dingban 是**同一信号、同一执行层、同一费率、同一 buffer**，三处不同：
   #     ① 数据态：2026-11-07 面板前视修复重建（`year_offset` 方向 + 事件表 epoch
   #        日期解析），慢信号 72 因子里 6 个污染因子换了值；
@@ -195,9 +210,10 @@ baselines:
   # ---------------------------------------------------------------------------
   - id: v2-dingban
     created: "2026-11-08"
-    updated: "2026-11-08"
-    status: production
-    label: "定版主模型 v2（920 fundind h1020 ⊕ 慢信号 s0.5 + buffer(15/40)；前视修复后，窗口 2019 起）"
+    updated: "2026-11-12"
+    status: superseded        # 2026-11-12 并入 yqcore-breadth（同策略同执行层，重立条目只会报两个数）
+    superseded_by: yqcore-breadth
+    label: "定版主模型 v2（920 fundind h1020 ⊕ 慢信号 s0.5 + buffer(15/40)）—— 已并入 yqcore-breadth"
     signal_key: dingban_fundind
     window: prod
     signal:
@@ -218,7 +234,7 @@ baselines:
       benchmark: "000300.SH"
     caliber:
       profile: production
-      cost: "固定 10bp（Config.costs()，impact_model=none）"
+      cost: "旧文案「固定 10bp」；实收≈36bp（万3佣金+千1印花+10bp滑点），未按 27bp 重算"
       execution: "open（T+1 开盘）"
       capital: 1.0e6
       mask: "信号预掩码 sig.shift(1).where(mask)；掩码自 2019 起有状态表"
@@ -274,7 +290,7 @@ baselines:
         eqw_top10pct: {ann: 0.2270, sharpe: 1.0125, sharpe_t_stat: 2.819}
         delta_buf_arm: {ann_pp: -1.58, sharpe: -0.065}
     fingerprint: 2bc26c866512
-    reproducible_local: true
+    reproducible_local: false   # 2026-11-12 核实：登记路径本机已不存在（见 retired_reason）
     regen_cmd: >
       ① 重构造定版信号（慢信号随 panels_neu 变 ⇒ **重建后必跑**，否则 caliber 读到旧信号）：
          D:/project/YuriQuant/.venv/Scripts/python.exe -m scripts.evaluation.buffer_arm_920
@@ -299,6 +315,19 @@ baselines:
       若将来做参数再优化，须在新基座上重扫，不得直接引用旧裁决的收益差。
       ✅ 顺带修正：v1 的 `18.07%` 是 income 4383 补齐**前**的旧数据态，且是执行价修复前的
       open 产物；本条 14.96%（prod2018）/ 21.57%（prod）都是修复后本机实测，两者不可直接相减。
+      🚨 **2026-11-12 并入 `yqcore-breadth`，本条转 `superseded`**（由莉酱拍板：定版策略只放
+      yqcore 族里）。理由：与 breadth **同信号 `dingban_fundind`、同执行层 `buffer(15/40)`**、
+      同主口径窗口，只差三处 —— 资金（1e6 vs breadth 的 2e6 native）、整手（无 vs 100）、
+      末日（09-23 vs 09-07）。实测差 **21.57% vs 21.66%**（0.09pp），属同一策略的两次报数，
+      不是两个方案。并入后：① 判改进默认基线 = `yqcore-breadth`（族内 `default: true`）；
+      ② 本条 21.57% 是 **36bp 旧成本基数**，与 breadth 现在的 27bp 数字**不可相减**；
+      ③ 本条登记的 `reports/frontier_audit_920_reval/defv_sig__h1.parquet` 本机已不存在
+      （`--check --baseline-id v2-dingban` 直接 FileNotFoundError）⇒ `reproducible_local:
+      true` 不再成立，已在 `retired_reason` 记明。
+    retired_reason: >
+      与 yqcore-breadth 是同一策略（同信号/同执行层/同窗口），仅资金+整手+末日末窗不同；
+      保留本条只为追溯 2026-11-08~11-12 期间"定版收益 = 21.57%"这个说法的出处。
+      引用它必须同时说明「36bp 旧基数 + 1876 日窗口」。新结论一律用 yqcore-breadth。
 
   # ---------------------------------------------------------------------------
   # v1w —— 本机工作基线（882 ortho 的定版执行层形态）
@@ -445,7 +474,7 @@ baselines:
       rebalance_freq: M
     caliber:
       profile: production
-      cost: "固定 10bp（Config.costs()，impact_model=none）"
+      cost: "旧文案「固定 10bp」；实收≈36bp（万3佣金+千1印花+10bp滑点），未按 27bp 重算"
       execution: "open（T+1 开盘）"
       capital: 1.0e6
       mask: "信号预掩码 sig.shift(1).where(mask)；掩码自 2019 起有状态表"
@@ -487,6 +516,13 @@ baselines:
       Sharpe t_NW 从 2.139（余量 9%）升到 2.741（余量 40%），years_to_prove 从 6.8 降到 3.8。
       2018 那一年策略 −26.6%、超额 +3.0%，但 +3.0% 是「假设全部买得进」算的，
       与 2019+ 的可执行口径不同源 —— 详见 reports/pool_scope_probe/README.md §二·补。
+      🚨 **2026-11-12 核实：本条两臂的成本基数不一致**。用当前 27bp 复算
+      （`--check --baseline-id v1w-ortho882-2019`）：`eqw_buf0.15_0.4` 23.89% / 1.006
+      （登记 23.57 / 0.993，**Δ+0.32pp 在容差内 PASS**）、`eqw_top10pct` 22.24% / 0.908
+      （登记 21.60 / 0.882，**Δ+0.64pp FAIL**）⇒ buffer 臂接近 27bp 基座、池子臂仍是 36bp。
+      **本条未按 27bp 重算**：作为 `working` 代理做同基数横向对比仍可用（引擎走当前 config），
+      但**不得**拿它和 yqcore 三档的 27bp 数字直接相减，也不得把它当"27bp 已核对"的证据。
+      下次需要它作锚点时必须先 `caliber --check` 并在结论里写明是哪个臂。
 
   # ---------------------------------------------------------------------------
   # v1w2 —— 候选微调（cheap_lever_scan 产出；🔴 生产切换 2026-10-17 搁置）
@@ -521,7 +557,7 @@ baselines:
       rebalance_freq: M
     caliber:
       profile: production
-      cost: "固定 10bp"
+      cost: "旧文案「固定 10bp」；实收口径未核实，未按 27bp 重算"
       execution: "open（T+1 开盘）"
       capital: 1.0e6
       source_script: "scripts/evaluation/cheap_lever_revalidate_920.py"
@@ -600,24 +636,29 @@ baselines:
   #
   #   🚨 两条档位的窗口都**强制截到 2026-09-07**（882 的 pred 面板末日）。920 重建代理
   #   原本到 11-04，不对齐会让 2026 年混进 36 个交易日、年化虚低 1.4~1.6pp（已实测）。
-  #   故与 v2-dingban 登记的 1876 日（止 09-23）**差 12 个交易日，数字不可逐位对比**。
+  #   故与已退休的 v2-dingban（1876 日、止 09-23、36bp 旧基数）**差 12 个交易日，
+  #   数字不可逐位对比**；2026-11-12 起 v2 已并入本族 breadth，不再是并列基线。
   # ===========================================================================
   - id: yqcore-breadth
     family: yqcore
     tier: breadth
-    default: true             # 族内默认档：规则 3 的「基线取 production 那条」指它
+    default: true             # 族内默认档 = **判改进基线**（v2-dingban 2026-11-12 并入本条）
     created: "2026-11-10"
-    updated: "2026-11-10"
+    updated: "2026-11-12"
     status: production
-    label: "YQ 核心 · 广度档（Breadth）：920 defv + buffer(15/40)，~614 只，大资金"
+    label: "YQ 核心 · 广度档（Breadth）：920 defv + buffer(15/40)，~614 只，大资金（判改进默认基线）"
     signal_key: dingban_fundind
     signal_key_local: dingban_fundind_local   # 登记路径本机已缺失，复算走重建代理
     check_arm: eqw_buf0.15_0.4   # 同上（breadth 的 production 键是缓冲带臂名）
+    check_end: 20260907          # 本机代理信号到 11-04，报数统一截到 882 末日（见 check_note）
     check_note: >-
-      本机只有重建代理信号 dingban_fundind_local（登记路径
-      reports/frontier_audit_920_reval/ 已不存在，窗口止 2026-11-04、特征清单全部重选）
-      ⇒ 复算 20.21% 与登记 21.66% 的 Δ=+1.45pp 是**数据态差**，不是实现漂移。
-      代理口径的 native 报数为 19.84%，见 metrics.product_line。
+      本机只有重建代理信号 dingban_fundind_local（指纹 44a31b8fc51c；登记路径
+      reports/frontier_audit_920_reval/ 已不存在）。**本条 metrics 全部产自代理数据态**
+      （1864 日、止 2026-09-07）；`--check` 靠条目上的 `check_end: 20260907` 复算同一窗口
+      ⇒ **逐位 PASS（21.81% / 1.013，Δ=0.00）**。若不截断会跑成 1900 日、20.35%，
+      那 1.46pp 全来自窗口末日（2026 年多 36 个交易日），不是实现漂移。
+      ⚠️ 代理数据态与出榜读的 `selection/` 同源，但**不等于**旧登记指纹 2bc26c866512 那份；
+      历史数字（v2-dingban 的 21.57%、36bp 旧基数）只作追溯，不是本条的复现目标。
     window: prod
     signal:
       preproc: ortho_fundind
@@ -637,7 +678,7 @@ baselines:
       benchmark: "000300.SH"
     caliber:
       profile: production
-      cost: "固定 10bp（Config.costs()，impact_model=none）"
+      cost: "往返 27bp 时变（佣金万1双边2bp + 印花税万5单向5bp + 滑点10bp双边20bp）"
       execution: "open（T+1 开盘）"
       capital: 1.0e6
       source_script: "scripts/evaluation/yq_core_report.py"
@@ -648,27 +689,34 @@ baselines:
         focus 档同末日。特征清单 36 份全部重算（含 y2026 四份指纹失配重算）
         ⇒ **不是**登记指纹 2bc26c866512 那份数据态。
       caveats: >
-        ⚠️ 与 v2-dingban 的 21.57% 不可逐位对比：窗口差 12 个交易日 + 数据态不同
-        （本条 21.66% 是同窗口同口径的实测，不是对 v2 的复现）。
+        ⚠️ 同日 09-07 截断是为了与 focus/solo 同末日；920 侧 pred 实际覆盖到 11-04，
+        差 36 个交易日会让 2026 年混进不同天数、年化虚低 1.4~1.6pp（已实测）。
         ⚠️ 明日 18:30 出榜读的是 `selection/`，本次重算已覆盖 y2026 四份清单 ⇒
         若榜单与近日差异明显，先看这里，不要判为策略失效。
+      data_state_history: >
+        2026-11-12：本档同时接过 v2-dingban 的"定版基线"身份（v2 → superseded）。
+        旧登记值 21.66%（指纹 2bc26c866512、1876 日、36bp）与 21.57%（32 位哈希同名条目）
+        均为**另一个数据态 + 旧成本基数**，只作历史追溯，不再是本档目标值。
     metrics:
       window_label: "2019-01-02..2026-09-07（1864 日 / 7.38 年）"
       fingerprint: 44a31b8fc51c
       profiles:
         production:
+          # 🚨 2026-11-12 成本口径修正后重算（往返 36bp→27bp 时变）。旧值 ann 0.21659 /
+          # sharpe 1.0061 / turnover 0.1708 是 36bp 基数，禁止与新值相减。
           eqw_buf0.15_0.4:
-            ann: 0.21659
-            sharpe: 1.0061
-            sharpe_arith: 1.0194
-            sharpe_t_stat: 2.82          # NW 校正，过 1.96，余量 44%
+            ann: 0.21809
+            sharpe: 1.0130
+            sharpe_arith: 1.0251
+            sharpe_t_stat: 2.8373        # NW 校正，过 1.96，余量 45%
             turnover: 0.1708
-            cost_bp: 1254
-            max_dd: 0.2665
+            cost_bp: 1034.0
+            max_dd: 0.2661
             n_active: 614
           # 集中化对照（同信号、同窗口，仅换持仓宽度）——这条是本档存在的理由
-          topk25_buf2: {ann: 0.1936, sharpe: 0.819, max_dd: 0.311, turnover: 0.616}
-          topk45_buf2: {ann: 0.1870, sharpe: 0.808, max_dd: 0.289, turnover: 0.565}
+          # ⚠️ 以下三行仍属 36bp 旧基数，只可用于「同基数下横向比较宽度」，不得与上方相减
+          topk25_buf2: {ann: 0.1936, sharpe: 0.819, max_dd: 0.311, turnover: 0.616, cost_base: "36bp 旧口径"}
+          topk45_buf2: {ann: 0.1870, sharpe: 0.808, max_dd: 0.289, turnover: 0.565, cost_base: "36bp 旧口径"}
       # 产品线口径（native）：各自推荐资金 + 整手 100 股 + 无前视成交价 ⇒ **实盘可达成值**
       # 与上面 production profile 的区别只在「资金 / 整手」两项，信号与成本完全相同。
       product_line:
@@ -676,17 +724,22 @@ baselines:
         capital: 2000000.0
         lot_size: 100
         price_panel: "close_raw.ffill().shift(1)"
-        ann: 0.1984
-        sharpe: 1.0187
-        sharpe_arith: 1.0276
-        sharpe_t_stat: 2.84
-        max_dd: 0.2464
-        calmar: 0.805
-        turnover: 0.1686
-        invest_mean: 0.8989          # 整手实投率（引擎算，非折算）
-        invest_min: 0.8061
+        ann: 0.20000
+        sharpe: 1.0269
+        sharpe_arith: 1.0344
+        sharpe_t_stat: 2.8537
+        max_dd: 0.2466
+        calmar: 0.8113
+        turnover: 0.1687
+        invest_mean: 0.8994          # 整手实投率（引擎算，非折算）
+        invest_min: 0.8082
         nhold_mean: 605.0
         nhold_min: 457
+        caveat: >
+          🚨 这是**本档资金下限**（200 万，605 只 × 3.3 万 ⇒ 整手吃掉 1.8pp）的可达成值，
+          不是本档的典型值：`grid_lot.csv` 里 500 万 21.02%、200 万 19.84%（36bp 基数），
+          真实区间 ≥1500 万时整手损耗消失。对外报「广度档能拿到多少」应同时给
+          「200 万 = 20.00%（下限）/ 500 万+ = 21%+」两个数，只报一个会误导。
       # 容量上限 = 单票 ADV × 参与率 / 单票权重。**产品线按此分界，不按收益**。
       capacity:
         participation_assumed: 0.10
@@ -708,22 +761,30 @@ baselines:
     source: "reports/yq_core/report.json（--view uniform = 1e6 无整手；产品线口径见 report_native.json）"
     verified_local: true
     notes: >
-      适用 **≥ 200 万**。选它的理由：same-window 回撤 26.6% vs focus 档 38.7%（低 12.1pp），
-      代价是年化少 3.3pp、换手低 5.1 倍（17.1% vs 87.3%）⇒ 容量与可操作性远好于 focus。
-      ⚠️ **alpha 宽度是这条档位的硬约束**：它靠"很多名字各有一点优势"累积，任何把持仓
+      🔑 **本档是判「改进 vs 基线」的默认对象**（族内 `default: true`）：
+      `caliber --check --baseline-id yqcore-breadth` 复算的就是本条 `production` 的
+      21.81% / 1.013（1e6 无整手）。产品线报数（2e6 + 整手）另计 20.00% / 1.027，
+      **两个数都对，回答的是不同问题**（可判改进 vs 实盘可达成）。
+      适用 **≥ 200 万**。选它的理由：same-window 回撤 26.6% vs focus 档 38.2%（低 11.6pp），
+      代价是年化少 7.8pp（21.81 vs 29.60）、换手低 5.1 倍（17.1% vs 87.6%）
+      ⇒ 容量与可操作性远好于 focus，且它是唯一能装 ≥1500 万的档。
+      🚨 **alpha 宽度是这条档位的硬约束**：它靠"很多名字各有一点优势"累积，任何把持仓
       压到 100 只以内的操作都会立刻损失 2~5pp（见 metrics 里的 topk25/topk45 对照），
       所以**不要用它做小资金集中**，那是 focus 档的场景。
+      ⚠️ 与已退休的 v2-dingban 的关系：同一条策略，只差资金/整手/末日；pipeline 里
+      若还有地方报"定版 21.5~21.6%"，那说的是 v2 的 36bp 旧基数，不是本档。
 
   - id: yqcore-focus
     family: yqcore
     tier: focus
     revision: 2               # rev1（2026-11-10）= ens_h1h5 + K25；数字见下方 history
     created: "2026-11-10"
-    updated: "2026-11-10"
+    updated: "2026-11-12"
     status: production
-    label: "YQ 核心 · 集中档（Focus）：882 四周期融合（2:1:1:2）+ TopK15 + buffer(×2)，小资金"
+    label: "YQ 核心 · 集中档（Focus）：882 四周期融合（2:1:1:2）+ TopK15 + buffer(×2)，容量中间台阶"
     signal_key: gbdt_mid13
     check_arm: topk15_buf2        # --check 复算时对照 metrics.profiles.production 里的哪条臂
+    check_end: 20260907           # 与同族其余两档同末日
     window: prod
     signal:
       preproc: ortho
@@ -747,7 +808,7 @@ baselines:
       benchmark: "000300.SH"
     caliber:
       profile: production
-      cost: "固定 10bp（Config.costs()，impact_model=none）"
+      cost: "往返 27bp 时变（佣金万1双边2bp + 印花税万5单向5bp + 滑点10bp双边20bp）"
       execution: "open（T+1 开盘）"
       capital: 1.0e6
       source_script: "scripts/evaluation/yq_core_report.py"
@@ -755,34 +816,42 @@ baselines:
       registered: "882 ortho 四周期 pred，止 2026-09-07"
       caveats: >
         ⚠️ pred 面板末日 2026-09-07（比 920 线早 36 个交易日）⇒ 与 v1w-ortho882-2019
-        的 23.57%（锚点 buf15/40，1864 日同窗口）同源可比，但**不可与 v2-dingban
-        的 1876 日数字并列**。
+        的 23.57%（锚点 buf15/40，1864 日同窗口）同源可比。
         🚨 复合信号无落盘实体：`caliber.load_context` 每次现场构造（~1s），指纹是
         **构造后**面板的指纹，与任一分量不同。
+        🔑 **本档与 yqcore-solo 是同一份信号**（指纹同为 79bdbbcc8fb9）：2026-11-12 同日同
+        执行层（1e5+整手）四臂分解——solo 36.58% / 本档配置 28.03% / 本档去掉行业约束前的
+        同参 k8 29.88% / 本档@50 万 29.40%。**A vs B 日收益相关 0.924、年化差 7.4pp、
+        配对 t 仅 1.81（< 2.0）⇒ 统计上不可分辨**。差的 6.7pp 几乎全来自"行业去重"这一步
+        （21 相位均值只有 +1.39pp），而这一步在 K=15 上装不下（去重后实持只剩 5.9 只，
+        等于把 focus 变成 solo）。⇒ **本档不提供独立 alpha，它的存在理由是容量台阶**。
     metrics:
       window_label: "2019-01-02..2026-09-07（1864 日 / 7.38 年）"
       fingerprint: 79bdbbcc8fb9
       profiles:
         production:
+          # 🚨 2026-11-12 成本口径修正后重算（往返 36bp→27bp 时变）。旧值 ann 0.28756 /
+          # sharpe 1.0804 / cost_bp 9079 是 36bp 基数（`caliber --check` 当时 Δ+0.84pp FAIL）。
           topk15_buf2:
-            ann: 0.28756
-            sharpe: 1.0804
-            sharpe_arith: 1.0842
-            sharpe_t_stat: 2.99          # NW 校正，过 1.96，余量 52%
+            ann: 0.29600
+            sharpe: 1.1125
+            sharpe_arith: 1.1091
+            sharpe_t_stat: 3.0529        # NW 校正，过 1.96，余量 56%
             turnover: 0.8763
-            cost_bp: 9079
-            max_dd: 0.3837
+            cost_bp: 7527.5
+            max_dd: 0.3822
             n_active: 15
-          # K 网格（同信号、同执行层）——U 形，不是单调；按 28~29% 预期
-          k8_buf2:  {ann: 0.3094, sharpe: 1.108, max_dd: 0.349, turnover: 0.895}
-          k10_buf2: {ann: 0.2880, sharpe: 1.055, max_dd: 0.359, turnover: 0.886}
-          k12_buf2: {ann: 0.2958, sharpe: 1.094, max_dd: 0.367, turnover: 0.884}
-          k18_buf2: {ann: 0.2947, sharpe: 1.115, max_dd: 0.390, turnover: 0.869}
-          k25_buf2: {ann: 0.3092, sharpe: 1.184, max_dd: 0.382, turnover: 0.850}
-          k30_buf2: {ann: 0.3122, sharpe: 1.213, max_dd: 0.382, turnover: 0.830}
-          # 同 K 对照：rev1 的旧信号（本档升级的理由）
-          rev1_ens_h1h5_k15: {ann: 0.2207, sharpe: 0.833, max_dd: 0.379}
-          rev1_ens_h1h5_k25: {ann: 0.2492, sharpe: 0.961, max_dd: 0.387}
+          # K 网格（同信号、同执行层）——U 形，不是单调；按 30% 附近预期
+          # ⚠️ 以下六行仍属 36bp 旧基数，只可横向比较 K 的相对优劣，不得与上方相减
+          k8_buf2:  {ann: 0.3094, sharpe: 1.108, max_dd: 0.349, turnover: 0.895, cost_base: "36bp 旧口径"}
+          k10_buf2: {ann: 0.2880, sharpe: 1.055, max_dd: 0.359, turnover: 0.886, cost_base: "36bp 旧口径"}
+          k12_buf2: {ann: 0.2958, sharpe: 1.094, max_dd: 0.367, turnover: 0.884, cost_base: "36bp 旧口径"}
+          k18_buf2: {ann: 0.2947, sharpe: 1.115, max_dd: 0.390, turnover: 0.869, cost_base: "36bp 旧口径"}
+          k25_buf2: {ann: 0.3092, sharpe: 1.184, max_dd: 0.382, turnover: 0.850, cost_base: "36bp 旧口径"}
+          k30_buf2: {ann: 0.3122, sharpe: 1.213, max_dd: 0.382, turnover: 0.830, cost_base: "36bp 旧口径"}
+          # 同 K 对照：rev1 的旧信号（本档升级的理由）——同为 36bp 旧基数
+          rev1_ens_h1h5_k15: {ann: 0.2207, sharpe: 0.833, max_dd: 0.379, cost_base: "36bp 旧口径"}
+          rev1_ens_h1h5_k25: {ann: 0.2492, sharpe: 0.961, max_dd: 0.387, cost_base: "36bp 旧口径"}
       # 产品线口径（native）：各自推荐资金 + 整手 100 股 + 无前视成交价 ⇒ **实盘可达成值**
       # 与上面 production profile 的区别只在「资金 / 整手」两项，信号与成本完全相同。
       product_line:
@@ -790,15 +859,15 @@ baselines:
         capital: 500000.0
         lot_size: 100
         price_panel: "close_raw.ffill().shift(1)"
-        ann: 0.2852
-        sharpe: 1.0803
-        sharpe_arith: 1.084
-        sharpe_t_stat: 2.98
-        max_dd: 0.3812
-        calmar: 0.748
-        turnover: 0.8689
-        invest_mean: 0.9917          # 整手实投率（引擎算，非折算）
-        invest_min: 0.9709
+        ann: 0.29400
+        sharpe: 1.1139
+        sharpe_arith: 1.1100
+        sharpe_t_stat: 3.0533
+        max_dd: 0.3799
+        calmar: 0.7739
+        turnover: 0.8693
+        invest_mean: 0.9921          # 整手实投率（引擎算，非折算）
+        invest_min: 0.9735
         nhold_mean: 15.0
         nhold_min: 15
       # 容量上限 = 单票 ADV × 参与率 / 单票权重。**产品线按此分界，不按收益**。
@@ -877,6 +946,7 @@ baselines:
     window: prod
     requires_panel: industry      # 申万一级截面（date × code），由调用方注入
     check_arm: solo_k8_b1.0       # --check 复算时对照 metrics.profiles.production 里的哪条臂
+    check_end: 20260907           # 与同族其余两档同末日
     signal:
       preproc: ortho
       ensemble: "h1:h5:h10:h20 = 2:1:1:2 秩平均"
@@ -1049,5 +1119,13 @@ baselines:
       回撤，年化 32.07/28.41/22.41%，**Sharpe 恒在 1.22~1.23**（不产生也不毁灭 alpha）。
       ❌ **波动率目标判负**：目标 20% 把回撤压到 31.4%，但年化 35.57→24.97%、Calmar
       0.98→0.80、最差年 +8.1%→+0.8% ⇒ 比线性降仓差，不进策略层。
-      ⚠️ 换手 92.3%（高于 focus 档的 87.6%），成本假设仍是固定 10bp —— 本档持仓更集中在
-      小行业龙头，真实滑点风险高于 focus 档。成交额分位**未单独测**（focus 档是 0.186）。
+      ⚠️ 换手 92.3%（高于 focus 档的 87.6%）⇒ **成本是本体最大的不确定性**：27bp 里的
+      20bp 是固定滑点假设，而本档持仓更集中在小行业龙头（成交额分位未单独测，focus 档 0.186）
+      ⇒ 真实滑点风险高于 focus。压力旁证 `solo_k8_b1.0_impact`（36bp 基数）显示逐股冲击
+      反而更便宜，但那不覆盖"小盘龙头冲击被低估"这一项。
+      🔑 **与 focus 的关系（2026-11-12 同日同执行层四臂分解）**：两者**同一份信号**
+      （指纹 79bdbbcc8fb9），本档 = focus 配置 + 行业去重 + K 收窄。同 1e5+整手：
+      本档 36.58% / focus 配置 28.03% / 同参 k8 无行业 29.88% / focus@50 万 29.40%；
+      A vs B 日收益相关 **0.924**、年化差 7.4pp、配对 t **1.81 < 2.0** ⇒ **不可分辨**。
+      ⇒ 本档与 focus 的差别是"浓度/容量取舍"，不是两套 alpha；不要按收益差 7pp
+      去论证"行业去重很强"（相位均值只有 1.39pp，见上）。

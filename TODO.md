@@ -22,6 +22,26 @@
 - **全 A 主线（已定版）**：fundind 快信号 h1020 ⊕ 慢信号 s0.5 + buffer(15/40)
   执行层；出榜链 dingban 10-10 已切（真源 `config/schedule.yaml`）。
   定版证据 `reports/batch1_920_收尾对照表.md`（沿革见册Ⅰ §一、册Ⅲ 批次 1）。
+- **✅ 定版集合收口到 `yqcore` 三档 + 成本 27bp 全面重算（2026-11-12，由莉酱拍板）**：
+  ① `v2-dingban` 转 `superseded`、并入 `yqcore-breadth` —— 两者**同信号 `dingban_fundind`、
+     同执行层 `buffer(15/40)`、同窗口**，只差资金（1e6 vs 2e6 native）、整手（无 vs 100）、
+     末日（09-23 vs 09-07），21.57% vs 21.66% 是同一策略的两次报数，不是两个方案。
+     ⇒ 登记表加**规则 12**：定版策略只放 `yqcore` 族，判改进默认基线 = `yqcore-breadth`
+     （族内 `default: true`）；`tests/test_caliber.py` 加两条不变量（无 family 的 production ≤1、
+     定版只能有一个族）。
+  ② **27bp 时变成本下三档全部重算**（此前只有 solo 重算过，focus/breadth 还是 36bp 基数）：
+     solo 36.58%/1.271（不变）、focus **29.40%**/1.114（+0.88pp）、breadth **20.00%**/1.027
+     （uniform 口径 21.81%/1.013 是判改进值）。**三档 `caliber --check` 全部逐位 PASS**。
+     ⚠️ 跨 36bp/27bp 一律不可相减（同臂差 0.15~1.01pp，随换手放大）。
+  ③ 顺带修三个 bug：`yq_core_report` / `focus_micro_probe` / `focus_holding_probe` /
+     `model_performance` 仍调 11-12 已改名的 `caliber._metrics`（→ `metrics_row`）⇒ 全部跑不起来；
+     `yq_core_report` 的 bare run 会覆盖 `report.json`（uniform 口径）；`--check` 新增
+     `check_end` 支持（否则 breadth 代理信号多 36 个 2026 交易日、复算低 1.46pp）。
+  ④ **solo vs focus 是同一份信号**（同指纹 `79bdbbcc8fb9`）：同 1e5+整手四臂分解
+     36.58 / 28.03（focus 配置）/ 29.88（同参 k8 无行业）/ 29.40（focus@50 万）；
+     **日收益相关 0.924、年化差 7.36pp、配对 t 仅 1.81 < 2.0 ⇒ 统计上不可分辨**。
+     差额 7 成来自行业去重（phase=0 单点 +6.70pp，21 相位均值只有 +1.39pp）⇒
+     **focus 不提供独立 alpha，它只是容量台阶**。证据 `reports/yq_core/README.md` §4.4。
 - **✅ h20-only 正式裁决：不换，定版维持 `h1020⊕s0.5`（11-06）**：归档判词一直是
   「年化最高、换手最低，但逐年不稳的 caveat 沿用」，从未在 buffer 壳、也从未与慢腿组合过。
   搬到生产壳 + 预注册五门（`scripts/evaluation/horizon_verdict_920.py`）实测：`h20⊕s0.5`
@@ -451,6 +471,8 @@
     但 `schtasks` 在沙箱里被禁 ⇒ 需手工跑 `python -m scripts.common.task_scheduler install rebuild_panels`
     （同病的还有 `alla_daily_rank`、`fetch_altdata_daily`）。
   - [x] **P0-G 基线重登记（2026-11-08 完成）**：`config/baselines.yaml` v4 —— 新增 `v2-dingban`
+    （⚠️ 2026-11-12 已并入 `yqcore-breadth` 转 `superseded`，见 §〇 定版收口条；下文的
+    `status: production` 是当时状态）
     （caliber 实测，`reproducible_local: true`，指纹 `2bc26c866512`），`v1-dingban` 转 `superseded`。
     表头加**规则 9**：重建面板后必须先 `buffer_arm_920 --save-sig` 重构造信号再报数
     （caliber 读落盘面板，不会自动跟着 `panels_neu` 变）；信号落盘**不要 shift**；

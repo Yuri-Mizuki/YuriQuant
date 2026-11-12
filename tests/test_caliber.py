@@ -35,13 +35,16 @@ def test_registry_schema_and_invariants():
 
     prod = [b for b in bl if b["status"] == "production"]
 
-    # 不变量（2026-11-10 精确化，原为「有且仅有一条 production」）：
+    # 不变量（2026-11-10 精确化，2026-11-12 再收紧）：
     # `yqcore` 立档后，一个策略族可以有多条并列 production 的**档位**（按资金规模
-    # 分档，互不取代，见 baselines.yaml 规则 10）。所以约束拆成两层：
+    # 分档，互不取代，见 baselines.yaml 规则 10）；2026-11-12 起进一步规定
+    # **定版策略只放 yqcore 族**（规则 12，v2-dingban 已并入 breadth）。所以两层约束：
+    #   ① 无 family 的 production 条目 **至多一条**（0 = 已全部迁进族；1 = 迁移未完成）；
+    #   ② 所有 production 必须落在某个有 default 的族里。
     plain = [b for b in prod if not b.get("family")]
-    assert len(plain) == 1, (
-        "无 family 的 production 定版有且仅有一条（v1→v2 这种线性更替）；"
-        f"实际 {[b['id'] for b in plain]}")
+    assert len(plain) <= 1, (
+        "无 family 的 production 定版至多一条（v1→v2 这种线性更替）；"
+        f"多于一条说明又出现了「同策略另立版本号」，实际 {[b['id'] for b in plain]}")
 
     from collections import defaultdict
     fams = defaultdict(list)
@@ -56,6 +59,11 @@ def test_registry_schema_and_invariants():
         assert sum(1 for b in items if b.get("default")) == 1, (
             f"{fam} 必须恰好一档 default: true（规则 3 的「基线取 production 那条」"
             "在同族多档时必须能唯一定位）")
+
+    # 规则 12（2026-11-12）：定版策略只放一个族里，不得再出现第二个族或
+    # 「族 + 散条目」并存的局面 —— 那正是 v2-dingban 与 yqcore-breadth 报两个数的成因。
+    families = {b["family"] for b in prod if b.get("family")}
+    assert len(families) <= 1, f"定版只能有一个族（规则 12），实际 {sorted(families)}"
 
 
 def test_registry_family_entries_are_consistent():
