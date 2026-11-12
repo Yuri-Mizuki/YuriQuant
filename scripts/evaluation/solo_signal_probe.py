@@ -291,7 +291,7 @@ def run_grid(arms, ctx, cost, px, ind, groups: dict, capital: float,
                     res = cal.run_once(bt, ctx, "open", signal=panel,
                                        price_panel=(px if lot else None),
                                        lot_size=(LOT if lot else None))
-                    rows.append(_row(res, cal._metrics(res, capital), reb, ind,
+                    rows.append(_row(res, cal.metrics_row(res, capital), reb, ind,
                                      name, dict(group=gname, k=k, buf=buf,
                                                 capital=capital, lot=lot)))
     return rows
@@ -320,7 +320,7 @@ def phases(arms, ctx, cost, px, ind, capital, lot, ks, bufs, reb,
                                        price_panel=(px if lot else None),
                                        lot_size=(LOT if lot else None),
                                        phase=ph)
-                    m = cal._metrics(res, capital)
+                    m = cal.metrics_row(res, capital)
                     rec = dict(k=k, buf=buf, phase=ph, arm=name,
                                ann=m["ann"], sharpe_arith=m["sharpe_arith"])
                     if name == "mid13":

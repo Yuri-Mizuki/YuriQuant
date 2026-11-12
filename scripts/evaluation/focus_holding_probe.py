@@ -133,7 +133,7 @@ def run_k(ctx, cost, k: int, exit_mult: float = 2.0):
     bt = VectorBacktest(strategy=BufferedTopKLongOnly(k=k, exit_mult=exit_mult),
                         rebalance_freq="M", initial_capital=CAP, costs=cost)
     res = cal.run_once(bt, ctx, "open")
-    met = cal._metrics(res, CAP)
+    met = cal.metrics_row(res, CAP)
     lo, hi, pneg = boot_ci(res.daily_returns)
     met.update(ann_lo=lo, ann_hi=hi, p_neg=pneg, ci_width=hi - lo)
     for y, sub in res.daily_returns.groupby(res.daily_returns.index.year):
@@ -377,7 +377,7 @@ def main() -> int:
             bt = VectorBacktest(strategy=s, rebalance_freq="M",
                                 initial_capital=CAP, costs=cost)
             res = cal.run_once(bt, ctx, "open")
-            m = cal._metrics(res, CAP)
+            m = cal.metrics_row(res, CAP)
             wrows.append(dict(k=k, mode=mode, ann=m["ann"], sharpe=m["sharpe"],
                               sharpe_arith=m["sharpe_arith"],
                               max_dd=m["max_dd"], turnover=m["turnover"]))

@@ -367,7 +367,7 @@ def run_arm(ctx, cost, px, strat, phase: int) -> dict:
 
 
 def summarize(res, tag: str, phase: int) -> dict:
-    m = cal._metrics(res, CAPITAL)
+    m = cal.metrics_row(res, CAPITAL)
     wh = res.weights_history
     nh = (wh > 1e-9).sum(axis=1)
     return {"arm": tag, "phase": phase, "ann": m["ann"], "sr": m["sharpe_arith"],

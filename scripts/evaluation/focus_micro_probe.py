@@ -232,7 +232,7 @@ def main(capital: float, quick: bool) -> None:
         res = cal.run_once(bt, ctx, "open",
                            price_panel=(px if with_lot else None),
                            lot_size=(LOT if with_lot else None))
-        r = {**_stats(res, cal._metrics(res, capital), reb, ind), "arm": tag,
+        r = {**_stats(res, cal.metrics_row(res, capital), reb, ind), "arm": tag,
              "capital": capital, **meta}
         rows.append(r)
         ms = meta.get("min_sectors") or 0
@@ -399,7 +399,7 @@ def main(capital: float, quick: bool) -> None:
             bt = cal.VectorBacktest(strategy=st, rebalance_freq="M",
                                     initial_capital=float(capital), costs=cost)
             res = cal.run_once(bt, ctx, "open", price_panel=px, lot_size=LOT)
-            m = cal._metrics(res, capital)
+            m = cal.metrics_row(res, capital)
             plc.append(dict(draw=i, ann=m["ann"], sharpe=m["sharpe_arith"],
                             max_dd=m["max_dd"]))
             print(f"  随机 {i+1:>2}: ann={m['ann']*100:6.2f}% SR={m['sharpe_arith']:.3f} "

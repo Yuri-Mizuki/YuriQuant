@@ -113,7 +113,7 @@ def blend(base: dict[int, pd.DataFrame], combo: dict[int, float]) -> pd.DataFram
 
 
 def stats(res, n_reb: int) -> dict:
-    m = cal._metrics(res, CAPITAL)
+    m = cal.metrics_row(res, CAPITAL)
     dr = res.daily_returns
     yr = (1 + dr).groupby(dr.index.year).prod() - 1
     mon = (1 + dr).resample("ME").prod() - 1

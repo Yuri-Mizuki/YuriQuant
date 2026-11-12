@@ -372,7 +372,7 @@ def build(signal: str, window: str, profile: str, buffer: str,
     arms = cal._arm_strategies(buffer, "")
     for tag, strat in arms:
         res = run_arm(strat, ctx, cost, cap, ex)
-        m = cal._metrics(res, cap)
+        m = cal.metrics_row(res, cap)
         arms_metrics[tag] = m
         curves[tag] = res.daily_returns.reindex(ctx.pred.index).fillna(0.0)
 
@@ -384,7 +384,7 @@ def build(signal: str, window: str, profile: str, buffer: str,
     bench_res.cost_series = pd.Series([0.0])
     bench_res.weights_history = pd.DataFrame()
     try:
-        bench_m = cal._metrics(bench_res, cap)
+        bench_m = cal.metrics_row(bench_res, cap)
     except Exception:                          # noqa: BLE001 —— 基准无持仓统计
         bench_m = {k: float("nan") for k in arms_metrics[next(iter(arms_metrics))]}
         sp = cal.sharpe_pair(bench_dr)

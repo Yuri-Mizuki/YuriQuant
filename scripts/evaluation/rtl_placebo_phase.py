@@ -54,7 +54,7 @@ def _ann(ctx, cost, px, ind, phase: int) -> float:
                             initial_capital=CAPITAL, costs=cost)
     res = cal.run_once(bt, ctx, "open", freq="M", phase=phase,
                        price_panel=px, lot_size=LOT)
-    return float(cal._metrics(res, CAPITAL)["ann"])
+    return float(cal.metrics_row(res, CAPITAL)["ann"])
 
 
 def main(draws: int, phases: list[int]) -> None:
