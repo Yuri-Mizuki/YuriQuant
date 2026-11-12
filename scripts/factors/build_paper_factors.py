@@ -89,8 +89,13 @@ FACTOR_DEFS: dict[str, str] = {
 
 def build_paper_panels(daily: pd.DataFrame, cal, income: pd.DataFrame,
                        balance: pd.DataFrame, cashflow: pd.DataFrame,
-                       cache=None) -> dict[str, pd.DataFrame]:
-    """返回 {因子名: 原始面板(date×code)}。"""
+                       cache=None,
+                       only: set[str] | None = None) -> dict[str, pd.DataFrame]:
+    """返回 {因子名: 原始面板(date×code)}。
+
+    ``only`` 非空时只算这些因子（其余从 ``compute_paper_factors`` 的 skip 里剔掉）
+    ——21 个面板 × 2511 日 × 5800 股 ≈ 2.7 GB，全历史重算时按需裁剪能显著降峰值。
+    """
     d = daily.reset_index()
     d["date"] = d["date"].dt.normalize()
     close = d.pivot(index="date", columns="code", values="close").sort_index()
@@ -183,7 +188,10 @@ def build_paper_panels(daily: pd.DataFrame, cal, income: pd.DataFrame,
     data = PaperData(close=close, high=high, low=low, volume=volume,
                      market_cap=market_cap, industry=industry,
                      pit=pit, ann_flag=ann_flag)
-    panels = compute_paper_factors(data)
+    # only 非空时只算需要的因子（其余显式 skip），控制内存峰值。
+    from factor.paper_factors import PAPER_FACTORS
+    skip = tuple(n for n in PAPER_FACTORS if only and n not in only)
+    panels = compute_paper_factors(data, skip=skip)
     # 统一对齐到 close 网格（compute 内部已用 close 网格，这里兜底）
     for name in panels:
         panels[name] = panels[name].reindex(index=close.index, columns=close.columns)
@@ -195,9 +203,24 @@ def main():
     add_build_args(parser)
     parser.add_argument("--pool", default=None,
                         help="股票池（hs300/zz500/zz1000/all_a，默认取 config）")
+    parser.add_argument("--keep-from", type=int, default=20160701,
+                        help="面板截断起点（库内统一 20160701，与 ic_h 索引对齐）；"
+                             "begin 应更早以覆盖长回看预热")
+    parser.add_argument("--only", default=None,
+                        help="只登记这些因子（逗号分隔）；空=全部")
     args = parser.parse_args()
 
     cache, uni, begin, end, dataset = make_data_context(args)
+    # 2026-11-12 事故：只传 --dataset 没传 --begin/--end 时，DEFAULT_RANGES
+    # 会给 (20250101, 20251231)，于是「全A 库」里进了 12 个只有 2025 年的面板。
+    # 这里把生效区间显式打出来，且区间短于 3 年就告警。
+    log.info("生效区间 begin=%d end=%d dataset=%s pool=%s",
+             begin, end, dataset, args.pool)
+    if end - begin < 20000:  # 约 2.5 自然年
+        log.warning("构建区间仅 %s~%s —— 入库前确认这**不是** DEFAULT_RANGES 的默认值",
+                    begin, end)
+    if args.pool == "all_a" and dataset != "all_a_2018_2026":
+        log.warning("pool=all_a 但 dataset=%s，通常应为 all_a_2018_2026", dataset)
 
     codes, cal, daily = load_daily(cache, uni, args.index, begin, end, pool=args.pool)
     fin = load_financial_tables(cache, codes)
@@ -208,9 +231,16 @@ def main():
              len(daily), len(fin["income"]), len(fin["balance_sheet"]),
              len(fin["cash_flow"]))
 
-    log.info("计算论文复现因子（%d 个）...", len(FACTOR_DEFS))
+    _only = ({n.strip() for n in args.only.split(",") if n.strip()}
+             if args.only else None)
+    log.info("计算论文复现因子（%d 个%s）...", len(FACTOR_DEFS),
+             f"，仅 {len(_only)} 个" if _only else "")
     panels = build_paper_panels(daily, cal, fin["income"], fin["balance_sheet"],
-                                fin["cash_flow"], cache=cache)
+                                fin["cash_flow"], cache=cache, only=_only)
+
+    # 库内统一口径：面板从 keep_from 起（begin 早于它只为覆盖长回看预热）。
+    keep = pd.Timestamp(str(args.keep_from))
+    panels = {k: v.loc[v.index >= keep] for k, v in panels.items()}
 
     if args.no_save:
         print_no_save(list(FACTOR_DEFS), panels)
@@ -219,10 +249,24 @@ def main():
     lib = FactorLibrary(dataset=dataset)
     returns_panel = returns_from_daily(daily)
 
-    log.info("入库到数据集: %s", dataset)
+    names = sorted(_only) if _only else None
+    todo = [n for n in (names or FACTOR_DEFS) if n in panels]
+    log.info("入库到数据集: %s（%d 个：%s）", dataset, len(todo), ", ".join(todo))
+
+    # 按 builder 惯例落 panels/<name>.parquet（中性化 / ic 融合都按原名找文件），
+    # 再让 register 跳过 slug 副本 —— 否则库里同面板存两份，且 builder 侧工具
+    # 找不到它（2026-11-12：12 个 pap 因此既无中性化面板也无 ic 列）。
+    from factor.preprocessing import standardize_zscore
+    from scripts.common.atomic_io import write_parquet_atomic
+
+    for n in todo:
+        write_parquet_atomic(standardize_zscore(panels[n]),
+                             lib.panels_dir / f"{n}.parquet")
+
     register_panels(
         lib, panels, FACTOR_DEFS, returns_panel,
         source=f"paper:awesome-systematic-trading:{begin}-{end}",
+        names=todo, write_panel=False,
     )
 
     record_experiment_safe(

@@ -42,6 +42,24 @@ KEEP_FROM = "2016-07-01"
 HORIZONS = (1, 5, 10, 20)
 #: IC 抽稀取列步长（全市场 5500+ 股，逐日 Spearman 抽 1/3 列加速）
 IC_CODE_STRIDE = 3
+
+
+def resolve_panel_file(ds: Path, name: str) -> Path | None:
+    """定位因子面板文件：先 ``panels/<name>.parquet``，再 ``panels/<slug>.parquet``。
+
+    两条入库通道的落盘口径不同：builder 批量通道写**原名**，而
+    ``FactorLibrary.register()`` 写 ``name_slug(name)``（md5 前 12 位）。
+    本模块的中性化 / IC 融合此前只认原名，于是走库入口登记的因子
+    **永远拿不到中性化面板和 ic 列**（2026-11-12 的 12 个 ``pap_*`` 即如此）。
+    统一走本函数，两条通道都能命中。
+    """
+    from research.factor_library import name_slug
+
+    for p in (ds / "panels" / f"{name}.parquet",
+              ds / "panels" / f"{name_slug(name)}.parquet"):
+        if p.exists():
+            return p
+    return None
 #: ic 融合的 coverage 下限——与 panels_neu 中性化的 MIN_COVERAGE 对齐，
 #  保证「ic_h 有列 ⟹ panels_neu 有文件」，方案 B 存在性门槛不再误触
 MIN_IC_COVERAGE = 0.3
@@ -133,10 +151,13 @@ def read_stats(ds_dir: Path, family: str) -> list[dict]:
 
 def fuse_horizon_ic(ds_dir: Path, h: int, family: str, *,
                     close_adj_loader=None, ic_code_stride: int = IC_CODE_STRIDE,
-                    skip_existing: bool = False) -> None:
-    """把本次 stats 里因子名的 IC 融入 ``ic_h{h}.parquet``。
+                    skip_existing: bool = False,
+                    names: list[str] | None = None) -> None:
+    """把因子名的 IC 融入 ``ic_h{h}.parquet``。
 
     Args:
+        names: 显式指定要融合的因子名（None=读 ``factor_stats_{family}.jsonl``）。
+            走 ``FactorLibrary`` 登记的因子没有 stats jsonl 行，补 ic 列时用本参数。
         close_adj_loader: 惰性返回 close_adj 面板的可调用（缺省
             :func:`load_close_adj`；个别 builder 用自身 load_panels 的头元素）。
         skip_existing: True 时跳过 ic_h 里已存在的因子列（constructed/style
@@ -144,7 +165,8 @@ def fuse_horizon_ic(ds_dir: Path, h: int, family: str, *,
     """
     from stats.ic import calc_ic_series
 
-    names = [s["name"] for s in read_stats(ds_dir, family)]
+    names = [s["name"] for s in read_stats(ds_dir, family)] if names is None \
+        else list(names)
     if not names:
         return
     # coverage 对齐（09-25）：coverage < MIN_IC_COVERAGE 的因子不进 ic_h——
@@ -168,10 +190,21 @@ def fuse_horizon_ic(ds_dir: Path, h: int, family: str, *,
     for n in names:
         if skip_existing and n in ic.columns:
             continue
-        p = pd.read_parquet(ds_dir / "panels" / f"{n}.parquet")
-        ic[n] = calc_ic_series(p[ic_codes], fwd).reindex(ic.index)
+        pf = resolve_panel_file(ds_dir, n)
+        if pf is None:
+            log.warning("ic_h%d 跳过 %s：面板不存在", h, n)
+            continue
+        p = pd.read_parquet(pf)
+        # 因子面板的列并不保证等于 close_adj 的列（覆盖率 <1 的因子、按池
+        # 子集构建的面板都少代码）；直接 p[ic_codes] 会 KeyError。
+        codes = [c for c in ic_codes if c in p.columns]
+        if not codes:
+            log.warning("ic_h%d 跳过 %s：面板与行情无共同代码", h, n)
+            continue
+        ic[n] = calc_ic_series(p[codes], fwd).reindex(ic.index)
     ic = ic.astype(np.float32)
-    ic.to_parquet(ds_dir / f"ic_h{h}.parquet")
+    from scripts.common.atomic_io import write_parquet_atomic
+    write_parquet_atomic(ic, ds_dir / f"ic_h{h}.parquet")
     log.info("ic_h%d merged: %d 因子", h, ic.shape[1])
 
 
@@ -458,7 +491,10 @@ def neutralize_one(task: tuple[str, str, str, bool]) -> tuple[str, float]:
 
     ds = Path(ds_str)
     base = _NEU_BASE_DIR
-    p = pd.read_parquet(ds / "panels" / f"{name}.parquet")
+    panel_file = resolve_panel_file(ds, name)
+    if panel_file is None:
+        raise FileNotFoundError(f"面板缺失: {name}（panels/ 下原名与 slug 均不存在）")
+    p = pd.read_parquet(panel_file)
     mc = pd.read_parquet(base / "market_cap.parquet")
     ind = pd.read_parquet(base / "cov_industry.parquet")
     common = mc.index.intersection(p.index)
@@ -525,7 +561,7 @@ def run_neutralization(ds: Path, out_subdir: str, *,
     done = set() if force else {f.stem for f in out_dir.glob("*.parquet")}
     todo = [n for n in names if n not in done]
     # registry 行存在但 panels/ 缺失：跳过，不让单点缺失崩整批
-    _no_panel = [n for n in todo if not (ds / "panels" / f"{n}.parquet").exists()]
+    _no_panel = [n for n in todo if resolve_panel_file(ds, n) is None]
     if _no_panel:
         print(f"跳过 {len(_no_panel)} 个无原始面板的因子: "
               f"{', '.join(_no_panel[:8])}", flush=True)
