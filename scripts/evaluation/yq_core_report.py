@@ -18,7 +18,8 @@
 --------------------------
 - 窗口 ``prod`` = 2019-01-02 起，**末日强制截到 2026-09-07**（882 的 pred 面板末日；
   920 重建代理到 11-04，不对齐则 2026 年混进 36 个交易日）
-- 成本 ``cost_profile("production")`` = 固定 10bp；成交 ``T+1 open``
+- 成本 ``cost_profile("production")`` = **往返 27bp 时变**（万1佣金双边 + 印花万5单边、
+  2023-08-28 前千1 + 滑点 10bp 双边）；成交 ``T+1 open``
 - 信号：``yqcore-focus`` / ``yqcore-solo`` → ``gbdt_mid13``（**复合信号**：
   gbdt h1:h5:h10:h20 = 2:1:1:2 秩平均，无落盘实体，由 ``caliber.load_context`` 现场构造）；
   ``yqcore-breadth`` → ``dingban_fundind_local``（登记路径本机缺失，走重建代理；
@@ -102,7 +103,7 @@ def run_tier(name: str, cost, capital: float, lot_size: int | None,
     bt = cal.VectorBacktest(strategy=strat, rebalance_freq="M",
                             initial_capital=float(capital), costs=cost)
     res = cal.run_once(bt, ctx, "open", price_panel=px, lot_size=lot_size)
-    m = cal._metrics(res, capital)
+    m = cal.metrics_row(res, capital)
 
     # 实投率（整手欠配的真实度量；未启用整手时恒 1）
     wh = res.weights_history
@@ -176,7 +177,7 @@ def run_grid(names: list[str], cost, capitals: list[float]) -> pd.DataFrame:
                                     initial_capital=float(cap), costs=cost)
             res = cal.run_once(bt, ctx, "open",
                                price_panel=px_cache[id(ctx)], lot_size=LOT)
-            m = cal._metrics(res, cap)
+            m = cal.metrics_row(res, cap)
             wh = res.weights_history
             reb = set(cal.next_day_rebalance(ctx.pred.index))
             whr = wh.loc[[d for d in wh.index if d in reb]]
@@ -266,7 +267,14 @@ def main(argv: list[str] | None = None) -> int:
     cost = cal.cost_profile(PROFILE)
     outdir = ROOT / args.out
     outdir.mkdir(parents=True, exist_ok=True)
-    suffix = f"_{args.tag}" if args.tag else ""
+    # 默认后缀按视图分文件（2026-11-12 修正）：此前 bare run 写 `report.json`，
+    # 但 README 约定 `report_native.json` 是产品线口径 ⇒ 跑一次 native 就把
+    # uniform 的 `report.json` 覆盖掉，两份产物互相踩。现在 native → `_native`，
+    # uniform → 无后缀（`report.json` = 历史 uniform 口径），其余视图同理。
+    # ⚠️ grid / capacity 的文件名**已自带视图名**（`grid_lot` / `capacity`），
+    #    再加后缀会变成 `grid_lot_grid.csv` ⇒ 这两个视图默认不加后缀。
+    suffix = f"_{args.tag}" if args.tag else {
+        "native": "_native", "uniform": "", "stress": "_stress"}.get(args.view, "")
 
     if args.view == "capacity":
         print(f"各档容量上限（单票 ≤ ADV 的 10%，整手 {LOT} 股）\n")

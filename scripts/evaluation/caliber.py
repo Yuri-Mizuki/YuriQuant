@@ -157,7 +157,8 @@ SIGNALS: dict[str, dict] = {
     # 本机代理：2026-11-09 用当前数据态重跑 select+predict 后现场构造的 defv，
     # 落在滚动产物目录里（登记路径 reports/frontier_audit_920_reval/ 在本机已不存在）。
     # 🚨 **不是**登记指纹 2bc26c866512 那份：窗口止 2026-11-04（1900 日）、
-    #    特征清单全部重选 ⇒ 数字不可与 v2-dingban 登记的 21.57% 逐位对比。
+    #    特征清单全部重选。v2-dingban（21.57%、36bp 旧基数、1876 日）已于
+    #    2026-11-12 并入 yqcore-breadth ⇒ 本键就是定版基线的唯一信号源。
     #    `yqcore` 族的报数用本键并显式截到 2026-09-07（与 882 同末日）。
     "dingban_fundind_local": {
         "path": "reports/alla_rolling_ortho920fundind/pred/defv__h1.parquet",
@@ -806,6 +807,12 @@ def _check(signal: str, window: str, prof_name: str, cost_kind: str,
             blk = hit[0].get("caliber", {}) or {}
             if "capital" in blk:
                 capital = float(blk["capital"])
+            # 2026-11-12：条目可声明 `check_end`（末日对齐日）。yqcore 三档报数统一截到
+            # 882 pred 末日 2026-09-07，而 breadth 的本机代理信号到 11-04 ⇒ 不截就把
+            # 36 个 2026 交易日混进窗口，复算值必对不上（读数差 ~1.4pp）。
+            # 显式 `--end` 优先级更高，便于做窗口敏感性对照。
+            if end is None and hit[0].get("check_end"):
+                end = int(hit[0]["check_end"])
         ctx = load_context(signal=signal, window=window, execution=execution,
                            end=end)
     else:
