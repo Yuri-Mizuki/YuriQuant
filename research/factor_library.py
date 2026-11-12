@@ -2227,36 +2227,96 @@ class FactorLibrary:
             log.warning("冗余索引不可用（回退逐面板比对）：%s: %s", type(e).__name__, e)
             return None
 
+    def precheck_dup(self, panel, name: str = "", topk: int = 5) -> dict:
+        """**登记前**冗余预检：最像哪几个、ρ 多大、对最近邻还有没有正交增量。
+
+        与 :meth:`_dup_check_fast` 的分工：后者是入库路径上的"够用就走"
+        （只取 top1、直接写 registry）；本方法只读、给 top-k 与判定，供人工
+        在**入库之前**决定这个因子该不该进库。
+
+        口径与局限（引用时必须带上）：
+
+        - ρ 是**逐日截面秩相关**在抽样日历上的均值，只反映"因子值像不像"；
+        - 判重看 ``|ρ|``（反向完全重复的因子同样是重复，如 ``SUMP`` vs ``SUMD``
+          ρ=−1.000）；``top`` 里保留符号，便于识别反向关系；
+        - ``resid_ic`` / ``resid_t`` 是对**最近邻**做逐日截面回归后的残差 IC，
+          ``|t| ≥ 2`` 才算"仍有独立增量"——只看 ρ 会误杀这类因子
+          （2026-11-12 实测 ``VSUMN30`` vs ``VSUMD30`` ρ=1.000 但残差 t=25.4）；
+        - 索引只覆盖建立索引时的库快照（``index_built_at``）；库重建过而索引
+          没重建时，近邻集合会过期，结论不可用于长期存档。
+
+        Returns:
+            dict: ``available`` / ``reason``（不可用时）· ``top``（近邻列表）·
+            ``top_corr`` · ``top_name`` · ``resid_ic`` · ``resid_t`` ·
+            ``verdict``（独立 / 近重复但有增量 / 近重复无增量 / 重复）·
+            ``index_built_at``。
+        """
+        idx = self.dup_index()
+        if idx is None:
+            return {"available": False,
+                    "reason": "冗余索引不存在（先跑 scripts.factors.dup_audit）"}
+        dates, codes = idx["dates"], idx["codes"]
+        arr = panel.reindex(index=dates, columns=codes).to_numpy(dtype=np.float64)
+        if arr.size == 0 or np.isfinite(arr).mean() < 0.05:
+            return {"available": False, "reason": "与索引日历/股票池几乎不重叠"}
+        zq = _row_rank_zscore(arr)
+        sig = idx["sig"]
+        num = np.zeros(len(idx["names"]), dtype=np.float64)
+        for k in range(len(dates)):
+            zk = zq[k]
+            if zk.any():
+                num += sig[k] @ zk
+        snew = float((zq.astype(np.float64) ** 2).sum())
+        if snew <= 0:
+            return {"available": False, "reason": "样本全同值，无截面变异"}
+        corr = np.clip(num / np.sqrt(np.clip(idx["norms"] * snew, 1e-12, None)), -1.0, 1.0)
+        # 排除自身：对**已在库**的因子做预检时，它自己就是 ρ=1.0 的最近邻
+        abs_corr = np.abs(corr)
+        if name:
+            abs_corr = abs_corr.copy()
+            abs_corr[np.asarray(idx["names"]) == name] = -1.0
+        order = np.argsort(-abs_corr)[:max(1, int(topk))]
+        top = [{"name": str(idx["names"][j]), "corr": round(float(corr[j]), 4)}
+               for j in order]
+        top_corr, top_name = abs(top[0]["corr"]), top[0]["name"]
+        # 残差回归是唯一的重活（全样本逐日截面 OLS，实测 8~13 s/因子）。
+        # 只在"疑似重复"时才值得算——ρ<0.85 的因子不存在"增量是否够"的问题。
+        if top_corr >= 0.85:
+            resid_ic, resid_t = self._residual_ic(
+                panel, self.default_returns_panel(), top_name)
+        else:
+            resid_ic, resid_t = float("nan"), float("nan")
+        if top_corr >= 0.95:
+            verdict = "重复" if abs(resid_t) < 2.0 else "重复但残差有增量"
+        elif top_corr >= 0.85:
+            verdict = "近重复但残差有增量" if abs(resid_t) >= 2.0 else "近重复无增量"
+        else:
+            verdict = "独立"
+        return {
+            "available": True, "top": top,
+            "top_corr": round(float(top_corr), 4), "top_name": top_name,
+            "resid_ic": round(float(resid_ic), 4),
+            "resid_t": round(float(resid_t), 2),
+            "verdict": verdict,
+            "index_built_at": idx.get("built_at", "?"),
+        }
+
     def _dup_check_fast(self, panel, dup_corr, reject_dup, name="") -> dict | None:
         """签名查表版冗余预检；索引不可用或样本不重叠时返回 None（调用方回退）。
 
         精度：索引只用抽样日历，与全样本逐日相关实测差 ≤0.02（4 对已知因子
         对照），用于 0.7/0.85 这种阈值判断足够；报告口径见
         ``reports/library_governance/dup_audit.md``。
+
+        2026-11-12：近邻从 ``argmax(corr)`` 改为 ``argmax(|corr|)``。原实现只
+        取最大**正**相关，``SUMP`` vs ``SUMD`` 这类 ρ=−1.000 的反向重复会被
+        判成"不相关"直接放行。
         """
-        idx = self.dup_index()
-        if idx is None:
+        res = self.precheck_dup(panel, name=name, topk=1)
+        if not res.get("available"):
             return None
-        dates, codes = idx["dates"], idx["codes"]
-        arr = panel.reindex(index=dates, columns=codes).to_numpy(dtype=np.float64)
-        if arr.size == 0 or np.isfinite(arr).mean() < 0.05:
-            return None                      # 与索引日历/股票池几乎不重叠
-        zq = _row_rank_zscore(arr)
-        sig = idx["sig"]
-        num = np.zeros(len(idx["names"]), dtype=np.float64)
-        for k in range(len(dates)):
-            zk = zq[k]
-            if not zk.any():
-                continue
-            num += sig[k] @ zk
-        snew = float((zq.astype(np.float64) ** 2).sum())
-        if snew <= 0:
-            return None
-        den = np.sqrt(np.clip(idx["norms"] * snew, 1e-12, None))
-        corr = np.clip(num / den, -1.0, 1.0)
-        j = int(np.argmax(corr))
-        top_corr, top_name = float(corr[j]), idx["names"][j]
-        resid_ic, resid_t = self._residual_ic(panel, self.default_returns_panel(), top_name)
+        top_corr, top_name = res["top_corr"], res["top_name"]
+        resid_ic, resid_t = res["resid_ic"], res["resid_t"]
         msg = (f"因子 {name} 冗余预检（签名查表）: 与 {top_name} 相关 {top_corr:.2f}"
                + (f"（>{dup_corr} 疑似冗余）" if top_corr > dup_corr else "")
                + f"；正交残差 IC={resid_ic:.4f} t_nw={resid_t:.2f}"
