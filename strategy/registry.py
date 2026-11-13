@@ -13,19 +13,23 @@
 **一个策略族的多个档位**（tier），而不是互相取代的版本：
 
 ==============================  =================  ============  ================  ============
-档位                            信号               持仓          适用资金          一句话
+方案 / 版本                      信号               持仓          适用资金          一句话
 ==============================  =================  ============  ================  ============
-``yqcore-breadth``（广度档）    dingban_fundind   ~628 只       ≥ 200 万          回撤低 7pp
-``yqcore-focus``（集中档）      gbdt_mid13        8~25 只       10~200 万         收益高 7pp
-``yqcore-solo``（独苗档）       gbdt_mid13        ≤8 只（实 ~6） 10~50 万          行业去重，+7pp
+``yqcore-breadth``（广度档）    dingban_fundind   ~628 只       ≥ 1500 万         回撤低 17pp
+``yqcore-focus``（集中档）      gbdt_mid13        —             —                 一方案两版本
+  └ ``-k15``（默认）            gbdt_mid13        ~15 只        600~1500 万       容量中间台阶
+  └ ``-k8``                     gbdt_mid13        ≤8 只（实 ~6） 5~600 万          行业去重，容量小
 ==============================  =================  ============  ================  ============
 
-**`solo` 是 focus 的资源约束变体**，不是第四个方向：信号相同，只在「每个申万一级行业
-最多留一只」上更严。10 万整手口径下同实际持仓数（≈5 只）年化 31.0% → **38.3%**、
-Sharpe 1.08 → 1.23，且过了随机行业标签安慰剂（10 次最高 33.8%，真实 38.3%）。
-它是目前**唯一一条 2024-2026 样本外年化高于 2019-2023 的线**（39.4% vs 33.6%）。
-但**回撤没降**（36.4%），要低回撤只能按 `gross_exposure` 线性降仓。证据
-``reports/focus_micro/README.md``。
+**`-k8` 是 `-k15` 的资源约束版本，不是第三个方案**（2026-11-13 由莉酱定：
+两个名字合并成一个方案的 two versions）：信号完全相同（指纹同为 `79bdbbcc8fb9`），
+差异只有执行层 4 项 —— 行业去重（每申万一级≤1）、`k` 8 vs 15、
+`exit_mult` 1.0（硬切）vs 2.0（缓冲到 30 名）、1e5+整手 vs 1e6 无整手。
+**这 4 项都有实测支撑，不得压成「只差 K」**：10 万整手口径下同实际持仓数（≈5 只）
+年化 31.0% → **38.3%**、Sharpe 1.08 → 1.23，且过了随机行业标签安慰剂（10 次最高 33.8%，
+真实 38.3%）。它是目前**唯一一条 2024-2026 样本外年化高于 2019-2023 的线**
+（39.4% vs 33.6%）。但**回撤没降**（36.4%），要低回撤只能按 `gross_exposure` 线性降仓。
+证据 ``reports/focus_micro/README.md``。
 
 **2026-11-10 当天把集中档的信号换了**（`ens_h1h5` → `gbdt_mid13`）。原因不是「换个数字好看的」，
 而是 `ens_h1h5` **只用了 h1+h5 两个短周期**、把 h20（长周期选择器）漏在外面：在
@@ -79,10 +83,10 @@ K=6..30 的 11 个格子上，`ens_h1h5` 的年化均值 22.1%，而任何**含 
 ----
     from strategy.registry import build, describe, list_tiers
 
-    sig_key, strat = build("yqcore-focus")            # 默认 K=15 + buf2（20 万以上）
-    sig_key, strat = build("yqcore-focus", k=8)       # 10 万：整手实投 92%，K=15 只有 82%
+    sig_key, strat = build("yqcore-focus")            # 方案名 → 默认版本 K=15 + buf2（600 万以上）
+    sig_key, strat = build("yqcore-focus-k8")         # 显式选版本：10 万，实际 ~6 只
     ind = pd.read_parquet(...)                        # 行业面板
-    sig_key, strat = build("yqcore-solo", industry=ind)   # 10 万，实际 ~6 只
+    sig_key, strat = build("yqcore-focus-k8", industry=ind)   # K8 版必须注入行业面板
     print(describe("yqcore-focus"))
 """
 from __future__ import annotations
@@ -122,6 +126,16 @@ class TierSpec:
     #: 构造器里接收该面板的**参数名**（``panel="industry"`` → ``sectors=``）。
     #: None = 与 ``panel`` 同名。
     panel_arg: str | None = None
+    #: **方案名**（产品线的一个方案，下挂若干配置档）。``None`` = 本档自成一个方案。
+    #: 同一 group 的多个档共享信号与 alpha 形状，只在**执行层浓度/约束**上不同
+    #: ⇒ 对外报「一个方案」，对内按资金选版本（2026-11-13 由莉酱定：
+    #: `yqcore-focus-k15` / `yqcore-focus-k8` 是同一方案的两个版本，不再叫
+    #: solo/focus 两个方案）。
+    group: str | None = None
+    #: 版本标识（同一 group 内唯一），如 ``"k15"`` / ``"k8"``。
+    variant: str | None = None
+    #: 该 group 的默认版本 —— ``get_tier("<group>")`` 返回它。每组恰有一个。
+    default_variant: bool = False
 
     @property
     def runnable_signal(self) -> str:
@@ -151,7 +165,7 @@ _FACTORIES = {
 }
 
 FAMILY = "yqcore"
-FAMILY_LABEL = "YQ 核心（breadth / focus / solo 三档）"
+FAMILY_LABEL = "YQ 核心（广度档 + 集中档的两个版本）"
 
 #: ``execution`` 段里**不是构造参数**的键（执行方式与基准，属口径不属策略）。
 _EXEC_NON_PARAM_KEYS = frozenset({"strategy", "rebalance_freq", "benchmark"})
@@ -165,8 +179,8 @@ _PARAM_ALIASES = {"buffer_entry": "frac_entry", "buffer_exit": "frac_exit"}
 #: 构造器缺省值（``BufferedTopKLongOnly`` 的缺省 k=45 会把口径变成另一条策略）。
 _REQUIRED_PARAMS = {
     "yqcore-breadth": ("frac_entry", "frac_exit"),
-    "yqcore-focus": ("k", "exit_mult"),
-    "yqcore-solo": ("k", "exit_mult", "max_per_sector", "min_sectors"),
+    "yqcore-focus-k15": ("k", "exit_mult"),
+    "yqcore-focus-k8": ("k", "exit_mult", "max_per_sector", "min_sectors"),
 }
 
 
@@ -238,12 +252,15 @@ TIERS: dict[str, TierSpec] = {
             "1e6 无整手口径 21.81% / 1.013 才是判改进的数，20.00% 是产品线可达成值。"
         ),
     ),
-    "yqcore-focus": TierSpec(
-        name="yqcore-focus",
-        label="集中档（Focus）· 882 四周期融合信号 + TopK + buffer(×2)",
-        **tier_wiring("yqcore-focus"),
+    "yqcore-focus-k15": TierSpec(
+        name="yqcore-focus-k15",
+        label="集中档 · **K15 版（默认）** · 882 四周期融合信号 + buffer(×2)",
+        **tier_wiring("yqcore-focus-k15"),
         min_capital=6.0e6,
         max_capital=1.5e7,
+        group="yqcore-focus",
+        variant="k15",
+        default_variant=True,
         notes=(
             "alpha 集中在最头部，不必摊宽。信号 = gbdt h1:h5:h10:h20 = 2:1:1:2 秩平均"
             "（复合信号，caliber 现场构造）。2026-11-10 从 `ens_h1h5` 升级：只用 h1+h5 时"
@@ -256,19 +273,21 @@ TIERS: dict[str, TierSpec] = {
             "把权重压给信号头部（softmax 给第一名 40%）反而亏 2.7~14.9pp。"
             "⚠️ 成交额分位 0.186 ⇒ 组合偏小盘，K 越小尾部风险越集中"
             "（k=5 时一只 −30% 就是组合 −6%）。证据 reports/focus_holding/README.md。"
-            "🔑 **产品线角色（2026-11-10 重定）**：小资金位已被 `yqcore-solo` 取代"
-            "（同资金下 solo 收益/Sharpe 全面更高）。本档现在是**容量中间台阶**："
-            "单票权重 6.6%、容量中位 3900 万（p10 1500 万），承接 solo 装不下的 600~1500 万。"
-            "它在 600 万以下仍可跑，只是不再是最优选择。"
+            "🔑 **产品线角色（2026-11-13 重定）**：本版本与同方案 `-k8` 共用一条信号，"
+            "分母是**资金**：`-k8`（单票 16.4%、容量 p10 573 万）承接 5~600 万，"
+            "本版本（单票 6.6%、容量中位 3900 万 / p10 1500 万）承接 600~1500 万。"
+            "它在 600 万以下仍可跑，但整手实投率更低（10 万只能建 82%）。"
         ),
     ),
-    "yqcore-solo": TierSpec(
-        name="yqcore-solo",
-        label="独苗档（Solo）· 882 四周期信号 + TopK8 + 每申万一级 ≤1 只",
-        **tier_wiring("yqcore-solo"),
+    "yqcore-focus-k8": TierSpec(
+        name="yqcore-focus-k8",
+        label="集中档 · **K8 版** · 882 四周期信号 + TopK8 + 每申万一级 ≤1 只",
+        **tier_wiring("yqcore-focus-k8"),
         panel_arg="sectors",
         min_capital=5.0e4,
         max_capital=6.0e6,
+        group="yqcore-focus",
+        variant="k8",
         notes=(
             "focus 档 + **行业去重**（每个申万一级行业只留最强的一只）。"
             "2026-11-12 实测（10 万整手，**同参数对照** k=8 b=1.0、27bp）：年化 29.88%→36.58%、"
@@ -328,10 +347,54 @@ def assert_no_orphan_registration(registry: dict | None = None) -> None:
 assert_no_orphan_registration()
 
 
+def assert_group_invariants() -> None:
+    """每个方案（``group``）必须有**恰一个** ``default_variant``，版本标识不得重复。
+
+    没有它，``get_tier("<方案名>")`` 会退化成「按字典序随便挑一个」，而挑错版本
+    在参数上只差 k/约束、**不会报错** —— 属于静默失败。
+    """
+    groups: dict[str, list[TierSpec]] = {}
+    for spec in TIERS.values():
+        if spec.group:
+            groups.setdefault(spec.group, []).append(spec)
+    for g, specs in groups.items():
+        if not any(s.default_variant for s in specs):
+            raise ValueError(f"方案 {g!r} 没有 default_variant（get_tier({g!r}) 会失败）")
+        if sum(s.default_variant for s in specs) > 1:
+            raise ValueError(f"方案 {g!r} 有多个 default_variant")
+        vs = [s.variant for s in specs]
+        if None in vs or len(set(vs)) != len(vs):
+            raise ValueError(f"方案 {g!r} 的 variant 缺失或重复：{vs}")
+
+
+assert_group_invariants()
+
+
+def group_members(group: str) -> dict[str, TierSpec]:
+    """取一个方案下的全部版本（``variant`` → spec），按 variant 排序。"""
+    out = {s.variant: s for s in TIERS.values() if s.group == group}
+    return dict(sorted(out.items()))
+
+
 def get_tier(name: str) -> TierSpec:
-    if name not in TIERS:
-        raise KeyError(f"未知档位 {name!r}，可选 {sorted(TIERS)}")
-    return TIERS[name]
+    """按**完整 id** 或**方案名**取档。
+
+    ``"yqcore-focus-k8"`` → 该版本；``"yqcore-focus"`` → 该方案的
+    ``default_variant``（K15）。方案名这条路径让「先说方案、再按资金选版本」的
+    调用方不必关心默认是哪个 K。
+    """
+    if name in TIERS:
+        return TIERS[name]
+    members = group_members(name)
+    if members:
+        for spec in members.values():
+            if spec.default_variant:
+                return spec
+        raise KeyError(
+            f"方案 {name!r} 无 default_variant，可选版本 {sorted(members)}")
+    groups = sorted({s.group for s in TIERS.values() if s.group})
+    raise KeyError(
+        f"未知档位 {name!r}；可选 id {sorted(TIERS)} 或方案名 {groups}")
 
 
 def build(name: str, **overrides) -> tuple[str, object]:
@@ -356,10 +419,8 @@ def _pad(text: str, width: int) -> str:
 
 
 def list_tiers() -> str:
-    cols = (16, 20, 16, 0)          # 最后一列（适用资金）不补空格
-    lines = [f"{FAMILY} — {FAMILY_LABEL}", ""]
-    head = "".join(_pad(v, w) for v, w in zip(("档位", "信号", "持仓", "适用资金"), cols))
-    lines += [head, "-" * _width(head)]
+    head = ("档位", "信号", "持仓", "适用资金")
+    rows: list[tuple[str, str, str, str]] = []
     for t in TIERS.values():
         hold = ("~610 只" if t.strategy == "BufferedTopFracLongOnly"
                 else f"≤{t.params.get('k', '?')} 只（实 5.9）"
@@ -368,10 +429,18 @@ def list_tiers() -> str:
         cap = (f"{t.min_capital/1e4:.0f} 万以上" if t.max_capital == float("inf")
                else f"{t.min_capital/1e4:.0f}~{t.max_capital/1e4:.0f} 万")
         sig = t.signal_key + ("*" if t.signal_key_local else "")
-        lines.append("".join(_pad(v, w)
-                             for v, w in zip((t.name, sig, hold, cap), cols)))
+        rows.append((t.name, sig, hold, cap))
+    # 列宽**动态**算：id 加了版本后缀（-k15 / -k8）后固定 16 会挤成
+    # 「yqcore-focus-k15gbdt_mid13」。最后一列（适用资金）不补空格。
+    widths = [max(_width(h), max(_width(r[i]) for r in rows)) + 2
+              for i, h in enumerate(head)]
+    widths[-1] = 0
+    lines = [f"{FAMILY} — {FAMILY_LABEL}", ""]
+    head_line = "".join(_pad(v, w) for v, w in zip(head, widths))
+    lines += [head_line, "-" * _width(head_line)]
+    lines += ["".join(_pad(v, w) for v, w in zip(r, widths)) for r in rows]
     lines.append("\n* = 本机用重建代理复算（换数据态，非登记指纹）")
-    lines.append("资金区间按**容量**划分（单票 ≤ ADV 的 10%）；收益上 solo 各档都最高，")
+    lines.append("资金区间按**容量**划分（单票 ≤ ADV 的 10%）；收益上 `-k8` 在各资金档都最高，")
     lines.append("往上一档换的是「装得下」，不是「赚更多」。")
     return "\n".join(lines)
 

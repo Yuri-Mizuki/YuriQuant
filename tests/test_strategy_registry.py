@@ -32,6 +32,7 @@ from strategy.registry import (  # noqa: E402
     build,
     describe,
     get_tier,
+    group_members,
     tier_wiring,
 )
 
@@ -45,16 +46,55 @@ def _entry(reg: dict, baseline_id: str) -> dict:
     return next(b for b in reg["baselines"] if b["id"] == baseline_id)
 
 
-def test_family_has_three_tiers():
-    """族内三档 = 三种 alpha 形状 × 资金规模，不是版本更替。"""
+def test_family_has_two_plans_three_versions():
+    """族内 = 两个方案：广度档 + 集中档（集中档下两个版本）。
+
+    2026-11-13 由莉酱定：`yqcore-focus-k15` / `-k8` 是**同一方案的两个版本**
+    （同信号、同 alpha 形状，只在执行层浓度/约束不同），不是两个方案。
+    """
     assert FAMILY == "yqcore"
-    assert set(TIERS) == {"yqcore-breadth", "yqcore-focus", "yqcore-solo"}
+    assert set(TIERS) == {"yqcore-breadth", "yqcore-focus-k15", "yqcore-focus-k8"}
     assert len({t.name for t in TIERS.values()}) == 3
+    plans = {t.group for t in TIERS.values() if t.group}
+    assert plans == {"yqcore-focus"}, "族内只应有集中档一个多版本方案"
+
+
+def test_plan_name_resolves_to_default_variant():
+    """方案名取默认版本；显式 id 取指定版本；两者是**同一个对象**不是两份参数。"""
+    g = "yqcore-focus"
+    members = group_members(g)
+    assert set(members) == {"k15", "k8"}
+    assert get_tier(g) is members["k15"]
+    assert get_tier(g).default_variant is True
+    assert get_tier(f"{g}-k15") is get_tier(g)
+    assert get_tier(f"{g}-k8") is members["k8"]
+
+
+def test_versions_differ_in_execution_not_just_k():
+    """合并命名 ≠ 合并策略：两版本除 k 外还有 exit_mult 与行业约束的实测差异。"""
+    a, b = get_tier("yqcore-focus-k15"), get_tier("yqcore-focus-k8")
+    assert a.strategy != b.strategy                # Buffered vs SectorCapped
+    assert a.params["exit_mult"] != b.params["exit_mult"]
+    assert "max_per_sector" in b.params and "max_per_sector" not in a.params
+
+
+def test_group_invariants_catch_missing_default(monkeypatch):
+    """每组必须恰有一个 default_variant —— 否则按方案名取版本会静默挑错。"""
+    from dataclasses import replace
+
+    import strategy.registry as reg
+
+    bad = dict(reg.TIERS)
+    bad["yqcore-focus-k15"] = replace(reg.TIERS["yqcore-focus-k15"],
+                                      default_variant=False)
+    monkeypatch.setattr(reg, "TIERS", bad)
+    with pytest.raises(ValueError, match="default_variant"):
+        reg.assert_group_invariants()
 
 
 def test_solo_tier_params():
     """solo = 行业去重档；param 与 `SectorCappedBufferedTopKLongOnly` 的签名对得上。"""
-    t = get_tier("yqcore-solo")
+    t = get_tier("yqcore-focus-k8")
     assert t.signal_key == "gbdt_mid13"
     assert t.strategy == "SectorCappedBufferedTopKLongOnly"
     # 值来自登记表（下面有专测「改登记表就跟着变」），此处钉**键集**：
@@ -68,8 +108,8 @@ def test_solo_tier_params():
 def test_solo_requires_explicit_panel():
     """注册表不读数据：缺面板必须报错，且错误信息告诉调用方怎么传。"""
     with pytest.raises(TypeError, match="industry"):
-        build("yqcore-solo")
-    sig, st = build("yqcore-solo", industry=pd.DataFrame({"a": ["x"]}))
+        build("yqcore-focus-k8")
+    sig, st = build("yqcore-focus-k8", industry=pd.DataFrame({"a": ["x"]}))
     assert sig == "gbdt_mid13"
     assert st.k == 8 and st.max_per_sector == 1
     # 面板名会被映射到构造器参数 sectors
@@ -77,7 +117,7 @@ def test_solo_requires_explicit_panel():
 
 
 def test_focus_tier_params():
-    t = get_tier("yqcore-focus")
+    t = get_tier("yqcore-focus-k15")
     assert t.signal_key == "gbdt_mid13"
     assert t.strategy == "BufferedTopKLongOnly"
     assert set(t.params) == {"k", "exit_mult"}
@@ -99,16 +139,16 @@ def test_tier_params_are_read_from_registry():
     这里会立刻红。
     """
     reg = _registry()
-    entry = _entry(reg, "yqcore-focus")
+    entry = _entry(reg, "yqcore-focus-k15")
     entry["execution"]["k"] = 25
     entry["execution"]["exit_mult"] = 1.5
     entry["signal_key"] = "fake_signal_key"
 
-    w = tier_wiring("yqcore-focus", reg)
+    w = tier_wiring("yqcore-focus-k15", reg)
     assert w["params"] == {"k": 25, "exit_mult": 1.5}
     assert w["signal_key"] == "fake_signal_key"
     # 真表不受影响（注入的是副本）
-    assert get_tier("yqcore-focus").params["k"] != 25
+    assert get_tier("yqcore-focus-k15").params["k"] != 25
 
 
 def test_buffer_keys_map_to_constructor_kwargs():
@@ -124,17 +164,17 @@ def test_buffer_keys_map_to_constructor_kwargs():
 def test_unknown_execution_param_raises():
     """登记表里写错参数名要报错，不能静默忽略（否则口径悄悄没生效）。"""
     reg = _registry()
-    _entry(reg, "yqcore-focus")["execution"]["k_typo"] = 15
+    _entry(reg, "yqcore-focus-k15")["execution"]["k_typo"] = 15
     with pytest.raises(ValueError, match="k_typo"):
-        tier_wiring("yqcore-focus", reg)
+        tier_wiring("yqcore-focus-k15", reg)
 
 
 def test_missing_required_param_raises():
     """必填参数被删要报错，不能悄悄落回构造器缺省值（TopK 缺省 k=45）。"""
     reg = _registry()
-    del _entry(reg, "yqcore-focus")["execution"]["k"]
+    del _entry(reg, "yqcore-focus-k15")["execution"]["k"]
     with pytest.raises(ValueError, match="k"):
-        tier_wiring("yqcore-focus", reg)
+        tier_wiring("yqcore-focus-k15", reg)
 
 
 def test_orphan_registration_raises():
@@ -151,9 +191,9 @@ def test_orphan_registration_raises():
 
 def test_build_returns_runnable_signal_and_fresh_instance():
     """返回的信号键必须是本机可读的那个；两次 build 不能共享状态（缓冲带有 _prev）。"""
-    sig, s1 = build("yqcore-focus")
+    sig, s1 = build("yqcore-focus-k15")
     assert sig == "gbdt_mid13"
-    _, s2 = build("yqcore-focus")
+    _, s2 = build("yqcore-focus-k15")
     assert s1 is not s2
     assert s1._prev is not s2._prev
 
@@ -166,11 +206,11 @@ def test_wide_uses_local_proxy_signal():
 
 
 def test_overrides_apply():
-    base_k = get_tier("yqcore-focus").params["k"]      # 登记值，不在测试里写死
-    sig, s = build("yqcore-focus", k=25)
+    base_k = get_tier("yqcore-focus-k15").params["k"]      # 登记值，不在测试里写死
+    sig, s = build("yqcore-focus-k15", k=25)
     assert sig == "gbdt_mid13"
     assert s.k == 25
-    assert get_tier("yqcore-focus").params["k"] == base_k   # 原件不被改
+    assert get_tier("yqcore-focus-k15").params["k"] == base_k   # 原件不被改
 
 
 def test_unknown_tier_raises():
@@ -179,7 +219,7 @@ def test_unknown_tier_raises():
 
 
 def test_describe_mentions_signal():
-    assert "gbdt_mid13" in describe("yqcore-focus")
+    assert "gbdt_mid13" in describe("yqcore-focus-k15")
 
 
 def test_registry_entries_are_production_and_complete():
@@ -200,7 +240,7 @@ def test_registry_entries_are_production_and_complete():
         assert b["caliber"]["source_script"], f"{b['id']} 缺报数脚本"
         if b.get("requires_panel"):
             assert b["requires_panel"] == TIERS[b["id"]].panel
-        if b["id"] == "yqcore-solo":
+        if b["id"] == "yqcore-focus-k8":
             # 小资金档是 1e5 + 整手口径，必须显式登记（否则会被当成 1e6 读）
             assert b["caliber"]["lot_size"] == 100
             assert b["caliber"]["capital"] == 1.0e5

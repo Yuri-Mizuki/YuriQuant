@@ -64,9 +64,14 @@
 #    🔑 复合信号的 `fingerprint` 是**构造后**面板的指纹，与任一分量都不同；引用它的
 #    结论必须同时写构造式（哪些分量、什么权重）。
 #
-# 12. **定版策略只放在 `yqcore` 族里**（2026-11-12 由莉酱拍板）：
-#    `yqcore-solo/focus/breadth` 是**唯一**的定版策略集合，判「改进 vs 基线」的默认对象是
-#    族内 `default: true` 的 `yqcore-breadth`。**不再新增无 `family` 的 production 条目** ——
+# 12. **定版策略只放在 `yqcore` 族里**（2026-11-12 由莉酱拍板；11-13 收敛为两方案）：
+#    `yqcore-focus-k15` / `yqcore-focus-k8` / `yqcore-breadth` 是**唯一**的定版策略集合，
+#    判「改进 vs 基线」的默认对象是族内 `default: true` 的 `yqcore-breadth`。
+#    🔑 **方案 vs 版本**（2026-11-13 由莉酱定）：`group` 是**方案名**（对外只说一个），
+#    `variant` 是同一方案下的配置档。`yqcore-focus` 一个方案下挂 `-k15`（默认）与 `-k8`
+#    两个版本 —— 它们同信号、同 alpha 形状，差异是执行层 4 项（行业去重 / k / exit_mult /
+#    资金整手），**不是两个方案**。`get_tier('yqcore-focus')` 走默认版本，按资金显式选版本。
+#    **不再新增无 `family` 的 production 条目** ——
 #    同一条策略另立一个版本号，只会让"同一批持仓报两个数"（v2-dingban 与 breadth 就是如此：
 #    同信号、同执行层、同 `buffer(15/40)`，只差资金/整手/末窗，21.57% vs 21.66%）。
 #    🔑 历史条目（`superseded` / `working`）保留在 `baselines:` 或 `retired:` 段里做追溯，
@@ -774,8 +779,11 @@ baselines:
       ⚠️ 与已退休的 v2-dingban 的关系：同一条策略，只差资金/整手/末日；pipeline 里
       若还有地方报"定版 21.5~21.6%"，那说的是 v2 的 36bp 旧基数，不是本档。
 
-  - id: yqcore-focus
+  - id: yqcore-focus-k15
     family: yqcore
+    group: yqcore-focus           # 方案名：get_tier('yqcore-focus') 返回本版本（default_variant）
+    variant: k15
+    default_variant: true
     tier: focus
     revision: 2               # rev1（2026-11-10）= ens_h1h5 + K25；数字见下方 history
     created: "2026-11-10"
@@ -819,7 +827,7 @@ baselines:
         的 23.57%（锚点 buf15/40，1864 日同窗口）同源可比。
         🚨 复合信号无落盘实体：`caliber.load_context` 每次现场构造（~1s），指纹是
         **构造后**面板的指纹，与任一分量不同。
-        🔑 **本档与 yqcore-solo 是同一份信号**（指纹同为 79bdbbcc8fb9）：2026-11-12 同日同
+        🔑 **本档与 yqcore-focus-k8 是同一份信号**（指纹同为 79bdbbcc8fb9）：2026-11-12 同日同
         执行层（1e5+整手）四臂分解——solo 36.58% / 本档配置 28.03% / 本档去掉行业约束前的
         同参 k8 29.88% / 本档@50 万 29.40%。**A vs B 日收益相关 0.924、年化差 7.4pp、
         配对 t 仅 1.81（< 2.0）⇒ 统计上不可分辨**。差的 6.7pp 几乎全来自"行业去重"这一步
@@ -894,7 +902,7 @@ baselines:
     fingerprint: 79bdbbcc8fb9
     reproducible_local: true
     regen_cmd: >
-      /d/Python/Python312/python -m scripts.evaluation.yq_core_report --view uniform --tiers yqcore-focus
+      /d/Python/Python312/python -m scripts.evaluation.yq_core_report --view uniform --tiers yqcore-focus-k15
     source: "reports/yq_core/report.json（--view uniform = 1e6 无整手；产品线口径见 report_native.json）"
     verified_local: true
     history:
@@ -935,13 +943,15 @@ baselines:
       ⚠️ 成交额分位仅 **0.186**、股价中位 21.1 元 ⇒ 组合系统性偏小盘；15 只等权意味
       单票 6.7%，一只暴雷 −6.7%。回测的 ST/退市掩码挡不住突发财务造假。
 
-  - id: yqcore-solo
+  - id: yqcore-focus-k8
     family: yqcore
-    tier: solo
+    group: yqcore-focus           # 与 -k15 同一方案（同信号 79bdbbcc8fb9），执行层更集中
+    variant: k8
+    tier: focus
     created: "2026-11-10"
-    updated: "2026-11-11"
+    updated: "2026-11-13"
     status: production
-    label: "YQ 核心 · 独苗档（Solo）：882 四周期信号 + TopK8 + 每申万一级 ≤1 只"
+    label: "YQ 核心 · 集中档 K8 版：882 四周期信号 + TopK8 + 每申万一级 ≤1 只（5~600 万）"
     signal_key: gbdt_mid13
     window: prod
     requires_panel: industry      # 申万一级截面（date × code），由调用方注入
@@ -972,8 +982,8 @@ baselines:
     data_state:
       registered: "882 ortho gbdt_mid13 + close_raw 未复权价，止 2026-09-07"
       caveats: >
-        🚨 **本条是 1e5 + 整手(100) 口径**，与同族 yqcore-focus（1e6、无整手）**不可逐位比**：
-        整手本身会丢 0.78pp（实投 97.8%）。要横向比收益请用 yqcore-focus 的 1e6 数字。
+        🚨 **本条是 1e5 + 整手(100) 口径**，与同族 yqcore-focus-k15（1e6、无整手）**不可逐位比**：
+        整手本身会丢 0.78pp（实投 97.8%）。要横向比收益请用 yqcore-focus-k15 的 1e6 数字。
     metrics:
       window_label: "2019-01-02..2026-09-07（1864 日 / 7.38 年）"
       fingerprint: 79bdbbcc8fb9
@@ -1079,7 +1089,7 @@ baselines:
       ① 消融/安慰剂/滚动重估（本档全部判定依据）：
          /d/Python/Python312/python -m scripts.evaluation.focus_micro_probe
       ② 产品线口径（10 万 + 整手，report_native.json 里本档那一行）：
-         /d/Python/Python312/python -m scripts.evaluation.yq_core_report --view native --tiers yqcore-solo
+         /d/Python/Python312/python -m scripts.evaluation.yq_core_report --view native --tiers yqcore-focus-k8
     source: "reports/focus_micro/grid.csv + reports/yq_core/report_native.json"
     verified_local: true
     notes: >

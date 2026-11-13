@@ -55,7 +55,23 @@ def test_registry_schema_and_invariants():
         assert len(items) >= 2, f"{fam} 只有一档，不该用 family（直接做普通条目即可）"
         tiers = [b.get("tier") for b in items]
         assert all(tiers), f"{fam} 的每条都必须给 tier"
-        assert len(set(tiers)) == len(tiers), f"{fam} 的 tier 必须唯一"
+        ids = [b.get("id") for b in items]
+        assert len(set(ids)) == len(ids), f"{fam} 的 id 必须唯一"
+        # 2026-11-13 方案/版本结构：一个 tier（= 方案）下允许多个 variant（版本）。
+        # 同 tier 多条时 variant 必填且唯一，group 一致，且恰有一个 default_variant
+        # —— `get_tier("<group>")` 与 `assert_group_invariants()` 都靠它定位。
+        for t in sorted(set(tiers)):
+            same = [b for b in items if b.get("tier") == t]
+            if len(same) == 1:
+                continue
+            vers = [b.get("variant") for b in same]
+            assert all(vers), (
+                f"{fam}/{t} 有多条同 tier 但缺 variant：{[b['id'] for b in same]}")
+            assert len(set(vers)) == len(vers), f"{fam}/{t} 的 variant 必须唯一：{vers}"
+            assert len({b.get("group") for b in same}) == 1, (
+                f"{fam}/{t} 的多条版本必须共用同一个 group 名")
+            assert sum(1 for b in same if b.get("default_variant")) == 1, (
+                f"{fam}/{t} 必须恰有一个 default_variant（按方案名取版本靠它）")
         assert sum(1 for b in items if b.get("default")) == 1, (
             f"{fam} 必须恰好一档 default: true（规则 3 的「基线取 production 那条」"
             "在同族多档时必须能唯一定位）")
