@@ -177,9 +177,16 @@ def main() -> None:
         ppath = resolve_panel(ds_dir / "panels", str(name))
         reg.at[i, "panel_path"] = str(ppath) if ppath else ""
         # ---- formula := label（hs300 先例）----
+        # 🚨 这里只是**兜底**：真正能反解析出表达式的走
+        # ``scripts/factors/formula_extract.py``（alpha 四族 + builder 标签，覆盖率 100%）。
+        # 本处填的 ``formula_src`` 必须标 ``label``——否则 ``formula_extract --apply``
+        # 会把「回填前的存量」当手写保护起来，源码改了公式永不刷新
+        # （2026-11-13 实测：第二次回填 0 行就是这么来的）。
         if pd.isna(reg.at[i, "formula"]) or not str(reg.at[i, "formula"]).strip():
             lab = reg.at[i, "label"]
             reg.at[i, "formula"] = str(lab) if pd.notna(lab) else str(name)
+            if "formula_src" in reg.columns:
+                reg.at[i, "formula_src"] = "label"
         # ---- family 旧码迁移 ----
         fam = str(reg.at[i, "family"] or "")
         if fam in FAMILY_MIGRATE:

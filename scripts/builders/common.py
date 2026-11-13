@@ -448,6 +448,15 @@ def merge_outputs(ds_dir: Path, family: str, *,
                                set_name=family)
         log.info("registry: %d -> %d 因子（新增 %d, 更新 %d）",
                  stat["before"], stat["after"], stat["added"], stat["updated"])
+        # 公式回填：只补本批的 formula（alpha 四族从源码 AST 反解析，其余写中文定义）。
+        # 不放在 upsert_rows 里是因为那是库层、要处理多库；放这里只碰本批，且
+        # 与 tag_dup_rows 并列——查重与公式都是"入库时顺手记的账"。
+        try:
+            from scripts.factors.formula_extract import backfill_batch
+
+            backfill_batch(ds_dir, [str(r["name"]) for r in rows if r.get("name")])
+        except Exception as e:                                  # noqa: BLE001
+            log.warning("公式回填失败（不影响入库）：%s", e)
     else:
         # 兜底：库根推断不出来（非常规目录布局）时保持历史直写行为，
         # 但明确告警——不静默退回"没有来源管理"的老路。

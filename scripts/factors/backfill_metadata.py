@@ -78,12 +78,29 @@ FEATURE_SETS = ("alpha158", "alpha360")
 
 
 def _alpha_formula(set_name: str, name: str) -> str:
-    """alpha 四族的定义引用（与 hs300 既有 505 行的写法对齐）。"""
+    """alpha 四族的定义：``<出处> #编号 = <可读表达式>``。
+
+    2026-11-13 起升级：原来只写引用（``GTJA Alpha191 #158``），拿到行回答不了
+    "这个面板是什么"。现在追加 ``= <反解析表达式>``，真源是
+    ``scripts/factors/formula_extract.py``（从 ``factor/alpha*.py`` 源码 AST 反解析）。
+    反解析失败时**退回纯引用**，不留半截（``= `` 后面空着比不写更糟）。
+
+    与 ``formula_extract --apply`` 的关系：后者写本库，是权威；本函数用于
+    ``backfill_metadata`` 的多库场景（hs300 / zz1000 没有 alpha 面板源码可溯源），
+    两边用同一个提取器，口径不分叉。
+    """
     from factor.alpha_base import SET_LABELS
+
+    from .formula_extract import formula_for
 
     label = SET_LABELS[set_name]
     tail = name[len(set_name) + 1:] if name.startswith(set_name + "_") else name
-    return f"{label} #{tail}" if set_name in NUMBERED_SETS else f"{label} · {tail}"
+    head = f"{label} #{tail}" if set_name in NUMBERED_SETS else f"{label} · {tail}"
+    expr, src = formula_for(name)
+    if src == "ast" and " = " in expr:
+        # formula_for 返回的已是「引用 = 表达式」，表达式部分直接取等号右侧
+        return f"{head} = {expr.split(' = ', 1)[1]}"
+    return head
 
 
 #: label 里"等号左边是干净的因子名"才算定义式；这条正则同时挡掉
