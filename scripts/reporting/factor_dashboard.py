@@ -3,8 +3,8 @@
 对齐 joinquant.com/view/factorlib/list 的信息架构：
 - 顶部筛选：来源(set) chips / 因子族 / 搜索框
 - 主表：因子名 / 来源 / 族 / 覆盖率 / IC(h1,h5,h10,h20) / ICIR / NW-t / IC胜率
-  / （有分层回测的库额外：多空年化·月/周切换 / 多头年化 / 超额年化 / 换手率） / 公式
-- 点行 → 右侧详情：指标卡 + 月度 IC 柱状图 + （有 evals 的因子）LS/LO 净值曲线
+  / （有分层回测的库额外：多空年化·月/周切换 / 多头年化 / 超额年化 / 换手率）
+- 点行 → 右侧详情：公式 + 指标卡 + 月度 IC 柱状图 + （有 evals 的因子）LS/LO 净值曲线
   （含全A等权基准虚线，如数据集有 bench_returns.parquet）
 
 数据来源（全部预计算，前端零后端）：
@@ -385,7 +385,9 @@ def main() -> None:
                    for g in dict.fromkeys(r["grp"] for r in rows)},
         "monthly": {k: v for k, v in monthly.items()},
         "equity": equity, "bench": bench,
-        "formula": {str(r["name"]): str(r.get("formula") or "")[:300]
+        #: 公式只在详情页展示（表格不占列），所以留全文不截断——最长 317 字符
+        #: （alpha191_159 那种三项加权）在整个 payload 里微不足道。
+        "formula": {str(r["name"]): str(r.get("formula") or "")
                     for _, r in reg.iterrows()},
         "meta": {str(r["name"]): {
             "freq": str(r.get("frequency") or "—"), "mat": str(r.get("maturity") or "—"),
@@ -460,8 +462,6 @@ tbody tr:hover { background:#f0f4ff; cursor:pointer; }
 tbody tr.sel { background:#e8eefc; }
 .pos { color:#A32D2D; font-weight:600; }
 .neg { color:#3B6D11; font-weight:600; }
-.fml { font-family:monospace; font-size:11px; color:#666; max-width:260px;
-       overflow:hidden; text-overflow:ellipsis; }
 /* 详情抽屉 */
 .detail { width:520px; flex-shrink:0; position:sticky; top:14px; background:#fff;
           border-radius:10px; padding:16px; box-shadow:0 1px 4px rgba(0,0,0,.06);
@@ -474,7 +474,15 @@ tbody tr.sel { background:#e8eefc; }
 .dcell .v { font-size:15px; font-weight:700; }
 .dcell .k { font-size:10px; color:#888; }
 .formula { font-family:monospace; font-size:11px; color:#555; background:#f8f9fa;
-           padding:8px 10px; border-radius:6px; margin-bottom:10px; word-break:break-all; }
+           padding:8px 10px; border-radius:6px; margin-bottom:10px; word-break:break-all;
+           line-height:1.7; }
+/* 公式分条展示：表头（定义引用）灰、let 别名淡、主表达式加粗 */
+.fmlHead { font-family:inherit; font-size:10px; color:#999; margin-bottom:4px;
+           letter-spacing:.2px; }
+.fmlLet  { padding-left:10px; border-left:2px solid #dfe3e8; color:#666; }
+.fmlVar  { color:#7a5cb8; }
+.fmlBody { color:#555; }
+.fmlMain { color:#1a1a1a; font-weight:600; margin-top:2px; }
 .dchart { margin-bottom:10px; }
 .badge { display:inline-block; padding:1px 8px; border-radius:10px; font-size:11px;
          background:#eef1f5; color:#555; margin-right:6px; }
@@ -484,6 +492,10 @@ _JS = r"""
 const D = __PAYLOAD__;
 const $ = id => document.getElementById(id);
 const fmt = (v, nd) => v === null || v === undefined ? '—' : (+v).toFixed(nd === undefined ? 4 : nd);
+// 公式是本项目自己写的，但含 <、>、& 等算子符号（如 `returns < 0`），
+// innerHTML 直接拼会被解析成标签 → 必须转义后再插。
+const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const cls = v => v === null || v === undefined ? '' : (v > 0 ? 'pos' : 'neg');
 const rowByIdx = {}; D.rows.forEach(r => rowByIdx[r.i] = r);
 
@@ -597,8 +609,7 @@ function renderRows() {
           `<td class="num ${cls(btOf(r,'lo'))}">${fmt(btOf(r,'lo'))}</td>` +
           (D.hasEx ? `<td class="num ${cls(btOf(r,'ex'))}">${fmt(btOf(r,'ex'))}</td>` : '') +
           `<td class="num">${fmt(btOf(r,'to'), 2)}</td>`
-        : '') +
-      `<td class="fml" title="${(D.formula[r.name]||'').replace(/"/g,'&quot;')}">${(D.formula[r.name]||'').slice(0,50)}</td>`;
+        : '');
     tr.onclick = () => showDetail(r, tr);
     tb.appendChild(tr);
   }
@@ -638,7 +649,34 @@ function showDetail(r, tr) {
     dcell('IC(h20)', curOf(r,'ic20')) + dcell('覆盖率', r.cov, 2) +
     (D.hasLS ? dcell('多空年化', btOf(r,'ls')) + dcell('多头年化', btOf(r,'lo')) +
       dcell('超额年化', btOf(r,'ex')) + dcell('换手率', btOf(r,'to'), 2) : '');
-  $('dFml').textContent = D.formula[r.name] || '（无公式记录）';
+  // 公式：存储格式是「定义引用 = let a = ... | let b = ... | 主表达式」。
+  // 用 textContent 会把 ` | ` 分隔压成一整行（最长 317 字符），详情页读不了 ⇒
+  // 按 ` | ` 拆条、`let x = ` 与主表达式分色，主表达式加粗。
+  // ⚠️ 首段是「引用 = 首个 let/主表达式」，剥掉 head 后**右半必须放回 parts**：
+  // 否则 148 个带别名的公式会把第一条 let 定义整段丢掉，主表达式里的变量无从解释。
+  const raw = D.formula[r.name] || '';
+  if (!raw) {
+    $('dFml').textContent = '（无公式记录）';
+  } else {
+    const parts = raw.split(' | ');
+    let head = '';
+    const eq = parts[0].indexOf(' = ');
+    if (eq >= 0) {
+      head = parts[0].slice(0, eq);
+      parts[0] = parts[0].slice(eq + 3);
+    }
+    $('dFml').innerHTML =
+      (head ? `<div class="fmlHead">${esc(head)}</div>` : '') +
+      parts.map((p, i) => {
+        const last = i === parts.length - 1;
+        if (p.startsWith('let ')) {
+          const [nm, ...rest] = p.slice(4).split(' = ');
+          return `<div class="fmlLet"><span class="fmlVar">${esc(nm)}</span> = `
+            + `<span class="fmlBody">${esc(rest.join(' = '))}</span></div>`;
+        }
+        return `<div class="${last ? 'fmlMain' : 'fmlBody'}">${esc(p)}</div>`;
+      }).join('');
+  }
 
   // 月度 IC（按当前区间截取尾部 N 个月）
   const ctx1 = $('dIcChart');
@@ -772,7 +810,6 @@ def render(dataset: str, n: int, reg: pd.DataFrame, payload: dict, months: list)
 <th data-k="nw" class="num">NW-t</th><th data-k="win" class="num">IC胜率</th>
 <th data-k="ic5" class="num">IC(h5)</th><th data-k="ic10" class="num">IC(h10)</th>
 <th data-k="ic20" class="num">IC(h20)</th>{ls_head}
-<th>公式</th>
 </tr></thead><tbody></tbody></table></div>
 </div>
 <div class="detail" id="detail">
