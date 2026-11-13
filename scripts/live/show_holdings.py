@@ -1,8 +1,8 @@
-"""yqcore-solo 持仓查询（只读，随时可跑）
+"""yqcore-focus-k8 持仓查询（只读，随时可跑）
 
 背景
 ----
-`yqcore-solo` 是**月频**策略：信号日 = 当月首个交易日，成交日 = 次一交易日开盘，
+`yqcore-focus-k8` 是**月频**策略：信号日 = 当月首个交易日，成交日 = 次一交易日开盘，
 持仓整月不变，下一期才换。所以「看持仓」不是每天生成新快照，而是
 **查当前生效的那一期**。
 
@@ -120,7 +120,7 @@ def show_period(ds: str, live_dir: Path | None = None,
     sig = meta.get("signal_date", ds)
     exe = meta.get("exec_date")
     print("=" * 78)
-    print(f"yqcore-solo 当期持仓  信号日 {sig} → 成交 {exe or '?'}（T+1 开盘）")
+    print(f"yqcore-focus-k8 当期持仓  信号日 {sig} → 成交 {exe or '?'}（T+1 开盘）")
     print(f"目标 {meta.get('k', '?')} 只 | 实持 {len(v)} 只"
           f" | 每申万一级 ≤{meta.get('max_per_sector', '?')} 只"
           f" | 整手 {meta.get('lot', '?')} 股")
@@ -176,7 +176,7 @@ def show_all(live_dir: Path | None = None) -> None:
                     if m.get("portfolio_ret") is not None else "?"),
         })
     print("=" * 62)
-    print("yqcore-solo 历史期次（持仓一个月一期）")
+    print("yqcore-focus-k8 历史期次（持仓一个月一期）")
     print("-" * 62)
     print(pd.DataFrame(rows).to_string(index=False))
     print("=" * 62)
@@ -186,7 +186,7 @@ def show_all(live_dir: Path | None = None) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser(
-        description="yqcore-solo 持仓查询（只读，随时可跑，不写文件）")
+        description="yqcore-focus-k8 持仓查询（只读，随时可跑，不写文件）")
     ap.add_argument("--date", default=None, metavar="YYYYMMDD",
                     help="查指定期次（信号日）；缺省 = 最新一期")
     ap.add_argument("--all", action="store_true", help="列出全部期次一览")

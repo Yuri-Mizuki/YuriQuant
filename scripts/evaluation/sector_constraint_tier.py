@@ -45,16 +45,16 @@ def industry_panel(ctx: cal.CaliberContext) -> pd.DataFrame:
 #: (臂名, 资金档来源, 构造 kwargs for SectorCappedBufferedTopKLongOnly)
 #: ``None`` 的 kwargs 表示「用 focus 定版的 BufferedTopKLongOnly(15, 2.0)」。
 ARMS = (
-    ("solo_base",   "yqcore-solo",   dict(k=8, exit_mult=1.0, max_per_sector=1)),
-    ("solo_fill8",  "yqcore-solo",   dict(k=8, exit_mult=1.0, max_per_sector=1,
+    ("solo_base",   "yqcore-focus-k8",   dict(k=8, exit_mult=1.0, max_per_sector=1)),
+    ("solo_fill8",  "yqcore-focus-k8",   dict(k=8, exit_mult=1.0, max_per_sector=1,
                                           min_sectors=8, fill_to_k=True)),
-    ("focus_base",  "yqcore-focus",  None),
-    ("focus_dedup", "yqcore-focus",  dict(k=15, exit_mult=2.0, max_per_sector=1)),
-    ("focus_fill15", "yqcore-focus", dict(k=15, exit_mult=2.0, max_per_sector=1,
+    ("focus_base",  "yqcore-focus-k15",  None),
+    ("focus_dedup", "yqcore-focus-k15",  dict(k=15, exit_mult=2.0, max_per_sector=1)),
+    ("focus_fill15", "yqcore-focus-k15", dict(k=15, exit_mult=2.0, max_per_sector=1,
                                           min_sectors=15, fill_to_k=True)),
-    ("focus_fill12", "yqcore-focus", dict(k=15, exit_mult=2.0, max_per_sector=1,
+    ("focus_fill12", "yqcore-focus-k15", dict(k=15, exit_mult=2.0, max_per_sector=1,
                                           min_sectors=12, fill_to_k=True)),
-    ("focus_sec2",  "yqcore-focus",  dict(k=15, exit_mult=2.0, max_per_sector=2)),
+    ("focus_sec2",  "yqcore-focus-k15",  dict(k=15, exit_mult=2.0, max_per_sector=2)),
 )
 
 

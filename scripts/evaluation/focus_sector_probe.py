@@ -50,18 +50,18 @@ SEED = 20261113
 
 #: (臂名, 资金档, 构造) 。``None``=无约束 BufferedTopKLongOnly(k, exit_mult)。
 ARMS: tuple[tuple[str, str, dict | None], ...] = (
-    ("base",       "yqcore-focus", None),
-    ("sec1",       "yqcore-focus", dict(k=15, exit_mult=2.0, max_per_sector=1)),
-    ("sec2",       "yqcore-focus", dict(k=15, exit_mult=2.0, max_per_sector=2)),
-    ("sec3",       "yqcore-focus", dict(k=15, exit_mult=2.0, max_per_sector=3)),
-    ("k20_sec1",   "yqcore-focus", dict(k=20, exit_mult=2.0, max_per_sector=1)),
-    ("k12_sec1",   "yqcore-focus", dict(k=12, exit_mult=2.0, max_per_sector=1)),
-    ("k8_plain",   "yqcore-focus", None),   # 持仓数匹配对照：无约束 K8（配 k12_sec1）
-    ("k9_match",   "yqcore-focus", None),   # 持仓数匹配对照（无约束）
-    ("k10_match",  "yqcore-focus", None),   # 同上
-    ("pl_rand",    "yqcore-focus", dict(k=15, exit_mult=2.0, max_per_sector=1)),
-    ("pl_rand_k12", "yqcore-focus", dict(k=12, exit_mult=2.0, max_per_sector=1)),
-    ("solo_base",  "yqcore-solo",  dict(k=8, exit_mult=1.0, max_per_sector=1)),
+    ("base",       "yqcore-focus-k15", None),
+    ("sec1",       "yqcore-focus-k15", dict(k=15, exit_mult=2.0, max_per_sector=1)),
+    ("sec2",       "yqcore-focus-k15", dict(k=15, exit_mult=2.0, max_per_sector=2)),
+    ("sec3",       "yqcore-focus-k15", dict(k=15, exit_mult=2.0, max_per_sector=3)),
+    ("k20_sec1",   "yqcore-focus-k15", dict(k=20, exit_mult=2.0, max_per_sector=1)),
+    ("k12_sec1",   "yqcore-focus-k15", dict(k=12, exit_mult=2.0, max_per_sector=1)),
+    ("k8_plain",   "yqcore-focus-k15", None),   # 持仓数匹配对照：无约束 K8（配 k12_sec1）
+    ("k9_match",   "yqcore-focus-k15", None),   # 持仓数匹配对照（无约束）
+    ("k10_match",  "yqcore-focus-k15", None),   # 同上
+    ("pl_rand",    "yqcore-focus-k15", dict(k=15, exit_mult=2.0, max_per_sector=1)),
+    ("pl_rand_k12", "yqcore-focus-k15", dict(k=12, exit_mult=2.0, max_per_sector=1)),
+    ("solo_base",  "yqcore-focus-k8",  dict(k=8, exit_mult=1.0, max_per_sector=1)),
 )
 #: 每个臂的 k / exit_mult（``None`` 的 kwargs 也要知道用几）。
 K_EXIT = {"base": (15, 2.0), "k8_plain": (8, 2.0), "k9_match": (9, 2.0),

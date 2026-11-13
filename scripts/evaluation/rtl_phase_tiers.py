@@ -31,7 +31,7 @@ solo ≈ 25 / focus ≈ 26 / breadth ≈ 21（差 5pp 以内）——
 用法::
 
     python -m scripts.evaluation.rtl_phase_tiers                    # 三档 21 相位（约 8 分钟）
-    python -m scripts.evaluation.rtl_phase_tiers --tiers yqcore-focus
+    python -m scripts.evaluation.rtl_phase_tiers --tiers yqcore-focus-k15
     python -m scripts.evaluation.rtl_phase_tiers --phases 0-2       # 冒烟
 """
 from __future__ import annotations
@@ -50,7 +50,7 @@ from strategy.registry import get_tier
 ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / "reports" / "rtl_phase_tiers"
 N_PHASE = 21
-TIERS = ("yqcore-solo", "yqcore-focus", "yqcore-breadth")
+TIERS = ("yqcore-focus-k8", "yqcore-focus-k15", "yqcore-breadth")
 
 
 def _parse_phases(txt: str) -> list[int]:

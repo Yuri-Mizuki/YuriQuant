@@ -20,7 +20,7 @@
   920 重建代理到 11-04，不对齐则 2026 年混进 36 个交易日）
 - 成本 ``cost_profile("production")`` = **往返 27bp 时变**（万1佣金双边 + 印花万5单边、
   2023-08-28 前千1 + 滑点 10bp 双边）；成交 ``T+1 open``
-- 信号：``yqcore-focus`` / ``yqcore-solo`` → ``gbdt_mid13``（**复合信号**：
+- 信号：``yqcore-focus-k15`` / ``yqcore-focus-k8`` → ``gbdt_mid13``（**复合信号**：
   gbdt h1:h5:h10:h20 = 2:1:1:2 秩平均，无落盘实体，由 ``caliber.load_context`` 现场构造）；
   ``yqcore-breadth`` → ``dingban_fundind_local``（登记路径本机缺失，走重建代理；
   这条是**换数据态**，与 v2 登记的 21.57% 不可逐位比）
@@ -32,7 +32,7 @@
     python -m scripts.evaluation.yq_core_report                    # 三档 native（产品线口径）
     python -m scripts.evaluation.yq_core_report --view uniform     # 跨档可比（历史口径）
     python -m scripts.evaluation.yq_core_report --view stress      # 统一 10 万极限压力
-    python -m scripts.evaluation.yq_core_report --tiers yqcore-solo
+    python -m scripts.evaluation.yq_core_report --tiers yqcore-focus-k8
 """
 from __future__ import annotations
 
@@ -58,8 +58,8 @@ LOT = 100
 #: 每档的**推荐资金**（产品线分界依据见 ``reports/yq_core/README.md`` §2.1）
 #: 取该档「整手几乎不 binding 且持仓宽度撑得住」的最小资金。
 NATIVE_CAPITAL = {
-    "yqcore-solo": 1.0e5,
-    "yqcore-focus": 5.0e5,
+    "yqcore-focus-k8": 1.0e5,
+    "yqcore-focus-k15": 5.0e5,
     "yqcore-breadth": 2.0e6,
 }
 

@@ -43,7 +43,7 @@ solo 自己的相位极差是 **17.98pp**（`reports/rtl_phase_tiers/`），单�
 用法::
 
     python -m scripts.evaluation.rd_overlay_probe                 # 三档 × 7 臂（约 5 分钟）
-    python -m scripts.evaluation.rd_overlay_probe --tiers yqcore-solo
+    python -m scripts.evaluation.rd_overlay_probe --tiers yqcore-focus-k8
     python -m scripts.evaluation.rd_overlay_probe --diag-only     # 只跑诊断（30 秒）
 """
 from __future__ import annotations
@@ -64,7 +64,7 @@ OUT = ROOT / "reports" / "rd_overlay"
 RD_RAW = ROOT / "reports" / "factor_ev_rd" / "panels" / "rd_to_cap.parquet"
 NEU_BASE = ROOT / "reports" / "alla_rolling" / "_base"
 CACHE = OUT / "rd_to_cap_neu.parquet"
-TIERS = ("yqcore-solo", "yqcore-focus", "yqcore-breadth")
+TIERS = ("yqcore-focus-k8", "yqcore-focus-k15", "yqcore-breadth")
 
 #: 产物文件名后缀（`--suffix`），分批跑时避免互相覆盖
 _SUFFIX = ""

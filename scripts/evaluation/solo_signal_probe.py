@@ -2,7 +2,7 @@
 
 为什么需要重做
 --------------
-``yqcore-solo`` 的信号 ``gbdt_mid13``（h1:h5:h10:h20 = 2:1:1:2）来自
+``yqcore-focus-k8`` 的信号 ``gbdt_mid13``（h1:h5:h10:h20 = 2:1:1:2）来自
 ``reports/focus_upgrade/``。但那份证据的口径**不是 solo 的执行层**：
 
 | 项 | focus_upgrade 的裁定 | solo 的实际 |
@@ -151,7 +151,7 @@ def monthly_forward(ctx: cal.CaliberContext) -> tuple[pd.DataFrame, pd.DataFrame
     """**持有期**前瞻收益（非重叠）—— 月频调仓的真正预测目标。
 
     此前项目里说的「IC = 次日截面排序有多准」是 ``h=1`` 日频口径：用**明天**的
-    收益去评今天的排序。但 ``yqcore-solo`` 是**月频**调仓 —— 信号日 T 收盘选股、
+    收益去评今天的排序。但 ``yqcore-focus-k8`` 是**月频**调仓 —— 信号日 T 收盘选股、
     T+1 开盘成交、持有到下一个调仓日。持有期 22~39 天（中位 30），**与 h=1 毫无
     关系**。用 h=1 的 IC 评价月频策略，等于用「当日预测能力」代替「持有期预测能力」。
 

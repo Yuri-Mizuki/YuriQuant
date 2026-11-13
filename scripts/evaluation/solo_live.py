@@ -1,4 +1,4 @@
-"""yqcore-solo 生产持仓生成器（2026-11-10 建立）。
+"""yqcore-focus-k8 生产持仓生成器（2026-11-10 建立）。
 
 **输入** = 出榜链的 ``ranking_<ds>.csv``（solo 信号口径：882 ortho ·
 ``gbdt_mid13`` = h1:h5:h10:h20 = 2:1:1:2 秩平均），**输出** = 当期实际可下单
@@ -8,8 +8,8 @@
 ------------
 ``scripts/pipelines/alla_daily_rank.py`` 的执行层只有两种产物：①
 ``picks``（top-frac + 分位缓冲带）②``--deliverable-k``（**无行业约束**的
-可交易 TopN）。而 ``yqcore-solo`` 的定义是
-``SectorCappedBufferedTopKLongOnly``（参数取登记表 ``yqcore-solo``）**+ 整手 100 股**
+可交易 TopN）。而 ``yqcore-focus-k8`` 的定义是
+``SectorCappedBufferedTopKLongOnly``（参数取登记表 ``yqcore-focus-k8``）**+ 整手 100 股**
 —— 两者都不在出榜链里（2026-11-10 复核：见
 ``reports/yq_core/README.md`` §未做项）。
 
@@ -58,10 +58,10 @@ from config import Config  # noqa: E402
 from strategy.examples import SectorCappedBufferedTopKLongOnly  # noqa: E402
 from strategy.registry import get_tier  # noqa: E402
 
-#: solo 档参数**真源**：``config/baselines.yaml`` 的 ``yqcore-solo.execution``
+#: solo 档参数**真源**：``config/baselines.yaml`` 的 ``yqcore-focus-k8.execution``
 #: （经 ``strategy.registry.tier_wiring`` 解析）。本文件不再写死 k / exit_mult /
 #: max_per_sector —— 2026-11-12 消双真源，改口径只改登记表。
-_SOLO = get_tier("yqcore-solo").params
+_SOLO = get_tier("yqcore-focus-k8").params
 
 LIVE_DIR = ROOT / "reports" / "yq_core" / "live"
 
@@ -187,7 +187,7 @@ def load_prev_holdings(live_dir: Path, before: pd.Timestamp) -> tuple[set, str]:
 
 # ---------------------------------------------------------------------------
 def main() -> None:
-    ap = argparse.ArgumentParser(description="yqcore-solo 生产持仓生成器")
+    ap = argparse.ArgumentParser(description="yqcore-focus-k8 生产持仓生成器")
     ap.add_argument("--ranking", required=True, help="出的榜 ranking_<ds>.csv")
     ap.add_argument("--date", required=True, help="信号日 YYYYMMDD")
     ap.add_argument("--capital", type=float, default=100000.0, help="资金（元）")

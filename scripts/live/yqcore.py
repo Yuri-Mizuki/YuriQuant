@@ -1,8 +1,8 @@
-"""yqcore-solo 生产入口：出榜 / 看持仓，两个独立子命令
+"""yqcore-focus-k8 生产入口：出榜 / 看持仓，两个独立子命令
 
 为什么分成两个子命令而不是一条命令跑完
 --------------------------------------
-`yqcore-solo` 是**月频**策略，但两个功能的频率差 20 倍：
+`yqcore-focus-k8` 是**月频**策略，但两个功能的频率差 20 倍：
 
 - ``rank``（出榜）：**每天**盘后跑 —— 用最新数据给全市场重新打分排序；
 - ``holdings``（看持仓）：**一个月一期** —— 信号日 = 当月首个交易日，
@@ -117,7 +117,7 @@ def cmd_holdings(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
         prog="yqcore",
-        description="yqcore-solo 生产入口（出榜 / 看持仓，两功能独立）",
+        description="yqcore-focus-k8 生产入口（出榜 / 看持仓，两功能独立）",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )

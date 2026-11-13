@@ -115,7 +115,7 @@ SIGNALS: dict[str, dict] = {
     },
     # 单周期分量：2026-11-10 起作为复合信号（gbdt_avg4 / gbdt_mid13）的基座登记。
     # 它们本身就是落盘实体（非复合），单独引用时注意 h1 单用的 K 曲线是灾难性的
-    # （`yqcore-focus` 升级研究：h1 权重 1/3 是过滤器、1/2 就开始亏）。
+    # （`yqcore-focus-k15` 升级研究：h1 权重 1/3 是过滤器、1/2 就开始亏）。
     "gbdt_h5": {
         "path": "reports/alla_rolling_ortho/pred/gbdt__h5.parquet",
         "desc": "882 ortho · gbdt 单周期 h5",
@@ -169,7 +169,7 @@ SIGNALS: dict[str, dict] = {
                          "gbdt__h{1,5,10,20}.parquet"),
     },
     # ---- 复合信号（多份 pred 面板的加权截面秩平均；无落盘实体，`load_context` 现场构造）
-    # 2026-11-10 新增：`yqcore-focus` 从 `ens_h1h5`（只用 h1+h5）升到 h1/h5/h10/h20
+    # 2026-11-10 新增：`yqcore-focus-k15` 从 `ens_h1h5`（只用 h1+h5）升到 h1/h5/h10/h20
     # 集成。依据见 `reports/focus_upgrade/README.md`：只用 h1+h5 时 K 曲线整体落在
     # 22.1%（11 格均值），任何含 h20 的组合都在 28~30% ⇒ h1+h5 是**漏了长周期选择器**。
     # 🚨 复合信号的指纹是**构造后**面板的指纹，与任一分量不同；引用必须带构造式。
@@ -882,7 +882,7 @@ def _check(signal: str, window: str, prof_name: str, cost_kind: str,
         exp = registered.get(tag)
         if exp is None and "ann" in registered:
             # 部分条目把 metrics.profiles.production 直接写成「一条臂」的指标
-            # （yqcore-focus/breadth），没有臂名这一层 ⇒ 按单臂处理。
+            # （yqcore-focus-k15/breadth），没有臂名这一层 ⇒ 按单臂处理。
             exp = registered
         if exp:
             d_ann = abs(m["ann"] - exp["ann"])
@@ -926,7 +926,7 @@ def main() -> int:
                     help="核对 config/baselines.yaml 的登记值")
     ap.add_argument("--baseline-id", default="",
                     help="配合 --check：按 id 精确匹配登记条目（同 signal+window 有多条"
-                         "并列档位时必须用它，如 yqcore-breadth / yqcore-focus）")
+                         "并列档位时必须用它，如 yqcore-breadth / yqcore-focus-k15）")
     ap.add_argument("--end", type=int, default=None,
                     help="窗口末日 YYYYMMDD（覆盖 WINDOWS 上界）。用于让两条 pred 末日"
                          "不同的信号**对齐到同一天**——不对齐时长短差会被读成业绩差"
