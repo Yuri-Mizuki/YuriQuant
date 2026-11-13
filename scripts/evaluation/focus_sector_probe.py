@@ -114,6 +114,10 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--phases", default="0")
     ap.add_argument("--arms", default=",".join(a[0] for a in ARMS))
+    ap.add_argument("--capital", type=float, default=None,
+                    help="覆盖档位 native 资金（判跨档可比性用；默认按 tier 取）")
+    ap.add_argument("--suffix", default="",
+                    help="产物后缀，避免覆盖同臂不同资金的 daily/phase 文件")
     ap.add_argument("--analyze", action="store_true")
     a = ap.parse_args(argv)
 
@@ -137,7 +141,8 @@ def main(argv=None) -> int:
     for arm, tier, kw in ARMS:
         if arm not in want:
             continue
-        capital = float(ycr.NATIVE_CAPITAL[tier])
+        capital = (a.capital if a.capital is not None
+                   else float(ycr.NATIVE_CAPITAL[tier]))
         sectors = ind
         if arm.startswith("pl_rand"):
             if ind_pl is None:
@@ -164,9 +169,10 @@ def main(argv=None) -> int:
                   f"SR={m['sharpe_arith']:6.3f} 持仓={m['n_active']:6.1f} "
                   f"换手={m['turnover']:5.3f} ({time.time() - t0:.0f}s)", flush=True)
         OUT.mkdir(parents=True, exist_ok=True)
-        pd.DataFrame(daily).to_parquet(OUT / f"daily_{arm}.parquet")
+        sfx = a.suffix
+        pd.DataFrame(daily).to_parquet(OUT / f"daily_{arm}{sfx}.parquet")
         pd.DataFrame(list(rets.values())).to_csv(
-            OUT / f"phase_{arm}.csv", index=False, encoding="utf-8-sig")
+            OUT / f"phase_{arm}{sfx}.csv", index=False, encoding="utf-8-sig")
     return 0
 
 
