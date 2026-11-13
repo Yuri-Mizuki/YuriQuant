@@ -31,6 +31,9 @@ logs/*.txt
 logs/*.lst
 # 后台跑批的 stdout 落盘（logs 是本地运行目录，不进版本库）
 logs/*.out
+# 临时落盘的中间件：旧 registry 快照 / selection 对照 JSON（一次诊断用完即弃）
+logs/*.csv
+logs/*.json
 
 # SDK cache (user-specific)
 AmazingData/
