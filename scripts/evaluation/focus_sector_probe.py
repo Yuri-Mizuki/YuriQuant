@@ -67,6 +67,15 @@ ARMS: tuple[tuple[str, str, dict | None], ...] = (
     ("k6_sec1",    "yqcore-focus-k8",  dict(k=6, exit_mult=1.0, max_per_sector=1)),
     ("k5_sec1",    "yqcore-focus-k8",  dict(k=5, exit_mult=1.0, max_per_sector=1)),
     ("k4_sec1",    "yqcore-focus-k8",  dict(k=4, exit_mult=1.0, max_per_sector=1)),
+    # ── 风险档位（目标回撤 → 仓位），2026-11-13：只改 gross_exposure ──
+    ("g85_sec1",   "yqcore-focus-k8",  dict(k=8, exit_mult=1.0, max_per_sector=1,
+                                            gross_exposure=0.85)),
+    ("g75_sec1",   "yqcore-focus-k8",  dict(k=8, exit_mult=1.0, max_per_sector=1,
+                                            gross_exposure=0.75)),
+    ("g65_sec1",   "yqcore-focus-k8",  dict(k=8, exit_mult=1.0, max_per_sector=1,
+                                            gross_exposure=0.65)),
+    ("g50_sec1",   "yqcore-focus-k8",  dict(k=8, exit_mult=1.0, max_per_sector=1,
+                                            gross_exposure=0.50)),
 )
 #: 每个臂的 k / exit_mult（``None`` 的 kwargs 也要知道用几）。
 K_EXIT = {"base": (15, 2.0), "k8_plain": (8, 2.0), "k9_match": (9, 2.0),

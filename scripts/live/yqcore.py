@@ -102,6 +102,8 @@ def cmd_holdings(args: argparse.Namespace) -> int:
             argv += ["--capital", str(args.capital)]
         if args.k:
             argv += ["--k", str(args.k)]
+        if args.gross is not None:
+            argv += ["--gross", str(args.gross)]
         return _run("scripts.evaluation.solo_live", argv, "holdings --commit")
 
     # 只读查询
@@ -144,6 +146,9 @@ def build_parser() -> argparse.ArgumentParser:
     h.add_argument("--ranking", default=None, help="--commit 时的榜单路径")
     h.add_argument("--capital", type=float, default=None, help="--commit 时资金")
     h.add_argument("--k", type=int, default=None, help="--commit 时目标只数")
+    h.add_argument("--gross", type=float, default=None,
+                   help="--commit 时目标总仓位 0~1（风险档位）；缺省 = 满仓。"
+                        "降回撤只能调它，不能用 --capital 代替")
     h.set_defaults(func=cmd_holdings)
 
     return ap

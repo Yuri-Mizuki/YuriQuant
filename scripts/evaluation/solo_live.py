@@ -195,6 +195,11 @@ def main() -> None:
                     help=f"目标只数（缺省 = 登记表 {_SOLO['k']}）")
     ap.add_argument("--max-per-sector", type=int, default=_SOLO["max_per_sector"],
                     help=f"每申万一级最多几只（缺省 = 登记表 {_SOLO['max_per_sector']}）")
+    ap.add_argument("--gross", type=float, default=None,
+                    help="目标总仓位 0~1（缺省 = 登记表 1.0）。**风险档位旋钮**："
+                         "0.75 = 只投 75%%、余下留现金。"
+                         "不要用 --capital 减半代替 —— 策略权重恒归一到满仓，"
+                         "减资金只影响整手颗粒度，不降敞口")
     ap.add_argument("--lot", type=int, default=100, help="最小交易单位")
     ap.add_argument("--prev", default=None,
                     help="显式指定上期持仓 CSV（缺省 = 自动取最近一期）")
@@ -233,7 +238,8 @@ def main() -> None:
         prev, prev_src = load_prev_holdings(out_dir, date)
 
     weights = solo_weights(ranking, date, k=args.k,
-                           max_per_sector=args.max_per_sector, prev=prev)
+                           max_per_sector=args.max_per_sector, prev=prev,
+                           gross_exposure=args.gross)
     px, tdays = load_prices(("open", "close"))
     close_t = px["close"].loc[date]
     sized = lot_sizing(weights, close_t, args.capital, lot=args.lot)
