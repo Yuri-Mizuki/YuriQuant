@@ -62,6 +62,11 @@ ARMS: tuple[tuple[str, str, dict | None], ...] = (
     ("pl_rand",    "yqcore-focus-k15", dict(k=15, exit_mult=2.0, max_per_sector=1)),
     ("pl_rand_k12", "yqcore-focus-k15", dict(k=12, exit_mult=2.0, max_per_sector=1)),
     ("solo_base",  "yqcore-focus-k8",  dict(k=8, exit_mult=1.0, max_per_sector=1)),
+    # ── k 递减扫描（2026-11-13）：与 solo_base 唯一差别是 k ──
+    ("k7_sec1",    "yqcore-focus-k8",  dict(k=7, exit_mult=1.0, max_per_sector=1)),
+    ("k6_sec1",    "yqcore-focus-k8",  dict(k=6, exit_mult=1.0, max_per_sector=1)),
+    ("k5_sec1",    "yqcore-focus-k8",  dict(k=5, exit_mult=1.0, max_per_sector=1)),
+    ("k4_sec1",    "yqcore-focus-k8",  dict(k=4, exit_mult=1.0, max_per_sector=1)),
 )
 #: 每个臂的 k / exit_mult（``None`` 的 kwargs 也要知道用几）。
 K_EXIT = {"base": (15, 2.0), "k8_plain": (8, 2.0), "k9_match": (9, 2.0),
@@ -160,9 +165,17 @@ def main(argv=None) -> int:
             res = cal.run_once(bt, ctx, "open", freq="M", phase=p,
                                price_panel=px, lot_size=ycr.LOT)
             m = cal.metrics_row(res, capital)
+            w = res.weights_history
+            n_day = (w > cal.N_ACTIVE_TOL).sum(axis=1)
+            n_nz = n_day[n_day > 0]          # 剔除清仓日，否则 min 恒为 0
             rets[p] = {"ann": m["ann"], "sr": m["sharpe_arith"],
                        "max_dd": m["max_dd"], "turnover": m["turnover"],
                        "cost_bp": m["cost_bp"], "n_hold": m["n_active"],
+                       "invest_mean": float(w.sum(axis=1).mean()),
+                       "n_hold_min": int(n_nz.min()) if len(n_nz) else 0,
+                       "n_hold_max": int(n_day.max()),
+                       "w_max": float(w.max(axis=1).mean()),
+                       "w_max_peak": float(w.max(axis=1).max()),
                        "phase": p, "arm": arm, "tier": tier}
             daily[p] = res.daily_returns
             print(f"  [{arm:<10}] p={p:<3} ann={m['ann'] * 100:7.2f}% "
