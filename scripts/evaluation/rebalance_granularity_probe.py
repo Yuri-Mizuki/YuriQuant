@@ -227,6 +227,187 @@ class BudgetedSectorCappedBufferedTopKLongOnly(SectorCappedBufferedTopKLongOnly)
         return pd.Series(1.0 / len(port), index=port)
 
 
+class StaggeredTopKLongOnly(SectorCappedBufferedTopKLongOnly):
+    """每期只替换 ``chunk`` 只的 TopK —— 部分调仓 / 分层建仓（tranching）。
+
+    与 :class:`BudgetedSectorCappedBufferedTopKLongOnly` 的区别（**别混**）：
+
+    - budget 是「这期最多买 chunk 只新的，**剩余名额从旧持仓里硬补**」——它保
+      ``k`` 只满仓，代价是留下排名很差的票（``age_pct`` 高）；
+    - 本类先算**完整目标名单**（含 ``exit_mult`` 带宽与行业约束，同父类），再把
+      当前持仓中**当期排名最差**的 ``chunk`` 只换成目标名单里**排名最好**的
+      ``chunk`` 只 —— 即「每期只磨损最旧的一层」，持仓可以不足 ``k``。
+
+    为什么需要它：``reports/solo_weekly/`` 判负的是「每周**全部重选**」（换手 4 倍），
+    而「每周只换 1/4」在**等价换手**下分散成交，是不同的问题（成本线性 ⇒
+    差别只在信号时效与批次效应，可测）。
+
+    等价换手对照：``freq="W", chunk=2`` ≈ ``freq="M", chunk=8``（每月 8 只）。
+    """
+
+    def __init__(self, *args, chunk: int = 1, **kwargs):
+        super().__init__(*args, **kwargs)
+        if chunk < 1:
+            raise ValueError(f"chunk 必须 ≥ 1: {chunk}")
+        self.chunk = int(chunk)
+        self.n_swap: list[int] = []
+        self.n_hold: list[int] = []
+        self.name = f"{self.name}_chunk{chunk}"
+
+    def get_weights_at(self, date, factor_values):
+        vals = factor_values.dropna()
+        if vals.empty:
+            self._prev = set()
+            return pd.Series(dtype=float)
+        prev = list(self._prev)
+        if not prev:
+            w = super().get_weights_at(date, factor_values)
+            self.n_swap.append(0)
+            self.n_hold.append(len(w))
+            return w
+
+        from strategy.examples import rank_desc
+
+        ranks = rank_desc(vals)
+        saved = set(self._prev)
+        target = list(super().get_weights_at(date, factor_values).index)
+        self._prev = saved                     # 复原：下面自己决定换哪几只
+
+        tgt = set(target)
+        ins = sorted((c for c in target if c not in saved),
+                     key=lambda c: float(ranks[c]))
+        # 卖出优先级 = 当期排名**最差**（ranks 数值大）优先；无排名（停牌/退市）
+        # 视为最差 ⇒ 父类同样会卖（它的 keep 要求 ``code in ranks.index``）。
+        outs = sorted((c for c in prev if c not in tgt),
+                      key=lambda c: -float(ranks.get(c, 1e18)))
+        # 只执行前 chunk 笔。取两侧**较大**者为笔数：target 扩张（ins 多于
+        # outs）时若只按卖出侧截断，会长期补不满 ⇒ 持仓缩水
+        # （2026-11-13 踩坑：M/chunk8 持仓从 5.9 掉到 3.7、年化 33.5%）。
+        # chunk ≥ max 时 drop/add 覆盖全部差集 ⇒ port 恒等于 target。
+        m = min(self.chunk, max(len(outs), len(ins)))
+        drop, add = set(outs[:m]), ins[:m]
+        port = [c for c in prev if c not in drop] + add
+
+        if len(port) > self.k:                 # 行业约束收缩导致超额，砍排名最差的旧票
+            removable = sorted((c for c in port if c not in tgt),
+                               key=lambda c: -float(ranks.get(c, 1e18)))
+            while len(port) > self.k and removable:
+                port.remove(removable.pop(0))
+
+        self.n_swap.append(m)
+        self.n_hold.append(len(port))
+        if not port:
+            self._prev = set()
+            return pd.Series(dtype=float)
+        self._prev = set(port)
+        return pd.Series(1.0 / len(port), index=port)
+
+
+def stagger_grid(ctx, px, ind) -> pd.DataFrame:
+    """部分调仓：``freq × chunk`` 的净收益网格（含两个实现自检臂）。
+
+    自检：``M/chunk8`` 必须逐位复现锚点 36.58%，``W/chunk8`` 必须复现
+    ``reports/solo_weekly`` 的周频全换 18.95%。**两条都对齐，chunk<8 才可信**。
+
+    换手可比性：``turnover`` 是每期单边，跨频率不可比 ⇒ 给 ``turnover_ann``
+    （每期 × 每年期数）与 ``cost_bp``（已折成占资金比例）。
+    """
+    per_year = {"W": 52, "2W": 26, "M": 12}
+    arms = [("M", 8), ("W", 8), ("W", 1), ("W", 2), ("W", 3), ("W", 4),
+            ("2W", 4), ("2W", 8)]
+    rows = []
+    for freq, chunk in arms:
+        strat = StaggeredTopKLongOnly(ind, k=SOLO_K, exit_mult=1.0,
+                                       max_per_sector=1, chunk=chunk)
+        r = _run(ctx, strat, px, ind, freq=freq)
+        r.update(arm=f"{freq}_c{chunk}", freq=freq, chunk=chunk,
+                 turnover_ann=r["turnover"] * per_year[freq],
+                 swap_mean=float(np.mean(strat.n_swap)) if strat.n_swap else np.nan,
+                 hold_mean=float(np.mean(strat.n_hold)) if strat.n_hold else np.nan)
+        rows.append(r)
+        print(f"  {freq:>2} c{chunk}: ann={r['ann']:.4f} SR={r['sharpe']:.4f} "
+              f"turn_ann={r['turnover_ann']:.2f} cost={r['cost_bp']:.0f}bp "
+              f"swap={r['swap_mean']:.2f} hold={r['hold_mean']:.1f}", flush=True)
+    return pd.DataFrame(rows)
+
+
+class CohortTrancheTopKLongOnly(SectorCappedBufferedTopKLongOnly):
+    """资金分 ``cohorts`` 层、每期重建 1 层 —— 滚动建仓（tranching）。
+
+    与 :class:`StaggeredTopKLongOnly` 的区别（两种「每周调一部分」的解读）：
+
+    - staggered：**共享持仓池**，每期只换最差的 ``chunk`` 只，持仓恒 ≈ ``k``；
+    - 本类：``c`` 个**独立小组合**，轮转重建，每层持有 ``c`` 个周期后整体换掉。
+      持仓数可达 ``c·k``（分散化），每层资金 ``1/c``。
+
+    同一只票出现在多层时权重**相加**（不归一化）—— 重叠度自动变成「停留时间
+    加权」，即被多期信号同时选中的票超配。这是本形态的副产品，不是 bug。
+
+    首期把 ``c`` 层全部建满（同一截面），避免前 ``c-1`` 期欠仓 75%/50%/25%。
+    """
+
+    def __init__(self, *args, cohorts: int = 4, **kwargs):
+        super().__init__(*args, **kwargs)
+        if cohorts < 2:
+            raise ValueError(f"cohorts 必须 ≥ 2: {cohorts}")
+        self.cohorts_n = int(cohorts)
+        self._layers: list[list[str] | None] = []
+        self._tick = 0
+        self.n_hold: list[int] = []
+        self.name = f"{self.name}_tranche{cohorts}"
+
+    def get_weights_at(self, date, factor_values):
+        vals = factor_values.dropna()
+        if vals.empty:
+            self._prev = set()
+            return pd.Series(dtype=float)
+        c = self.cohorts_n
+        if not self._layers:                       # 首期：全部建满
+            self._prev = set()
+            base = list(super().get_weights_at(date, factor_values).index)
+            self._layers = [list(base) for _ in range(c)]
+        else:
+            j = self._tick % c
+            self._prev = set()                     # 每层重建 = 硬切 TopK，不带 buffer
+            self._layers[j] = list(
+                super().get_weights_at(date, factor_values).index)
+            self._tick += 1
+
+        acc: dict[str, float] = {}
+        for layer in self._layers:
+            if not layer:
+                continue
+            w = 1.0 / (c * len(layer))
+            for code in layer:
+                acc[code] = acc.get(code, 0.0) + w
+        self._prev = set(acc)
+        self.n_hold.append(len(acc))
+        return pd.Series(acc)
+
+
+def tranche_grid(ctx, px, ind) -> pd.DataFrame:
+    """滚动分层建仓：``freq`` 每期重建 1 层，``cohorts`` 层轮转。
+
+    ``cohorts=2, freq="2W"`` 的每层持有 4 周 ≈ 月频替换速度，但成交分 2 批 ——
+    这是「每周/每两周调一部分」在**资金层**上的等价物。
+    """
+    per_year = {"W": 52, "2W": 26, "M": 12}
+    arms = [("W", 2), ("W", 3), ("W", 4), ("W", 6), ("2W", 2), ("2W", 4)]
+    rows = []
+    for freq, c in arms:
+        strat = CohortTrancheTopKLongOnly(ind, k=SOLO_K, exit_mult=1.0,
+                                          max_per_sector=1, cohorts=c)
+        r = _run(ctx, strat, px, ind, freq=freq)
+        r.update(arm=f"{freq}_t{c}", freq=freq, cohorts=c,
+                 turnover_ann=r["turnover"] * per_year[freq],
+                 hold_mean=float(np.mean(strat.n_hold)) if strat.n_hold else np.nan)
+        rows.append(r)
+        print(f"  {freq:>2} t{c}: ann={r['ann']:.4f} SR={r['sharpe']:.4f} "
+              f"turn_ann={r['turnover_ann']:.2f} cost={r['cost_bp']:.0f}bp "
+              f"hold={r['hold_mean']:.1f}", flush=True)
+    return pd.DataFrame(rows)
+
+
 def _run(ctx, strat, px, ind, freq="M", phase=0):
     bt = cal.VectorBacktest(strategy=strat, rebalance_freq=freq,
                             initial_capital=float(CAPITAL),
@@ -294,7 +475,7 @@ def cadence_grid(ctx, px, ind) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def swap_diagnostics(ctx, topk: int = SOLO_K) -> pd.DataFrame:
+def swap_diagnostics(ctx, topk: int = SOLO_K, freq: str = "M") -> pd.DataFrame:
     """每次换手的**边际收益**：换入票 vs 换出票在下一持有期的收益差。
 
     这是"换手是信息驱动还是噪声"的直接判据 —— 与"少换就亏"互补：
@@ -302,9 +483,13 @@ def swap_diagnostics(ctx, topk: int = SOLO_K) -> pd.DataFrame:
 
     口径：纯排名 TopK（**不含行业约束**，故与 solo 的 5.9 只不同，只读方向与量级）；
     close→close 到下一调仓日，不扣成本、不含 T+1 开盘价差。
+
+    ``freq`` 参数（2026-11-13）：对比「月频换 6 只」与「周频换 2 只」的单笔 edge，
+    用于判断**周内排名变化里有没有真信息**。周频 edge ≈ 0 ⇒ 提频只是把噪声
+    当信号交易，这解释了 stagger/tranche 全线判负。
     """
     sig, close = ctx.pred, ctx.close
-    rb = cal.rebalance_dates(ctx.pred.index, freq="M")
+    rb = cal.rebalance_dates(ctx.pred.index, freq=freq)
     rows, prev = [], None
     for i, t in enumerate(rb[:-1]):
         nxt = rb[i + 1]
@@ -330,7 +515,8 @@ def swap_diagnostics(ctx, topk: int = SOLO_K) -> pd.DataFrame:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--only",
-                    choices=("ic", "anchor", "budget", "cadence", "swap"),
+                    choices=("ic", "anchor", "budget", "cadence", "swap",
+                             "stagger", "tranche"),
                     default=None)
     ap.add_argument("--end", type=int, default=END)
     a = ap.parse_args()
@@ -349,16 +535,18 @@ def main() -> int:
         print(f"半衰期 = {hl:.1f} 个交易日（月频周期 ≈ 21）")
 
     if a.only in (None, "swap"):
-        df = swap_diagnostics(ctx)
-        df.to_csv(OUT / "swap_diagnostics.csv", index=False, encoding="utf-8-sig")
-        print("\n=== 换手归因（换入 vs 换出，下一持有期 close→close）===")
-        print(f"  期数 {len(df)} | 每期换入 {df['n_in'].mean():.2f} / "
-              f"换出 {df['n_out'].mean():.2f}（纯排名 K={SOLO_K}）")
-        print(f"  换入 {df['in_ret'].mean():.4%} vs 换出 {df['out_ret'].mean():.4%} "
-              f"⇒ edge {df['edge'].mean():.4%}/期（中位 {df['edge'].median():.4%}，"
-              f"{int((df['edge'] > 0).sum())}/{len(df)} 期为正）")
+        for fq in ("M", "W"):
+            df = swap_diagnostics(ctx, freq=fq)
+            name = "swap_diagnostics.csv" if fq == "M" else f"swap_diagnostics_{fq}.csv"
+            df.to_csv(OUT / name, index=False, encoding="utf-8-sig")
+            print(f"\n=== 换手归因 freq={fq}（换入 vs 换出，下一持有期 close→close）===")
+            print(f"  期数 {len(df)} | 每期换入 {df['n_in'].mean():.2f} / "
+                  f"换出 {df['n_out'].mean():.2f}（纯排名 K={SOLO_K}）")
+            print(f"  换入 {df['in_ret'].mean():.4%} vs 换出 {df['out_ret'].mean():.4%} "
+                  f"⇒ edge {df['edge'].mean():.4%}/期（中位 {df['edge'].median():.4%}，"
+                  f"{int((df['edge'] > 0).sum())}/{len(df)} 期为正）")
 
-    if a.only in (None, "anchor", "budget", "cadence"):
+    if a.only in (None, "anchor", "budget", "cadence", "stagger", "tranche"):
         px, ind = price_panel(ctx), industry_panel(ctx)
         if a.only in (None, "anchor"):
             r = anchor(ctx, px, ind)
@@ -375,6 +563,16 @@ def main() -> int:
             print("\n=== P1 换手预算（每期最多新增 m 只）===")
             df = budget_grid(ctx, px, ind)
             df.to_csv(OUT / "budget_grid.csv", index=False, encoding="utf-8-sig")
+        if a.only in (None, "stagger"):
+            print("\n=== P2 部分调仓（每期只换 chunk 只）===")
+            df = stagger_grid(ctx, px, ind)
+            df.to_csv(OUT / "stagger_grid.csv", index=False,
+                      encoding="utf-8-sig")
+        if a.only in (None, "tranche"):
+            print("\n=== P2b 滚动分层建仓（每期重建 1 层）===")
+            df = tranche_grid(ctx, px, ind)
+            df.to_csv(OUT / "tranche_grid.csv", index=False,
+                      encoding="utf-8-sig")
     return 0
 
 
