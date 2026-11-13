@@ -64,3 +64,40 @@ def test_unreadable_panels_needs_rebuild():
     need, reasons = R.needs_rebuild(_cov("2026-10-30", "全部读取失败"), "2026-10-30")
     assert need
     assert any("panels_neu" in r for r in reasons), reasons
+
+
+# --------------------------------------------------------------------------
+# 重建链序列（2026-11-13）
+# --------------------------------------------------------------------------
+
+def test_dup_index_is_last_step():
+    """冗余索引重建必须在**最后**：面板全量重算后旧索引已过期。
+
+    这是反复踩了四轮的坑（`dedup_execution.md` 记了三次 P2 未做）。若把它
+    插在中间，后面的中性化会产出新面板而索引仍指向旧签名 —— 入库查重
+    （`_dup_check_fast`）与去重决策表都在读那份过期近邻。
+    """
+    steps = R._steps(workers=1)
+    names = [n for n, _ in steps]
+    assert names[-1] == "dup_index", names[-3:]
+    assert names.count("dup_index") == 1
+
+
+def test_dup_index_step_does_not_apply_registry_backfill():
+    """重建链里的 dup_audit **不得带 --apply**。
+
+    `--apply` 会回填 registry 的 `dup_*` 统计列。混进「重建面板」这个动作里，
+    一旦出问题就无法二分「是面板变了还是统计列变了」；回填应当是独立决策。
+    """
+    steps = dict(R._steps(workers=1))
+    cmd = steps["dup_index"]
+    assert "--apply" not in cmd, cmd
+    assert "scripts.factors.dup_audit" in cmd
+
+
+def test_dup_index_step_targets_production_dataset():
+    """索引必须建在生产数据集上，否则 `_dup_check_fast` 读不到。"""
+    steps = dict(R._steps(workers=1))
+    cmd = steps["dup_index"]
+    assert "--dataset" in cmd
+    assert cmd[cmd.index("--dataset") + 1] == "all_a_2018_2026"

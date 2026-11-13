@@ -390,7 +390,9 @@ _TESTS_ONLY_PRIVATE: set[tuple[str, str]] = {
     # synth_panel / head_excess / weekly_turnover / geo_tstat / long_feature_matrix /
     # monthly_returns / rolling_max_drawdown / run_backtest / run_with_cls /
     # hrp_weights / erc_weights），本字典只保留「确实只给测试看」的那部分。
-    ("research.factor_library", "_row_rank_zscore"),
+    # 2026-11-12：`_row_rank_zscore` 已不在本字典 —— 它曾有三份逐字相同的副本
+    # （`factor_library` / `dup_audit` / 探针各一），已收敛为公开的
+    # `row_rank_zscore`。抄一份实现就让"探针对拍"失去意义，公开化才是正解。
     ("research.factor_library", "_collapse_duplicate_names"),
     ("research.factor_library", "_count_changed"),
     ("research.factor_library", "_family_key"),

@@ -378,6 +378,15 @@ def _steps(workers: int) -> list[tuple[str, list[str]]]:
         # 市场级广播 ⇒ 截面中性化恒 0 ⇒ 浮点残差被放大成假面板），故由本 builder
         # 按面板形态分派覆盖写回。顺序颠倒 = 把 2026-10-10 修好的 alt 中性化打回原形。
         ("neu_altf", [py, "-m", b + "build_alla_altfactor_neu"]),
+        # ⑦ 冗余索引重建 —— **必须排最后**：索引是对全部面板签名算的静态快照，
+        # 面板全量重算后旧索引的 `built_at` 与 `names` 都已过期，而入库查重
+        # （`_dup_check_fast`）与去重决策表都读它 ⇒ 不重建就一直在用过期近邻。
+        # 这是反复踩了四轮的坑（dedup_execution.md 记了三次 P2 未做）。
+        # ⚠️ 不带 `--apply`：回填 registry 的 `dup_*` 列是独立决策，混进重建链会让
+        # 「重建面板」这个动作顺带改统计列，出问题时无法二分。
+        # 耗时约 25 分钟（965 因子 × 200 采样日），是重建链里最贵的一步。
+        ("dup_index", [py, "-m", "scripts.factors.dup_audit",
+                       "--dataset", "all_a_2018_2026"]),
     ]
 
 
