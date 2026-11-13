@@ -259,7 +259,9 @@ def _daily_candidates() -> tuple[Path, ...]:
 #: 支持的调仓频率（与 ``VectorBacktest._get_rebalance_days`` 同名同义）。
 #: 2026-11-10 起 ``rebalance_dates`` / ``next_day_rebalance`` / ``run_once`` 参数化，
 #: 周频实验不再需要在探针里另写一套调仓日（那会与引擎静默漂移）。
-REBALANCE_FREQS: tuple[str, ...] = ("D", "W", "2W", "M")
+#: 2026-11-13 加 ``2M`` / ``Q``：solo 档调仓节奏研究（``rebalance_granularity_probe``）
+#: 需要「比月频更慢」的一侧 —— 此前只有更快的一侧（D/W/2W）被测过。
+REBALANCE_FREQS: tuple[str, ...] = ("D", "W", "2W", "M", "2M", "Q")
 
 
 def rebalance_dates(idx: pd.DatetimeIndex, freq: str = "M",
@@ -286,6 +288,16 @@ def rebalance_dates(idx: pd.DatetimeIndex, freq: str = "M",
     if freq == "D":
         return pd.DatetimeIndex(idx)
     s = pd.Series(idx, index=idx)
+    if freq in ("2M", "Q"):
+        # 2026-11-13 新增（solo 节奏研究的「更慢」一侧）。pandas 无 "2M" 周期，
+        # 用**月份序数**分组：错开 phase 个月再整除周期长度 ⇒ phase 即「周期内
+        # 第几个自然月起步」（2M: 0~1；Q: 0~3）。相位必须能扫，否则 2M 与 Q 的单点
+        # 差异分不清「频率效应」与「调仓日运气」（见 reports/rebalance_granularity）。
+        per_len = 2 if freq == "2M" else 3
+        if not 0 <= phase < per_len:
+            raise ValueError(f"freq={freq!r} 的 phase 须在 [0,{per_len})，收到 {phase}")
+        m = s.index.to_period("M").asi8
+        return pd.DatetimeIndex(s.groupby((m - phase) // per_len).first().values)
     per = s.index.to_period(freq)
     if phase <= 0:
         picked = s.groupby(per).first()

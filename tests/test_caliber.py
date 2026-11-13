@@ -229,16 +229,20 @@ def test_next_day_rebalance_is_trading_day_after_month_first():
         assert prev == same_month[0]          # 前一天是当月首个交易日
 
 
-@pytest.mark.parametrize("freq", ["D", "W", "2W", "M"])
+@pytest.mark.parametrize("freq", ["D", "W", "2W", "M", "2M", "Q"])
 def test_rebalance_dates_match_engine_for_all_freqs(freq):
     """``rebalance_dates(freq)`` 必须与引擎 ``_get_rebalance_days`` 逐位一致。
 
     2026-11-10 新增：频率参数化（周频实验）后，两套实现一旦漂移，回测会静默退化为
     「恒用最后一期权重」（2026-10-13 踩过），且**不会报错**。
+    2026-11-13 加 2M / Q（solo 节奏研究）：下面那条集合断言防止「新增频率忘了加进
+    本参数化列表」—— 漏掉的频率会静默逃过守卫。
     """
     from backtest.engine import VectorBacktest
-    from scripts.evaluation.caliber import rebalance_dates
+    from scripts.evaluation.caliber import REBALANCE_FREQS, rebalance_dates
 
+    assert set(REBALANCE_FREQS) == {"D", "W", "2W", "M", "2M", "Q"}, \
+        "REBALANCE_FREQS 变了 ⇒ 须同步本测试的参数化列表"
     idx = pd.bdate_range("2019-01-02", "2026-09-07")
     bt = VectorBacktest.__new__(VectorBacktest)      # 只借用纯函数，不构造完整对象
     bt.rebalance_freq = freq

@@ -555,6 +555,14 @@ class VectorBacktest:
             s = pd.Series(dates, index=dates)
             wk = list(s.groupby(s.index.to_period("W")).first())
             return set(wk[::2])
+        elif self.rebalance_freq == "2M":
+            # 2026-11-13：每两个自然月的首个交易日（与 caliber.rebalance_dates 逐位一致，
+            # 由 tests/test_caliber.py::test_rebalance_dates_match_engine_for_all_freqs 守）。
+            s = pd.Series(dates, index=dates)
+            return set(s.groupby(s.index.to_period("M").asi8 // 2).first())
+        elif self.rebalance_freq == "Q":
+            s = pd.Series(dates, index=dates)
+            return set(s.groupby(s.index.to_period("Q")).first())
         else:
             return set(dates)
 
