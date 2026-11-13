@@ -67,6 +67,12 @@ ARMS: tuple[tuple[str, str, dict | None], ...] = (
     ("k6_sec1",    "yqcore-focus-k8",  dict(k=6, exit_mult=1.0, max_per_sector=1)),
     ("k5_sec1",    "yqcore-focus-k8",  dict(k=5, exit_mult=1.0, max_per_sector=1)),
     ("k4_sec1",    "yqcore-focus-k8",  dict(k=4, exit_mult=1.0, max_per_sector=1)),
+    # ── k 上行扫描（2026-11-13）：与 solo_base 严格同口径（exit_mult=1.0 · 10万+整手），
+    #    唯一差别是 k。注意 k12_sec1 是 exit_mult=2.0，与这里不同源，不可混用。 ──
+    ("k10_e1",     "yqcore-focus-k8",  dict(k=10, exit_mult=1.0, max_per_sector=1)),
+    ("k12_e1",     "yqcore-focus-k8",  dict(k=12, exit_mult=1.0, max_per_sector=1)),
+    ("k15_e1",     "yqcore-focus-k8",  dict(k=15, exit_mult=1.0, max_per_sector=1)),
+    ("k20_e1",     "yqcore-focus-k8",  dict(k=20, exit_mult=1.0, max_per_sector=1)),
     # ── 风险档位（目标回撤 → 仓位），2026-11-13：只改 gross_exposure ──
     ("g85_sec1",   "yqcore-focus-k8",  dict(k=8, exit_mult=1.0, max_per_sector=1,
                                             gross_exposure=0.85)),
