@@ -76,11 +76,15 @@ def test_formal_maturity_without_eval_is_violation(tmp_path):
     lib = FactorLibrary(root=tmp_path, dataset="t")
     panel, rets = _panel_and_returns()
     # 先正常登记一个"正式"因子（合规）
-    lib.register("f_ok", panel, rets, maturity="active", check_dup=True)
+    lib.register("f_ok", panel, rets, maturity="active", check_dup=True,
+                 reject_dup=False)
     assert lib.contract_violations() == []
 
     # 再造一个只有登记、却标成 active 的因子（违规）
-    lib.ingest("f_bad", panel + 0.01, rets, maturity="active", evidence=False)
+    # ``check_dup=False`` 才触发 ``formal_without_dup_check`` —— 这里要的是"没查过冗余"
+    # 的违规现场，不是让新判据去拒绝它（等价面板会被 reject_dup 拦下）。
+    lib.ingest("f_bad", panel + 0.01, rets, maturity="active", evidence=False,
+               check_dup=False, reject_dup=False)
     rules = {v["rule"] for v in lib.contract_violations() if v["name"] == "f_bad"}
     assert "formal_without_eval" in rules
     assert "formal_without_dup_check" in rules
@@ -117,7 +121,8 @@ def test_apply_eval_many_writes_all_rows_once(tmp_path):
     panel, rets = _panel_and_returns()
     names = [f"m{i}" for i in range(3)]
     for i, nm in enumerate(names):
-        lib.ingest(nm, panel + i * 0.01, rets, evidence=False)
+        lib.ingest(nm, panel + i * 0.01, rets, evidence=False,
+                   reject_dup=False)   # 面板近似，非查重测试
 
     mapping = {nm: lib.evaluate(nm, rets, persist=False) for nm in names}
     assert lib.apply_eval_many(mapping) == 3

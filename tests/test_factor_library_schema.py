@@ -17,6 +17,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from research.factor_library import (
     CANONICAL_COLUMNS,
@@ -203,7 +204,8 @@ def test_upsert_rows_fills_source_and_tags(tmp_path):
         [{"name": "evt_a", "ic_mean_h1": 0.02}, {"name": "evt_b"}],
         source="evt:builders:ds_meta", family="事件", kind="raw",
         maturity="experimental", frequency="日频", set_name="evt")
-    assert stat == {"before": 0, "after": 2, "added": 2, "updated": 0}
+    assert stat == {"before": 0, "after": 2, "added": 2, "updated": 0,
+                    "blocked": 0}
     reg = lib.list_all().set_index("name")
     for col, want in (("source", "evt:builders:ds_meta"), ("family", "事件"),
                       ("kind", "raw"), ("maturity", "experimental"),
@@ -258,6 +260,58 @@ def test_upsert_rows_refreshes_stat_columns_on_rerun(tmp_path):
     assert abs(float(reg.loc["s1", "ic_mean_h1"]) - 0.033) < 1e-12
     # 人工标签不被冲掉
     assert reg.loc["s1", "family"] == "动量"
+
+
+def test_upsert_rows_skips_retired_names(tmp_path):
+    """🔑 退登记的因子不得被重建链写回（2026-11-13）。
+
+    成因：``upsert_rows`` 只增不减，而 06:00 重建走它；退登记只从
+    ``registry.csv`` 删行，``factor_stats_*.jsonl`` 里的统计行不动 ⇒ 下次重建
+    原样复活。实测当时台账 38 个名字**全部**仍在该 jsonl 里。
+    """
+    lib = FactorLibrary(root=tmp_path / "flib", dataset="ds_ret")
+    lib.upsert_rows([{"name": "a"}, {"name": "b"}],
+                    source="alpha101:builders:ds_ret", family="量价")
+    # 模拟退登记：a 从 registry 删掉、写进台账
+    reg = lib.list_all()
+    lib._save_registry(reg[reg["name"] != "a"].reset_index(drop=True))
+    (tmp_path / "flib" / "ds_ret" / "registry_retired.csv").write_text(
+        "name,batch_id\na,b1\n", encoding="utf-8")
+
+    stat = lib.upsert_rows([{"name": "a"}, {"name": "b"}, {"name": "c"}],
+                           source="alpha101:builders:ds_ret", family="量价")
+    assert stat["blocked"] == 1
+    names = set(lib.list_all()["name"])
+    assert "a" not in names, "退登记的 a 被复活了"
+    assert {"b", "c"} <= names
+    assert stat["added"] == 1          # 只有 c 是新增
+
+
+def test_upsert_rows_all_blocked_does_not_touch_registry(tmp_path):
+    """整批都在台账里 ⇒ 直接返回，不写盘（否则会白刷一次文件时间戳）。"""
+    lib = FactorLibrary(root=tmp_path / "flib", dataset="ds_ret2")
+    lib.upsert_rows([{"name": "z"}], source="alpha101:builders:ds_ret2")
+    p = tmp_path / "flib" / "ds_ret2" / "registry.csv"
+    before_mtime = p.stat().st_mtime_ns
+    (tmp_path / "flib" / "ds_ret2" / "registry_retired.csv").write_text(
+        "name\nz\n", encoding="utf-8")
+    stat = lib.upsert_rows([{"name": "z", "ic_mean_h1": 0.9}],
+                           source="alpha101:builders:ds_ret2")
+    assert stat["blocked"] == 1 and stat["added"] == 0
+    assert p.stat().st_mtime_ns == before_mtime, "整批被挡时不应写盘"
+
+
+def test_upsert_rows_corrupt_retired_ledger_fails_loudly(tmp_path):
+    """台账存在但缺 name 列 ⇒ 必须炸，不能静默当"没有台账"。
+
+    静默退化成"不过滤"的后果就是复活已退因子，而这正是本过滤要防的事。
+    """
+    lib = FactorLibrary(root=tmp_path / "flib", dataset="ds_ret3")
+    (tmp_path / "flib" / "ds_ret3").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "flib" / "ds_ret3" / "registry_retired.csv").write_text(
+        "wrong_col\nx\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="缺 name 列"):
+        lib.upsert_rows([{"name": "x"}], source="alpha101:builders:ds_ret3")
 
 
 def test_count_changed_ignores_repr_noise():
@@ -336,7 +390,8 @@ def test_upsert_rows_dedupes_intra_batch_duplicates(tmp_path):
          {"name": "d_a", "coverage": 0.7, "ic_mean_h1": 0.03},
          {"name": "d_b", "coverage": 0.6}],
         source="evt:builders:ds_dup_batch", family="事件", set_name="evt")
-    assert stat == {"before": 0, "after": 2, "added": 2, "updated": 0}
+    assert stat == {"before": 0, "after": 2, "added": 2, "updated": 0,
+                    "blocked": 0}
     reg = lib.list_all().set_index("name")
     assert list(reg.index) == ["d_a", "d_b"]
     # keep="last"：追加顺序即运行顺序，取最后一次统计

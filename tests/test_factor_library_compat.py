@@ -124,7 +124,7 @@ def test_dup_check_excludes_builder_rows_by_default(tmp_path):
     """默认不比批量入库因子 → 无可比对象时 dup_corr_max 为空（而不是静默假装比过）。"""
     lib, panels = _builder_style_lib(tmp_path, names=("evt_insider",))
     dup = panels["evt_insider"]
-    row = lib.register("copy", dup, dup, check_dup=True)
+    row = lib.register("copy", dup, dup, check_dup=True, reject_dup=False)
     assert row["dup_corr_max"] == ""
 
 
@@ -132,7 +132,8 @@ def test_dup_include_builder_rows_expands_pool(tmp_path):
     """显式开启后批量入库因子参与比较——此前它们被静默跳过且 dup_checked 写 True。"""
     lib, panels = _builder_style_lib(tmp_path, names=("evt_insider",))
     dup = panels["evt_insider"]
-    row = lib.register("copy", dup, dup, check_dup=True, dup_include_builder_rows=True)
+    row = lib.register("copy", dup, dup, check_dup=True, reject_dup=False,
+                       dup_include_builder_rows=True)
     assert float(row["dup_corr_max"]) > 0.99
     assert row["dup_top"] == "evt_insider"
 

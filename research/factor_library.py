@@ -636,11 +636,14 @@ _RP_CACHE: dict[str, pd.DataFrame] = {}
 _RP_BASIS: dict[str, str] = {}
 
 
-def _row_rank_zscore(a: np.ndarray) -> np.ndarray:
+def row_rank_zscore(a: np.ndarray) -> np.ndarray:
     """(R, C) 原始值 → 逐行截面 rank 后 z-score，NaN 记 0。
 
-    冗余审计与入库门禁共用这一份变换：只有两边口径完全一致，
-    「入库时查到的相关」才等于「审计时入表的那个数」。
+    冗余审计、入库门禁、口径探针共用这一份变换：只有三边口径完全一致，
+    「入库时查到的相关」才等于「审计时入表的那个数」，探针的层间对拍才有意义。
+
+    NaN 记 0 而不是剔除，是因为后面要走矩阵乘法；0 在 z-score 尺度上等于
+    "当日该股票处于中位"，对缺失的假设与截面均值填补一致。
     """
     from scipy.stats import rankdata
 
@@ -652,6 +655,11 @@ def _row_rank_zscore(a: np.ndarray) -> np.ndarray:
         z = (r - mu) / sd
     z[~np.isfinite(z)] = 0.0
     return z.astype(np.float32)
+
+
+#: 旧私有名的兼容别名：本模块内部与 `dup_audit` 曾各有一份同名实现，
+#: 已收敛为上面这一个。别名只是为了不在同一夜打断其它脚本，新代码请用公开名。
+_row_rank_zscore = row_rank_zscore
 
 
 def _forward_returns(returns_panel: pd.DataFrame, horizon: int) -> pd.DataFrame:
@@ -858,9 +866,14 @@ class FactorLibrary:
         horizons: tuple[int, ...] | None = (1, 5, 10, 20),
         evidence: bool = True,
         write_panel: bool = True,
-        check_dup: bool = False,
+        #: 🚨 2026-11-12 起**默认开启**：新因子入库自动查重。
+        #: 旧默认 False 的后果是 ``dup_checked`` 全库 0 行、
+        #: ``contract_violations()`` 里"正式因子不许没查过冗余"这条门禁永远红着。
+        check_dup: bool = True,
         dup_corr: float = 0.7,
-        reject_dup: bool = False,
+        #: 是否拒绝**秩空间等价**的因子。默认 True：等价因子对模型没有新信息。
+        #: 注意它**不**拒绝「高相关但秩空间有增量」——那类必须放行（2026-11-12）。
+        reject_dup: bool = True,
         dup_include_builder_rows: bool = False,
         persist: bool = True,
         ret_basis: str = "close_pct_v1",
@@ -1096,14 +1109,26 @@ class FactorLibrary:
 
         回填脚本的唯一写盘点：worker 只算（``evaluate(persist=False)``）、
         父进程汇总后调本方法，避免多进程同时写 ``registry.csv`` 互相截断。
+
+        未登记的名字**跳过并计数**，不抛异常（2026-11-13 改）。原实现
+        ``raise KeyError("未登记因子")``，而写入方是**全库审计**——审计对象取自
+        面板目录 / 索引，天然包含已退登记的因子。于是「退过任何因子的库」跑
+        ``dup_audit --apply`` 必崩，这也正是它一直挂不进重建链的直接原因。
+        跳过时一定打印数量（静默跳过正是 2026-09 那次"912 个因子标了
+        dup_checked=True 其实没查"的老毛病，不可复发）。
         """
         if not mapping:
             return 0
         reg = self._load_registry()
+        known = set(reg["name"])
+        ghost = [n for n in mapping if n not in known]
+        if ghost:
+            log.info("回填跳过 %d 个未登记因子（多半已退登记）：%s",
+                     len(ghost), sorted(ghost)[:8])
         for name, metrics in mapping.items():
             m = reg["name"] == name
             if not m.any():
-                raise KeyError(f"未登记因子 {name}")
+                continue
             for k, v in metrics.items():
                 if k not in reg.columns:
                     reg[k] = pd.NA
@@ -1580,9 +1605,9 @@ class FactorLibrary:
         frequency: str = "",
         maturity: str = "experimental",
         note: str = "",
-        check_dup: bool = False,
+        check_dup: bool = True,
         dup_corr: float = 0.7,
-        reject_dup: bool = False,
+        reject_dup: bool = True,
         dup_include_builder_rows: bool = False,
         write_panel: bool = True,
     ) -> dict:
@@ -1695,6 +1720,37 @@ class FactorLibrary:
         reg = self._load_registry()
         before = len(reg)
         known = set(reg["name"])
+
+        # 🚨 退登记台账过滤（2026-11-13）。
+        #
+        # 为什么必须有这一步：本方法**只增不减**，而 06:00 重建链的
+        # ``scripts.builders.common.merge_outputs`` 正是走它。退登记只从
+        # ``registry.csv`` 删行，``factor_stats_*.jsonl`` 里的统计行**不动**
+        # ⇒ 下一次重建就把退掉的因子原样写回来。实测：38 个台账名字**全部**
+        # 仍出现在 stats jsonl 里，只是 13:40 退完还没跑过重建，所以交集暂时为 0。
+        # 不挡就是「今天退 21 个、明早 06:00 变回 962」。
+        #
+        # 语义选择：**跳过**而不是报错、也不是静默删除——
+        # - 报错会让整条重建链中断（而重建链每天自动跑）；
+        # - 静默删除连自己也看不见，违反「覆盖面一定要打印」的既有教训；
+        # - 跳过 + 计数 + 日志，重建可继续，账面上看得见被挡了多少。
+        #
+        # ``maturity == "retired"`` 的老写法（只打标签不删行）不在本过滤范围内：
+        # 它在 registry 里本就该存在，只是状态是 retired。
+        #
+        # 🔑 为什么只挡 upsert_rows、不挡 ingest/register：后两者是**主动入库**
+        # （调用方明确要登记这一个因子），重新登记是有意的；本方法是**批量重建
+        # 的被动通道**，调用方并不"想要"这些因子，只是 stats 文件里还留着它们。
+        # 把过滤加在 ingest 上会让「退错了要恢复」这件事变得不可能。
+        _blocked = self._retired_names() & set(new_df["name"])
+        if _blocked:
+            new_df = new_df[~new_df["name"].isin(_blocked)]
+            log.info("轻量登记：%d 个因子在退登记台账里，跳过不写回（防复活）：%s",
+                     len(_blocked), sorted(_blocked)[:8])
+            if new_df.empty:
+                return {"before": before, "after": before, "added": 0,
+                        "updated": 0, "blocked": len(_blocked)}
+
         n_add = int((~new_df["name"].isin(known)).sum())
         dup = reg["name"].isin(new_df["name"])
         keep = reg[~dup]
@@ -1739,7 +1795,29 @@ class FactorLibrary:
         log.info("轻量登记: %d -> %d 因子（新增 %d, 更新 %d, 统计刷新 %d 格）",
                  before, len(out), n_add, int(dup.sum()), n_refresh)
         return {"before": before, "after": len(out), "added": n_add,
-                "updated": int(dup.sum())}
+                "updated": int(dup.sum()), "blocked": len(_blocked)}
+
+    def _retired_names(self) -> set[str]:
+        """退登记台账里的因子名（``registry_retired.csv``）。
+
+        读不到就返回空集：台账缺失属于「还没退过任何因子」，不该让重建链中断。
+        ⚠️ 但**存在却读失败**（编码/列名坏）必须炸——那会让过滤静默失效，
+        退掉的因子被悄悄复活，而这正是本方法要防的事。
+        """
+        p = self._registry_path.with_name("registry_retired.csv")
+        if not p.exists():
+            return set()
+        try:
+            led = pd.read_csv(p)
+        except Exception as e:  # noqa: BLE001
+            raise RuntimeError(
+                f"退登记台账存在但读取失败：{p}（{type(e).__name__}: {e}）。"
+                "继续 upsert 会静默复活已退因子，故拒绝写入。") from e
+        if "name" not in led.columns:
+            raise RuntimeError(
+                f"退登记台账缺 name 列：{p}（有 {list(led.columns)}）。"
+                "继续 upsert 会静默复活已退因子，故拒绝写入。")
+        return set(led["name"].dropna().astype(str))
 
     # ---- 查询 ----
     def has(self, name: str) -> bool:
@@ -2267,7 +2345,7 @@ class FactorLibrary:
         arr = panel.reindex(index=dates, columns=codes).to_numpy(dtype=np.float64)
         if arr.size == 0 or np.isfinite(arr).mean() < 0.05:
             return {"available": False, "reason": "与索引日历/股票池几乎不重叠"}
-        zq = _row_rank_zscore(arr)
+        zq = row_rank_zscore(arr)
         sig = idx["sig"]
         num = np.zeros(len(idx["names"]), dtype=np.float64)
         for k in range(len(dates)):
@@ -2288,24 +2366,40 @@ class FactorLibrary:
                for j in order]
         top_corr, top_name = abs(top[0]["corr"]), top[0]["name"]
         # 残差回归是唯一的重活（全样本逐日截面 OLS，实测 8~13 s/因子）。
-        # 只在"疑似重复"时才值得算——ρ<0.85 的因子不存在"增量是否够"的问题。
-        if top_corr >= 0.85:
-            resid_ic, resid_t = self._residual_ic(
-                panel, self.default_returns_panel(), top_name)
+        # 只在"疑似重复"时才值得算——ρ 不到触发线的不存在"等价"问题。
+        from scripts.factors.dup_criteria import (
+            classify, classify_independent, explain, should_check)
+
+        if should_check(top_corr):
+            opp = self.get_panel(top_name)
+            if opp is not None:
+                from scripts.factors.dup_audit import rank_resid_stats
+
+                st = rank_resid_stats(panel, {top_name: opp},
+                                      self.default_returns_panel())
+                v = classify(st)
+            else:
+                # 没有独立面板（批量入库的 builder 行）⇒ 用索引里已有的签名兜底。
+                # 不兜底就等于「库内最主要的那部分最近邻一律放行」——等价检查静默失效。
+                from scripts.factors.dup_audit import rank_resid_stats_from_sig
+
+                j = [str(n) for n in idx["names"]].index(top_name)
+                st = rank_resid_stats_from_sig(zq, np.asarray(idx["sig"][:, j, :]))
+                v = classify(st)
+                if not v.tested:
+                    # 兜底也没测成 ⇒ 「无法检验」，**不能**当「不相似」
+                    v = classify({"rel_std": float("nan"), "n_span": 0})
         else:
-            resid_ic, resid_t = float("nan"), float("nan")
-        if top_corr >= 0.95:
-            verdict = "重复" if abs(resid_t) < 2.0 else "重复但残差有增量"
-        elif top_corr >= 0.85:
-            verdict = "近重复但残差有增量" if abs(resid_t) >= 2.0 else "近重复无增量"
-        else:
-            verdict = "独立"
+            v = classify_independent(top_corr)
         return {
             "available": True, "top": top,
             "top_corr": round(float(top_corr), 4), "top_name": top_name,
-            "resid_ic": round(float(resid_ic), 4),
-            "resid_t": round(float(resid_t), 2),
-            "verdict": verdict,
+            "verdict": v.level, "verdict_detail": v.reason,
+            "rel_std": round(float(v.rel_std), 6) if np.isfinite(v.rel_std) else None,
+            "resid_ic": round(float(v.resid_ic), 4) if np.isfinite(v.resid_ic) else None,
+            "resid_t": round(float(v.resid_t), 2) if np.isfinite(v.resid_t) else None,
+            "removable": v.removable, "tested": v.tested,
+            "criteria": explain(),
             "index_built_at": idx.get("built_at", "?"),
         }
 
@@ -2313,34 +2407,42 @@ class FactorLibrary:
         """签名查表版冗余预检；索引不可用或样本不重叠时返回 None（调用方回退）。
 
         精度：索引只用抽样日历，与全样本逐日相关实测差 ≤0.02（4 对已知因子
-        对照），用于 0.7/0.85 这种阈值判断足够；报告口径见
+        对照），用于触发线判断足够；报告口径见
         ``reports/library_governance/dup_audit.md``。
 
-        2026-11-12：近邻从 ``argmax(corr)`` 改为 ``argmax(|corr|)``。原实现只
-        取最大**正**相关，``SUMP`` vs ``SUMD`` 这类 ρ=−1.000 的反向重复会被
-        判成"不相关"直接放行。
+        **判据（2026-11-12 改口径）**：`dup_corr` 只用来决定「值不值得做残差检验」
+        与日志提示，**不参与"是否重复"的判定**。真正判重看秩空间残差
+        （``scripts.factors.dup_criteria``）：
+
+        - ``rel_std < 1e-3`` ⇒ **等价**（单调变换/镜像）⇒ ``reject_dup`` 时直接拒
+        - 否则放行，即使 ρ 高达 0.999——实测 129 个「ρ≥0.95 的冗余」里
+          95 个秩空间仍有 7%~27% 残差标准差，按 ρ 判会误杀真信号
+
+        ``reject_dup=True`` 时**只拒等价**，不拒「高相关但有增量」。
         """
         res = self.precheck_dup(panel, name=name, topk=1)
         if not res.get("available"):
             return None
         top_corr, top_name = res["top_corr"], res["top_name"]
-        resid_ic, resid_t = res["resid_ic"], res["resid_t"]
-        msg = (f"因子 {name} 冗余预检（签名查表）: 与 {top_name} 相关 {top_corr:.2f}"
-               + (f"（>{dup_corr} 疑似冗余）" if top_corr > dup_corr else "")
-               + f"；正交残差 IC={resid_ic:.4f} t_nw={resid_t:.2f}"
-               + ("（增量信息不足）" if abs(resid_t) < 2.0 else "（含增量信息）"))
-        if top_corr > dup_corr:
+        verdict, detail = res["verdict"], res.get("verdict_detail", "")
+        rel_std, resid_ic, resid_t = res["rel_std"], res["resid_ic"], res["resid_t"]
+        msg = (f"因子 {name} 冗余预检（签名查表）: 最近邻 {top_name} |ρ|={top_corr:.4f}"
+               f" ⇒ {verdict}" + (f"（{detail}）" if detail else ""))
+        if res.get("removable"):
             log.warning(msg)
             if reject_dup:
-                raise ValueError(f"入库被拒（reject_dup）: {msg}")
+                raise ValueError(
+                    f"入库被拒：新因子与库内 {top_name} 秩空间等价"
+                    f"（rel_std={rel_std}），对模型没有新信息。{msg}")
         else:
             log.info(msg)
         return {
             "dup_checked": True,
             "dup_corr_max": round(top_corr, 3),
             "dup_top": top_name,
-            "resid_ic": round(resid_ic, 4),
-            "resid_t_nw": round(resid_t, 2),
+            "resid_ic": resid_ic if resid_ic is not None else "",
+            "resid_t_nw": resid_t if resid_t is not None else "",
+            "dup_verdict": verdict,
         }
 
     def _run_dup_check(self, name, panel, returns_panel, check_dup, dup_corr, reject_dup,
@@ -2410,23 +2512,40 @@ class FactorLibrary:
         hits.sort(reverse=True)
         log.info("冗余预检覆盖: 实际比较 %d/%d 个库内因子", len(hits), n_total)
         top_corr, top_name = hits[0]
-        resid_ic, resid_t = self._residual_ic(panel, returns_panel, top_name)
-        msg = (f"因子 {name} 冗余预检: 与 {top_name} 相关 {top_corr:.2f}"
-               + (f"（>{dup_corr} 疑似冗余）" if top_corr > dup_corr else "")
-               + f"；正交残差 IC={resid_ic:.4f} t_nw={resid_t:.2f}"
-               + ("（增量信息不足）" if abs(resid_t) < 2.0 else "（含增量信息）"))
-        if top_corr > dup_corr:
+        # ---- 判据与快路径统一走 dup_criteria（2026-11-12）----
+        # 这里原来用 raw 值的 resid_t（|t|≥2 算有增量），已被证伪：
+        # 纯单调变换（rank 版本）在 raw 空间留下曲线残差，能给出 t=−7.4 的伪增量。
+        from scripts.factors.dup_audit import rank_resid_stats
+        from scripts.factors.dup_criteria import (
+            classify, classify_independent, explain, should_check)
+
+        if should_check(top_corr):
+            opp = self.get_panel(top_name)
+            if opp is not None:
+                v = classify(rank_resid_stats(panel, {top_name: opp},
+                                              returns_panel))
+            else:
+                v = classify({"rel_std": float("nan"), "n_span": 0})
+        else:
+            v = classify_independent(top_corr)
+        msg = (f"因子 {name} 冗余预检: 最近邻 {top_name} |ρ|={top_corr:.4f}"
+               f" ⇒ {v.level}" + (f"（{v.reason}）" if v.reason else ""))
+        if v.removable:
             log.warning(msg)
             if reject_dup:
-                raise ValueError(f"入库被拒（reject_dup）: {msg}")
+                raise ValueError(
+                    f"入库被拒：与库内 {top_name} 秩空间等价"
+                    f"（rel_std={v.rel_std:.2e}），对模型没有新信息。{msg}\n"
+                    f"判据：{explain()}")
         else:
             log.info(msg)
         return {
             "dup_checked": True,
             "dup_corr_max": round(top_corr, 3),
             "dup_top": top_name,
-            "resid_ic": round(resid_ic, 4),
-            "resid_t_nw": round(resid_t, 2),
+            "resid_ic": round(float(v.resid_ic), 4) if np.isfinite(v.resid_ic) else "",
+            "resid_t_nw": round(float(v.resid_t), 2) if np.isfinite(v.resid_t) else "",
+            "dup_verdict": v.level,
         }
 
     def _residual_ic(self, panel, returns_panel, top_name) -> tuple[float, float]:

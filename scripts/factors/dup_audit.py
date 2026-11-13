@@ -47,7 +47,6 @@ import argparse
 import json
 import sys
 import time
-import warnings
 from pathlib import Path
 
 import numpy as np
@@ -57,8 +56,8 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from research.factor_library import FactorLibrary, row_rank_zscore  # noqa: E402
 from scripts.common.cli_common import setup_logging  # noqa: E402
-from research.factor_library import FactorLibrary, name_slug  # noqa: E402
 
 log = setup_logging("dup_audit")
 
@@ -123,22 +122,10 @@ def _code_pool(dates: pd.DatetimeIndex, max_codes: int) -> tuple[list[str], pd.D
 
 
 # ---------------------------------------------------------------- 签名构建
-def _row_rank_zscore(a: np.ndarray) -> np.ndarray:
-    """(R, C) 原始值 → 逐行截面 rank 后 z-score，NaN 记 0。
-
-    NaN 记 0 而不是剔除，是因为后面要走矩阵乘法；0 在 z-score 尺度上等于
-    "当日该股票处于中位"，对缺失的假设与截面均值填补一致。
-    """
-    from scipy.stats import rankdata
-
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", RuntimeWarning)
-        r = rankdata(a, axis=1, nan_policy="omit")
-        mu = np.nanmean(r, axis=1, keepdims=True)
-        sd = np.nanstd(r, axis=1, keepdims=True)
-        z = (r - mu) / sd
-    z[~np.isfinite(z)] = 0.0
-    return z.astype(np.float32)
+#: 秩变换的**唯一实现**在 ``research.factor_library.row_rank_zscore``。
+#: 曾在这里抄过一份，后果是「入库门禁查到的相关」与「审计入表的相关」分家，
+#: 而且探针拿两份实现对拍等于没对拍。私有别名仅为兼容旧引用。
+_row_rank_zscore = row_rank_zscore
 
 
 def build_signatures(lib: FactorLibrary, names: list[str], dates: pd.DatetimeIndex,
@@ -222,15 +209,35 @@ def correlation_matrix(Z: np.ndarray) -> np.ndarray:
     return np.clip(np.nan_to_num(corr), -1.0, 1.0).astype(np.float32)
 
 
-def neighbors(corr: np.ndarray, names: list[str], top_k: int = 3) -> pd.DataFrame:
-    """每个因子的最近邻（排除自身）。"""
+def neighbors(corr: np.ndarray, names: list[str], top_k: int = 3,
+              abs_corr: bool = False) -> pd.DataFrame:
+    """每个因子的最近邻（排除自身）。
+
+    Args:
+        abs_corr: 为 True 时按 **|ρ|** 排序（反向重复也算近邻）。默认 False 保持
+            历史行为（按 ρ 降序），因为 ``dup_audit`` 的报告与 ``test_dup_audit``
+            都锁着「max_corr 是最大正相关」这个语义。
+
+    🚨 **判重必须传 ``abs_corr=True``**（2026-11-12 复核）。默认的 "最大正相关"
+    会把 ρ=−1 的镜像对判成不相关：``alpha158_SUMN30`` vs ``SUMP30`` 是精确的
+    −1.000，但按 ρ 排序时它的最近邻是另一个 ρ=+0.93 的因子，于是
+    ``max_corr=0.93`` 落进 T3/独立 ⇒ 整对逃过判重。
+    ``_dup_check_fast`` 早在 11-12 就改成 ``argmax(|corr|)``，本函数是同一处
+    遗漏的另一半（当时只修了入库门禁，没修审计报告这条链）。
+    """
     c = corr.copy()
-    np.fill_diagonal(c, -np.inf)
+    #: 排序键与报告值分开：``c`` 保留**带符号**原值（报告用），``key`` 只用来排序。
+    #: 🚨 必须在取完 |·| **之后**再屏蔽对角线——先屏蔽 ``c`` 再取绝对值会把
+    #: ``-inf`` 变成 ``+inf``，自身就成了"最近邻"（2026-11-12 踩过）。
+    key = np.abs(c) if abs_corr else c.copy()
+    np.fill_diagonal(key, -np.inf)
     rows = []
     for i, nm in enumerate(names):
-        order = np.argpartition(-c[i], min(top_k, len(names) - 1))[:top_k]
-        order = order[np.argsort(-c[i][order])]
-        rec = {"name": nm, "max_corr": float(c[i][order[0]]) if len(order) else np.nan,
+        order = np.argpartition(-key[i], min(top_k, len(names) - 1))[:top_k]
+        order = order[np.argsort(-key[i][order])]
+        rec = {"name": nm,
+               "max_corr": float(c[i][order[0]]) if len(order) else np.nan,
+               "abs_corr": abs(float(c[i][order[0]])) if len(order) else np.nan,
                "top": names[order[0]] if len(order) else ""}
         for j, oi in enumerate(order, 1):
             rec[f"nb{j}"] = names[oi]
@@ -247,11 +254,16 @@ def clusters(corr: np.ndarray, names: list[str], thresh: float,
     只有 0.1，会被串成一簇——实测全库单链接给出一个 323 个成员、簇内相关
     跨 [0.08, 1.00] 的巨簇，这种簇无法回答"可以合并哪些"。完全链接保证
     簇内**任意两点**都 ≥ thresh，代价是簇更碎（真正能合并的才会在一起）。
+
+    🚨 **距离用 ``1−|ρ|`` 而非 ``1−ρ``**（2026-11-12 复核）。用 ``1−ρ`` 时
+    ρ=−1 的镜像对距离是 2（最远）⇒ 它们永远进不了同一簇，`alpha158_SUMN30`
+    与 `SUMP30`（精确 −1.000）被分到两个簇。判重问的是「信息是否等价」，
+    反向只是符号约定（IC 取反即可），必须在同一簇里才能比较留谁。
     """
     from scipy.cluster.hierarchy import fcluster, linkage
     from scipy.spatial.distance import squareform
 
-    d = 1.0 - corr.astype(np.float64)
+    d = 1.0 - np.abs(corr.astype(np.float64))
     np.fill_diagonal(d, 0.0)
     d = np.clip((d + d.T) / 2, 0, None)
     np.fill_diagonal(d, 0.0)
@@ -260,7 +272,180 @@ def clusters(corr: np.ndarray, names: list[str], thresh: float,
     return pd.DataFrame({"name": names, "cluster": lab})
 
 
+# ---------------------------------------------------------------- 秩空间增量
+def rank_resid_stats(panel: pd.DataFrame, against: dict[str, pd.DataFrame],
+                     returns: pd.DataFrame, *, min_obs: int = 20,
+                     stride: int = 1) -> dict:
+    """**秩空间**多因子增量检验：把 y 的截面秩对 covering 因子的截面秩回归取残差。
+
+    为什么不用原始值 OLS（2026-11-12 复核改口径）
+    --------------------------------------------
+    ``_resid_for`` 在**原始值**上做逐日截面 OLS。纯单调变换（例如
+    ``alpha101_033`` 就是 ``alpha158_OPEN0`` 的截面 rank）在原始值空间不是线性
+    关系，OLS 残差是一个**关于 x 的系统性曲线**（x² 项等），它当然与未来收益
+    相关 ⇒ 稳定的大 t 值。实测：
+
+    - ``OPEN0`` vs ``101_033``：2511 天秩相关**恒 = 1.000000**，raw OLS 给 **t = −7.40**
+    - ``VSUMN30`` vs ``VSUMD30``：2511 天秩相关**恒 = −1.000**，raw OLS 给 **t = +25.4**
+
+    后者曾被当作「量比信号就在残差里」的证据写进报告——**那个结论是错的**：
+    两因子在秩空间完全等价，而生产链（``panels_neu`` → z-score → DPP）消费的
+    正是截面秩/z，原始值的非线性差异进不了模型。
+
+    本函数在秩空间做同一件事：先对每日截面取 rank，再对 covering 因子的 rank
+    回归。单调变换下残差**精确为 0**，不会产生任何伪增量。
+
+    Args:
+        panel: 待检验因子（date × code）。
+        against: ``{name: 面板}``，要控制掉的因子（通常是簇代表 + 已判留者）。
+        returns: 未来收益面板（与 ``default_returns_panel`` 同口径）。
+
+    Returns:
+        dict:
+        - ``rel_std``：残差标准差 / 因变量秩标准差。**< 1e-3 即「秩空间退化」**
+          （等价于 covering 的单调变换），可直接删。**只取决于因子间关系，
+          与收益面板无关**——收益不覆盖的因子照样能判等价。
+        - ``ic`` / ``t``：残差与未来收益的 Rank IC 均值与 NW t。
+        - ``n_days``：IC 有效截面数。< 20 时``ic``/``t`` 记 NaN，**必须与「无增量」
+          区分开**（见 ``_verify_retire_resid_on_cover`` 的 8/8 假通过事故）。
+        - ``n_span``：参与回归的截面数。**与 ``n_days`` 分开报**：精确退化时
+          残差恒 0 ⇒ ``n_days=0`` 但 ``n_span`` 可能是 2511。
+        - ``degenerate``：``rel_std < 1e-3``。
+
+    ⚠️ 掩码分两个（2026-11-12 修）：``rel_std`` 用「因子 × covering 均有效」，
+    ``ic`` 再叠「收益有效」。曾经共用一个含收益的掩码，导致收益面板不覆盖的
+    因子被判「无法检验（n_span=0）」，而它其实**已经可以判等价**。
+    """
+    import scipy.stats as ss_mod
+
+    from stats.robust_stats import nw_tstat
+
+    cd = panel.index
+    cc = panel.columns
+    for p in against.values():
+        cd = cd.intersection(p.index)
+        cc = cc.intersection(p.columns)
+    if len(cd) < min_obs or len(cc) < min_obs:
+        return {"rel_std": float("nan"), "ic": float("nan"),
+                "t": float("nan"), "n_days": 0, "n_span": 0,
+                "degenerate": None}
+
+    cd = cd[::max(1, int(stride))]
+    Y = panel.reindex(index=cd, columns=cc).to_numpy(dtype=np.float64)
+    # 收益**不进交集**：不覆盖的日子在下面按 NaN 掩掉，只影响 ic，不影响 rel_std。
+    R = returns.reindex(index=cd, columns=cc).to_numpy(dtype=np.float64)
+    Xs = [p.reindex(index=cd, columns=cc).to_numpy(dtype=np.float64)
+          for p in against.values()]
+
+    rel: list[float] = []
+    ics: list[float] = []
+    for ti in range(len(cd)):
+        y = Y[ti]
+        r = R[ti]
+        cols = [x[ti] for x in Xs]
+        # ⚠️ 两个掩码**必须分开**（2026-11-12 修）：
+        # ``rel_std`` 是纯**因子间**的秩空间关系，与收益无关；只有 ``ic`` 需要收益。
+        # 原先用同一个 ``ok``（含 isfinite(r)）⇒ 收益面板不覆盖的因子被判「无法检验」，
+        # 而它其实**已经能判等价**。真实场景：新因子窗口比收益面板长/短、
+        # 或单测里没给收益面板。这与我此前犯的「精确退化写成样本不足」是同一类错。
+        ok = np.isfinite(y)
+        for c in cols:
+            ok &= np.isfinite(c)
+        if ok.sum() < min_obs:
+            continue
+        ry = ss_mod.rankdata(y[ok])
+        sy = float(np.std(ry))
+        if sy <= 0:
+            continue
+        # 秩空间设计矩阵：[1, rank(covering)...]
+        M = np.column_stack([np.ones(int(ok.sum()))]
+                            + [ss_mod.rankdata(c[ok]) for c in cols])
+        beta, *_ = np.linalg.lstsq(M, ry, rcond=None)
+        resid = ry - M @ beta
+        rs = float(np.std(resid))
+        rel.append(rs / sy)
+        if rs / sy < 1e-6:            # 秩空间精确退化 ⇒ 无残差可言
+            continue
+        # 到这里才需要收益：在 ok 的索引空间里再筛一次
+        ok_ic = np.isfinite(r[ok])
+        if int(ok_ic.sum()) < min_obs:
+            continue
+        rr = r[ok][ok_ic]
+        if np.std(rr) == 0:
+            continue
+        ic = float(np.corrcoef(ss_mod.rankdata(resid[ok_ic]),
+                               ss_mod.rankdata(rr))[0, 1])
+        if not np.isnan(ic):
+            ics.append(ic)
+
+    if not rel:
+        return {"rel_std": float("nan"), "ic": float("nan"),
+                "t": float("nan"), "n_days": 0, "n_span": 0, "degenerate": None}
+    rel_std = float(np.mean(rel))
+    # ⚠️ ``n_span``（参与回归的截面数）与 ``n_days``（IC 有效日）**必须分开报**：
+    # 秩空间精确退化时残差恒 0，IC 无从计算 ⇒ ``n_days=0`` 但 ``n_span`` 可能是 2511。
+    # 混用会让"精确等价"被当成"样本不足"（2026-11-12 实测 34 个）。
+    n_span = len(rel)
+    if len(ics) < 20:
+        return {"rel_std": rel_std, "ic": float("nan"), "t": float("nan"),
+                "n_days": len(ics), "n_span": n_span,
+                "degenerate": rel_std < 1e-3}
+    t, _se, _lag = nw_tstat(np.asarray(ics))
+    return {"rel_std": rel_std, "ic": float(np.mean(ics)), "t": float(t),
+            "n_days": len(ics), "n_span": n_span,
+            "degenerate": rel_std < 1e-3}
+
+
 # ---------------------------------------------------------------- 回填
+def rank_resid_stats_from_sig(z_new: np.ndarray, z_old: np.ndarray, *,
+                              min_obs: int = 20) -> dict:
+    """索引签名兜底：只用两个因子的 rank-z 签名做秩空间回归（无收益 ⇒ 无 ic）。
+
+    为什么需要它
+    ------------
+    ``precheck_dup`` 判等价要拿最近邻的**面板**做回归，但库内 912 个批量入库
+    （``merge_outputs``）的行 ``panel_path`` 为空、``get_panel`` 返回 None。
+    而索引（``dup_signatures.npy``）覆盖**全库**，于是「新因子 vs 库内 builder
+    因子」这条最主要的路径全部落到「无法检验 ⇒ 放行」——等价检查静默失效。
+    签名本来就在内存里（memmap），拿它兜底不需要多读一个字节。
+
+    ⚠️ 口径差异（引用时必须带上）：签名里 NaN 已记 0（= 当日中位），
+    无法还原「缺失」。后果分两种：
+
+    - 缺失模式**相同** ⇒ 0 的位置也相同 ⇒ 残差仍**精确为 0**，判等价不受影响；
+    - 缺失模式**不同** ⇒ ``rel_std`` 偏大 ⇒ 只会**漏判**等价，不会误判。
+
+    方向是保守的（宁留冗余，不误杀真信号），因此本函数**只回答"是否等价"**，
+    不产出 ``ic``/``t``——没有收益就绝不假装有。
+
+    Returns:
+        同 :func:`rank_resid_stats`，但 ``ic``/``t`` 恒 NaN、``n_days`` 恒 0。
+    """
+    import scipy.stats as ss_mod
+
+    rel: list[float] = []
+    n_span = 0
+    for ti in range(z_new.shape[0]):
+        a, b = z_new[ti], z_old[ti]
+        ok = np.isfinite(a) & np.isfinite(b)
+        if ok.sum() < min_obs:
+            continue
+        ra = ss_mod.rankdata(a[ok])
+        sy = float(np.std(ra))
+        if sy <= 0:
+            continue
+        M = np.column_stack([np.ones(int(ok.sum())), ss_mod.rankdata(b[ok])])
+        beta, *_ = np.linalg.lstsq(M, ra, rcond=None)
+        rel.append(float(np.std(ra - M @ beta)) / sy)
+        n_span += 1
+    if not rel:
+        return {"rel_std": float("nan"), "ic": float("nan"),
+                "t": float("nan"), "n_days": 0, "n_span": 0, "degenerate": None}
+    rel_std = float(np.mean(rel))
+    return {"rel_std": rel_std, "ic": float("nan"), "t": float("nan"),
+            "n_days": 0, "n_span": n_span, "degenerate": rel_std < 1e-3}
+
+
 def _resid_for(lib: FactorLibrary, name: str, top: str) -> tuple[float, float]:
     """近重复因子的正交残差 IC（对 top 做逐日截面回归取残差）。
 
@@ -281,12 +466,16 @@ def _resid_for(lib: FactorLibrary, name: str, top: str) -> tuple[float, float]:
     panel = lib.get_panel(name)
     old = lib.get_panel(top)
     if panel is None or old is None:
-        return float("nan"), 0.0
+        # 🚨 这里原来返回 (nan, 0.0)。那个 0.0 会被下游读成「残差无增量」，
+        # 而真相是「没测成」——退登记后的因子 registry 里已无该行，
+        # ``get_panel`` 必然返回 None，于是 129 个核验对象 8/8 假通过。
+        # 现在返回 (nan, nan)：判定层用 pd.notna 区分，不再让缺失冒充结论。
+        return float("nan"), float("nan")
     rp = lib.default_returns_panel()
     cd = panel.index.intersection(old.index).intersection(rp.index)
     cc = panel.columns.intersection(old.columns).intersection(rp.columns)
     if len(cd) < 20 or len(cc) < 20:
-        return float("nan"), 0.0
+        return float("nan"), float("nan")
     Y = panel.reindex(index=cd, columns=cc).to_numpy(dtype=np.float64)
     X = old.reindex(index=cd, columns=cc).to_numpy(dtype=np.float64)
     R = rp.reindex(index=cd, columns=cc).to_numpy(dtype=np.float64)
@@ -318,7 +507,7 @@ def _resid_for(lib: FactorLibrary, name: str, top: str) -> tuple[float, float]:
         if not np.isnan(ic):
             ds.append(cd[t]); vs.append(ic)
     if len(vs) < 20:
-        return float("nan"), 0.0
+        return float("nan"), float("nan")
     t, _se, _lag = nw_tstat(np.asarray(vs))
     return float(np.mean(vs)), float(t)
 

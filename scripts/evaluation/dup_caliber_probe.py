@@ -38,7 +38,6 @@ import argparse
 import json
 import sys
 import time
-import warnings
 from pathlib import Path
 
 import numpy as np
@@ -48,11 +47,13 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from config import Config  # noqa: E402
 from scripts.common.cli_common import setup_logging  # noqa: E402
 
 log = setup_logging("dup_caliber_probe")
 
-LIB_ROOT = Path("e:/data/factor_library/all_a_2018_2026")
+#: 库根走 ``Config.paths()``，不硬编码盘符（换机器会静默读旧副本）。
+LIB_ROOT = Path(str(Config.paths()["factor_library_root"])) / "all_a_2018_2026"
 SELECTION_DIR = ROOT / "reports" / "alla_rolling_ortho920fundind" / "selection"
 OUT_DIR = ROOT / "reports" / "library_governance"
 
@@ -119,7 +120,7 @@ def _codes(max_codes: int, dates: pd.DatetimeIndex) -> list[str]:
 def _signatures(dirpath: Path, names: list[str], dates: pd.DatetimeIndex,
                 codes: list[str]) -> tuple[np.ndarray, list[str], np.ndarray]:
     """(K,F,C) 签名 + 实际读到的名 + 每个面板的非空率。"""
-    from scripts.factors.dup_audit import _row_rank_zscore
+    from research.factor_library import row_rank_zscore
 
     Z = np.zeros((len(dates), len(names), len(codes)), dtype=np.float32)
     cover = np.zeros(len(names), dtype=np.float32)
@@ -138,7 +139,7 @@ def _signatures(dirpath: Path, names: list[str], dates: pd.DatetimeIndex,
             continue
         a = df.to_numpy(dtype=np.float64)
         cover[fi] = float(np.isfinite(a).sum()) / max(1, a.size)
-        Z[:, fi, :] = _row_rank_zscore(a)
+        Z[:, fi, :] = row_rank_zscore(a)
         got.append(nm)
         if (fi + 1) % 50 == 0:
             log.info("签名 %d/%d（%.0fs）", fi + 1, len(names), time.time() - t0)

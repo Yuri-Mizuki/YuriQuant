@@ -45,11 +45,23 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from research.factor_library import FactorLibrary  # noqa: E402
+from scripts.factors.dup_criteria import (  # noqa: E402
+    CORR_TRIGGER,
+    MIN_SPAN,
+    REL_STD_DEGENERATE,
+    REL_STD_TINY,
+    RESID_IC_NEGLIGIBLE,
+    classify,
+    explain,
+)
 
 PLAN_DEFAULT = Path("reports/library_governance/dedup_decision.csv")
-COVER_RHO_MIN = 0.95
-RESID_IC_MAX = 0.02
-RESID_T_MAX = 2.0
+#: 只用于**触发**残差检验的下限，不是判定门槛。判据见 ``dup_criteria``。
+#: 🚨 2026-11-13：原为独立的 ``0.95``，与决策层的 ``CORR_TRIGGER=0.85`` **不一致**
+#: ⇒ 决策表即便给出 ρ=0.8975 的 `safe_drop`（秩空间 rel_std=7.8e-16 的真等价），
+#: 执行层也会以「覆盖 ρ < 0.95」拒批。这是「判据只在 ρ≥0.95 区域生效」的第四道闸。
+#: 现收敛到唯一真源，改口径只需改 ``dup_criteria``。
+COVER_RHO_MIN = CORR_TRIGGER
 
 
 def _write_csv_atomic(df: pd.DataFrame, path: Path) -> None:
@@ -68,7 +80,7 @@ def _write_csv_atomic(df: pd.DataFrame, path: Path) -> None:
 
 def _load_plan(path: Path) -> pd.DataFrame:
     df = pd.read_csv(path)
-    need = {"name", "action", "cover_by", "cover_rho", "resid_ic", "resid_t", "n_sel"}
+    need = {"name", "action", "cover_by", "cover_rho", "n_sel"}
     miss = need - set(df.columns)
     if miss:
         raise SystemExit(f"决策表缺列：{sorted(miss)}")
@@ -77,9 +89,20 @@ def _load_plan(path: Path) -> pd.DataFrame:
 
 def _verify_plan(sd: pd.DataFrame, keep: set[str], corr: np.ndarray,
                  names: list[str]) -> list[str]:
-    """三重校验；返回违反项（空 = 通过）。"""
+    """三重校验；返回违反项（空 = 通过）。
+
+    🚨 判据**不再用** registry 的 ``resid_ic`` / ``resid_t``（那是原始值空间、对
+    ``dup_top`` 算的，已被证伪）。改用决策表的**秩空间**列 ``rank_rel_std`` /
+    ``rank_resid_ic``，并按 ``dup_criteria`` 的分级判定。决策表若缺这两列
+    （旧版本产物）直接拒绝——**拿旧表跑新库比不跑更危险**。
+    """
     pos = {n: i for i, n in enumerate(names)}
     bad: list[str] = []
+    need = {"rank_rel_std", "rank_resid_ic", "rank_n_days", "rank_note"}
+    miss = need - set(sd.columns)
+    if miss:
+        return [f"决策表缺秩空间列 {sorted(miss)}——请用当前版本重跑 "
+                f"`python -m scripts.factors.library_dedup_plan`"]
     for r in sd.itertuples():
         if r.cover_by not in keep:
             bad.append(f"{r.name}: 覆盖者 {r.cover_by} 不在保留集")
@@ -91,20 +114,120 @@ def _verify_plan(sd: pd.DataFrame, keep: set[str], corr: np.ndarray,
         rho = abs(float(corr[i, j]))
         if rho < COVER_RHO_MIN - 1e-6:
             bad.append(f"{r.name}: 覆盖 ρ={rho:.3f} < {COVER_RHO_MIN}")
-        if abs(float(r.resid_ic)) >= RESID_IC_MAX or abs(float(r.resid_t)) >= RESID_T_MAX:
-            bad.append(f"{r.name}: 残差有增量 ic={r.resid_ic} t={r.resid_t}")
-        if int(r.n_sel) != 0:
-            bad.append(f"{r.name}: 曾进定版 selection {int(r.n_sel)} 次")
+        v = classify({
+            "rel_std": float(r.rank_rel_std) if pd.notna(r.rank_rel_std) else float("nan"),
+            "ic": float(r.rank_resid_ic) if pd.notna(r.rank_resid_ic) else float("nan"),
+            "t": float("nan"), "n_days": int(r.rank_n_days or 0),
+            # n_span 决策表没单独存；退化判定只看 rel_std，不受影响
+            "n_span": MIN_SPAN if pd.notna(r.rank_rel_std) else 0,
+            "degenerate": (pd.notna(r.rank_rel_std)
+                           and float(r.rank_rel_std) < REL_STD_DEGENERATE),
+        })
+        if not v.removable:
+            bad.append(f"{r.name}: 秩空间仍有增量（{v.level}，{v.reason}）")
+        # 🔑 「曾进定版 selection」**不再**是拒批理由（2026-11-13）。
+        # 核实过：出榜链读静态 JSON（`alla_daily_rank.py::load_selection`），
+        # 重建链明确不重建 selection ⇒ 退登记不改已落盘清单，只影响
+        # 「主动 --stage select 重跑旧年份」。真正要护的是**当期在用**，
+        # 而执行层只看决策表，无法独立判断当期 ⇒ 由 ``library_dedup_plan``
+        # 把当期在用的判成 ``keep_prod``（永不进 safe_drop）来保证。
+        # 这里只留一条「当期在用绝不能走到这」的强断言。
+        if bool(getattr(r, "in_prod_now", False)):
+            bad.append(f"{r.name}: 当期定版在用，禁止退登记")
     return bad
 
 
+def _restore(lib, base: Path, reg_path: Path, retired_path: Path,
+             names_file: Path, apply: bool, reason: str) -> None:
+    """按名单把误退的因子恢复到 registry，**并从台账移除对应行**。
+
+    与 ``--rollback`` 的区别：rollback 按 ``batch_id`` 整批退；restore 按**因子名**
+    精确恢复（一次批量里可能只有一部分退错）。恢复后写
+    ``restore_batches.jsonl`` 留痕，含当时账面依据，便于日后追溯。
+
+    安全边界：
+    - 只恢复「在 ``registry_retired.csv`` 里、且不在 ``registry.csv`` 里」的名字；
+      已在册的幂等跳过（防止重复插入）。
+    - 名字非法/找不到账本记录 ⇒ 报错退出，不做部分写。
+    - 备份 + 原子写 + 事后再读一遍核对。
+    """
+    if not retired_path.exists():
+        raise SystemExit("没有 registry_retired.csv，无从恢复")
+    want = [s.strip() for s in names_file.read_text(encoding="utf-8").splitlines()
+            if s.strip() and not s.strip().startswith("#")]
+    if not want:
+        raise SystemExit(f"名单为空：{names_file}")
+
+    reg = pd.read_csv(reg_path)
+    led = pd.read_csv(retired_path)
+    in_reg, in_led = set(reg["name"]), set(led["name"])
+    unknown = [n for n in want if n not in in_led]
+    if unknown:
+        raise SystemExit(f"{len(unknown)} 个不在台账里，拒绝执行：{unknown[:10]}")
+    dup = [n for n in want if n in in_reg]
+    todo = [n for n in want if n not in in_reg]
+    if dup:
+        print(f"注：{len(dup)} 个已在 registry（幂等跳过），如 {dup[:3]}")
+
+    back = led[led["name"].isin(todo)].copy()
+    meta = ["batch_id", "retired_at", "reason", "cover_by", "cover_rho"]
+    rows = back.drop(columns=[c for c in meta if c in back.columns])
+    rows = rows.reindex(columns=reg.columns)
+    merged = pd.concat([reg, rows], ignore_index=True)
+    if merged["name"].duplicated().any():
+        raise SystemExit("!! 合并后出现重名，拒绝写盘")
+
+    print(f"registry: {len(reg)} → {len(merged)}（恢复 {len(todo)}）")
+    print(f"台账: {len(led)} → {len(led) - len(todo)}")
+    if "family" in reg.columns:
+        print("\n按家族:")
+        print(back["family"].value_counts().to_string())
+    print("\n按前缀:")
+    pre = back["name"].str.extract(r"^(alpha\d+|alt_\w+|\w+)")[0]
+    print(pre.value_counts().rename(None).to_string())
+
+    if not apply:
+        print("\n（dry-run；加 --apply 执行）")
+        return
+
+    ts = time.strftime("%Y%m%d-%H%M%S")
+    reg_bak = reg_path.with_name(f"registry.csv.bak-{ts}")
+    led_bak = retired_path.with_name(f"registry_retired.csv.bak-{ts}")
+    reg.to_csv(reg_bak, index=False, encoding="utf-8")
+    led.to_csv(led_bak, index=False, encoding="utf-8")
+    print(f"\n备份: {reg_bak.name} / {led_bak.name}")
+
+    _write_csv_atomic(merged, reg_path)
+    _write_csv_atomic(led[~led["name"].isin(todo)].reset_index(drop=True), retired_path)
+
+    chk = pd.read_csv(reg_path)
+    led_chk = pd.read_csv(retired_path)
+    missing = set(todo) - set(chk["name"])
+    still = set(todo) & set(led_chk["name"])
+    print(f"复核: registry {len(chk)} 行 | 未恢复 {len(missing)} | "
+          f"台账残留 {len(still)} | 重复名 {int(chk['name'].duplicated().sum())}")
+    if missing or still or chk["name"].duplicated().any():
+        raise SystemExit("!! 写盘复核失败，请从备份恢复")
+
+    audit = base / "restore_batches.jsonl"
+    with audit.open("a", encoding="utf-8") as f:
+        f.write(json.dumps({
+            "batch": f"restore-{ts}", "n": len(todo), "reason": reason,
+            "before": len(reg), "after": len(chk), "names": todo,
+            "source": str(names_file),
+        }, ensure_ascii=False) + "\n")
+    print(f"审计: {audit.name}（+1 行）")
+    print(f"完成。回滚命令: --rollback-batch restore-{ts}")
+
+
 def main() -> None:
-    ap = argparse.ArgumentParser(description="库内去重执行（退登记）")
+    ap = argparse.ArgumentParser(description="库内去重执行（退登记 / 恢复）")
     ap.add_argument("--dataset", default="all_a_2018_2026")
     ap.add_argument("--plan", default=str(PLAN_DEFAULT))
     ap.add_argument("--apply", action="store_true", help="真正写盘；默认 dry-run")
-    ap.add_argument("--rollback", default="", help="按 batch_id 回滚")
-    ap.add_argument("--reason", default="dedup_v3: ρ覆盖且残差无增量且未进定版")
+    ap.add_argument("--rollback", default="", help="按 batch_id 整批回滚退登记")
+    ap.add_argument("--restore", default="", help="按名单文件恢复误退因子（每行一个名）")
+    ap.add_argument("--reason", default="dedup_v3: 秩空间等价或微小增量且未进定版")
     args = ap.parse_args()
 
     lib = FactorLibrary(dataset=args.dataset)
@@ -114,7 +237,13 @@ def main() -> None:
     reg_path = base / "registry.csv"
     retired_path = base / "registry_retired.csv"
 
-    # ---------- 回滚 ----------
+    # ---------- 恢复（按名单） ----------
+    if args.restore:
+        _restore(lib, base, reg_path, retired_path, Path(args.restore),
+                 args.apply, args.reason)
+        return
+
+    # ---------- 回滚（按 batch） ----------
     if args.rollback:
         if not retired_path.exists():
             raise SystemExit("没有 registry_retired.csv，无从回滚")

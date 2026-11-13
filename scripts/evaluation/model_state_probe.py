@@ -125,10 +125,13 @@ def _apply_position_cost(base: pd.Series, expo: pd.Series,
 # ---------------------------------------------------------------------------
 def _rank_corr(x: np.ndarray, y: np.ndarray) -> float:
     """两个等长向量的 Spearman 相关（秩变换后 Pearson）。"""
+    # ⚠️ pandas 2.2+ 的 ``.to_numpy()`` 在部分路径返回**只读**视图，原地 ``-=`` 会抛
+    # ``ValueError: output array is read-only``（2026-11-12 实测 3 个测试因此全红）。
+    # 用减去均值的新表达式，不依赖底层数组可写。
     rx = pd.Series(x).rank().to_numpy()
     ry = pd.Series(y).rank().to_numpy()
-    rx -= rx.mean()
-    ry -= ry.mean()
+    rx = rx - rx.mean()
+    ry = ry - ry.mean()
     den = float(np.sqrt((rx * rx).sum() * (ry * ry).sum()))
     return float((rx * ry).sum() / den) if den > 0 else np.nan
 
