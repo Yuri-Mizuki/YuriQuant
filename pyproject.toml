@@ -91,6 +91,12 @@ exclude = [
 [tool.ruff.lint]
 select = ["E", "F", "I"]
 
+[tool.ruff.lint.per-file-ignores]
+# 前端页面模板内嵌 HTML/CSS/JS，长行属于模板本身（拆行会破坏可读性），
+# 只对本文件放开行宽（2026-11-17，factor_board 因子看板）。
+"scripts/reporting/factor_board.py" = ["E501"]
+"scripts/reporting/picks_board.py" = ["E501"]
+
 [tool.mypy]
 # 2026-10-19：从 3.10 改为 3.12 —— numpy 2.5 的 stub 使用 `type` 语句，
 # python_version=3.10 时 mypy 第一屏即语法错误、检查完全跑不起来。

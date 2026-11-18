@@ -175,6 +175,7 @@ reports/    实验产物、监控台账与设计文档
 |---|---|---|
 | yqcore 每日出榜 | `python -m scripts.live.yqcore rank --preset dingban` | 定版预设 = `dingban` |
 | 现在持了什么 | `python -m scripts.live.yqcore holdings`（`--all` 看全期） | 默认只读；`--commit` 有副作用，仅换仓日 |
+| 定版看板（历史回测 + 当期持仓 + 期内表现 + 个股 K 线） | `python -m scripts.reporting.yqcore_dashboard --open` | 自包含单页 HTML，零后端；产物 `reports/yq_core/dashboard.html` |
 | 三档收益 / 容量对照 | `python -m scripts.evaluation.yq_core_report --view native` | `native`=产品线口径，`grid`=资金×档位 |
 | 三档的参数改哪里 | `config/baselines.yaml` → `id: yqcore-*` 的 `execution` | **唯一真源**；`strategy/registry.py` 只读不写 |
 | 全A 每日推理 | `python -m scripts.pipelines.alla_daily_rank --preset dingban` | |
