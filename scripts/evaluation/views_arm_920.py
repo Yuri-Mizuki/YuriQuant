@@ -152,7 +152,7 @@ def main(argv: list[str] | None = None) -> None:
     from model.predictor import LGBMPredictor
     from model.views import TwoStagePredictor, inject_by_feature_duplication
     from scripts.common import alla_common as AC
-    from scripts.common.alla_common import FeatureStore, ds_root, existence_mask
+    from scripts.common.alla_common import existence_mask, fundind_store
     from scripts.evaluation.fundamental_blend import build_slow_panel
     from scripts.evaluation.horizon_mix import load
     from scripts.evaluation.news_alpha_probe import ic_stats, masked_ic
@@ -171,7 +171,7 @@ def main(argv: list[str] | None = None) -> None:
     fwd1 = close.pct_change(1, fill_method=None).shift(-1)
 
     # ---- 观点因子单因子 IC 披露（观点可能是错的）----
-    store = FeatureStore(ds_root() / "panels_neu_fundind")
+    store = fundind_store()
     view_panel = store.get(args.view_factor)
     vp = view_panel.reindex(index=oos_days, columns=close.columns)
     view_ic = masked_ic(vp, fwd1, mask)

@@ -54,8 +54,8 @@ from config import Config  # noqa: E402
 from scripts.common.cli_common import setup_logging  # noqa: E402
 from scripts.common.alla_common import (  # noqa: E402
     FUNDAMENTAL_FAMILY_SETS, FeatureStore, ann, ds_root,
-    existence_mask, load_base, rank_average as _rank_average, res_metrics,
-    yearly_rows as _yearly_rows,
+    existence_mask, fundind_dirs, load_base, rank_average as _rank_average,
+    res_metrics, yearly_rows as _yearly_rows,
 )
 
 log = setup_logging("rolling_grid_alla")
@@ -1732,8 +1732,11 @@ def main():
         log.info("+++ 因子层正交化：特征源 -> panels_neu，输出 -> %s", OUT)
     if args.preproc == "ortho_fundind":
         OUT = Path("reports") / "alla_rolling_ortho"
-        PANELS_DIR = ds_root() / "panels_neu_fundind"
-        log.info("+++ E5 臂：基本面族只剥行业（特征源 panels_neu_fundind），输出 -> %s", OUT)
+        # 2026-11-18 起覆盖层只存「与 panels_neu 内容不同」的因子（省 48.55 GB
+        # 重复存储）；解析顺序 = 覆盖层优先、否则回落基准层 panels_neu。
+        PANELS_DIR, NAME_DIR = fundind_dirs()
+        log.info("+++ E5 臂：基本面族只剥行业（基准 panels_neu + %d 个逐因子覆盖），"
+                 "输出 -> %s", len(NAME_DIR), OUT)
     if args.preproc == "mixed":
         OUT = Path("reports") / "alla_rolling_mixed"
         _neu = ds_root() / "panels_neu"

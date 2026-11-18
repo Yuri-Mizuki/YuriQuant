@@ -137,9 +137,10 @@ def main(argv: list[str] | None = None) -> None:
     from model.labels import build_labels
     from model.params import DEFAULT_MODEL_PARAMS
     from scripts.common.alla_common import (
-        FeatureStore,
         ds_root,
         existence_mask,
+        fundind_names,
+        fundind_store,
         load_base,
     )
     from scripts.evaluation.news_alpha_probe import ic_stats, masked_ic
@@ -170,8 +171,8 @@ def main(argv: list[str] | None = None) -> None:
     if not sel_path.exists():
         raise SystemExit(f"特征清单缺失：{sel_path}")
     names = json.loads(sel_path.read_text(encoding="utf-8"))
-    pdir = ds_root() / "panels_neu_fundind"
-    avail = {p.stem for p in pdir.glob("*.parquet")}
+    pdir = ds_root() / "panels_neu_fundind"   # 仅用于日志里的层名
+    avail = set(fundind_names())
     missing = [n for n in names if n not in avail]
     if missing:
         log.warning("清单里 %d 个特征在 %s 无面板，剔除：%s",
@@ -196,7 +197,7 @@ def main(argv: list[str] | None = None) -> None:
     # ---- 裁剪特征到所需最小日期范围（省内存：50 面板 × 全史 ≈ 2.4GB）----
     i0 = int(all_days.get_indexer([oos_days[0]])[0])
     keep = all_days[max(0, i0 - args.window - h - 20):]
-    store = FeatureStore(ds_root() / "panels_neu_fundind")
+    store = fundind_store()
     feats = store.get_many(names)
     feats = {k: v.reindex(index=keep, columns=close.columns) for k, v in feats.items()}
     log.info("特征加载完成：%d 个 × %d 日（%s ~ %s）",

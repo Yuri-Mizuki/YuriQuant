@@ -87,7 +87,7 @@ def main(argv: list[str] | None = None) -> None:
                     help="命中已落盘的 ic_cache CSV 时跳过 IC 扫描")
     args = ap.parse_args(argv)
 
-    from scripts.common.alla_common import ds_root, load_base
+    from scripts.common.alla_common import ds_root, fundind_names, layer_panel_file, load_base
     from stats.ic import calc_ic_series
 
     ds = ds_root()
@@ -117,9 +117,12 @@ def main(argv: list[str] | None = None) -> None:
     dest.mkdir(parents=True, exist_ok=True)
     ic_cache_fp = dest / f"ic_cache_y{args.year}__h{h}.csv"
 
-    files = sorted(pdir.glob("*.parquet"))
+    # 2026-11-18 起 panels_neu_fundind 是「基准 + 覆盖」两层，glob 会漏掉
+    # 绝大多数回落基准层的因子 —— 用分层清单而不是目录枚举。
+    stems = (fundind_names() if args.panels_dir == "panels_neu_fundind"
+             else sorted(q.stem for q in pdir.glob("*.parquet")))
     registered = set(reg["name"].astype(str))
-    files = [p for p in files if p.stem in registered]
+    files = [s for s in stems if s in registered]
     log.info("候选面板 %d 个（%s）", len(files), pdir)
 
     qual_cached: dict[str, float] = {}
@@ -177,7 +180,7 @@ def main(argv: list[str] | None = None) -> None:
     sample_codes = None
     panels: dict[str, pd.DataFrame] = {}
     for n in cands:
-        x = pd.read_parquet(pdir / f"{n}.parquet")
+        x = pd.read_parquet(layer_panel_file(n, args.panels_dir, ds))
         if not isinstance(x.index, pd.DatetimeIndex):
             x.index = pd.to_datetime(x.index)
         if sample_codes is None:

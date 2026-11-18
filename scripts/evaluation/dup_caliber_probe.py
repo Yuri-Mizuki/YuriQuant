@@ -82,11 +82,24 @@ def load_selection() -> tuple[set[str], set[str], dict]:
 
 
 # ---------------------------------------------------------------- 样本与签名
+def _panel(nm: str, dirpath: Path) -> Path:
+    """``dirpath`` 下的面板路径；``panels_neu_fundind`` 走分层解析。
+
+    2026-11-18 起覆盖层只存与 ``panels_neu`` 内容不同的因子，直接拼
+    ``dirpath/<nm>.parquet`` 会漏掉绝大多数（回落基准层）的因子。
+    """
+    from scripts.common.alla_common import FUNDIND_SUBDIR, layer_panel_file
+
+    if dirpath.name == FUNDIND_SUBDIR:
+        return layer_panel_file(nm, FUNDIND_SUBDIR, dirpath.parent)
+    return dirpath / f"{nm}.parquet"
+
+
 def _dates_from(dirpath: Path, names: list[str], k: int) -> pd.DatetimeIndex:
     """用若干代表面板的 index 交集作为真实公共日历，等距抽 k 个。"""
     idx: pd.DatetimeIndex | None = None
     for nm in names[:3] + names[-3:]:
-        p = dirpath / f"{nm}.parquet"
+        p = _panel(nm, dirpath)
         if not p.exists():
             continue
         cur = pd.DatetimeIndex(pd.read_parquet(p, columns=[]).index)
@@ -127,7 +140,7 @@ def _signatures(dirpath: Path, names: list[str], dates: pd.DatetimeIndex,
     got: list[str] = []
     t0 = time.time()
     for fi, nm in enumerate(names):
-        p = dirpath / f"{nm}.parquet"
+        p = _panel(nm, dirpath)
         if not p.exists():
             got.append(nm)
             continue
@@ -291,7 +304,7 @@ def main() -> None:
     d_raw = LIB_ROOT / "panels"
     d_neu = LIB_ROOT / "panels_neu_fundind"
     missing_raw = [n for n in names if not (d_raw / f"{n}.parquet").exists()]
-    missing_neu = [n for n in names if not (d_neu / f"{n}.parquet").exists()]
+    missing_neu = [n for n in names if not _panel(n, d_neu).exists()]
     log.info("缺面板：raw %d 个 / neu %d 个", len(missing_raw), len(missing_neu))
 
     dates = _dates_from(d_neu, [n for n in names if n not in missing_neu], args.sample_dates)

@@ -50,10 +50,12 @@ from scripts.builders.common import (  # noqa: E402
     run_neutralization,
     setup_logging,
 )
+from scripts.common.alla_common import layer_panel_file  # noqa: E402
 
 log = setup_logging("sync_factor_artifacts")
 
-NEU_SUBDIR = "panels_neu_fundind"
+NEU_SUBDIR = "panels_neu_fundind"   # E5 覆盖层（只存与基准层不同的因子）
+NEU_BASE_SUBDIR = "panels_neu"      # 基准层（定版 focus + 慢信号源）
 
 
 def _coverage(panel: pd.DataFrame) -> float:
@@ -111,14 +113,22 @@ def main() -> int:
         fin = {n.strip() for n in (args.fundind_names or "").split(",") if n.strip()}
         if fin:
             log.info("只剥行业（E5 口径）：%s", ", ".join(sorted(fin)))
-        n_ok = run_neutralization(ds, NEU_SUBDIR, workers=args.workers,
+        # 基准层必须先有：2026-11-18 起覆盖层只存「与基准层内容不同」的因子，
+        # 只写覆盖层会让基准层缺该因子，其它读 panels_neu 的路径全部落空。
+        n_ok = run_neutralization(ds, NEU_BASE_SUBDIR, workers=args.workers,
                                   only=names, force=True, set_name="paper",
-                                  label="中性化(paper 补齐)",
-                                  industry_only=frozenset(fin))
-        log.info("中性化完成 %d 个 -> %s", n_ok, NEU_SUBDIR)
+                                  label="中性化(paper 补齐·基准层)")
+        log.info("中性化完成 %d 个 -> %s", n_ok, NEU_BASE_SUBDIR)
+        if fin:
+            n_ok = run_neutralization(ds, NEU_SUBDIR, workers=args.workers,
+                                      only=sorted(fin), force=True,
+                                      set_name="paper",
+                                      label="中性化(paper 补齐·E5 覆盖层)",
+                                      industry_only=frozenset(fin))
+            log.info("E5 覆盖层完成 %d 个 -> %s", n_ok, NEU_SUBDIR)
         neu_patch = []
         for n in names:
-            f = ds / NEU_SUBDIR / f"{n}.parquet"
+            f = layer_panel_file(n, NEU_SUBDIR, ds)
             if f.exists():
                 neu_patch.append({"name": n,
                                   "neutralized_coverage": _coverage(pd.read_parquet(f))})

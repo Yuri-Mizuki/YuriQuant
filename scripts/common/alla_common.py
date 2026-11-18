@@ -119,6 +119,70 @@ class FeatureStore:
         return {n: self.get(n) for n in names}
 
 
+# ---------------------------------------------------------------------------
+# E5 fundind 口径的分层存储（2026-11-18）
+# ---------------------------------------------------------------------------
+#: 覆盖层：**只存与基准层内容不同**的因子（基本面/股东族「只剥行业」+ 27 个
+#: 事件/资金流/浮点噪声因子），其余一律回落 :data:`FUNDIND_BASE_SUBDIR`。
+#: 历史原因：建库脚本按因子集整批落盘，两个目录 950 个同名文件里 863 个逐字节
+#: 相同 —— 48.55 GB 纯重复（2026-11-18 实测 md5 全量比对）。
+FUNDIND_SUBDIR = "panels_neu_fundind"
+FUNDIND_BASE_SUBDIR = "panels_neu"
+
+
+def fundind_dirs(root: Path | None = None) -> tuple[Path, dict[str, Path]]:
+    """E5 fundind 口径的 ``(基准目录, 逐因子覆盖映射)``。
+
+    解析顺序：覆盖层存在该因子 ⇒ 用覆盖层；否则回落基准层。覆盖映射按目录实际
+    内容生成（~1e2 个文件，毫秒级），不作静态清单维护。
+
+    Raises:
+        SystemExit: 基本面/股东族因子在基准层有面板、覆盖层却没有 —— 那意味着
+            该因子会静默退化成「行业+市值全剥」，与 E5 口径不符。
+    """
+    ds = Path(root) if root is not None else ds_root()
+    base, ov = ds / FUNDIND_BASE_SUBDIR, ds / FUNDIND_SUBDIR
+    if not base.is_dir():
+        raise FileNotFoundError(f"基准层缺失：{base}")
+    name_dir = {p.stem: ov for p in ov.glob("*.parquet")}
+    missing = sorted(
+        n for n in FUNDAMENTAL_FAMILY_SETS
+        if (base / f"{n}.parquet").exists() and n not in name_dir)
+    if missing:
+        raise SystemExit(
+            f"E5 覆盖层缺 {len(missing)} 个基本面/股东族因子：{missing[:8]}。"
+            f"这些因子会静默按「行业+市值全剥」取值（口径错误）。补救："
+            f"python -m scripts.builders.build_alla_factor_neutralized_fundind "
+            f"--only {' '.join(missing[:8])}")
+    return base, name_dir
+
+
+def fundind_store(**kwargs) -> FeatureStore:
+    """E5 fundind 口径的 :class:`FeatureStore`（基准层 + 覆盖层）。"""
+    base, name_dir = fundind_dirs()
+    return FeatureStore(base, name_dir=name_dir, **kwargs)
+
+
+def fundind_names(root: Path | None = None) -> list[str]:
+    """E5 fundind 口径下的全部可用因子名（基准层 ∪ 覆盖层，去重有序）。"""
+    base, name_dir = fundind_dirs(root)
+    return sorted({p.stem for p in base.glob("*.parquet")} | set(name_dir))
+
+
+def layer_panel_file(name: str, subdir: str,
+                     root: Path | None = None) -> Path:
+    """``<root>/<subdir>/<name>.parquet``；``panels_neu_fundind`` 走分层解析。
+
+    单因子路径查询不做目录扫描（只 ``exists()``），可在 1e3 量级循环里调用；
+    批量场景用 :func:`fundind_dirs` / :func:`fundind_names` 更省。
+    """
+    ds = Path(root) if root is not None else ds_root()
+    p = ds / subdir / f"{name}.parquet"
+    if subdir == FUNDIND_SUBDIR and not p.exists():
+        return ds / FUNDIND_BASE_SUBDIR / f"{name}.parquet"
+    return p
+
+
 def existence_mask(feats: dict, close: pd.DataFrame,
                    test_days: pd.DatetimeIndex) -> pd.DataFrame:
     """股票在信号日的可用性掩码：当日有行情 且 >=1/4 特征非 NaN。

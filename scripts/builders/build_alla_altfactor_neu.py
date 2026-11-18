@@ -28,8 +28,14 @@ altf 会产出**坏面板**（2026-10-10 定位）：
    （行业+市值中性化 → zscore）照常。
 3. 其余 ⇒ 标准三步。
 
-对 ``panels_neu`` 与 ``panels_neu_fundind`` **同口径各写一份**（altf=事件族不在
-``FUNDAMENTAL_FAMILY_SETS``，故 fundind 变体对 alt 与标准变体一致）。
+写盘范围按 2026-11-18 的**分层口径**收敛（见 ``alla_common.fundind_dirs``）：
+
+- 一律写 ``panels_neu``（基准层）。
+- ``panels_neu_fundind`` 现在只存「与基准层内容不同」的因子 ⇒ 仅两种情况写它：
+  ① 该因子在 ``FUNDAMENTAL_FAMILY_SETS``（fundind 变体真不同）；
+  ② 基准层没有该因子（覆盖层独有，如 ``pap_*``）。
+  其余（altf 绝大多数）**只写基准层** —— 旧实现无条件双写，正是 11-18 清掉的
+  863 个逐字节重复副本的来源，会把省下的空间按因子数逐月涨回来。
 
 用法::
 
@@ -53,6 +59,11 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from scripts.common.alla_common import (
+    FUNDAMENTAL_FAMILY_SETS,
+    FUNDIND_BASE_SUBDIR,
+    FUNDIND_SUBDIR,
+)
 from scripts.common.atomic_io import write_parquet_atomic
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -118,6 +129,17 @@ def _transform(panel: pd.DataFrame, mode: str, mc: pd.DataFrame, ind: pd.DataFra
     return x.clip(-10.0, 10.0)
 
 
+def needs_override(name: str, ds: Path) -> bool:
+    """该因子是否需要写 ``panels_neu_fundind`` 覆盖层（2026-11-18 分层口径）。
+
+    只有两种情况需要：① 基本面/股东族（fundind 变体真与全剥变体不同）；
+    ② 基准层 ``panels_neu`` 没有这个因子（覆盖层独有，如 ``pap_*``）。
+    其余因子两个变体逐字节相同 ⇒ 只写基准层，否则会把这轮清掉的重复副本逐月涨回来。
+    """
+    return (name in FUNDAMENTAL_FAMILY_SETS
+            or not (ds / FUNDIND_BASE_SUBDIR / f"{name}.parquet").exists())
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--only", nargs="+", default=None, help="只处理指定因子")
@@ -154,8 +176,11 @@ def main() -> None:
         mode, diag = classify(panel)
         x = _transform(panel, mode, mc, ind, name=n, fundind=False)
         cov = float(x.notna().mean().mean())
+        # 覆盖层只在「内容真不同」或「基准层没有」时才写（2026-11-18 分层口径）。
+        need_override = needs_override(n, ds)
         if not args.diagnose:
-            for sub, fin in (("panels_neu", False), ("panels_neu_fundind", True)):
+            for sub, fin in (((FUNDIND_BASE_SUBDIR, False),) +
+                             (((FUNDIND_SUBDIR, True),) if need_override else ())):
                 out = ds / sub
                 out.mkdir(parents=True, exist_ok=True)
                 arr = x if not fin else _transform(panel, mode, mc, ind,

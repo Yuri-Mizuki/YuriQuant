@@ -42,10 +42,15 @@ def month_lasts(days: pd.DatetimeIndex) -> pd.DatetimeIndex:
 
 def load_family_slices(names: set, dates: pd.DatetimeIndex, root: Path,
                        subdir: str = "panels_neu") -> dict:
-    """逐个加载因子面板（默认 panels_neu）并只保留 needed 日期（控制内存峰值）。"""
+    """逐个加载因子面板（默认 panels_neu）并只保留 needed 日期（控制内存峰值）。
+
+    ``subdir="panels_neu_fundind"`` 走 :func:`alla_common.layer_panel_file` 的
+    分层解析（基准 ``panels_neu`` + 逐因子覆盖层），自 2026-11-18 起覆盖层只存
+    与基准层内容不同的因子。
+    """
     out = {}
     for n in sorted(names):
-        p = root / subdir / f"{n}.parquet"
+        p = AC.layer_panel_file(n, subdir, root)
         if not p.exists():
             continue
         df = pd.read_parquet(p)

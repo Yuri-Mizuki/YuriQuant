@@ -59,6 +59,10 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from scripts.common.alla_common import (  # noqa: E402
+    FUNDIND_SUBDIR,
+    layer_panel_file,
+)
 from scripts.common.cli_common import setup_logging  # noqa: E402
 from scripts.common.power import keep_system_awake  # noqa: E402
 
@@ -123,11 +127,22 @@ def _panel_coverage(subdir: str, probes: tuple[str, ...]) -> str:
     取 max 会让任一新写入的因子掩盖其余全部陈旧因子（2026-10-16 实测：`--only`
     手工刷新 3 个探测因子后，`max` 立刻报 10-15、守判"无需重建"，而 950 个里
     944 个仍停在 09-01）。
+
+    2026-11-18 起 ``panels_neu_fundind`` 是**覆盖层**（只存与基准层内容不同的因子，
+    全层约百个）：固定抽样 ``_PROBE_NEU`` 里 2/3 已回落到 ``panels_neu``，按名字
+    读文件会读不到、``min`` 退化成单点样本（实测只剩 ``bp`` 一个）。覆盖层文件量小，
+    改为**枚举自身全部文件**，``min`` 才仍然代表"整层是否最新"。
     """
     root = _ds_root() / subdir
     if not root.exists():
         return "缺失"
-    dates = [_parquet_last_date(root / f"{n}.parquet") for n in probes]
+    if subdir == FUNDIND_SUBDIR:
+        paths = sorted(root.glob("*.parquet"))
+        if not paths:
+            return "缺失"
+    else:
+        paths = [layer_panel_file(n, subdir) for n in probes]
+    dates = [_parquet_last_date(p) for p in paths]
     ok = [d for d in dates if not d.startswith("ERR")]
     if not ok:
         return "全部读取失败"

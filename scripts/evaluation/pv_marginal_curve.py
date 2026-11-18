@@ -50,10 +50,12 @@ sys.path.insert(0, ROOT)
 
 from config import Config  # noqa: E402
 from research.dpp_selection import corr_matrix, dpp_select  # noqa: E402
+from scripts.common.alla_common import FUNDIND_SUBDIR, fundind_names, layer_panel_file  # noqa: E402
 from stats.ic import calc_ic_series  # noqa: E402
 
 LIB = os.path.join(Config.paths()["factor_library_root"], "all_a_2018_2026")
-P_NEU = os.path.join(LIB, "panels_neu_fundind")
+# 生产层是「panels_neu 基准 + panels_neu_fundind 覆盖」两层（2026-11-18），
+# 逐因子路径走 layer_panel_file，**不要**直接拼目录（会漏掉回落基准层的因子）。
 IC_H1 = os.path.join(LIB, "ic_h1.parquet")
 REG = os.path.join(LIB, "registry.csv")
 CLOSE_ADJ = os.path.join(
@@ -72,10 +74,14 @@ RANDOM_SEEDS = [0, 1, 2]
 _COL_CACHE: dict[str, set] = {}
 
 
+def _pf(name: str) -> str:
+    """生产层面板路径（2026-11-18 起 ``panels_neu_fundind`` 为分层解析）。"""
+    return str(layer_panel_file(name, FUNDIND_SUBDIR))
+
+
 def _cols_of(name: str) -> set:
     if name not in _COL_CACHE:
-        _COL_CACHE[name] = set(pq.read_schema(
-            os.path.join(P_NEU, f"{name}.parquet")).names)
+        _COL_CACHE[name] = set(pq.read_schema(_pf(name)).names)
     return _COL_CACHE[name]
 
 
@@ -85,7 +91,7 @@ def read_cols(name: str, cols) -> pd.DataFrame | None:
     if not use:
         return None
     try:
-        return pd.read_parquet(os.path.join(P_NEU, f"{name}.parquet"), columns=use)
+        return pd.read_parquet(_pf(name), columns=use)
     except Exception:
         return None
 
@@ -150,7 +156,7 @@ def main() -> int:
     covd = dict(zip(reg["name"], reg["coverage"]))
     ic = pd.read_parquet(IC_H1)
 
-    have = {f[:-8] for f in os.listdir(P_NEU) if f.endswith(".parquet")}
+    have = set(fundind_names())
     pv_all = sorted(n for n in fam if fam[n] == "量价" and n in have
                     and covd.get(n, 0) >= MIN_COVERAGE)
     nonpv_all = sorted(n for n in fam if fam[n] != "量价" and n in have

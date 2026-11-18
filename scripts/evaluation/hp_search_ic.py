@@ -51,12 +51,12 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.common.cli_common import setup_logging  # noqa: E402
-from stats.significance import mean_inference  # noqa: E402
 from scripts.evaluation.retrain_freq_ic import (  # noqa: E402
     SEL_DIR,
     TRADABLE_LABELS,
     rolling_pred,
 )
+from stats.significance import mean_inference  # noqa: E402
 
 log = setup_logging("hp_search_ic")
 
@@ -111,13 +111,14 @@ def main(argv: list[str] | None = None) -> None:
     args = ap.parse_args(argv)
 
     from model.labels import build_labels
-    from scripts.evaluation.news_alpha_probe import ic_stats, masked_ic
     from scripts.common.alla_common import (
-        FeatureStore,
-        ds_root,
+        FUNDIND_SUBDIR,
         existence_mask,
+        fundind_store,
+        layer_panel_file,
         load_base,
     )
+    from scripts.evaluation.news_alpha_probe import ic_stats, masked_ic
 
     t0 = time.time()
     h = args.horizon
@@ -133,14 +134,9 @@ def main(argv: list[str] | None = None) -> None:
     mask = base["mask"].astype(bool)
     all_days = close.index
 
-    # 特征面板覆盖末日：close 可到未来（如 2026-10），但 panels_neu_fundind 未必——
-    # OOS 一旦越界，existence_mask 全 False ⇒ IC 静默变 NaN（冒烟实测踩过）。
-    _pf = sorted((ds_root() / "panels_neu_fundind").glob("*.parquet"))
-    panel_last = (pd.read_parquet(_pf[0], columns=[]).index.max()
-                  if _pf else all_days[-1])
-    log.info("特征面板覆盖末日：%s（close 末日 %s）",
-             pd.Timestamp(panel_last).date(), all_days[-1].date())
-    coverage_end = min(pd.Timestamp(all_days[-1]), pd.Timestamp(panel_last))
+    # 特征面板覆盖末日下面按「实际用到的因子」取最早者（见 names 之后）——
+    # 原来只看字母序第一张面板，会掩盖单因子提前截断。
+    # OOS 越界会让 existence_mask 全 False ⇒ IC 静默变 NaN（冒烟实测踩过）。
 
     # ---- 特征清单（定版 E5 fundind，按年冻结）----
     if args.sel_year is None:
@@ -156,6 +152,17 @@ def main(argv: list[str] | None = None) -> None:
     names = json.loads(sel_path.read_text(encoding="utf-8"))
     log.info("特征清单 %s：%d 个 | 网格 %d 配置 | refit=%d",
              sel_path.name, len(names), len(grid), refit)
+
+    # 特征面板覆盖末日 = 所用因子里**最早**的那张（2026-11-18）
+    _ends = []
+    for _n in names:
+        _p = layer_panel_file(_n, FUNDIND_SUBDIR)
+        if _p.exists():
+            _ends.append(pd.read_parquet(_p, columns=[]).index.max())
+    panel_last = min(_ends) if _ends else all_days[-1]
+    log.info("特征面板覆盖末日：%s（close 末日 %s）",
+             pd.Timestamp(panel_last).date(), all_days[-1].date())
+    coverage_end = min(pd.Timestamp(all_days[-1]), pd.Timestamp(panel_last))
 
     # ---- OOS 区间（终点受特征面板覆盖约束）----
     if args.quick:
@@ -174,7 +181,7 @@ def main(argv: list[str] | None = None) -> None:
     # ---- 裁剪特征（50 面板 × 全史 ≈ 2.4GB，裁到所需最小范围）----
     i0 = int(all_days.get_indexer([oos_days[0]])[0])
     keep = all_days[max(0, i0 - args.window - h - 20):]
-    store = FeatureStore(ds_root() / "panels_neu_fundind")
+    store = fundind_store()
     feats = store.get_many(names)
     feats = {k: v.reindex(index=keep, columns=close.columns) for k, v in feats.items()}
     log.info("特征加载完成：%d 个 × %d 日（%s ~ %s）",
