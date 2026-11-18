@@ -140,7 +140,7 @@ def registry_lookup(setname: str, name: str):
 
 
 def _worker(wid: int, n_workers: int, warmup: int, keep_from: int,
-            dataset: str, resume: bool):
+            dataset: str, resume: bool, only: list[str] | None = None):
     """worker 进程：轮转分片计算因子 → panels/*.parquet + 分片统计/IC。"""
     from config import Config
     from factor.alpha_base import SET_LABELS, AlphaData
@@ -156,6 +156,14 @@ def _worker(wid: int, n_workers: int, warmup: int, keep_from: int,
 
     all_fns = collect_factor_fns()
     names = sorted(all_fns)
+    if only:
+        # 定向补算（数据延长后只补落后的面板）。与 ``--only`` 语义一致的族 builder
+        # 已有此开关，alpha 族此前没有 ⇒ 只能整族重算 798 个（约 40 分钟/6 进程）。
+        unknown = sorted(set(only) - set(names))
+        if unknown:
+            raise SystemExit(f"--only 含未注册因子 {unknown[:5]}…（共 {len(unknown)}）")
+        names = [n for n in names if n in set(only)]
+        log.info("[w%d] --only 定向：候选 %d 个", wid, len(names))
     mine = [n for i, n in enumerate(names) if i % n_workers == wid]
 
     stats_path = ds_dir / f"factor_stats_w{wid}.jsonl"
@@ -328,16 +336,19 @@ def main():
     ap.add_argument("--dataset", default="all_a_2018_2026")
     ap.add_argument("--resume", action="store_true", help="跳过已完成的因子")
     ap.add_argument("--workers", type=int, default=1, help="并行进程数")
+    ap.add_argument("--only", nargs="+", default=None,
+                    help="只构建指定因子（数据延长后定向补算用）")
     args = ap.parse_args()
 
     t0 = time.time()
     if args.workers <= 1:
-        _worker(0, 1, args.warmup, args.keep_from, args.dataset, args.resume)
+        _worker(0, 1, args.warmup, args.keep_from, args.dataset, args.resume,
+                args.only)
     else:
         ctx = mp.get_context("spawn")
         procs = [ctx.Process(target=_worker_proc, name=f"alpha-w{w}",
                              args=(w, args.workers, args.warmup, args.keep_from,
-                                   args.dataset, args.resume))
+                                   args.dataset, args.resume, args.only))
                  for w in range(args.workers)]
         for p in procs:
             p.start()
@@ -350,10 +361,11 @@ def main():
     log.info("全部完成, 耗时 %.0fs", time.time() - t0)
 
 
-def _worker_proc(wid, n_workers, warmup, keep_from, dataset, resume):
+def _worker_proc(wid, n_workers, warmup, keep_from, dataset, resume,
+                 only=None):
     """spawn 入口：独立进程内跑 worker（异常时非零退出）。"""
     try:
-        _worker(wid, n_workers, warmup, keep_from, dataset, resume)
+        _worker(wid, n_workers, warmup, keep_from, dataset, resume, only)
     except Exception:  # noqa: BLE001
         import traceback
         traceback.print_exc()
