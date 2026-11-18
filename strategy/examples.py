@@ -524,8 +524,8 @@ class QuantileLongShort(Strategy):
 def build_strategy(name: str, k: int = 30, frac: float | None = None):
     """按名称构造策略实例（run_backtest / select_stocks 共用工厂，2026-08-05 统一）。
 
-    注（2026-09-21）：`run_backtest` 已删除、`select_stocks` 已归档到
-    ``scripts/archive/``；工厂本身仍为活跃调用方（`model_portfolio` /
+    注（2026-09-21）：`run_backtest` 已删除、`select_stocks` 已归档；
+    两者连同 ``scripts/archive/`` 于 2026-11-18 整体下线。工厂本身仍为活跃调用方（`model_portfolio` /
     `multi_period` 等）服务。
 
     Args:

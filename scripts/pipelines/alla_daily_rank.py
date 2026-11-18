@@ -174,7 +174,7 @@ MARKET_FEATURE_INDICES: tuple[str, ...] = ("000001_SH", "399317_SZ")
 # 项而静默跑出混合口径（本项目历史上最贵的一类事故）。显式传参优先于预设。
 #   legacy —— 旧口径（h1+h5 × ortho × 无慢信号 × 无 buffer），仅复现历史产物用；
 #              2026-10-19 起 `--preset` 缺省不再是 legacy（改为 dingban）。
-#   dingban —— README 定版（真源 reports/batch1_920_收尾对照表.md §⑭⑯ 与
+#   dingban —— README 定版（真源 reports/batch_920_consolidated/batch1_920_收尾对照表.md §⑭⑯ 与
 #              scripts/evaluation/buffer_arm_920.py --variant defv）：
 #              fundind 快信号 h1020 ⊕ 慢信号 s0.5 + buffer(15/40) 执行层。
 #   v1w2-cheap —— dingban 的 cheap_lever 微调版（baselines.yaml::v1w2-cheap）：

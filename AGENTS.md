@@ -49,7 +49,8 @@
   `reports/` 根部只允许 README + 4 个接口文件；实验日志放该实验自己的目录，
   不丢根部。
 - **删除/移动前**：快照清单（路径+md5 → 仓库外）→ 引用扫描 → 同步改引用
-  → 回收站删除（`scripts/oneoff/_recycle_batch.py`），并把记录写进
+  → 回收站删除（`python -m scripts.data_tools.recycle <路径…>`，每批 ≤10；原写的
+  `scripts/oneoff/_recycle_batch.py` 从未存在过，2026-11-18 更正），并把记录写进
   `reports/README.md` §四。
 
 ## 2. 收尾回写（每个任务完成时自动做，不等用户提醒）

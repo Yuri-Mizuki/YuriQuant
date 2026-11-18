@@ -198,7 +198,7 @@ baselines:
          ⊕ 0.5·rank(slow)）。它 **不是** rolling_grid_alla --stage ensemble 的产物
          （该阶段只写 ens_rgr / ens_h1h5 / ens_all，源码 rolling_grid_alla.py:1588-1596）。
          故不要按 `pred/ens_h1020__h1.parquet` 去找 —— 该文件永远不会生成。
-    source: "reports/batch1_920_收尾对照表.md §⑭⑯（好机器产物，本机无副本）"
+    source: "reports/batch_920_consolidated/batch1_920_收尾对照表.md §⑭⑯（好机器产物，本机无副本）"
     verified_local: false
 
   # ---------------------------------------------------------------------------
