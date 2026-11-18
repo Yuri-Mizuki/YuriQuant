@@ -29,7 +29,7 @@
 | `textmining/` | 文本因子管线（**活跃开发中**，结构见其自带 README） | `scripts/textmining/*` |
 | `alla_rolling_ortho920fundind/` | 定版 `dingban_fundind` 的滚动产物；`selection/` 供每日出榜（`--preset dingban`）读取，**勿动** | `scripts/pipelines/rolling_grid_alla.py --preproc ortho_fundind` |
 
-### 结论速查：58 份实验 README（每个目录一行）
+### 结论速查：每个目录一行（判定见末列）
 
 > **只做扫描用**：口径、证据与复现命令以各目录 `README.md` 为准；§1.2 说明的是目录职责与
 > 产出脚本，本表给的是**判定**。判定口径：`采纳`（进生产/进定版）/ `判负`（实测无增量或被
@@ -122,6 +122,18 @@
 | `portfolio_weighting` | 优化层空白维探明：TopK45 + inv_vol + buf1.5 = 18.07% / Sharpe 0.736 | 采纳 | 2026-10-10 |
 | `pv_marginal` | 量价边际曲线并非平滑见顶；前作「DPP50→150 −24%」对照不公平 | 归档 | 2026-10-10 |
 | `raft_weight` | RAFT 式「按状态相似度给训练样本加权」在全A 主模型上**显著为负**（sim2 ΔIC −0.0024 / NW t −2.85 / 9 年 8 年负）；元凶不是减样本而是**碎片化**（同等 ESS≈300 下 time 连续 1 段无损、sim2 碎成 15 段掉 0.0024）；time 臂 ΔIC 0.0000 独立复现 `p2_objective` 的加权地板 1e-3 | 判负 | 2026-11-01 |
+| `new_source_scan` | **新数据源可得性复核**：本地数据已榨干（970 因子中 798 量价，margin/大宗/龙虎榜/股东户数/解禁/质押全有 builder）。**10-13「一致预期不可立项」只对一半**——它否的是 EPS 字段（`predict*` 2024-04 起），而同一接口的**评级/评级变动有 9.5 年、覆盖 93%+、免费**（实测逐年覆盖表），目标价仅 5–31% 太稀；库里**零评级类因子**。北向已停更不可上线。给出预注册判据（残差 \|t\|≥3 + 分年 ≥7/9 + 组合 Δ≥+0.3pp）。**P1 已跑完并判负** ⇒ 见 `em_rating_probe` | 判负 | 2026-11-15 |
+| `intraday_source` | **日内因子可交易性复核**（原线 10-14~10-23 已三段收口：83 个 `im_*`、GP ❌、模型层 −1.71pp、半衰期 ❌）。本次独立重建 9 个日内因子复现同一结论（`ilate` ≡ `im_mom_close30_ret`，残差 IC −0.0225 / t −5.6），**新增定量成本维度**：日频多空取反毛 +14.96bp/日（Sharpe 2.16）、换手 85.5% ⇒ **打平单边仅 8.8bp < 本项目 13.5bp，扣 27bp 往返 −8.12bp/日**。**月频重算有意外（`monthly/`，2026-11-15）**：`mean` 月内日均多空 −139.6bp/月（取反 +139.6 / t 1.38），但**控制月反转后 D10 多头只剩 +4.8bp（t 0.12）= 月度反转的伪装**；**`eom`（月末当日尾盘 30 分钟收益取反）逐层控制月反转 / 月末当日全天收益 / 两者**：D10 多头 **+92.8（t 2.74）→ +82.0（t 2.38）→ +75.7bp/月（t 2.13）**，分年 4–5/5；多空最高 +139.3（t 2.64），换手 87.3%/月 ⇒ 净 +81bp —— **九个因子里唯一活着的**；但只在 HS300 内（400 只 / 56 月）、容量小、6 格挑 1 未做多重检验校正，定位是「独立小容量策略候选」。**加不进 K15**：触及度仅 **0.5%**（840 个持仓月仅 4 个在池内），叠加 λ=0.1/0.2/0.4 全负（−0.78 ~ −1.72pp，原因在触及度不在信号）。原记「−151.8bp/月」不可复现（当时无月度代码），且复核中我曾误用单位（百分点当 bp），已全部重算更正。**周频也否（`weekly/`，2026-11-15）**：换手对持有期免疫（日频 85.7%/次 → 持有 20 日仍 87.9%/次）⇒ 唯一杠杆是调仓次数（250 : 50 : 12）；周频 `wmean` 取反毛 20.79bp/周（t 1.36）、往返成本 22.7bp/周 ⇒ **净 −1.9bp/周（年化 −93bp）**，D10 只做多每格为负；`wend` 与 `eom` **不是同一时点**（月末=周最后仅 31/56 月，其余 25 月 wend 取到下月初）；`wend` 是独立信号但 IC 仅 0.010、毛/成本 0.60、净 −459bp/年，而 `eom` IC 0.041、毛/成本 5.91 ⇒ **「月末」比「任一周末」强 4 倍，eom 不是周效应伪装的**。判据用**毛/成本比**：日频 0.82 / 周频 0.92 / 月频 eom 5.91 | 判负 | 2026-11-15 |
+| `horizon_h40` | 补训 h=40 新周期腿**无新信息**：h20 模型直接预测 40 日标签已得 IC 0.1539，专训的 h40 只多 0.0008（其「IC 0.1548 比 h20 高」纯属标签平滑）；h40 vs h20 日度预测相关 **0.9498**（高于 h20-h10 的 0.9288）；月度截面 IC Δ **−0.0023 / t −0.51**、K15 超额配对 **−0.081pp / t −0.23**；加进 mid13 反降 0.282pp | 判负 | 2026-11-15 |
+| `em_rating_probe` | **卖方评级族 8 个构造全部未过预注册**（残差 \|t\|≥3 / 分年 ≥7/9 / 组合 Δ≥+0.3pp 且 t≥1.5）：最好 `rtg_delta_mean` 残差 IC **0.0096（t 1.74）**、组合 Δ +0.08pp（t 0.40）；`rtg_rev_net` 0.0093（t 1.86）。数据本身齐（**150,386 条 / 4,871 只 / 112 家机构 / 2017-01 起**，逐年条数与接口声明逐位一致，评级非空 93%+）。**机制：评级在 A 股不是截面变量是稀疏事件**——74.6% 给「买入」、99.2% 买入+增持；每季全市场上调 72 次/下调 64 次、覆盖 1284 只、**净变动非零仅 9.4%（≈120 只）**，因子 90% 取值为 0。事后窗口 250 日残差 IC 反而降到 0.004~0.008。唯一稳定信号 `rtg_first_share` 为**负**（原始 IC −0.0152 / t −2.81，W250 −0.0201 / t −3.40），但残差 t 仅 −0.52，已被 mid13 吃掉。**补测触及度（`reach/`）：判负理由从「信号弱」升级为「没有决策可改」**——K15 的 15 个仓位平均只有 **2.76 只有覆盖（18.4%）、0.37 只有净变动、0.21 只被下调（1.4%，中位 0）**；**完美预测下月下调**（上帝视角）104 个月仅命中 **2 次**、Δ **+0.006pp**（= 基线的 0.6%），放宽到 K45 命中 9 次但 Δ **−0.011pp**（t −1.53，下调端方向为负）；PIT 硬否决 22 次 Δ +0.003pp。机制是市值错配：K15 持仓市值分位 **37.8%** vs 其中有覆盖者 **52.2%**，差 **−14.4pp（t −6.90）**。⇒ 换构造/换窗口/机构加权整条路封死 | 判负 | 2026-11-15 |
+| `event_driven_probe` | **事件驱动「独立组合」口径（非横截面滤网）九族一次性判生死**：事件发生→买入→持有 H 日→卖出，市值 5 分组基准、T+1 开盘。**通过 1 族：董监高主动增持 `inc_pure`**（剔除分红送转/股权激励，成交方式∈竞价/二级/大宗，relation=本人，同股同日聚合，4,401 个事件）——H=20 毛超额 **+14.53%**、扣费 **+11.95%**、t **3.23**、Sharpe 0.92、**分年 9/9 全正**（剔除 2020 仍 +12.51%）、安慰剂 20 次均值仅 **+0.03%**（p=0.000，净 edge +14.50%）；H=10 扣费 **+17.14%（比 H=20 高 5.2pp）**、换手 34x；**成本 = 单边 13.5bp / 双边 27bp（等价，不可叠加）**，相邻档打平点 H=5↔10 **6.5bp**、H=10↔20 **47.6bp**、H=20↔40 **63.4bp** ⇒ 现实 13.5~27bp 下 **H=10 才是净额最高档**，H=20 只在成本 ∈(47.6,63.4)bp 时唯一最优（押"单边成本 ≥47.6bp"）；H=20 作上线口径的硬理由只是 `exec_fill_probe` 只验过这 1,597 笔。**成本占毛超额比例 34%/21%/18%（H=5/10/20），无"吃掉大半"一说**。**与 K15 主线超额相关仅 0.052**。市值中位 56.7 亿=全市场 52 分位，**不偏小盘**，平均持仓 19.5 只（中位 14）。边缘：解禁 +5.60%（9/9 正，扣费仅 +2.42% 未达门槛）。判负：业绩预增 −1.88%、预减 −2.83%（**独立复核 PEAD，与 `pead_probe` 截面口径同结论：A 股无 PEAD**）、户数减少 +1.27%、同日≥2人增持 −0.09%。**做空端三个极强但无权限**：户数暴增 −25.10%（t −7.97，0/9）、董监高减持 −11.15%、大宗折价 −9.82%（t −8.35）。**四个口径坑**：`tradable_mask` 不含上市日（会把"还没上市的股票"建仓，净值从 +20% 变 −76%）；空仓日不能 dropna（高估 6pp/年）；持有期不能用 mask 过滤（差 7pp/年）；**早于回测起点的事件必须丢弃不能钳到首日**（初版把 2010–2017 的 748 个公告堆到 2018-01-02 建 664 只仓，修正后扣费超额 +12.03%→+11.95%，结论不变） | 采纳（`inc_pure` 立项） | 2026-11-15 |
+| `event_opt_probe` | **`inc_pure` 优化 6 臂 + 5 个新事件族：5 个无效、1 个噪声级，且它不是独立腿**。优化：`amt_hi`≥1000万 −1.12%（仅 661 例/持仓 4.5 只，t 0.21）、`amt_lo` +15.81% 🚨 **不是「小额更强」而是市值暴露**（金额与市值 rank 相关 **0.558**：最小五分组市值中位 26.2 亿 vs 最大 100.0 亿；干净对照 `inc_big`≥0.5% 比例 2,286 例 +11.88%≈base ⇒ **强度加权无增量**）；`delay2/3` **+4.89/+4.69%（−7.1pp，t 1.76）⇒ 超额集中在建仓首日**（执行风险 > 回撤风险）；`no_neg` +12.92% 但只剔 23/1597 笔（噪声级）；`cap10` 几乎不变（1597→1552 笔，容量非约束）。🚨 **推翻「第二条独立的腿」**：日**超额**相关 0.052 但日**绝对收益**相关 **0.94**（都是满仓 A 股多头）— 叠加 `mix_50_50` Sharpe 0.916→**0.955**、回撤 −33.1%→−33.3% 不减免、年化 24.4→23.2% ⇒ **第二条 alpha 来源，不是独立收益腿**。新族全否：`fe_pos` 快报≥+30% −5.48%（**第三次独立确认 A 股无 PEAD**，预告+快报+截面三路同结论）、`fe_neg` +1.91%。做空端 5 新信号全无权限：`margin_up` −20.80%（t −5.82，0/9）、`lhb_inst` −24.70%（t −4.40）、**`lhb_all` −40.32%（t −11.86，0/9）= 对照组**（证明 `lhb_inst` 负收益主要是「上榜均值回归」而非「机构接盘」，且上榜股次日一字/高开**不可执行**）；`margin_dn` −9.50%。未测清单已清空（`alt_holder_control` 是快照非事件、`dividend` 属因子、`index_constituent` 样本不足） | 工具保留 | 2026-11-15 |
+| `exec_fill_probe` | **`inc_pure` 执行层检验：能买进，但必须买在开盘集合竞价**。可成交性：建仓日**开盘跳空中位 +0.00%**（公告在开盘价里完全没被定价）、跳空≥9.5% 仅 **0.19%**、**封涨停 0.00%**（远低于 5% 门槛）、卖出日封跌停 0.06% ⇒ **「T+1 开盘抢不到」的担心不成立**；剔除跳空≥5% 的 13 笔后净超额 **+12.01%→+12.01%**，摩擦为 0。真正的成本在成交价：同一批持仓只换价——开盘 **+12.01%** / 开盘买收盘卖 **+12.02%**（卖出端完全不敏感）/ **VWAP +7.75%** / 收盘 **+6.67%** / 迟1天买仍持满 20 日 **+5.51%**；逐笔配对 open−VWAP **+0.401%/笔（t 5.05）**、open−close +0.527%（t 4.78）。**机理**：超额集中在**建仓日日内**（+0.534%，中位 +0.305%，**9/9 年为正**），隔夜仅 −0.015% ⇒ VWAP/算法单把日内涨幅让给市场，年损耗 **4.3pp**。容量：资金 1000 万内中位成交额可容纳，成交额分档无单调衰减；但**开盘集合竞价量无数据**，按全天 2% 估算保守可承载 **300~500 万**。滑点极敏感：10bp→+9.81%、20bp→+7.62%、**50bp→+1.05%（t 0.81，失效）**。判据三条全过 ⇒ **可执行（条件式：9:25 前挂开盘竞价单、不用 VWAP）** | 采纳（执行口径） | 2026-11-15 |
+| `exec_fill_probe_h10` | **`inc_pure` H=10 执行层对照：可成交性同样干净，净额高 5.67pp，但容错少 15bp**。`--hold 10`（1,778 笔，比 H=20 多 11%）：**封涨停 0 笔（0.00%）**、卖出日封跌停 0.00%、**跳空中位 +0.00%**、跳空≥9.5% 仅 0.22%、**剔除跳空≥5% 的 14 笔后净额反而 +17.68%→+17.70%**（被剔的是弱势单）⇒ **「短持有期更容易撞涨停」不成立，买卖两端与 H=20 同样干净**。执行价：开盘 **+17.68%** / 开盘买收盘卖 +17.65% / **VWAP +11.29%**（损耗 **6.39pp**，比 H=20 的 4.26pp 更大——持有期越短开盘价越值钱）/ 收盘 +8.43% / 迟1天 +8.13%。🔑 **滑点阶梯夹住了 47.6bp 的解析打平点**：0bp **+17.68% vs +12.01%（+5.67pp）**、10bp +13.77% vs +9.81%、20bp +9.85% vs +7.62%、**50bp −1.86% vs +1.05%（H=10 已归零）** ⇒ **H=10 把存活区间从 (0,63bp) 压到 (0,48bp)，安全边际少 15bp**。容量：平均持仓 **12.1 只**（H=20 为 19.5）⇒ 单笔 1.6 倍，可行资金上限仍约 500 万，但「最差 10% 分位」在 500 万即不达标（H=20 尚有 1.4 倍余量）⇒ **更早触顶**。唯一负年 2025（超额 −5.05%）缺口集中在 **8 月单月差 11.7pp**（H=10 +9.5% vs H=20 +21.2%），而 H=5 同年 +40.4% 非单调 ⇒ 少数极端窗口主导。**⇒ 不直接切档，P0 纸面 H=10/H=20 双轨 A/B 40 日，用实测滑点定档** | 进行中 | 2026-11-16 |
+| `event_chain_probe` | **L3 事件链 + L2 事件前状态双否：增持的「来历」不解释收益，且比随机抽样更差**。5,081 条事件明细（保留 person），四个维度检验：① 前 180 日有无减持（A1 无 Δ **−2.70pp** p 0.85 / A2 有 Δ **−2.28pp** p 0.75）；② 前 365 日无减持 Δ **−7.66pp** p 1.00；③ **同一股东** 365 日减持过 Δ **−6.46pp**（仅 157 笔）；④ 公告前价格位置——**暴跌后增持（ret60 ≤ −20%）Δ −8.41pp p 0.95，「护盘溢价」假设被彻底否定**，反而是最差的一档；ret60 (0,+20%] 的 Δ +4.01pp 看似最好，但 p 0.25、t 1.83、分年 6/9、四档**不单调**（2.38/4.57/15.12/0.69）⇒ 判噪声。🔑 **10 个子集里 8 个 Δ 为负**，说明该维度上 alpha 是**均匀分布**的，任何切分只损失样本不带来信息 ⇒ `inc_pure` 的 alpha 来自「董监高自购」这个**动作本身**，与减持史、价格位置无关。**安慰剂铁律**：子集事件密度低 ⇒ 组合长期低仓 ⇒ 年化天然被摊薄，必须用「同规模随机剔除 20 次」对照，直接比子集 vs base 会误判 | 判负 | 2026-11-16 |
+| `event_industry_probe` | **L4 行业密度信号判负，且是结构性稀释而非调参问题**。申万一级 31 个行业、事件 → 行业（PIT）→ 滚动 K 日累计 → 边缘触发 → 买入**该行业全部成分股等权** → 持有 H 日。主信号（K=20 M=3，425 信号/392 段窗口）：**扣费 −1.35%/年**、t **0.46**、分年 **5/9**、均持 4.3 行业。**K×M 网格 12 格 11 格为负**（−8.55% ~ +2.44%），唯一近门槛的 +2.44% 与同列相邻格 −3.04%/−8.55% 完全不连续 ⇒ 锯齿状=噪声。**双安慰剂都不过**：P1 行业打乱（事件数/日期/密度全不变，只置换「事件→行业」配对）Δ **+0.53pp** p 0.40、P2 日期平移 60~480 日 Δ **+1.45pp** p 0.29 ⇒「聚集」结构只值 0.5pp、「时点」只值 1.5pp。🔑 **失败机理是数学必然**：行业口径毛超额 **+1.57%** vs 个股 **+14.53%**，**保留率 10.8%**——申万一级约 180 只成分股、同时点仅 1~5 只带信号 ⇒ 暴露 1~3%，量级对得上。**要保留 alpha 就只能买事件股（回到 L1），要买行业就必须接受稀释，中间无第三选项**；改二级/三级行业只会让「行业」退化成小板块、容量优势消失 ⇒ 不再试 | 判负 | 2026-11-16 |
+| `inc_pure_playbook` | **`inc_pure` 实盘落地清单 + 出单器（操作手册，非研究）**。Gate 0 开工前置 6 条 → 每日时序（20:00 落盘 / 20:30 出单 / 20:40 人工复核 4 项 / **T+1 9:15 挂涨停价竞价单** / **9:20 撤高开 >7%** / 9:25 撮合）→ 事件判定字段级 SQL → 下单规则 9 条（单笔 5%、≤成交额 1%、100 股整手、同股再触发**延长不加仓**）→ 风控 R1–R8（回撤 25% 减半 / 35% 全停 / **不设个股止损**：回测 20 日固定窗无止损分支，要控风险只能控总仓位）→ **明确不做 9 条**（不用 VWAP、不延后建仓、不强度加权、不按金额筛、不换持有期、不与主线混仓做分散、不追未成交单、不因无信号放宽条件）。出单器 `scripts/live/inc_pure_live.py` 复刻 `fam_inc_pure` 四条条件 + T+1 开盘/20 日持有/重叠延长，新增四条回测没有的闸门（`is_st`/`is_suspended`/上市<60 日/单笔≤成交额 1%），带 `state.json` 台账与 `[FATAL]` 数据新鲜度拦截。**61 个交易日逐日真实回放**（2026-07-01~09-23，400 万，含最密集 8 月）：总买 49/卖 27、**单日买入中位 0 笔峰值 6 笔、54% 交易日零新单** ⇒ 低频、无需盯盘；期末 23 只/仓位 99.4%；**并发上限 30 触发 0 次**（回测"峰值 122 只"是建仓日重叠的静态快照，实盘逐日进场不出现）⇒ 该参数是保险非约束；真正卡资金的是**整手不足 9 次 + 现金不足 1 次** ⇒ 实盘系统性偏向"先进来的事件"，与回测"同日全收"不同源。⛔ **唯一硬阻断**：`alt_cninfo_holder` 只到 2026-09-23（滞后 33 个交易日）、行情到 2026-11-06 ⇒ 补齐前只能纸面 | 工具保留 | 2026-11-16 |
+| `event_reach_probe` | **事件族「触及度 + 上帝视角天花板」7 族一次性收口**（解禁/减持/大宗折价/质押/股东户数/预告为负/并集）：K15 口径下**无一族值得立项**。并集触及度 **33.9%**（每五只持仓一只下月出事）看着够用，但被标股票 vs 未标的次月超额差仅 **−0.22pp（t −0.44）** ⇒ 上帝视角剔干净也只值 **+0.058pp/月**。**天花板可解析：`Δ ≈ spread × k/(K−k)`**，要做到 +0.3pp/月需 spread −1.2pp，实测差 5 倍。**硬否决（选股阶段剔除+补位）的 Δ 几乎全是换股噪声**——同规模**随机**否决本身就值 −0.06~+0.13pp/月（`block` +0.185 vs 安慰剂 +0.129，p=0.25；`unlock` +0.060 反低于安慰剂 +0.091）。唯一跑赢安慰剂的是**减持**（+0.179pp / t 1.80 / 安慰剂 20 次 0 次达到 / 净 edge +0.093pp），但分年断崖：2018–2021 +0.13~+0.57、2022 起归零、**2026 −0.45**，加未扣成本（每期剔 10.6 只）⇒ 净期望 ≈0，**边缘候选但不立项**。副产品：`holdernum` 户数暴增的持仓次月**反而 +1.42pp（t 1.65）**，与「筹码分散=偏空」相反，记待解释异象。⚠️ 本目录结论仅对「剔除/否决」用法成立，**对「事件驱动独立组合」不成立**——见 `event_driven_probe` | 判负 | 2026-11-15 |
 | `regime_probe` | Phase 0 见肉（IC 0.127 vs 0.110、t=3.55），但条件化最终不立项 | 判负 | 2026-10-14 |
 | `risk_budget` | 风险维度已探过：市值中性化 −6.4pp/年、行业中性化近乎免费 | 归档 | 2026-10-10 |
 | `seg_weight_probe` | **华泰 AI106「学分钟权重」P0 判定**：12 段动量信息**只在 seg12（14:40-15:00）**——训练 IC −0.0675/t **−14.31**、测试 −0.0544/t −7.12，双段衰减仅 19%；**学权重打不过零参数选段**（12 维 IC-IR `0.0493/0.0133` vs 仅 seg12 `0.0544/0.0199`，h5 甚至不如 12 段等权 `0.0256`）；**逐日独立估权重不可行**（滞后 oracle 仅 `0.0190`，不到静态 40%）；路径分组 `A4−A5=+0.0063/+0.0106` 是唯一真增量，但 48 参数仍打不过零参数方案 ⇒ **「学权重」判负**；华泰 5~7% 靠 240bar×全A×9年×跨日共享参数，非"学权重"动作本身（A3 否证逐日独立，反证跨日共享的必要性） | 判负（保留「路径条件化」方向） | 2026-11-03 |
@@ -165,7 +177,7 @@
 | `ml_synthesis_h1/` | ⚠️ 归档时代产物，但 `monitor_performance.py` 读其预测面板 ⇒ **不可删** |
 | `investment_report/` | HS300 时代交付物存档（年化口径 ~3% 偏移待重跑）；归档脚本以其为输入 |
 | `walk_forward/`、`two_periods/` | 早期回测产物；`research/report_pipeline.py`（generate_report）读取其 `summary.csv` |
-| `_htai_gp/` | 华泰 GP 挖掘对照数据 + 手写方法论总结（`scripts/archive/compare_ml_synthesis.py` 读取） |
+| `_htai_gp/` | 华泰 GP 挖掘对照数据 + 手写方法论总结（原读取脚本 `compare_ml_synthesis.py` 2026-11-18 随 `scripts/archive/` 下线，数据本身保留） |
 | `neutralize_vectorization/` | neutralize 逐日循环向量化的等价性证据与计时（2026-09-20；`factor/preprocessing.py` 的 `neutralize_batch` / `neutralize_grouped`，默认已切 2.96x 逐位一致版） |
 | `e2e_p0_intraday/` | 日内 P0 A/B 链路（2026-09-23 五合一：`daily/` 每日链+placebo、`with_im/` `no_im/` 分钟因子对照、`w2023h2/` `w2025h1/` 双窗口日志；产出 `scripts/oneoff/_p0_intraday_ab*.py`） |
 | `holder_dyn/` | 股东动态 9 因子三探针（2026-09-23 二合一：`ablation/` A/B 消融、`forced/` 强制纳入臂 Δ=−0.85pp，结论已归档 TODO；pred 中间产物已清理） |
@@ -250,6 +262,70 @@
 > 无生产代码读取，重跑约 1 分钟/臂。
 >
 > 二轮清理（同日）已删归档脚本产物、HS300 时代 e2e 族与演示产物；结论见 §三.13~17。
+
+**2026-11-18 补登：920 批次臂与历史散件（55 行）**
+
+> 起因：`docs_lint` 规则 1/5 报 52 个目录既未登记、又无判定行。这批都是 2026-09-20 前后
+> 920 治本重跑及其后的消融/网格臂，结论统一记在 `batch_920_consolidated/` 的两张收尾表里，
+> 目录本身只是产物。判定一律取 `归档`（有结论、无后续动作）；`工具保留` 的四个是脚本仍在读写的位置。
+> 同期把根部的 9 个 `alphapool_ppo_*.json`、12 个 `gflownet_*.pt`、2 张收尾表归位进目录。
+
+| `alla_rolling_ortho920tl` | 批次 1/2/3/8 的 920 治本/消融臂；结论见 `batch_920_consolidated/` | 归档 |
+| `alla_rolling_ortho920v2` | 批次 1/2/3/8 的 920 治本/消融臂；结论见 `batch_920_consolidated/` | 归档 |
+| `alla_rolling_ortho920e4` | 批次 2/3 的 E4 交互因子族臂；结论见 `batch_920_consolidated/` | 归档 |
+| `alla_rolling_ortho920e4force` | 批次 2/3 的 E4 交互因子族臂；结论见 `batch_920_consolidated/` | 归档 |
+| `alla_rolling_ortho920nolabels` | 批次 1 单开关消融臂（去掉 `--tradable-labels`）；结论见 `batch_920_consolidated/` | 归档 |
+| `alla_rolling_ortho920fundind2` | 批次 1/2/3/8 的 920 治本/消融臂；结论见 `batch_920_consolidated/` | 归档 |
+| `alla_rolling_ortho920fundind3` | 批次 1/2/3/8 的 920 治本/消融臂；结论见 `batch_920_consolidated/` | 归档 |
+| `alla_rolling_ortho920fundind4` | 批次 1/2/3/8 的 920 治本/消融臂；结论见 `batch_920_consolidated/` | 归档 |
+| `alla_rolling_ortho920fundind5` | 批次 1/2/3/8 的 920 治本/消融臂；结论见 `batch_920_consolidated/` | 归档 |
+| `alla_rolling_ortho920fundind_h40` | fundind 预处理 + h40 长持有期臂（产物只留 pred/selection）；结论见 `batch_920_consolidated/` | 归档 |
+| `alla_rolling_ortho920fundind_mf` | fundind 预处理 + 分钟频（mf）派生信号臂；结论见 `batch_920_consolidated/` | 归档 |
+| `alla_rolling_ortho920tl_lblco` | 批次 1 标签口径消融臂（lblco/lblgauss/lblir 三档标签变换）；结论见 `batch_920_consolidated/` | 归档 |
+| `alla_rolling_ortho920tl_lblgauss` | 批次 1 标签口径消融臂（lblco/lblgauss/lblir 三档标签变换）；结论见 `batch_920_consolidated/` | 归档 |
+| `alla_rolling_ortho920tl_lblir` | 批次 1 标签口径消融臂（lblco/lblgauss/lblir 三档标签变换）；结论见 `batch_920_consolidated/` | 归档 |
+| `buffer_arm_920` | 缓冲带参数扫描臂（单文件 `buffer_arm.csv`）；结论见 `batch_920_consolidated/` | 归档 |
+| `buffer_arm_920v2` | 缓冲带参数扫描臂（单文件 `buffer_arm.csv`）；结论见 `batch_920_consolidated/` | 归档 |
+| `buffer_arm_920v2_defv` | 缓冲带参数扫描臂（单文件 `buffer_arm.csv`）；结论见 `batch_920_consolidated/` | 归档 |
+| `buffer_arm_920fundind_defv` | 缓冲带参数扫描臂（单文件 `buffer_arm.csv`）；结论见 `batch_920_consolidated/` | 归档 |
+| `buffer_arm_920fundind3_defv` | 缓冲带参数扫描臂（单文件 `buffer_arm.csv`）；结论见 `batch_920_consolidated/` | 归档 |
+| `buffer_arm_920fundind4_defv` | 缓冲带参数扫描臂（单文件 `buffer_arm.csv`）；结论见 `batch_920_consolidated/` | 归档 |
+| `buffer_sweep_p2` | 缓冲带二阶段网格扫描（e15/e16 × x25/x30 等格子，每格一目录） | 归档 |
+| `buffer_sweep_p2_v2` | 缓冲带二阶段网格扫描（e15/e16 × x25/x30 等格子，每格一目录） | 归档 |
+| `fundamental_blend_920` | 基本面慢腿混入权重臂（`metrics_fundamental_blend.csv` + `slow_weights.csv`）；结论见 `batch_920_consolidated/` | 归档 |
+| `fundamental_blend_920_hd` | 基本面慢腿混入权重臂（`metrics_fundamental_blend.csv` + `slow_weights.csv`）；结论见 `batch_920_consolidated/` | 归档 |
+| `fundamental_blend_920v2` | 基本面慢腿混入权重臂（`metrics_fundamental_blend.csv` + `slow_weights.csv`）；结论见 `batch_920_consolidated/` | 归档 |
+| `fundamental_blend_920v2_T3` | 基本面慢腿混入权重臂（`metrics_fundamental_blend.csv` + `slow_weights.csv`）；结论见 `batch_920_consolidated/` | 归档 |
+| `fundamental_blend_920v2_T6` | 基本面慢腿混入权重臂（`metrics_fundamental_blend.csv` + `slow_weights.csv`）；结论见 `batch_920_consolidated/` | 归档 |
+| `fundamental_blend_920v2_T12` | 基本面慢腿混入权重臂（`metrics_fundamental_blend.csv` + `slow_weights.csv`）；结论见 `batch_920_consolidated/` | 归档 |
+| `fundamental_blend_920fundind` | 基本面慢腿混入权重臂（`metrics_fundamental_blend.csv` + `slow_weights.csv`）；结论见 `batch_920_consolidated/` | 归档 |
+| `fundamental_blend_920fundind2_altnews` | 基本面慢腿混入权重臂（`metrics_fundamental_blend.csv` + `slow_weights.csv`）；结论见 `batch_920_consolidated/` | 归档 |
+| `fundamental_blend_920fundind3` | 基本面慢腿混入权重臂（`metrics_fundamental_blend.csv` + `slow_weights.csv`）；结论见 `batch_920_consolidated/` | 归档 |
+| `fundamental_blend_920fundind4` | 基本面慢腿混入权重臂（`metrics_fundamental_blend.csv` + `slow_weights.csv`）；结论见 `batch_920_consolidated/` | 归档 |
+| `fundamental_blend_920fundind5` | 基本面慢腿混入权重臂（`metrics_fundamental_blend.csv` + `slow_weights.csv`）；结论见 `batch_920_consolidated/` | 归档 |
+| `fundamental_blend_920fundind_full` | 基本面慢腿混入权重臂（`metrics_fundamental_blend.csv` + `slow_weights.csv`）；结论见 `batch_920_consolidated/` | 归档 |
+| `horizon_mix_920` | h1/h5/h20 周期混合权重臂（`metrics_horizon_mix.csv`）；结论见 `batch_920_consolidated/` | 归档 |
+| `horizon_mix_920v2` | h1/h5/h20 周期混合权重臂（`metrics_horizon_mix.csv`）；结论见 `batch_920_consolidated/` | 归档 |
+| `horizon_mix_920fundind` | h1/h5/h20 周期混合权重臂（`metrics_horizon_mix.csv`）；结论见 `batch_920_consolidated/` | 归档 |
+| `horizon_mix_920fundind3` | h1/h5/h20 周期混合权重臂（`metrics_horizon_mix.csv`）；结论见 `batch_920_consolidated/` | 归档 |
+| `horizon_mix_920fundind4` | h1/h5/h20 周期混合权重臂（`metrics_horizon_mix.csv`）；结论见 `batch_920_consolidated/` | 归档 |
+| `horizon_mix_920fundind5` | h1/h5/h20 周期混合权重臂（`metrics_horizon_mix.csv`）；结论见 `batch_920_consolidated/` | 归档 |
+| `stack_blend_920` | stacking 权重混合臂（`metrics_stack_blend.csv` + `stack_weights.csv`） | 归档 |
+| `stack_blend_920v2` | stacking 权重混合臂（`metrics_stack_blend.csv` + `stack_weights.csv`） | 归档 |
+| `ai97_pbo` | AI97 因子集的 PBO / DSR 报告（单文件 `pbo_report.json`） | 工具保留 |
+| `mf10_t_scan` | MF10 单因子 t 值扫描（hs300 2022–2025 两口径 IC/IR） | 归档 |
+| `portfolio_phase2` | 组合 Phase-2 实验（equity/signals/summary，24MB） | 归档 |
+| `portfolio_phase2_full` | 组合 Phase-2 全样本版本（同上，22 文件） | 归档 |
+| `portfolio_phase2_full_parts` | Phase-2 消融分解臂（p2024_full / no_alpha / no_excess / no_risk）**5.5GB，全库最大** | 归档 |
+| `tabfm_rolling` | TabFM 滚动预测产物（all_a / hs300 / zz1000 三池各一个子目录） | 归档 |
+| `views_arm_920_smoke` | views 臂的 smoke 试跑（`meta.json` + `pred_ic.csv`），被 `views_arm_920/README.md` 引用 | 归档 |
+| `vol_target_920_const` | 目标波动 overlay 的恒定敞口对照臂（单文件 `vol_target.csv`） | 归档 |
+| `yelaoshi_first_board_2026-10-25` | 首板策略回测产物（`scripts/oneoff/yelaoshi_first_board_*.py` 产出） | 归档 |
+| `_rebuild_logs` | 前视修复后重建的全程日志 + `HANDOFF.md`（331 文件 59MB），供追溯那次重建 | 归档 |
+| `alphapool_ppo` | AlphaPool PPO 三臂 × 三种子训练/评估记录（`run_alphapool_ppo.py` 默认输出目录） | 工具保留 |
+| `gflownet_ckpt` | GFlowNet 因子挖掘的模型权重存档（12 个 `.pt`，按 im/raw/rawim/rre/budget2x 分组） | 工具保留 |
+| `batch_920_consolidated` | 920 批次收尾对照表与结果速览（原在 `reports/` 根部，2026-11-18 归位） | 归档 |
+| `e2e_backtest` | 批次 7 年化口径重出（252 口径 + 环境漂移注记），HS300 时代链路的备份证据；重出脚本已于 2026-11-18 随 `scripts/archive/` 删除 | 归档 |
 
 ### 1.3 文档型报告（2026-09-11 按功能归类）
 
@@ -390,7 +466,7 @@ model层 / ML合成，其余已删、可重跑复现——结论见 §三.13~17�
 9. **`timing_vs_crosssection/`** —— 目标波动 / 状态机择时均不优于纯截面（Sharpe 0.57 / 0.54 /
    0.29，2025 年段）；与 `position_overlay_grid` 一致：overlay 只压回撤、不提升 Sharpe。
 10. **`select_hs300_2025/`** —— HS300 选股演示（幸存者偏差修复前，数字虚高：top30 年化 48% /
-    Sharpe 2.54）；`scripts/archive/select_stocks.py` 可重生成。
+    Sharpe 2.54）；原 `select_stocks.py` 已于 2026-11-18 随 `scripts/archive/` 删除，只能从 git 历史取。
 11. **`textmining_txt/`** —— 文本挖掘早期 txt 堆放处，已被 `textmining/` 分层布局取代，无引用。
 12. **`models_mock/`** —— `walk_forward_model.py --mock` 模型台账，按需重生成。
 13. **`diagnose/`** —— 单因子 vs 模型同口径诊断：负 IC 单因子 top50 超额 +20%~+36%，实为
@@ -404,13 +480,32 @@ model层 / ML合成，其余已删、可重跑复现——结论见 §三.13~17�
 17. **`e2e_backtest/`、`e2e_picks/`、`optimize_e2e/`、`signals/`、`multi_period/`** —— HS300 时代
     e2e 与演示产物（数字带 ~3% 年化口径偏移，册Ⅰ §一 待重跑）。结论：等权 top50 +16.2% 跑输
     全池等权 +30.8%；风格中性化 16.2%→27.0%（Sharpe 0.41→0.66）；周频被证伪；最优 = 月频 +
-    中性化（已并入 investment_report）。重跑见 `scripts/archive/` 同名脚本；
+    中性化（已并入 investment_report）。原脚本 2026-11-18 随 `scripts/archive/` 删除（`git show 9ca06fc^:scripts/archive/e2e_backtest.py`）；
     `daily_hs300.parquet` 2026-08-26 停更，复现仅限该缓存窗口。
 18. **`intraday_stat_checkup_run.log`** —— 手动控制台重定向日志，结论在同根 `.csv`，无独立价值。
 
 ---
 
 ## 四、清理记录
+
+- **2026-11-18（reports 结构对齐：根部归位 + 55 个未登记目录补登 + 4 项回收）**：
+  起因是同步远端 64 个提交后跑 `docs_lint`，本机报 133 项（干净 `origin/master` 是 0 项）——
+  全来自本机 gitignored 的残留，不是远端引入。按 §1.6 处理后**首次全绿（0 项）**。
+  - **归位（不删）**：根部 23 个散件进目录 —— 9 个 `alphapool_ppo_*.json` → `alphapool_ppo/`、
+    12 个 `gflownet_*.pt` → `gflownet_ckpt/`、`batch1_920_收尾对照表.md` + `batch2385_结果速览.md`
+    → `batch_920_consolidated/`。**移动改了三处硬引用**：`run_alphapool_ppo.py` 默认输出前缀、
+    `config/baselines.yaml` 的 `source:`、`alla_daily_rank.py` 注释，另同步 `TODO.md` /
+    `TODO_ARCHIVE.md`（19 处）/ `_rebuild_logs/HANDOFF.md` 的路径。
+  - **补登 56 行**（§1.2.1）：920 批次臂（ortho920* 14 / buffer* 8 / fundamental_blend_920* 12 /
+    horizon_mix_920* 6 / stack_blend_920* 2）、历史散件（portfolio_phase2* 3、tabfm_rolling、
+    yelaoshi_first_board_2026-10-25 等）、新增三目录。判定统一 `归档`（结论在
+    `batch_920_consolidated/`），`工具保留` 的 5 个是脚本仍在读写的位置。
+  - **回收站 4 项**（走 `scripts/data_tools/recycle.py`）：`tmpprobecheck`（空目录）、
+    `_fresh_panels.txt`、`factor_gp_20261007_150235.csv`（352B，零引用）、
+    `alla_rolling_ortho920smoke`（477MB smoke 试跑，零引用）。快照清单（路径/文件数/字节/mtime）
+    存 `D:/project/_yq_snapshots/2026-11-18_reports_cleanup.txt`，README 备份同目录。
+  - **未删任何实验产物**：`alla_rolling_ortho920*` 与 `portfolio_phase2_full_parts`（5.5GB）
+    全部保留并登记，`reports/` 仍占 ~27GB。要回收空间需另议（`_base/` 可重生成，是主要体积）。
 
 - **2026-11-12（成本口径补标 + 择时族整合 + 过时复现命令）**：起因是由莉酱问
   「还有什么冗余重复、过时的脚本、readme、报告」。清点结论：**目录层已干净**
