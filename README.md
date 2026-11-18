@@ -1,230 +1,290 @@
 # YuriQuant
 
-**从原始行情到每日选股清单——一套盘后自动跑数据、出榜单、发报告的全链路 A 股量化研究系统。**
+**A 股全市场量化研究与生产系统。** 从原始行情到每日可执行榜单，覆盖数据、因子、模型、
+组合构建、回测、监控与报告的完整链路，围绕三条约束构建：**无未来函数、可样本外复现、
+可直接投产**。
 
-大多数量化仓库止步于回测脚本。YuriQuant 覆盖 **数据 → 因子 → 模型 → 组合优化 →
-回测 → 监控 → 报告** 的完整研发生命周期，全部围绕一条铁律构建——
-**无未来函数、可样本外复现、可直接投产**。
+系统同时记录**什么不成立**。每一条被判负的假设都以可复跑的形式留在 `reports/` 里，
+并与正面结论享受同一套证据标准——这是本项目与「只展示漂亮回测」的仓库最主要的分野。
 
-## 🏆 实战战绩
+---
 
-全 A 市场（5549 只股票，含退市回补）、因子层全正交、2018–2026 逐年 walk-forward
-样本外、**T+1 开盘可执行口径**（含交易成本，非纸面收益）：
+## 一、核心结果
 
-| 配置 | 年化 | Sharpe | 最大回撤 | 换手 |
+全部数字为 **27bp 往返时变成本**（佣金万分之一双边 + 印花税按调仓日时变，2023-08-28 起
+减半 + 滑点 20bp）、**T+1 开盘成交**、100 万资金、窗口 **2019-01-02 – 2026-09-07**
+（1864 个交易日 / 7.38 年）。锚点臂须在 `config/baselines.yaml` 逐位复现登记值，Δ≠0 即作废。
+
+### 1.1 yqcore 定版策略（现行生产）
+
+同一信号族的三档配置，差异仅在持仓数与执行层：
+
+| 档位 | 信号与执行层 | 持仓 | 年化 | Sharpe | 最大回撤 | 年换手 |
+|---|---|---|---|---|---|---|
+| `breadth`（判改进基线） | 920 因子全正交 + 月频 Top10% 等权 + buffer(15/40) | 均 614 只 | **21.81%** | 1.013 | 26.6% | 17.1% |
+| `focus-k15`（默认） | 882 因子四周期融合 2:1:1:2 + TopK15 + buffer(2.0) | 15 只 | **29.60%** | 1.113 | 38.2% | 87.6% |
+| `focus-k8`（小资金） | 同上 + 每申万一级行业 ≤1 只 | 均 5.9 只 | **36.58%** | 1.271 | 36.3% | 92.4% |
+
+`focus-k8` 8 个年度全部为正，最差年度 +8.69%（2022）。三档并非「越好越推荐」：
+集中档的高收益来自持仓集中度，代价是 38% 级别的回撤与小资金下的整手摩擦，
+选择依据是资金规模而非历史收益。
+
+### 1.2 ETF 轮动（三方案）
+
+跨资产 ETF 池（宽基 / 行业 / 主题 / 债券 / 商品 / 跨境），信号唯一真源
+`scripts/portfolio/etf_contest_spec.py` 的 `FINAL` 参数表：
+
+| 方案 | 形态 | 年化 | Sharpe | 最大回撤 |
 |---|---|---|---|---|
-| **定版信号**：fundind 面板 h1+h5+h10+h20 混合 ⊕ 慢信号 blend + buffer(15/40) 执行层 | **18.07%** | 0.81 | — | **19.1%** |
-| 同信号 · 月频 TopFrac 口径（无 buffer） | 18.68% | 0.813 | 34.0% | 49.6% |
-| 主基线：GBDT 单周期 · 月频 Top10% | 11.67% | 0.49 | — | — |
+| 三锋（定版） | Top3 · 周频 | **30.63%** | 1.16 | 24.97% |
+| 五衡（对照档） | Top5 · 周频 | 20.65% | 0.89 | — |
+| 磐石（长线） | 月频 + 防御腿 | 12.97% | 1.02 | — |
 
-慢信号单独成军也有年化 12.8%、换手仅 22% 的防御性配置。定版演进与逐项消融见
-`reports/batch1_920_收尾对照表.md`（§⑩–⑯：污染事故更正 → v2 完整口径 →
-fundind 快信号采纳 → buffer 参数网格上修 15/40）。
+收益来源已做分解：31% 里「选标 +11.03pp × 集中放大 2.48 倍」，集中本身只贡献 +3.78pp；
+长样本（2013–2019）复核表明放大器的效果取决于池内右尾厚度，不是 ETF 轮动的普遍规律。
 
-> **口径诚实注记**：定版数字为 income 财报数据补齐（4383 只）**之前**的 v2 数据态
-> 存档；同一配置在补齐后的当前数据态重跑约 **17.0–17.2%**（v3/v4 双证）。本项目
-> 按纪律不回退数据换数字，引用时须注明数据态（income 4383 前后）。
+### 1.3 因子看板
 
-系统同样诚实地告诉你什么不行——日频调仓在交易成本下直接转负；AlphaPool RL
-挖掘被自己的 PBO 检验判负（0.704）后追加 10 倍步长归因确认真实失效才归档；
-zz1000 上的 RL/QP 组合优化 24 臂消融无稳健超额；全A QP 组合优化全家族与集中化方案
-在公平成本口径下全数证伪（成本感知自救 +11.7pp 后仍输简单 buffer 形态）；
-大盘择时 / regime 条件化 / 波动率管理 / 模型自诊断仓位四条证据链（本项目实测 +
-AQR + JFE 复核）同向收口；LLM-MCTS 是唯一产出超门槛因子的挖掘引擎（席位 4/14 突破）但组合层增量
-+0.16pp 噪声级、不采纳；另类数据三族因子席位 0/36；GP/GFlowNet 双双预算饱和。
-基本面族面板污染事故连更正重跑的全程记录都在 `reports/` 里。**没有幸存者偏差的战绩表。**
+888 个因子 × 4 组 horizon 的分层业绩，每个因子真跑两端分位组合（月频、T+1 开盘、
+27bp、全 A 等权基准），13 类逻辑族筛选，单文件 HTML 零后端。
 
-## ✨ 能力巡礼
+看板是**横向比较的展示口径**（全池等权约 900 只、无容量 / 整手 / 冲击建模），
+不构成改进结论，也不可与上表并列。
 
-### 📊 数据层：一切研究的地基
+### 1.4 已判负的方向
+
+诚实清单，每条都有对应 `reports/` 目录与复现脚本：
+
+| 方向 | 判负依据（摘要） |
+|---|---|
+| 短期反转 / 日频调仓 | 期限对齐后转正（+9.87%/SR 0.480），但 0.86 日换手下成本吞噬全部超额；40bp 只剩 +3.8%，54bp 转负 |
+| 日频 overlay 到集中档 | 组合 SR 0.944 与两腿 SR/ρ 闭式解 0.9441 **精确相等** ⇒ 纯分散化、零增量；且持仓重叠仅 2.4%，物理上不可执行 |
+| 组合优化（QP 全家族） | 公平口径下全数证伪；成本感知自救 +11.7pp 后仍输简单 buffer 形态 |
+| 大盘择时 | 日收益自相关 +0.048、月度方向 0/7 显著、样本外 R² 为负 ⇒ 可实现上界 ≈ 满仓 |
+| 事件驱动（打板 / 接力 / 半路 / PEAD） | 接力逐笔 −0.474%/年化 −71%（方向做反）；半路组合口径 −17.6%/年；PEAD 可交易 IR 0.08–0.11 |
+| 周频（换频率求解） | 三次独立证伪：944 因子配对差、同参数换频、新造两融日频因子，结论一致指向数据的信息结构而非因子工程 |
+| 另类数据三族因子 | 席位 0/36；研报文本、行为金融族均为换皮或前视 |
+| RL / GP / GFlowNet 挖掘 | AlphaPool 被自身 PBO 检验判负（0.704）；GP、GFlowNet 预算饱和；仅 LLM-MCTS 产出超门槛因子（14/750）但组合层增量噪声级 |
+
+---
+
+## 二、系统能力
+
+### 数据层
 
 - **数据源可插拔**：商业 SDK / CSV / Mock 三态切换，只改配置不动业务代码
-- **本地 Parquet 增量缓存**：15+ 类表（行情/分钟/财务三表/行业/股本/股东/涨跌停停牌/指数成分…），增量水位 + 数据指纹自动管理
-- **Point-in-time 纪律**：指数成分 PIT 取股票池、财务三表 PIT 展开为日频面板——回测里不存在未来函数
-- **行业上下文（2026-11-01）**：`scripts/builders/industry_context.py` 一处产出申万一级 PIT 行业归属 + 三种加权口径（流通市值 / 自由流通近似 / 行业内等权）+ 调仓日；自由流通 = 流通股本 − 持股 ≥5% 股东所持流通股（十大股东表，按公告日 PIT，同报表双表并列已去重）
-- **可交易性掩码**：停牌、涨停封板、跌停封板、ST 全部显式建模
-- **另类数据自建通道**：7 个免费公开源落地——巨潮快讯 **119 万条**（2014 年起自建存档）、增减持 26.6 万行全历史、宏观日历 6.5 万行、董监高/亲属买卖/实控人变动
-- **另类数据三族因子（altf）**：`scripts/builders/build_alla_altfactors.py` 一轮产出 20 个面板因子（增减持/宏观日历 surprise/快讯情绪三族，公告日与 15:00 收盘闸门双 PIT 口径），并入 all_a_2018_2026 registry + ic_h
-- **分钟数据内存映射面板**：GB 级分钟行情按年分区 `np.memmap` 稠密化 `[日, bar, 股票]`，全市场分钟数据不进内存，之上直接跑 59 个"分钟→日频"统计特征 + 36 个时段切片特征
-- **ETF 数据通道（2026-10-26）**：41 只跨资产 ETF 池（宽基/行业/主题/债券/商品/跨境）+ 份额 / 净值 / IOPV 三表全池回补（`scripts/ingest/update_etf_flow.py`，份额按 `ANN_DATE ≥ CHANGE_DATE` PIT 校验 1.000）；入池体检（上市满 3 年 + 60 日均成交额 ≥ 3000 万）随 `update_etf` 自动打印
+- **本地 Parquet 增量缓存**：15+ 类表（行情 / 分钟 / 财务三表 / 行业 / 股本 / 股东 /
+  涨跌停停牌 / 指数成分），带增量水位与数据指纹
+- **Point-in-time 纪律**：指数成分 PIT 取股票池、财务三表按公告日展开为日频面板；
+  行业归属与自由流通市值同样按公告日 PIT 构造
+- **可交易性掩码**：停牌、涨停封板、跌停封板、ST 显式建模，回测中不存在「买到买不到的票」
+- **分钟数据内存映射**：GB 级分钟行情按年分区 `np.memmap` 稠密化 `[日, bar, 股票]`，
+  之上直接计算 59 个「分钟→日频」统计特征与 36 个时段切片特征
+- **另类数据自建通道**：巨潮快讯（2014 年起自建存档 119 万条）、增减持 26.6 万行、
+  宏观日历 6.5 万行、董监高与实控人变动；公告日与 15:00 收盘双闸门控制可得性
 
-### 🧬 因子层：本系统最完整的主干
+### 因子层
 
-- **多因子谱系**：50+ 算子注册表、通达信口径指标 57 个、Alpha101/158/191/360、经典 + 券商特征族 36 个、论文复现 21 式
-- **全 A 因子库**：**920+ 因子 × 5549 股（含退市）× 2018–2026**，registry + panels + evals 三件套，血缘全程可溯
-- **五种自动挖掘引擎**：穷举搜索、遗传规划（DEAP）、GFlowNet（Trajectory Balance 与 PPO 对照训练）、AlphaPool 强化学习（MaskablePPO + LSTM，含 LLM 生成的初始因子池）、LLM-MCTS（UCT 搜索 + 三层去重）——全部引擎已跑到可引用终审：GFlowNet raw+im 臂 114 因子入库（族层 PBO 0.114 稳健），LLM-MCTS all-A 正式跑 750 候选收编 14（族层 PBO 0.039，唯一产出超 top-150 门槛因子的引擎），GP/AlphaPool 预算饱和与真实失效分别归档
-- **合成七法**：IC 加权 / PCA / IC_IR 最大 / 半衰加权 / 等权 / 正交 / ML Stacking
-- **预处理流水线**：去极值 → 行业 + 市值中性化 → 标准化，向量化实现 **2.96x 提速且与逐日实现逐位一致**
+- **因子库**：**888 个登记因子 × 5565 只股票（含退市回补）× 2016–2026**，
+  `registry` / `panels` / `evals` 三件套，血缘与公式全程可溯
+- **多因子谱系**：50+ 算子注册表、通达信口径指标 57 个、Alpha101/158/191/360、
+  券商特征族 36 个、论文复现 21 式
+- **五种挖掘引擎**：穷举、遗传规划、GFlowNet、AlphaPool 强化学习、LLM-MCTS，
+  全部跑到可引用终审（含族层 PBO 检验）
+- **合成七法**：IC 加权、PCA、IC_IR 最大、半衰加权、等权、正交、ML Stacking
+- **预处理**：去极值 → 行业 + 市值中性化 → 标准化，向量化实现 2.96 倍提速且与
+  逐日实现逐位一致
 
-### 🤖 模型层：从因子到预测
+### 模型层
 
-- **预测器**：Ridge / LightGBM / TabICL，滚动时序 CV；表格基础模型三级对照收官——TabICL 在 hs300/zz1000 为最优单臂（头部内加权成中小池组合冠军），全A 大截面上 GBDT 不可替代（IC 反超 4.4 倍）
-- **标签工程**：多 horizon × 多变换（rank / gauss_rank / zscore / raw）× 超额口径（IR / Calmar）× 隔夜窗口，embargo = horizon 防泄漏；gauss_rank / 隔夜 / IR 三臂全量裁决均为负结果，现行 rank+cc 口径即标签工程维局部最优（两篇 2026 外部文献转译闭环）
-- **模型注册表**：持久化版本管理，同名再注册即新版本，实验全留痕
-- **模型即因子**：预测面板一键回写因子库，模型 ↔ 因子血缘双向溯源
+- **预测器**：Ridge / LightGBM / TabICL，滚动时序交叉验证；表格基础模型三级对照显示
+  中小池 TabICL 最优、全 A 大截面 GBDT 不可替代
+- **标签工程**：多 horizon × 多变换 × 超额口径 × 隔夜窗口，embargo = horizon 防泄漏
+- **模型即因子**：预测面板回写因子库，模型与因子血缘双向溯源
 
-### ⚖️ 优化层：从预测到持仓
+### 组合与风控层
 
-- **组合优化**：QP 五法（min_var / tev / mvo / risk_parity / Black-Litterman）+ HRP；约束覆盖预算 / 上下限 / 行业中性 / 基准行业偏离 / 逐股权重变动上限 / λ 网格；`mvo` 量级失配修复（`alpha_scale` 自动标定，顶点解 → 风险-收益权衡解）
-- **成本感知优化**：Almgren-Chriss 二次近似把交易成本内生化进 QP 目标（`optimize/cost_penalty.py`：形状校准 + k₁/k₂ 扫描，1e8 资金定标值 2.3e-4 / 7.0e-2）；α 衰减感知 aim portfolio（GP 2013 机制代理，`optimize/aim.py`，已关闭但工具保留）
-- **风险归因**：α/β 分解（Newey-West t）、Brinson（Carino 链接）、Euler 风险分解 + VaR/CVaR 成分
-- **多期执行**：日 / 周 / 月调仓频率，调仓日重解优化，每日可执行信号导出
+- **组合优化**：QP 五法（min_var / tev / mvo / risk_parity / Black-Litterman）+ HRP，
+  约束覆盖预算、上下限、行业中性、基准偏离、逐股变动上限
+- **风险归因**：α/β 分解（Newey-West t）、Brinson（Carino 链接）、Euler 风险分解 +
+  VaR/CVaR 成分
+- **执行层**：日 / 周 / 月调仓，T+1 开盘、整手约束、逐股冲击成本 `η·σ·√(Q/ADV)`
+- **容量表**：集中度 × AUM 二维实测，回答「这个策略能装多少钱」而非只报百分比
 
-### 🎯 回测与反过拟合：数字必须经得起拷问
+### 回测与反过拟合
 
-- **向量化回测引擎**：交易成本、涨跌停 / 停牌过滤、**T+1 开盘可执行口径为全链默认**（收盘价成交的乐观数字只作上限对照）；逐股冲击成本模型 `η·σ·√(Q/ADV)`（`ImpactCostModel`，AUM 敏感）与整手约束可启用
-- **统一评估口径（唯一真源）**：`scripts/evaluation/caliber.py` + `config/baselines.yaml`——production / fair 双 profile 把一次评估的全部口径要素（基线形态 / 窗口 / Sharpe / 成本 / 成交价 / 资金）收敛到一处，锚点臂必须逐位复现登记基线（Δ≠0 作废），杜绝跨口径并列
-- **执行层容量与摩擦**：集中度 × AUM 二维容量表（`capacity_table.py`，buffer 形态容量 >1e9）；成本感知对照（`cost_penalty_probe.py`）；实测 1e8 资金下冲击 ≈ 固定 10bp、成本是 AUM 的强函数——固定滑点口径回答不了容量问题
-- **仓位层 overlay 先过「信息上界测试」**：波动率目标 / 趋势 / 择时 / 回撤状态机等总仓位改造，先算「信息完美且可实现」收益上界（收盘知当日、次日执行），再测靶子可预测性，最后跑规则（`timing_probe.py`）。实测日收益自相关仅 +0.048、月度方向 0/7 显著 ⇒ 择时上界 ≈ 满仓，该线已收口（`reports/timing_probe/`）
-- **稳健统计**：Newey-West t、OLS+HAC、自动滞后阶、FDR 多重检验校正
-- **反过拟合三件套**：CSCV PBO 过拟合概率（12870 个组合秒级算完）、Deflated Sharpe Ratio、三段式训练纪律（train / valid / test 分段 + embargo，配置冻结）
-- **增量方向探针（frontier，2026-10-19）**：h60 长 horizon 全链 + 残差目标三探针（均带安慰剂臂）。判定：h60 预测力存活（IC 0.161）但组合层无增量、残差无正交信息 ⇒ 判负归档（`reports/frontier_audit_2026-10-19/`）
-- **指数增强探针（B1，2026-10-26）**：中证500 成分内 IC 0.069 / t=4.3，但 3–5% TE 净超额仅 +1.5~1.9%（t≈0.8）、2025 −7% ⇒ 不立项为 α（`reports/index_enhance_probe/`）
-- **ETF 轮动定版（2026-10-30 收口）**：`etf_contest_spec.py`（**参数唯一真源 `FINAL`**）+ `etf_champ_signals.py`（信号板）+ `etf_rotation_probe.py`（回测引擎）/ `etf_rotation_panels.py`（扩展面板）。三方案：**三锋**（定版，Top3 周频）**30.63% / Sharpe 1.16 / MDD 24.97%**、**五衡**（对照档，Top5）20.65% / 0.89、**磐石**（长线月频 + 防御腿）12.97% / 1.02 —— **对外口径统一 T+1 开盘成交**（PIT 修复后重算），文档真源 `reports/etf_contest5/README.md`。**−15% 降档纪律已于 2026-10-30 拍板取消**（三个状态下全无优势，§8.1/§8.2）
-- **ETF 轮动实验收口（2026-10-30）**：**30 条判否**（信号层 8 变体 / 去重阈值 / 单只上限 / 条件执行 / 降频 / 相位 / 22 个出场变体 / 扩池 / 熔断降仓 / 13 档权重规则 / VWAP 执行价）；唯一剩余杠杆 = 模式 B（盘中 14:50 出信号 + 收盘集合竞价，可回收 2.95pp 流程税，未改造）。5 个一次性探针脚本、18 个临时脚本与 12 个实验产物目录已回收，结论全在 `reports/etf_contest5/README.md` §七
-- **🚨 ETF 轮动收益来源分解 + 长样本结算（2026-10-30，含同日自查修正）**：31% 里的三层是「选标 +11.03pp（z=2.18）× 集中放大 2.48 倍」，集中本身只值 +3.78pp。**长样本（2013–2019，24 只）结论（修正后）**：放大器 **−0.97 / −3.89pp ≈ 0 略负**（2020–2026 同 24 只池 +3.40pp、生产 46 只池 +20.08pp）、选标 alpha **+1.44 / +5.87 / +11.03pp 随池内离散度单调**、相位极差 5.93pp 反而小于等权 6.04pp ⇒ **池效应 16.3pp ≫ 时期效应 4.4–7.7pp；机制强度由池内右尾决定，不是「ETF 轮动」的普遍规律**。🚨 自查抓到真错误：误判「无份额」把 `crowdsoft` 关掉（`fund_share` 实际覆盖 2004-12 起），已修并全量重跑；价格路径与生产逐位相同。详见 `reports/etf_contest5/README.md` §4.5–§4.6
+- **向量化引擎**：交易成本、涨跌停与停牌过滤、T+1 开盘可执行口径为全链默认
+- **统一评估口径**：`scripts/evaluation/caliber.py` + `config/baselines.yaml` 把一次评估的
+  全部要素（基线形态 / 窗口 / Sharpe 定义 / 成本 / 成交价 / 资金）收敛到一处
+- **反过拟合三件套**：CSCV PBO（12870 个组合秒级）、Deflated Sharpe Ratio、
+  三段式 train / valid / test + 配置冻结
 
-### 🏭 生产化：研究系统的最后一公里
+### 生产与交付
 
-- **每日盘后自动推理**：计划任务增量更新数据 → 尾部重算 → 重训 → 全 A 排名 + Top10% 可交易候选；`--preset` 一次配齐协同参数（`dingban` = 现行定版；`v1w2-cheap` = buffer(8/40)+h1 0.125 候选，已**搁置**，待批次 12 终裁）
-- **因子库面板月度重建**：定版口径的慢信号读**离线**面板（`panels_neu` / `panels_neu_fundind`，批处理产物、不随新数据更新）⇒ 守卫式月度重建（`scripts/pipelines/rebuild_panel_library.py`：已覆盖上月即空转，并避开 16:00–20:00 出榜窗口）
-- **生产口径 IC 台账**：每日 IC / 中性化 IC / 风格暴露持续记录，信号衰减一眼可见；历史种子由 `scripts/reporting/build_monitor_seed.py` 现场构造（与出榜同口径，含慢信号）
-- **报告自动化**：自包含 HTML（Chart.js，A 股红涨绿跌）+ XLSX + 邮件日报，一键端到端汇总
-- **因子看板**：聚宽式全 A 因子看板（`scripts/reporting/factor_dashboard.py`）——950 因子
-  筛选 / 排序 / 点行看详情，ICIR / NW-t / 月度 IC 由 `ic_h*.parquet` 现场计算，单文件零后端
-- **调度单点管理**：Windows 计划任务 XML 导入式注册 + `doctor` 体检（登记↔系统漂移检测）
+- **每日盘后自动推理**：计划任务增量更新数据 → 尾部重算 → 重训 → 全 A 排名与
+  可交易候选，`--preset dingban` 一次配齐协同参数
+- **面板月度重建**：守卫式重建（已覆盖上月即空转，避开 16:00–20:00 出榜窗口）
+- **生产 IC 台账**：每日 IC / 中性化 IC / 风格暴露持续记录
+- **交付物**：自包含 HTML 看板（A 股红涨绿跌）、XLSX、邮件日报
 
-## 🏗️ 目录结构
+---
+
+## 三、架构
 
 ```
-data/       数据层：数据源抽象、增量缓存、PIT、可交易掩码、另类数据、分钟面板
-factor/     因子层：算子库、五大挖掘引擎、合成、因子库
-model/      模型层：特征漏斗、标签、预测器、训练评价、注册表
-optimize/   优化层：QP/HRP/BL、风险归因、信号、多期执行
-backtest/   向量化回测引擎
-strategy/   因子值 → 组合权重
-research/   研究工具：IC/分层、归因、DPP、实验台账、报告渲染
-stats/      稳健统计与反过拟合（PBO / DSR）
-monitoring/ 生产监控：IC 台账、告警规则、账本
-scripts/    161 个活跃入口（ingest / factors / pipelines / portfolio /
-            evaluation / reporting / builders / common …；索引自动生成于
-            scripts/README.md；退役入口在 scripts/archive/；本地 oneoff 另计、gitignored）
-config/     settings.yaml（参数真源）+ baselines.yaml（定版登记表）+ schedule.yaml（调度登记表）
-tests/      104 个文件 / 1394 个用例
-reports/    实验产物、监控台账与设计文档
+data/        数据层 —— 数据源抽象、增量缓存、PIT、可交易掩码、分钟面板、另类数据
+factor/      因子层 —— 算子库、挖掘引擎、合成、预处理
+model/       模型层 —— 特征漏斗、标签、预测器、训练评价、注册表
+strategy/    策略层 —— 因子值 → 组合权重
+optimize/    优化层 —— QP / HRP / BL、成本建模、风险归因、多期执行
+backtest/    回测层 —— 向量化引擎、成本模型、绩效指标
+research/    研究层 —— IC 与分层、归因、DPP 选样、因子库、报告渲染
+stats/       统计层 —— 稳健统计、PBO / DSR、显著性检验
+monitoring/  监控层 —— IC 台账、告警、账本、拥挤度
+scripts/     入口层 —— 283 个可执行入口（ingest / builders / pipelines / factors /
+             portfolio / evaluation / reporting / textmining / live / common）
+config/      参数真源 —— settings.yaml（环境与数据源）/ baselines.yaml（基线登记表）/
+             schedule.yaml（调度登记表）
+tests/       131 个测试文件 / 1781 个用例
+reports/     实验结果与交付物（本地证据库，不进版本库；155 个目录 / 85 份实验 README 登记判定）
 ```
 
-## 🧭 文档分工（先看这里）
+依赖方向单向：`scripts → strategy/optimize/model/factor/data`，`tests` 同时覆盖库层与
+生产链脚本。口径真源与生产主链仍在 `scripts/` 下（历史原因），迁移成本高于收益，已记录
+在案。
 
-本仓库的文档按「一件事只有一处真源」分四层，互相只放指针、不复述结论：
+---
 
-| 层 | 文件 | 回答什么问题 | 更新时机 |
-|---|---|---|---|
-| 门面 | `README.md`（本文件） | 系统是什么、能力边界、怎么跑起来 | 新增/退休能力时同步 |
-| 任务 | [`TODO.md`](TODO.md) / [`TODO_ARCHIVE.md`](TODO_ARCHIVE.md) | 现在做什么、哪些已收口（三册：工程线 / 研读复现线 / 好机器队列） | 每个任务收尾回写 |
-| 产物治理 | [`reports/README.md`](reports/README.md) | 产物放哪（§1.6 落盘判定表）、清理记录、**§一「结论速查」43 份实验一行一条** | 新产出必须登记 |
-| 文档区 | [`reports/docs/README.md`](reports/docs/README.md) | 32 篇设计/核对/研读文档的导航（各带一句话定位） | 新增 `.md` 同步加行 |
-| 入口索引 | [`scripts/README.md`](scripts/README.md) | 每个脚本干什么、有哪些参数、哪些已归档 | 新增/退役入口同步 |
-
-`reports/*` 与 `scripts/oneoff/` 不进 git：前者是本地证据库（126 个目录），后者是本地一次性脚本。
-跨会话硬约定（合并优先、分类落盘、删除前快照）见 [`AGENTS.md`](AGENTS.md)。
-
-**文档模板与校验**（2026-10-28 起）：新建实验 README 复制
-[`reports/docs/TEMPLATE_实验README.md`](reports/docs/TEMPLATE_实验README.md)（固定四段：结论先行 /
-口径与判据 / 证据 / 复现与边界）；落盘后跑
-`python -m scripts.data_tools.docs_lint --check` 校验目录登记、四要素、标题日期、
-孤儿文档四项，`--verbose` 看完整清单。它只审**新写或刚改**的文档，存量按 mtime 基线豁免。
-
-## 🔎 能力索引（问题 → 一行入口）
-
-> **先查表，再写代码。** 2026-11-12 的教训：问「因子周频 IC」，有人从 `panels_neu`
-> 逐因子重算了 **37 分钟**，而因子库里的 `ic_h{1,5,10,20}.parquet` 早就建好了，
-> 读盘只要 **0.34 秒**。根因不是「不知道有这个文件」，而是**只有脚本索引、没有能力索引**
-> —— [`scripts/README.md`](scripts/README.md) 能查到「有 `xxx_probe.py`」，查不到
-> 「因子 IC 用哪行代码」。本表按**你要解决的问题**组织，不按文件名。
-
-### 因子研究
-
-| 要解决的问题 | 一行入口 | 说明 |
-|---|---|---|
-| 全库因子 IC 排序（任意 horizon） | `FactorLibrary(dataset="all_a_2018_2026").ic_summary()` | 0.57 s 出 936 因子 × 4 horizon；列含 `ic_h*` `ir_h*` `pos_h*` `n_h*` |
-| 单因子逐日 IC 序列 | `.ic_matrix(h)` → `(日期 × 因子)` | h ∈ {1,5,10,20}；未预计算的 h 抛 `KeyError`（不静默返回空） |
-| 库里有因子 / 有哪些族 | `FactorLibrary().list_all()`、`registry.csv` | |
-| 因子是不是「换皮」（实质重复） | `python -m scripts.factors.dup_audit --dataset <ds>` | 判重复的唯一入口，`--apply` 才写库 |
-| 因子半衰期 / 期限怎么选 | `python -m scripts.evaluation.factor_half_life_probe --from-library` | **必须带 `--from-library`**，否则退回逐因子重算 |
-| 面板有没有前视泄漏 | `python -m scripts.factors.panel_leak_audit --layer neu` | 只读；判据随认知增补，跨轮比较要走 diff |
-
-> ⚠️ 库版 IC = `IC_CODE_STRIDE=3` 抽稀 + 库内 `close_adj`，与 `evaluate()` 现算**不同源**
-> （复权价差 3.5%）。引用时必须写明用哪一份；只有要 t 值 / 非重叠对照才值得重算。
-
-### 回测与口径
-
-| 要解决的问题 | 一行入口 | 说明 |
-|---|---|---|
-| 跑一次回测（统一口径） | `python -m scripts.evaluation.caliber --signal <key> --window prod` | 全项目**唯一**评估真源，别自己写 `port_backtest` |
-| 判断「这次改动算不算改进」 | `python -m scripts.evaluation.caliber --check --baseline-id <id>` | 基线只在登记表里，**不得自造** |
-| 某条基线的数字是多少 | `config/baselines.yaml` → `metrics.profiles.production` | 判改进只认 `production`，`fair` 仅旁证 |
-| 成本 / 印花税时变怎么算的 | `backtest/costs.py`（`STAMP_DUTY_CHANGES`） | 往返 27bp；**跨口径禁相减** |
-| 可交易掩码（ST / 停牌 / 封板） | `data/tradability.py` | |
-| 状态表断更了没有 | `data.status_guard.check_status_freshness()` | 返回 `StatusFreshness`，`severity ∈ {ok,warn,error,unknown}` |
-| 数据盘在哪 | `Config.paths()` | 禁硬编码盘符（有守卫测试） |
-
-### 生产与产品线
-
-| 要解决的问题 | 一行入口 | 说明 |
-|---|---|---|
-| yqcore 每日出榜 | `python -m scripts.live.yqcore rank --preset dingban` | 定版预设 = `dingban` |
-| 现在持了什么 | `python -m scripts.live.yqcore holdings`（`--all` 看全期） | 默认只读；`--commit` 有副作用，仅换仓日 |
-| 定版看板（历史回测 + 当期持仓 + 期内表现 + 个股 K 线） | `python -m scripts.reporting.yqcore_dashboard --open` | 自包含单页 HTML，零后端；产物 `reports/yq_core/dashboard.html` |
-| 三档收益 / 容量对照 | `python -m scripts.evaluation.yq_core_report --view native` | `native`=产品线口径，`grid`=资金×档位 |
-| 三档的参数改哪里 | `config/baselines.yaml` → `id: yqcore-*` 的 `execution` | **唯一真源**；`strategy/registry.py` 只读不写 |
-| 全A 每日推理 | `python -m scripts.pipelines.alla_daily_rank --preset dingban` | |
-| 主实验网格 | `python -m scripts.pipelines.rolling_grid_alla` | 实验真源（入口只进不出） |
-
-### 工程与治理
-
-| 要解决的问题 | 一行入口 | 说明 |
-|---|---|---|
-| 文档合规（登记 / 四要素 / 日期） | `python -m scripts.data_tools.docs_lint --check` | `--verbose` 看全量清单 |
-| 记忆体格式与体量 | `python -m scripts.data_tools.memory_lint --check` | |
-| 某个脚本干什么、参数怎么传 | [`scripts/README.md`](scripts/README.md) | 脚本索引，与本表互补 |
-| 某条结论是什么、产物放哪 | [`reports/README.md`](reports/README.md) §一 结论速查 | |
-
-## 🚀 快速开始
+## 四、快速开始
 
 ```bash
 git clone https://github.com/Yuri-Mizuki/YuriQuant.git
 cd YuriQuant
-pip install -e ".[dev]"        # 依赖按 pyproject.toml 功能域分组，缺失时优雅降级
-pytest tests/ -q              # 1394 个用例，无需任何数据凭证
+pip install -e ".[dev]"
+
+pytest -q                      # 1781 个用例，无需数据凭证
 ```
 
-**没有商业数据源也能开发**：`config/settings.yaml` 把 `datasource.type` 切成
-`csv`，或给任意管线加 `--mock`——全链路在合成数据上跑通。
+**没有商业数据源也能跑通全链**：把 `config/settings.yaml` 的 `datasource.type` 切成 `csv`，
+或给任意管线加 `--mock`，全部在合成数据上执行。
 
-接真实数据的主线（需 AmazingData SDK 凭证，见下方说明）：
+接真实数据后（需 AmazingData SDK 凭证）：
 
 ```bash
-python -m scripts.ingest.update_data             # 建立/增量更新 Parquet 缓存
-python -m scripts.pipelines.rolling_grid_alla    # 主实验：全A 多年度 walk-forward 网格
-python -m scripts.archive.run_model_portfolio  # legacy 组合对照（h1+h5；非现行生产）
-python -m scripts.pipelines.alla_daily_rank --preset dingban  # 每日盘后推理出榜（现行）
-python -m scripts.reporting.generate_report      # 一键端到端 HTML 报告
+python -m scripts.ingest.update_data                          # 增量更新 Parquet 缓存
+python -m scripts.pipelines.rolling_grid_alla                 # 主实验：全 A 多年度 walk-forward
+python -m scripts.live.yqcore rank --preset dingban           # 每日出榜（现行定版）
+python -m scripts.reporting.yqcore_dashboard --open           # 定版看板
+python -m scripts.reporting.factor_board                      # 因子看板
 ```
 
-> **数据源说明**：主数据源 AmazingData 为银河证券私有分发的商业 SDK（非公开，
-> 需自行获取授权）。这不妨碍你阅读、复用全部架构与算法代码——数据层抽象让任何
-> 数据源（包括你自己的 CSV）都能接进同一条管线。
+> **数据源说明**：主数据源 AmazingData 为商业分发的 SDK（非公开，需自行获取授权）。
+> 这不影响复用全部架构与算法代码——数据层抽象允许任何数据源（包括自有 CSV）接入同一条管线。
 
-## 🧪 工程质量
+---
 
-- **测试**：1394 个用例覆盖数据层、回测、因子挖掘、模型、优化、监控、报告全栈
-- **CI**：GH Actions 已移除（2026-10-27，原工作流早已静音）；守卫 = 本机 `python -m pytest -q`
-- **文档守卫**：`python -m scripts.data_tools.docs_lint --check`（四条规则，见上「文档模板与校验」），
-  与 `gen_scripts_index --check` 同级；两者都可独立跑，不依赖数据凭证
-- **依赖锁**：`uv.lock` 已移出跟踪（零消费方，本地保留 + gitignore，需要时 `uv lock` 重建）；可选依赖按域分组（ml / gp / solver / rl），缺失优雅降级
-- **Lint / 类型**：`ruff check .`（F 规则为门禁）；`mypy` 以 Python 3.12 配置运行，存量类型告警未清零
+## 五、工程纪律
 
-## 📜 免责声明
+本项目的核心不是模型复杂度，而是**让每个数字都能被追问**。
+
+**单一口径真源。** 判「这次改动算不算改进」只有一条路径：`caliber --check --baseline-id <id>`。
+基线不得自造，锚点臂必须逐位复现登记值。跨口径数字一律不可相减——成本从 36bp 改为
+27bp 时变后，所有旧报告已逐份加注作废。
+
+**三条判据，缺一即无效。**
+
+1. **增益必过安慰剂。** 且要同时报「跑赢安慰剂」与「跑赢基线」两个 p 值——安慰剂本身
+   有害，只过前者不说明任何问题。
+2. **IC ≠ 经济价值，期限必须等于持有期。** 报 IC 必须给 Top-N 尾部并拆多空两端；
+   A 股做空受限时，空头端贡献可能完全是假象。
+3. **overlay 类结论先算闭式解。** 两腿组合的理论 SR 只需 SR₁、SR₂、ρ 三个数，
+   实测值与闭式解精确相等即证明它只是分散化，与「因子有效」无关。
+
+**前视与幸存者偏差是两个反复出现的坑。** 收益必须写成 `shift(-(1+h))/shift(-1) − 1`；
+股票池必须 PIT，静态快照会系统性高估（实测静态 339 池漏掉 19.5% 历史成分股，
+策略持仓中 17.1% 是前视选出来的）。
+
+**文档守卫。** 新增实验目录必须在 `reports/README.md` 登记判定；`docs_lint --check`
+校验目录登记、四要素、标题日期、孤儿文档四项，`memory_lint --check` 校验记忆体。
+
+**每个结论可复跑。** `reports/` 全部 155 个目录都有对应入口脚本，索引在
+`scripts/README.md`，按「你要解决的问题」组织的入口表在本文件 §六。
+
+---
+
+## 六、能力索引
+
+先查表，再写代码。
+
+### 因子研究
+
+| 要解决的问题 | 一行入口 |
+|---|---|
+| 全库因子 IC 排序（任意 horizon） | `FactorLibrary(dataset="all_a_2018_2026").ic_summary()` |
+| 单因子逐日 IC 序列 | `.ic_matrix(h)` → `(日期 × 因子)`，h ∈ {1,5,10,20} |
+| 因子是否实质重复（换皮） | `python -m scripts.factors.dup_audit --dataset <ds>` |
+| 因子半衰期 / 期限选择 | `python -m scripts.evaluation.factor_half_life_probe --from-library` |
+| 面板有无前视泄漏 | `python -m scripts.factors.panel_leak_audit --layer neu` |
+
+> 库版 IC 为 `IC_CODE_STRIDE=3` 抽稀 + 库内 `close_adj`，与 `evaluate()` 现算不同源，
+> 引用时须注明用哪一份。
+
+### 回测与口径
+
+| 要解决的问题 | 一行入口 |
+|---|---|
+| 跑一次回测 | `python -m scripts.evaluation.caliber --signal <key> --window prod` |
+| 判断改动是否算改进 | `python -m scripts.evaluation.caliber --check --baseline-id <id>` |
+| 某条基线的数字 | `config/baselines.yaml` → `metrics.profiles.production` |
+| 成本 / 印花税时变 | `backtest/costs.py`（`STAMP_DUTY_CHANGES`） |
+| 可交易掩码 | `data/tradability.py` |
+| 数据盘在哪 | `Config.paths()`（禁硬编码盘符，有守卫测试） |
+
+### 生产与交付
+
+| 要解决的问题 | 一行入口 |
+|---|---|
+| 每日出榜 | `python -m scripts.live.yqcore rank --preset dingban` |
+| 当前持仓 | `python -m scripts.live.yqcore holdings`（`--all` 看全期；`--commit` 有副作用） |
+| 定版看板 | `python -m scripts.reporting.yqcore_dashboard --open` |
+| 出榜解释（为什么是这些票） | `python -m scripts.reporting.picks_board` |
+| 因子看板 | `python -m scripts.factors.factor_board_data` + `factor_board` |
+| 三档收益 / 容量对照 | `python -m scripts.evaluation.yq_core_report --view native` |
+
+---
+
+## 七、文档体系
+
+按「一件事只有一处真源」分四层，互相只放指针：
+
+| 层 | 文件 | 回答什么问题 |
+|---|---|---|
+| 门面 | `README.md`（本文件） | 系统是什么、能力边界、怎么跑起来 |
+| 任务 | `TODO.md` / `TODO_ARCHIVE.md` | 现在做什么、哪些已收口 |
+| 产物治理 | `reports/README.md` | 每个实验目录的判定（采纳 / 判负 / 归档 / 工具保留 / 事故记录） |
+| 文档区 | `reports/docs/README.md` | 39 篇设计、核对与研读文档的导航 |
+| 入口索引 | `scripts/README.md` | 每个脚本的参数与用途 |
+| 跨会话约定 | `AGENTS.md` | 合并、落盘、删除的硬约定 |
+
+`reports/` 与 `scripts/oneoff/` 不进版本库：前者是本地证据库，后者是一次性脚本。
+
+---
+
+## 八、已知边界
+
+- **只有多头腿。** A 股融券成本与券源受限，空头端收益在被证伪的方向里多次出现「样本内
+  显著、组合口径转负」，系统不假装可以捕获。
+- **数据依赖商业 SDK。** 数据层可插拔，但默认路径需要授权；开源部分可直接用 CSV 或
+  Mock 复现全部逻辑。
+- **成本口径随时间变化。** 2023-08-28 印花税减半是硬事实，跨该日期的常数成本假设必然错，
+  系统按调仓日查表，旧报告一律标注口径。
+- **单机部署。** 调度走 Windows 计划任务 + XML 导入式注册，`doctor` 命令检测登记与系统
+  状态的漂移；无分布式编排，也无云依赖。
+- **研究报告是证据而非产品。** `reports/` 中大量探针脚本服务于「这个想法成立吗」，
+  不保证接口稳定，也不保证在新数据上仍能跑出同样数字。
+
+---
+
+## 九、免责声明
 
 本项目仅供量化研究与方法论学习，不构成任何投资建议。历史回测收益不代表未来表现。
