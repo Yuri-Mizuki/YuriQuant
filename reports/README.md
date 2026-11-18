@@ -236,7 +236,7 @@
 | `capacity_table` | 集中度 × AUM 二维容量表（`scripts/evaluation/capacity_table.py`） | 工具保留 |
 | `barra_cne6` | CNE6 风格回归产物（因子收益 / t / 残差面板 / sigma 诊断） | 工具保留 |
 | `chip_behavior_probe_2026-10-27` | 行为金融「筹码/换手」廉价探针（全 A 面板 + 三口径 IC） | 判负 |
-| `cyq_probe_2026-11-18` | CYQ 筹码分布三因子（上游三角分布模型递推到全 A 面板）；`conc90` 无效、`benefit` 残差 IC 0.008 但安慰剂也 t=4.24 ⇒ 初判不立项，缺 Top-N | 进行中 |
+| `cyq_probe_2026-11-18` | CYQ 筹码分布三因子（上游三角分布模型递推到全 A 面板）；L1~L5 无一过筛（`benefit`/`trap` 符号翻转、`conc90` 无 IC），组合层顺 raw 方向 −8.94pp/0 相位为正（打不过循环平移安慰剂） | 判负 |
 | `network_probe_2026-10-27` | 跨股票网络中心度 P1 探针 | 判负 |
 | `cohort_mom_probe` | 建仓后分组动量探针（`group_ic*` / `gate.parquet`） | 判负 |
 | `hp_search_ic` | 超参扫描（**只比可交易 IC** 的收口证据，`scripts/evaluation/hp_search_ic.py`） | 采纳 |
