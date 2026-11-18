@@ -142,6 +142,13 @@ monitoring:
   max_stale_days: 7          # 数据新鲜度告警：面板落后数据源超过 N 个交易日 → warning
   min_coverage: 0.5          # 近期窗口截面覆盖率下限
   warn_ic_retention: 0.5     # 近期 IC < 期望（全期或上线基线）的 50% → warning；翻负 → critical
+  min_abs_ic_for_decay: 0.01 # 衰减判定的最低基线强度：|基线 IC| 低于此值不判衰减/翻转。
+                             # 弱因子 IC 本就近 0，符号翻转是噪声且保留率分母趋零放大；
+                             # 2026-11-18 实测无门槛时 57 个 critical 全部来自 |IC|<0.017
+                             # 的因子（全库 |IC| 中位 0.042），全员误报。
+  min_abs_ic_for_neutral: 0.005 # 方向翻转归因的最低中性化 IC 强度：中性化 IC 仍同向且
+                             # 绝对值不低于此值时，判「风格轮动」而非「alpha 衰减」。
+                             # 只在算过中性化 IC 的因子上生效。
   min_monotonicity: 0.5      # 分位单调性下限（模型因子：结构恶化先于 IC 归零，作退出预警；0.8 对未筛选的原始因子库过严）
   min_t_nw_recent: 1.0       # 模型因子近期 Newey-West t 下限（显著性丢失 → warning）
   ledger_root: reports/monitoring   # 快照 / 告警账本与 HTML 报告输出目录

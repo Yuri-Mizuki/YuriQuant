@@ -102,10 +102,34 @@ class MonitorMetrics:
         return d
 
 
-def load_close_panel(cache_root: str | Path) -> pd.DataFrame:
-    """从日线缓存读 close 宽表（date×code），尽量乘后复权因子对齐库口径。"""
+def load_close_panel(
+    cache_root: str | Path | None = None,
+    pool: str = "all_a",
+    base_dir: str | Path | None = None,
+) -> pd.DataFrame:
+    """后复权收盘价宽表（date × code）。
+
+    两条来源，**库自带基准面板优先**：
+
+    1. ``base_dir/close_adj.parquet`` —— 因子库复权价基准面板
+       （``rolling_grid_alla --stage prep`` 产出，回测与 IC 口径的唯一真源）。
+       命中即返回，不必再乘复权因子。
+    2. ``cache_root/daily_<pool>.parquet`` —— 原始日线缓存，乘
+       ``backward_factor.parquet`` 还原后复权。仅在无 base 面板时使用。
+
+    历史：本函数此前硬编码 ``daily_hs300.parquet``，HS300 行情源 2026-08-21
+    停更后监控读到的是冻结序列（滞后被自我掩盖，见 :func:`data_lag_days`）。
+    现按数据集池名参数化，并优先走库内基准面板。
+    """
+    if base_dir is not None:
+        p = Path(base_dir) / "close_adj.parquet"
+        if p.exists():
+            return pd.read_parquet(p).sort_index()
+    if cache_root is None:
+        raise FileNotFoundError(
+            "复权价面板不可用：无 base_dir/close_adj.parquet 且未给 cache_root")
     root = Path(cache_root)
-    daily = pd.read_parquet(root / "daily_hs300.parquet")
+    daily = pd.read_parquet(root / f"daily_{pool}.parquet")
     close = daily["close"].unstack("code").sort_index()
     bf_path = root / "backward_factor.parquet"
     if bf_path.exists():
@@ -159,27 +183,44 @@ def data_lag_days(as_of: pd.Timestamp, today: pd.Timestamp | None = None) -> int
     return int(len(pd.bdate_range(as_of + pd.Timedelta(days=1), today)))
 
 
-def load_style_covariates(cache_root: str | Path,
+def load_style_covariates(cache_root: str | Path | None,
                           close_panel: pd.DataFrame,
-                          pool: str = "hs300",
-                          include_industry: bool = True) -> dict[str, pd.DataFrame]:
+                          pool: str = "all_a",
+                          include_industry: bool = True,
+                          base_dir: str | Path | None = None) -> dict[str, pd.DataFrame]:
     """构建监控用风格协变量（size / mom / vol / turn / industry）。
 
-    与回测基线 ``_base/cov_*.parquet`` **同公式同数据源**
-    （:func:`factor.preprocessing.build_style_covariates`），因此中性化 IC 与
-    历史消融网格口径可比。任一源文件缺失时该项自动跳过；全缺 → ``{}``
-    （``compute_factor_metrics`` 会跳过中性化 IC）。
+    优先读库自带基准面板 ``base_dir/cov_*.parquet`` —— 与回测基线
+    ``_base/cov_*.parquet`` **同一个文件**，中性化 IC 与历史消融网格天然可比，
+    且省掉逐日重建的数秒开销。缺失时才按 :func:`factor.preprocessing.
+    build_style_covariates` 现场重建（同公式同数据源）。
 
     Args:
-        cache_root: 行情缓存根。
+        cache_root: 行情缓存根（base 面板不可用时的重建输入）。
         close_panel: 后复权收盘价面板（与 :func:`load_close_panel` 同口径）。
         pool: 日线文件池名（``daily_<pool>.parquet``，与数据集一致的股票池）。
         include_industry: 是否构建行业哑变量（需要 ``industry_classification``
             事件表；失败时自动降级为其余四项）。
+        base_dir: 因子库基准面板目录，其 ``cov_*.parquet`` 优先于现场重建。
     """
+    if base_dir is not None:
+        cached: dict[str, pd.DataFrame] = {}
+        bd = Path(base_dir)
+        for k in ("size", "mom", "vol", "turn"):
+            p = bd / f"cov_{k}.parquet"
+            if p.exists():
+                cached[k] = pd.read_parquet(p)
+        if include_industry and (bd / "cov_industry.parquet").exists():
+            cached["industry"] = pd.read_parquet(bd / "cov_industry.parquet")
+        if cached:
+            log.info("监控风格协变量（库基准面板）: %s", list(cached))
+            return cached
+
     from data.market_cap import build_shares_panel
     from factor.preprocessing import build_style_covariates
 
+    if cache_root is None:
+        return {}
     root = Path(cache_root)
     idx, cols = close_panel.index, close_panel.columns
     dpath = root / f"daily_{pool}.parquet"
@@ -265,6 +306,21 @@ def quantile_monotonicity(
     return mono, ls
 
 
+def _expected_ic(registry_row: pd.Series, horizon: int = 1) -> float:
+    """注册时的冻结基线 IC（上线时的 OOS 表现），按期限取列。
+
+    优先 ``ic_mean``（旧 schema 单一列）；为 NaN 时取 ``ic_mean_h{horizon}``。
+    **不跨期限回退**——监控 IC 序列是 h=1，拿 h=5 的均值当基线等于换了标的。
+    ``all_a_2018_2026`` 库的 ``ic_mean`` 列 888 行全为 NaN（批量入库只写
+    ``ic_mean_h1/h5/h10/h20``），此前冻结基线实际从未生效，这里一并修掉。
+    """
+    for col in ("ic_mean", f"ic_mean_h{horizon}"):
+        v = registry_row.get(col) if hasattr(registry_row, "get") else None
+        if v is not None and not isinstance(v, str) and v == v:
+            return float(v)
+    return float("nan")
+
+
 def pick_baseline(m: MonitorMetrics) -> float:
     """选择保留率基线：注册时的**冻结基线**（|IC| 足够显著时）→ 否则全期基线。
 
@@ -280,23 +336,44 @@ def pick_baseline(m: MonitorMetrics) -> float:
 def compute_factor_metrics(
     name: str,
     registry_row: pd.Series,
-    factor_panel: pd.DataFrame,
+    factor_panel: pd.DataFrame | None,
     ic_series: pd.Series,
     returns_panel: pd.DataFrame,
     as_of: pd.Timestamp,
     window: int = 60,
     window_long: int = 252,
     style_covariates: dict[str, pd.DataFrame] | None = None,
+    baseline_horizon: int = 1,
+    registry_baseline: str = "model",
 ) -> MonitorMetrics:
-    """计算单个因子的监控指标（registry_row 提供 kind/maturity/note/ic_mean）。
+    """计算单个因子的监控指标（registry_row 提供 kind/maturity/note/IC 基线）。
 
     双窗口口径：``window``（默认 60d）做近期提前预警（灵敏），
     ``window_long``（默认 252d）做长窗稳健确认（抗噪音）。
 
-    中性化 IC（style_covariates 传入时计算）：对因子做 5 因子风格中性化取残差
+    ``factor_panel`` 可为 ``None``：此时只算 IC 层指标（IC 漂移、显著性、
+    中性化 IC、保留率），跳过覆盖率 / 分位单调性 / 新鲜度这类需要读面板的项。
+    这是全库巡检的默认模式——库内 962 个面板合计 41.6 GiB，逐因子读盘会让
+    一次巡检从秒级退化到十分钟级；调用方先按 IC 层筛出需关注的因子，再对
+    它们补面板指标（见 ``monitoring.runner.run_monitoring`` 的 ``panel_mode``）。
+
+    中性化 IC（style_covariates 传入时计算）：对因子做风格中性化取残差
     后再算 IC，产出 ic_neutral_mean_* / ic_neutral_drift / style_exposure_ratio。
     raw IC 衰减但 neutral IC 稳定 → 风格轮动（告警语义"重新中性化"而非"因子失效"）；
     两者同时衰减 → 真 alpha 衰减（因子应退出）。
+
+    ``baseline_horizon``：注册时基线的期限档。监控 IC 序列是 h=1（次日收益），
+    基线必须取同一期限的 ``ic_mean_h{horizon}``，跨期限比较无意义。
+
+    ``registry_baseline``：注册基线（冻结基线）的适用面 —— ``model``（默认，
+    只对 ``model:`` 因子用）/ ``all``（全库）/ ``none``（全不用）。
+    默认只给模型因子用，因为**因子侧跨源基线不可比**：registry 的
+    ``ic_mean_h1`` 出自入库评估（``IC_CODE_STRIDE=3`` 抽稀口径），而监控 IC
+    序列来自看板缓存（逐日全样本），两者存在系统差（实例：``alpha101_001``
+    入库 −0.0246 vs 同源全期 −0.0301，差 22%）。跨源相除会让保留率整体偏
+    1.2 倍，直接污染 ``warn_ic_retention`` 判定。因子侧改用同源全期均值
+    （``pick_baseline`` 的回退分支）——含近期会稀释漂移，但至少尺度一致。
+    模型因子无"上线时同源序列"可用，只能以注册基线为准。
     """
     is_model = name.startswith(MODEL_PREFIX)
     m = MonitorMetrics(
@@ -333,8 +410,11 @@ def compute_factor_metrics(
         m.ic_t_nw_recent_252 = base252["ic_t_nw_recent"]
         m.ic_p_nw_recent_252 = base252["ic_p_nw_recent"]
 
-    reg_ic = registry_row.get("ic_mean")
-    m.expected_ic = float(reg_ic) if reg_ic is not None and reg_ic == reg_ic else float("nan")
+    m.expected_ic = (
+        _expected_ic(registry_row, baseline_horizon)
+        if registry_baseline == "all" or (registry_baseline == "model" and is_model)
+        else float("nan")
+    )
     if m.expected_ic == m.expected_ic and abs(m.expected_ic) >= _FROZEN_BASELINE_MIN_ABS:
         m.frozen_baseline = m.expected_ic
     baseline = pick_baseline(m)
@@ -344,30 +424,31 @@ def compute_factor_metrics(
         if m.ic_mean_recent_252 == m.ic_mean_recent_252:
             m.ic_retention_252 = m.ic_mean_recent_252 / baseline
 
-    recent_days = _recent_window(factor_panel.index, as_of, window)
-    if len(recent_days):
-        sub = factor_panel.loc[recent_days]
-        ret_recent = returns_panel.reindex(index=recent_days)
-        # 覆盖率按日计算：每天只在当天有收益的股票（当期可交易成分）上算
-        # notna 比例，再取均值。避免 PIT 并集池中历史成分股拉低分母。
-        mask_ret = ret_recent.notna()
-        mask_fac = sub.notna()
-        daily_denom = (mask_ret & mask_fac).sum(axis=1)
-        daily_valid = mask_fac.sum(axis=1)
-        # 有效天数 = 当天因子有值且收益也有值的股票数 / 当天因子有值的股票数
-        ratio = (daily_denom / daily_valid.replace(0, np.nan)).dropna()
-        m.coverage_recent = float(ratio.mean()) if len(ratio) else float(
-            sub.notna().to_numpy().mean())
-        mono, ls = quantile_monotonicity(sub, ret_recent)
-        m.monotonicity_recent = mono
-        m.ls_daily_recent = ls
+    if factor_panel is not None and len(factor_panel):
+        recent_days = _recent_window(factor_panel.index, as_of, window)
+        if len(recent_days):
+            sub = factor_panel.loc[recent_days]
+            ret_recent = returns_panel.reindex(index=recent_days)
+            # 覆盖率按日计算：每天只在当天有收益的股票（当期可交易成分）上算
+            # notna 比例，再取均值。避免 PIT 并集池中历史成分股拉低分母。
+            mask_ret = ret_recent.notna()
+            mask_fac = sub.notna()
+            daily_denom = (mask_ret & mask_fac).sum(axis=1)
+            daily_valid = mask_fac.sum(axis=1)
+            # 有效天数 = 当天因子有值且收益也有值的股票数 / 当天因子有值的股票数
+            ratio = (daily_denom / daily_valid.replace(0, np.nan)).dropna()
+            m.coverage_recent = float(ratio.mean()) if len(ratio) else float(
+                sub.notna().to_numpy().mean())
+            mono, ls = quantile_monotonicity(sub, ret_recent)
+            m.monotonicity_recent = mono
+            m.ls_daily_recent = ls
 
-        last_valid = factor_panel.index[factor_panel.notna().any(axis=1)]
-        if len(last_valid):
-            m.stale_days = _stale_days(last_valid[-1], as_of, returns_panel.index)
+            last_valid = factor_panel.index[factor_panel.notna().any(axis=1)]
+            if len(last_valid):
+                m.stale_days = _stale_days(last_valid[-1], as_of, returns_panel.index)
 
     # 中性化 IC：风格剥离后的纯 Alpha IC（style_covariates 传入时计算）
-    if style_covariates:
+    if style_covariates and factor_panel is not None:
         try:
             # research 是实验层：monitoring（生产监控）只允许函数级向上引用
             # （2026-09-11 自模块级降级，守卫防回潮）。

@@ -1,8 +1,23 @@
 """监控编排 —— 扫描因子库 → 计算指标 → 触发告警 → 落盘账本 → HTML 报告。
 
-状态：HS300 时代监控链，**已停用**（``config/schedule.yaml`` 里 ``key: monitor`` 为 retired）。
-2026-11-18 起其 CLI 入口 ``scripts/reporting/monitor_performance.py`` 已下线冷归档，
-本模块只作为 ``monitoring.metrics`` / ``alerts`` 的编排参考保留，不再有生产入口。
+监控对象 = **定版因子库**（默认 ``all_a_2018_2026``）的 registry 全集：
+普通因子（``kind=raw``）与模型预测因子（``name`` 带 ``model:`` 前缀）走同一条
+指标链，模型侧额外以注册时 OOS 基线判断保留率。
+
+数据来源
+--------
+- 复权价 / 风格协变量：库自带基准面板 ``<库根>/base/close_adj.parquet``
+  与 ``base/cov_*.parquet``（与回测同一份文件，不现场重建）。
+- 逐日 IC 序列：**因子看板缓存优先**（``reports/factor_board/cache/<name>.parquet``
+  的 ``ic`` 列，886 个因子 × 1908 天已算好且与看板同源），库 ``evals/`` 兜底。
+  这样巡检是**读**而不是**重算**——全库 IC 重算需要读 41.6 GiB 面板。
+- 因子面板（覆盖率 / 分位单调性 / 新鲜度）：按 ``panel_mode`` 懒加载，
+  默认只给已触发告警的因子补（见 :func:`run_monitoring`）。
+
+历史：本链此前绑 ``hs300_2022_2025``，行情源 2026-08-21 停更后 28 次运行
+全部自称「基准日 08-21」且零告警；改指 all_a 后又因 registry 不写
+``panel_path``/``eval_path`` 而整片跳过（见 ``FactorLibrary._resolve_panel_path``
+的 2026-09-12 注释）。2026-11-18 起链路按上述来源重建。
 ``next_run_time`` 为纯函数，跨零点正确，可单测。
 """
 
@@ -42,8 +57,61 @@ def next_run_time(now: datetime, hhmm: str) -> datetime:
     return target if target > now else target + timedelta(days=1)
 
 
+def _load_ic_series(
+    name: str,
+    lib,
+    row: pd.Series,
+    board_cache_dir: Path | None,
+    ic_source: str = "auto",
+) -> pd.Series:
+    """取该因子的逐日 IC 序列（index = 日期，值 = 截面 Spearman）。
+
+    优先级：看板缓存 → 库 ``evals/``。两者都缺返回空 Series（调用方跳过该因子）。
+
+    「看板缓存优先」是刻意的：全库逐日 IC 重算要读 41.6 GiB 因子面板，
+    而看板已经按同一口径（``close_adj.pct_change().shift(-1)``）算好并落盘。
+    代价是巡检依赖看板缓存存在——缺失时自动回落 ``evals/``，两者都没有就
+    跳过并在日志里点名，不静默当成"健康"。
+    """
+    if ic_source in ("auto", "board") and board_cache_dir is not None:
+        p = Path(board_cache_dir) / f"{name}.parquet"
+        if p.exists():
+            try:
+                d = pd.read_parquet(p, columns=["ic"])
+            except (KeyError, ValueError):
+                d = pd.DataFrame()
+            if not d.empty and "ic" in d.columns:
+                s = pd.to_numeric(d["ic"], errors="coerce").dropna()
+                s.index = pd.to_datetime(s.index)
+                return s.sort_index()
+    if ic_source in ("auto", "evals"):
+        ep = lib._resolve_eval_path(row)
+        if ep is not None:
+            try:
+                d = pd.read_parquet(ep)
+            except Exception:  # noqa: BLE001 — 单个坏文件不该中断全库巡检
+                d = pd.DataFrame()
+            if not d.empty and "ic" in d.columns:
+                s = pd.to_numeric(d["ic"], errors="coerce").dropna()
+                s.index = pd.to_datetime(s.index)
+                return s.sort_index()
+    return pd.Series(dtype=float)
+
+
+#: 面板相关字段：能否从「纯 IC 快照」升级为「含面板快照」就看这几个
+_PANEL_FIELDS = ("coverage_recent", "monotonicity_recent", "ls_daily_recent", "stale_days")
+#: 深度诊断字段：只有算出中性化 IC 的因子才需要回填
+_NEUTRAL_FIELDS = (
+    "ic_neutral_mean_full",
+    "ic_neutral_mean_recent",
+    "ic_neutral_drift",
+    "ic_neutral_retention",
+    "style_exposure_ratio",
+)
+
+
 def run_monitoring(
-    dataset: str = "hs300_2022_2025",
+    dataset: str = "all_a_2018_2026",
     window: int | None = None,
     window_long: int | None = None,
     as_of: str | None = None,
@@ -55,8 +123,13 @@ def run_monitoring(
     signal_path: str | Path | None = None,
     confirm_n: int | None = None,
     run_stamp: str | None = None,
-    style_neutral_scope: str = "model",
-    pool: str = "hs300",
+    style_neutral_scope: str = "alerted",
+    pool: str = "all_a",
+    base_dir: str | Path | None = None,
+    ic_source: str = "auto",
+    board_cache_dir: str | Path | None = None,
+    panel_mode: str = "alerted",
+    neutral_max: int = 20,
 ) -> dict:
     """跑一轮完整监控，返回汇总 dict（factors/models/告警计数 + 产物路径）。
 
@@ -64,13 +137,25 @@ def run_monitoring(
         dataset: 因子库数据集（监控对象全集 = 该库 registry 所有因子）。
         window: 近期短窗（默认 config monitoring.window，如 60d，提前预警）。
         window_long: 近期长窗（默认 config monitoring.window_long，如 252d，稳健确认）。
-        as_of: 监控基准日 YYYYMMDD（默认 = 数据源最新交易日）。
+        as_of: 监控基准日 YYYYMMDD（默认 = 库基准面板最新交易日）。
         factor_root / cache_root / ledger_root: 路径覆盖（测试隔离用）。
         record: 是否写 experiments 账本。
-        style_neutral_scope: 中性化 IC 的计算范围 —— ``model``（默认，只算
+        style_neutral_scope: 中性化 IC 的计算范围 —— ``alerted``（默认：只对已
+            触发告警的因子算，用于区分风格轮动与 alpha 衰减）/ ``model``（只算
             ``model:`` 因子，秒级）/ ``all``（全库，逐因子逐日 lstsq，分钟级）
-            / ``none``（不算，保持既有行为）。
-        pool: 日线文件池名（``daily_<pool>.parquet``），与数据集股票池一致。
+            / ``none``（不算）。
+        pool: 日线缓存池名（``daily_<pool>.parquet``），仅在库基准面板缺失时使用。
+        base_dir: 库基准面板目录（默认 ``<库根>/base``），提供
+            ``close_adj.parquet`` 与 ``cov_*.parquet``。
+        ic_source: IC 序列来源 —— ``auto``（看板缓存优先，``evals/`` 兜底，
+            默认）/ ``board`` / ``evals``。
+        board_cache_dir: 因子看板缓存目录（默认 ``reports/factor_board/cache``）。
+        panel_mode: 因子面板的读取策略 —— ``alerted``（默认：先只算 IC 层并对
+            触发告警的因子补面板）/ ``all``（全库读面板，慢，分钟级）/
+            ``none``（完全不读面板，最快）。
+        neutral_max: ``style_neutral_scope="alerted"`` 时做中性化诊断的因子上限
+            （默认 20，按 |全期 IC| 降序取 critical 级因子）。单因子全序列中性化
+            约 24 秒，调大前先确认时间预算。
     """
     from research.factor_library import FactorLibrary
 
@@ -79,17 +164,27 @@ def run_monitoring(
     window_long = int(window_long or conf.get("window_long", 252))
     factor_root = Path(factor_root) if factor_root else None
     cache_root = Path(cache_root) if cache_root else Path(Config.cache()["root"])
+    if panel_mode not in ("alerted", "all", "none"):
+        raise ValueError(f"panel_mode 只能是 alerted/all/none，收到 {panel_mode!r}")
+    if ic_source not in ("auto", "board", "evals"):
+        raise ValueError(f"ic_source 只能是 auto/board/evals，收到 {ic_source!r}")
 
     lib = FactorLibrary(root=factor_root, dataset=dataset)
     registry = lib.list_all()
     if registry.empty:
         raise RuntimeError(f"因子库为空: dataset={dataset} root={factor_root}")
 
-    close = load_close_panel(cache_root)
+    # 库自带基准面板：与回测同一份文件（复权价 + 5 项风格协变量）
+    base = Path(base_dir) if base_dir else (Path(lib.root) / "base")
+    if not (base / "close_adj.parquet").exists():
+        log.warning("库基准面板缺失（%s/close_adj.parquet），回退日线缓存重建", base)
+        base = None
+
+    close = load_close_panel(cache_root, pool=pool, base_dir=base)
     as_of_ts = pd.Timestamp(as_of) if as_of else close.index[-1]
     returns = load_returns_panel(close, as_of=as_of_ts)
 
-    # 数据新鲜度守卫：as_of 是从这份缓存自己推出来的，缓存停更时滞后会
+    # 数据新鲜度守卫：as_of 是从这份数据自己推出来的，数据停更时滞后会
     # 静默归零（08-21~09-17 共 28 次运行全自称「基准日 08-21」却零告警）。
     # 这里改用墙钟对齐，滞后不再被自我掩盖。
     calendar = load_trading_calendar(cache_root)
@@ -102,27 +197,48 @@ def run_monitoring(
                     as_of_ts.date(), lag_days, max_lag,
                     cal_last.date() if cal_last is not None else "—")
 
+    board_cache = (
+        Path(board_cache_dir) if board_cache_dir else Path("reports/factor_board/cache")
+    )
+
     style_cov: dict[str, pd.DataFrame] = {}
     if style_neutral_scope != "none":
-        style_cov = load_style_covariates(cache_root, close, pool=pool)
+        style_cov = load_style_covariates(cache_root, close, pool=pool, base_dir=base)
 
-    def _cov_for(name: str) -> dict[str, pd.DataFrame] | None:
+    neutral_names: set[str] = set()
+
+    def _cov_for(name: str, stage: int = 1) -> dict[str, pd.DataFrame] | None:
+        """返回该因子要用的风格协变量；``None`` = 本次不算中性化 IC。
+
+        ``alerted``（默认）第一阶段一律返回 ``None``（全库逐日 lstsq 太贵），
+        第二阶段只对**被选入深度诊断名单**的因子返回。名单默认是 critical 级
+        告警因子（按 |全期 IC| 降序取前 ``neutral_max`` 个）：单因子全序列中性化
+        实测约 24 秒，warning 级动辄上百个，全做要半小时——而告警级别里只有
+        critical 才需要立刻回答「这是风格轮动还是真 alpha 衰减」。
+        """
         if not style_cov:
             return None
         if style_neutral_scope == "all":
             return style_cov
+        if style_neutral_scope == "alerted":
+            return style_cov if (stage == 2 and name in neutral_names) else None
         return style_cov if name.startswith("model:") else None
 
     snapshots: list[MonitorMetrics] = []
     ic_history: dict[str, pd.Series] = {}
+    ic_by_name: dict[str, pd.Series] = {}
+    row_by_name: dict[str, pd.Series] = {}
+    missing_ic: list[str] = []
     for _, row in registry.iterrows():
         name = row["name"]
-        panel = lib.get_panel(name)
-        eval_path = Path(str(row.get("eval_path", "")))
-        ic = pd.read_parquet(eval_path)["ic"] if eval_path.exists() else pd.Series(dtype=float)
-        if panel is None or ic.empty:
-            log.warning("跳过（面板或 eval 缺失）: %s", name)
+        ic = _load_ic_series(name, lib, row, board_cache, ic_source)
+        if ic.empty:
+            missing_ic.append(name)
             continue
+        ic = ic[ic.index <= as_of_ts]
+        panel = lib.get_panel(name) if panel_mode == "all" else None
+        if panel_mode == "all" and panel is None:
+            log.warning("面板缺失（IC 层指标照常计算）: %s", name)
         m = compute_factor_metrics(
             name, row, panel, ic, returns, as_of_ts,
             window=window, window_long=window_long,
@@ -130,7 +246,54 @@ def run_monitoring(
         )
         m = attach_alerts(m, conf)
         snapshots.append(m)
-        ic_history[name] = ic[ic.index <= as_of_ts].tail(PERIODS_PER_YEAR)
+        ic_history[name] = ic.tail(PERIODS_PER_YEAR)
+        ic_by_name[name] = ic
+        row_by_name[name] = row
+
+    if missing_ic:
+        log.warning("跳过 %d 个因子（无可用 IC 序列：看板缓存与 evals 均缺）: %s%s",
+                    len(missing_ic), ", ".join(missing_ic[:8]),
+                    " …" if len(missing_ic) > 8 else "")
+
+    # 二阶段：给已触发告警的因子补面板指标（覆盖率 / 分位单调性 / 新鲜度）。
+    # 只补"已报警"的是刻意的成本取舍——全库读面板要 41.6 GiB；但这也意味着
+    # **覆盖率下滑本身不会被发现**，除非该因子同时有 IC 层告警。需要全库
+    # 体检时用 ``panel_mode="all"``（分钟级），建议按周跑一次。
+    n_panel_filled = 0
+    n_neutral = 0
+    if panel_mode == "alerted":
+        # 深度诊断名单：critical 级告警因子，按 |全期 IC| 降序取前 neutral_max。
+        # 中性化是全序列逐日 lstsq（实测 24s/因子），必须限量。
+        neutral_names.update(
+            m.name
+            for m in sorted(
+                (x for x in snapshots if x.status == "critical"),
+                key=lambda x: -abs(x.ic_mean_full) if x.ic_mean_full == x.ic_mean_full else 0.0,
+            )[: max(neutral_max, 0)]
+        )
+        for m in snapshots:
+            if not m.alerts:
+                continue
+            panel = lib.get_panel(m.name)
+            if panel is None:
+                continue
+            cov_m = _cov_for(m.name, stage=2)
+            full = compute_factor_metrics(
+                m.name, row_by_name[m.name], panel, ic_by_name[m.name], returns,
+                as_of_ts, window=window, window_long=window_long,
+                style_covariates=cov_m,
+            )
+            for f in _PANEL_FIELDS:
+                setattr(m, f, getattr(full, f))
+            if cov_m:
+                for f in _NEUTRAL_FIELDS:
+                    setattr(m, f, getattr(full, f))
+                n_neutral += 1
+            attach_alerts(m, conf)
+            n_panel_filled += 1
+        if n_panel_filled:
+            log.info("二阶段补面板指标: %d 个告警因子（其中中性化 %d 个）",
+                     n_panel_filled, n_neutral)
 
     # 库级拥挤度监控：因子 IC 相关矩阵 → 同质化/分散度虚假
     if len(ic_history) >= 2:
@@ -208,7 +371,7 @@ def run_monitoring(
         r["confirmed"] = (r["name"], r["rule"]) in confirmed
     ledger.append_alerts(pd.DataFrame(alert_rows), run_date)
 
-    report_path = Path(ledger_root) / "monitor_report.html"
+    report_path = Path(ledger_root) / "factor_health_report.html"
     generate_html_report(
         snapshots,
         final_alert_rows,
@@ -224,6 +387,9 @@ def run_monitoring(
     )
 
     n_model = sum(1 for m in snapshots if m.category == "model")
+    n_factor = sum(1 for m in snapshots if m.category == "factor")
+    n_crowd = sum(1 for m in snapshots if m.category == "crowd")
+    n_signal = sum(1 for m in snapshots if m.category == "signal")
     summary = {
         "run_date": run_date,
         "as_of": str(as_of_ts.date()),
@@ -235,12 +401,21 @@ def run_monitoring(
         "n_style_covariates": len(style_cov),
         "n_style_neutral_factors": sum(
             1 for m in snapshots if m.ic_neutral_mean_recent == m.ic_neutral_mean_recent),
-        "n_factors": len(snapshots),
+        "n_factors": n_factor + n_model,   # 监控对象总数（模型预测即因子）
         "n_models": n_model,
+        "n_crowd": n_crowd,
+        "n_signal": n_signal,
+        "n_snapshots": len(snapshots),
         "n_critical": sum(1 for m in snapshots if m.status == "critical"),
         "n_warning": sum(1 for m in snapshots if m.status == "warning"),
         "n_normal": sum(1 for m in snapshots if m.status == "normal"),
         "n_pending": n_pending,
+        "n_skipped_no_ic": len(missing_ic),
+        "panel_mode": panel_mode,
+        "ic_source": ic_source,
+        "n_panel_filled": n_panel_filled,
+        "n_neutral_diagnosed": n_neutral,
+        "base_panel": str(base) if base is not None else "",
         "snapshots_path": str(ledger.snapshots_path),
         "alerts_path": str(ledger.alerts_path),
         "report_path": str(report_path),
@@ -250,13 +425,15 @@ def run_monitoring(
         from research.experiments import record_experiment
 
         record_experiment(
-            kind="performance_monitor",
-            command=f"monitor_performance --dataset {dataset}",
+            kind="factor_health",
+            command=f"monitor_factor_health --dataset {dataset} --panel-mode {panel_mode}",
             params={
                 "dataset": dataset,
                 "window": window,
                 "window_long": window_long,
                 "as_of": str(as_of_ts.date()),
+                "panel_mode": panel_mode,
+                "ic_source": ic_source,
             },
             result_path=str(report_path),
             metrics={
@@ -265,7 +442,7 @@ def run_monitoring(
                 "n_critical": summary["n_critical"],
                 "n_warning": summary["n_warning"],
             },
-            note="生产化监控：因子与模型预测性能快照 + 告警 + HTML 报告",
+            note="定版库因子与模型预测健康度巡检：IC 漂移 + 告警 + HTML 报告",
         )
     log.info("监控完成: %s", summary)
     return summary
@@ -455,7 +632,8 @@ def generate_html_report(
     """
     # research 是实验层（其 __init__/html_report 拖 matplotlib）：monitoring
     # （生产监控）只允许函数级向上引用（2026-09-11 自模块级降级，守卫防回潮）。
-    from research.html_report import page, svg_sparkline_monthly as _sparkline_monthly
+    from research.html_report import page
+    from research.html_report import svg_sparkline_monthly as _sparkline_monthly
 
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -576,7 +754,14 @@ def generate_html_report(
         )
     parts.append("</div>")
 
-    # 统一表（thead/tbody 分离，排序 JS 只操作 tbody）
+    # 统一表（thead/tbody 分离，排序 JS 只操作 tbody 行）
+    parts.append(
+        "<div class='meta'>中性化IC / 风格占比只对<b>严重</b>级因子做深度诊断"
+        "（全序列逐日中性化，单因子约 24 秒，默认取前 20 个）："
+        "风格占比 = 1 − 中性化IC/原始IC，正值表示 IC 里有该比例来自风格暴露，"
+        "负值表示剥离风格后反而更强（风格拖累）。"
+        "原始 IC 衰减而中性化 IC 稳定 = 风格轮动，两者同衰 = 真 alpha 衰减。</div>"
+    )
     parts.append("<div class='scroll-table'>")
     parts.append(
         "<table id='snap-table'><thead><tr>"
@@ -585,6 +770,8 @@ def generate_html_report(
         "<th class='sortable num abs-sort'>全期IC</th>"
         "<th class='sortable num abs-sort'>近60日IC</th>"
         "<th class='sortable num abs-sort'>近252日IC</th>"
+        "<th class='sortable num abs-sort'>中性化IC</th>"
+        "<th class='sortable num'>风格占比</th>"
         "<th class='sortable num'>覆盖率</th>"
         "<th class='sortable num abs-sort'>单调性</th>"
         "<th class='sortable num'>滞后日</th>"
@@ -606,6 +793,8 @@ def generate_html_report(
             f"<td class='num'>{_fmt(m.ic_mean_full)}</td>"
             f"<td class='num'>{_fmt(m.ic_mean_recent)}</td>"
             f"<td class='num'>{_fmt(m.ic_mean_recent_252)}</td>"
+            f"<td class='num'>{_fmt(m.ic_neutral_mean_recent)}</td>"
+            f"<td class='num'>{_fmt(m.style_exposure_ratio, '{:+.0%}')}</td>"
             f"<td class='num'>{_fmt(m.coverage_recent, '{:.0%}')}</td>"
             f"<td class='num'>{_fmt(m.monotonicity_recent, '{:+.2f}')}</td>"
             f"<td class='num'>{m.stale_days}</td>"
@@ -673,7 +862,8 @@ def generate_html_report(
             n_c = sum(1 for a in alerts_in_g if a["level"] == "critical")
             parts.append(
                 f"<button class='filter-btn' data-src='{_html.escape(g)}' "
-                f"data-table='alert-table'>{_html.escape(g)}（{len(alerts_in_g)} · 严重 {n_c}）</button>"
+                f"data-table='alert-table'>{_html.escape(g)}"
+                f"（{len(alerts_in_g)} · 严重 {n_c}）</button>"
             )
         parts.append("</div>")
 

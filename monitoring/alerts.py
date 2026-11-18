@@ -54,7 +54,13 @@ def evaluate_alerts(m: MonitorMetrics, cfg: dict[str, Any]) -> list[dict]:
 
     if _ok(m.ic_mean_recent) and _ok(m.ic_mean_full) and m.recent_n_days >= 20:
         baseline = pick_baseline(m)
-        if _ok(baseline) and abs(baseline) > 1e-12:
+        # 最低强度门槛：|基线 IC| 太小的因子不做衰减判定。
+        # 一个 IC≈0.003 的因子，近 60 日变成 −0.001 就"方向翻转"——那不是事故，
+        # 是噪声换了个符号；保留率更是除法的分母趋零放大（实测弱因子出现 434%
+        # 这种数）。2026-11-18 全库实测：无门槛时 57 个 critical，其中 median
+        # |基线| 0.0031、最大 0.017，而全库 |IC| 中位数是 0.042 —— 全员误报。
+        min_abs = float(cfg.get("min_abs_ic_for_decay", 0.01))
+        if _ok(baseline) and abs(baseline) >= min_abs:
             retention = m.ic_mean_recent / baseline
             thr = float(cfg.get("warn_ic_retention", 0.5))
             # 长窗（252d）确认态：短窗已跌破预警、长窗仍稳健 → 观察中未确认
@@ -63,16 +69,42 @@ def evaluate_alerts(m: MonitorMetrics, cfg: dict[str, Any]) -> list[dict]:
             )
             observing = _ok(retention_252) and retention_252 >= thr
             if m.ic_mean_recent * baseline < 0:
-                alerts.append(
-                    {
-                        "rule": "ic_decay",
-                        "level": "critical",
-                        "message": (
-                            f"近{m.suffix_short}d IC {m.ic_mean_recent:+.4f} 与基线 "
-                            f"{baseline:+.4f} 方向翻转"
-                        ),
-                    }
+                # 方向翻转先做归因：算过中性化 IC 且它仍同向 → 是风格造成的假翻转。
+                # 实测（2026-11-18）：alpha191_152 raw IC 全期 −0.017 / 近 60 日
+                # +0.011（"翻转"），但中性化后是 +0.0085 → +0.0274 同向走强——
+                # 翻的只是那层负向风格暴露。判 critical 会把风格轮动当成 alpha 报废。
+                neutral_floor = float(cfg.get("min_abs_ic_for_neutral", 0.005))
+                neutral_intact = (
+                    _ok(m.ic_neutral_mean_recent)
+                    and _ok(m.ic_neutral_mean_full)
+                    and m.ic_neutral_mean_recent * m.ic_neutral_mean_full > 0
+                    and abs(m.ic_neutral_mean_recent) >= neutral_floor
                 )
+                if neutral_intact:
+                    alerts.append(
+                        {
+                            "rule": "style_rotation",
+                            "level": "warning",
+                            "message": (
+                                f"近{m.suffix_short}d raw IC {m.ic_mean_recent:+.4f} 与基线 "
+                                f"{baseline:+.4f} 方向翻转，但中性化 IC 仍同向"
+                                f"（全期 {m.ic_neutral_mean_full:+.4f} → 近期 "
+                                f"{m.ic_neutral_mean_recent:+.4f}）⇒ 风格轮动，非 alpha 衰减，"
+                                f"应重新中性化而非下架"
+                            ),
+                        }
+                    )
+                else:
+                    alerts.append(
+                        {
+                            "rule": "ic_decay",
+                            "level": "critical",
+                            "message": (
+                                f"近{m.suffix_short}d IC {m.ic_mean_recent:+.4f} 与基线 "
+                                f"{baseline:+.4f} 方向翻转"
+                            ),
+                        }
+                    )
             elif retention < thr:
                 alerts.append(
                     {
@@ -85,7 +117,10 @@ def evaluate_alerts(m: MonitorMetrics, cfg: dict[str, Any]) -> list[dict]:
                                 f"；近{m.suffix_long}d 保留率 {retention_252:.0%} 仍稳健"
                                 f" → 观察中，尚未长窗确认"
                                 if observing
-                                else f"；近{m.suffix_long}d 保留率 {retention_252:.0%} 同步衰减，予以确认"
+                                else (
+                                    f"；近{m.suffix_long}d 保留率 {retention_252:.0%}"
+                                    f" 同步衰减，予以确认"
+                                )
                             )
                         ),
                     }
@@ -123,20 +158,29 @@ def evaluate_alerts(m: MonitorMetrics, cfg: dict[str, Any]) -> list[dict]:
 
     # 风格轮动 vs alpha 衰减区分（中性化 IC 传入时才触发）
     if _ok(m.ic_neutral_mean_recent) and _ok(m.ic_mean_recent):
-        # 风格暴露占比过高（raw IC 中 > 50% 来自风格）
+        # 风格占比过高（>50%）：再按符号分两种完全不同的情形——
+        #   同号：raw IC 里有一半以上只是风格，alpha 是其中的一小部分；
+        #   异号：raw IC 的**方向**都由风格决定（实测 alpha191_152：raw −0.017
+        #         而中性化 +0.0085），此时"风格暴露"这个词会误导——它不是
+        #         "暴露偏多"，是"看错了方向"。
         if _ok(m.style_exposure_ratio) and m.style_exposure_ratio > 0.5:
-            alerts.append(
-                {
-                    "rule": "style_rotation",
-                    "level": "warning",
-                    "message": (
-                        f"raw IC 中风格可解释比例 {m.style_exposure_ratio:.0%}"
-                        f"（中性化 IC {m.ic_neutral_mean_recent:+.4f}"
-                        f" vs raw IC {m.ic_mean_recent:+.4f}），"
-                        f"因子主体为风格暴露而非纯 alpha"
-                    ),
-                }
-            )
+            # 判符号要用**全期**口径：style_exposure_ratio 本身就由全期的
+            # raw/neutral 算出，拿近期符号去配对会自相矛盾（实测 alpha191_152
+            # 近期两侧都是正号，而全期是 raw −0.017 vs neutral +0.0085）。
+            if m.ic_mean_full * m.ic_neutral_mean_full < 0:
+                msg = (
+                    f"全期 raw IC {m.ic_mean_full:+.4f} 与中性化 IC "
+                    f"{m.ic_neutral_mean_full:+.4f} 符号相反 ⇒ raw IC 的方向由风格"
+                    f"决定，纯 alpha 在反方向（中性化后再用，不要按 raw 方向下架）"
+                )
+            else:
+                msg = (
+                    f"raw IC 中风格可解释比例 {m.style_exposure_ratio:.0%}"
+                    f"（中性化 IC {m.ic_neutral_mean_full:+.4f}"
+                    f" vs raw IC {m.ic_mean_full:+.4f}），"
+                    f"因子主体为风格暴露而非纯 alpha"
+                )
+            alerts.append({"rule": "style_rotation", "level": "warning", "message": msg})
         # raw IC 衰减但中性化 IC 稳定 → 风格轮动而非因子失效
         elif (_ok(m.ic_neutral_drift) and _ok(m.ic_drift)
                 and abs(m.ic_drift) > 0.01
