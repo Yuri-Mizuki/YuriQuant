@@ -795,6 +795,15 @@ class FactorLibrary:
         self.root = self.base_root / _sanitize_dataset(dataset) if dataset else self.base_root
         self.panels_dir = self.root / "panels"
         self.evals_dir = self.root / "evals"
+        # 静默失败守卫（2026-11-18）：下面的 mkdir 会让「库不存在」变成「建一个空库」，
+        # 随后 registry 读到 0 行、所有循环空转、结果是一张空表而非报错。
+        # 2026-11-18 下线 hs300_2022_2025 后，仍有 6 个脚本的 --dataset 默认值指向它，
+        # 每次调用都会把删掉的空壳目录重新 mkdir 出来 —— 必须在这里出声。
+        if dataset and not self.root.exists():
+            log.warning(
+                "因子库数据集 %r 不存在（%s），正在新建空库。若并非有意建库，"
+                "请检查 --dataset；可用数据集：%s",
+                dataset, self.root, self.list_datasets(self.base_root) or "（无）")
         self.panels_dir.mkdir(parents=True, exist_ok=True)
         self.evals_dir.mkdir(parents=True, exist_ok=True)
         self._registry_path = self.root / "registry.csv"

@@ -45,7 +45,7 @@ from scripts.common.alla_common import (  # noqa: E402
     ds_root,
 )
 
-ARCHIVE = Path("e:/data/_archive")
+ARCHIVE = Path(ds_root()).parent.parent / "_archive"
 
 
 def md5_of(path: Path) -> str:

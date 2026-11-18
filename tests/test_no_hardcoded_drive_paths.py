@@ -51,12 +51,17 @@ ALLOWED: dict[str, str] = {
 
 
 def _tracked(suffixes: tuple[str, ...]) -> list[str]:
-    """只审计 git 跟踪的文件（自动跳过 _tmp/ reports/ scripts/oneoff/ 等）。"""
+    """只审计 git 跟踪的文件（自动跳过 _tmp/ reports/ scripts/oneoff/ 等）。
+
+    索引与实际工作区在「已删但未提交」时会不一致：``git ls-files`` 仍列出该路径，
+    直接读会 FileNotFoundError。跳过即可 —— 文件既已不在工作区，就没有硬编码可查。
+    """
     out = subprocess.run(["git", "ls-files", "-z"], cwd=ROOT, capture_output=True,
                          text=True, encoding="utf-8")
     if out.returncode != 0:
         pytest.skip("不在 git 工作区内，跳过")
-    return [f for f in out.stdout.split("\0") if f and f.endswith(suffixes)]
+    return [f for f in out.stdout.split("\0")
+            if f and f.endswith(suffixes) and (ROOT / f).exists()]
 
 
 def _probe_text(path: Path, text: str) -> str:

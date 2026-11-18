@@ -1,6 +1,6 @@
 # scripts 入口索引
 
-> 自动生成（257 个活跃入口；archive/oneoff 不计）。改脚本 docstring 后运行 `python -m scripts.data_tools.gen_scripts_index` 更新；`--check` 校验是否过期。
+> 自动生成（259 个活跃入口；archive/oneoff 不计）。改脚本 docstring 后运行 `python -m scripts.data_tools.gen_scripts_index` 更新；`--check` 校验是否过期。
 
 约定：`python -m scripts.<目录>.<文件名>` 运行；`scripts/archive/` 已于 2026-11-18 整体下线（活代码已上移，其余删除）；实验结论查 `reports/README.md` §一「结论速查」，产物落盘规则见其 §1.6。
 
@@ -45,7 +45,9 @@
 | `common/alla_common.py` | 全A滚动实验的**共享底座**（2026-10-19 架构清理）。 |
 | `common/atomic_io.py` | 原子写面板 + 抗瞬时文件占用（Windows 原生锁）。 |
 | `common/cli_common.py` | 脚本层公共 CLI 骨架 |
+| `common/feature_funnel.py` | 特征选择漏斗（覆盖率 → 去冗余 → 质量分截断）—— 口径中性的单一实现。 |
 | `common/fundamental_common.py` | 财报长表的 TTM / 单季拆解公共函数（2026-09-11 收敛）。 |
+| `common/im_features.py` | ``im_*`` 分钟特征装载与评估窗口对齐（GFlowNet / GP 第二层共用口径）。 |
 | `common/portfolio_common.py` | 跨实验脚本共享的组合编排组件（无 CLI 入口） |
 | `common/power.py` | 任务运行期间请求系统保持唤醒（**在本机 S0 连接待机下无效，见下**）。 |
 | `common/task_scheduler.py` | Windows 计划任务注册收口 + 调度体检（单一真源）。 |
@@ -54,12 +56,14 @@
 
 | 脚本 | 说明 |
 |---|---|
+| `data_tools/audit_fundind_split.py` | E5 覆盖层体检：``panels_neu_fundind`` vs 基准层 ``panels_neu``。 |
 | `data_tools/docs_lint.py` | 文档规范校验（docs 治理 P0，2026-10-28）。 |
 | `data_tools/dump_pdf_text.py` | 把研报 PDF 抽成带页码标记的纯文本，便于按关键词定位口径参数。 |
 | `data_tools/fix_meta.py` | 修复 e:/data/parquet/_meta.json：对齐实际日期 + 补文本表 + 加 pool 口径。 |
 | `data_tools/gen_scripts_index.py` | 生成 ``scripts/README.md`` 入口索引（2026-10-19 审计 ③）。 |
 | `data_tools/memory_lint.py` | 记忆层治理校验（memory_lint，2026-11-03）。 |
 | `data_tools/new_experiment.py` | 新建实验目录：一条命令完成「建目录 + 复制模板 + 登记判定」。 |
+| `data_tools/recycle.py` | 走 Windows 回收站删除（**不永久删除**），供维护类脚本复用。 |
 
 ## evaluation
 
@@ -77,7 +81,6 @@
 | `evaluation/cost_penalty_probe.py` | 成本感知优化探针（P0-2，2026-10-13）。 |
 | `evaluation/cpcv_eval.py` | CPCV 多路径评估 —— 挖因子方法选型决策工具。 |
 | `evaluation/cvar_arm_920.py` | 批次 12⑤：CVaR 约束组合臂 vs Top10% 等权 vs buffer 形态（production 口径）。 |
-| `evaluation/daily_survivorship_probe.py` | 日频策略幸存者偏差对照 —— 同一因子、同一执行，只换评估池。 |
 | `evaluation/deliverable_portfolio.py` | 可交付组合：集中度 × 行业约束（P0 落地，2026-10-10 固化）。 |
 | `evaluation/dup_caliber_probe.py` | 判重口径探针：同一批因子在三种相关口径下到底有多像。 |
 | `evaluation/ev_rd_backtest.py` | EV / 研发 四因子的组合层验证：IC 好不等于赚钱。 |
@@ -104,8 +107,6 @@
 | `evaluation/hp_sensitivity.py` | 模型层超参敏感度探针（P2）。 |
 | `evaluation/index_enhance_probe.py` | B1 探针：现有 α 能不能在**中证500 成分约束下**做出可投的指数增强？ |
 | `evaluation/intraday_analysis.py` | 日内收益分解 + 时段效应分析 |
-| `evaluation/intraday_composite_probe.py` | im_ 因子复合的方向纠错 —— 上一轮「复合更差」是实现 bug 还是真结论。 |
-| `evaluation/intraday_daily_probe.py` | 日内因子日频组合探针 —— 期限对齐：h1 信号 × 持有 1 天。 |
 | `evaluation/jq_factor_probe.py` | 聚宽因子看板候选探针（2026-10-26）。 |
 | `evaluation/market_direction_probe.py` | 大盘方向准入检验：**新信息集**能不能预测下月沪深300？ |
 | `evaluation/member_blend12.py` | 多模型×多标签预测合成对照（Task ⑥ / AI29·国金19 语义）。 |
@@ -188,6 +189,7 @@
 | `factors/panel_leak_audit.py` | 全库面板前视体检（只读）：把「哪几块面板还在用未来数据」从猜测变成清单。 |
 | `factors/panel_leak_audit_diff.py` | 把两次体检的 CSV 放到**同一套判据**下重判，输出可比的前后对照。 |
 | `factors/promote_maturity.py` | 成熟度晋升：把 :data:`research.factor_library.MATURITY_GATES` 落到全库。 |
+| `factors/prune_registry_backups.py` | registry 备份轮转：只保留「有用的快照」，其余走回收站。 |
 | `factors/run_alphapool_ppo.py` | 华泰 AI97《大模型+强化学习因子挖掘》—— AlphaPool + MaskablePPO 训练入口 |
 | `factors/run_gflownet_phase1.py` | GFlowNet Phase 1：真实 HS300 对齐研报 |
 | `factors/run_llm_mcts.py` | 东吴 LLM-MCTS 因子迭代 Phase 0 —— 同题四引擎对照 runner |
