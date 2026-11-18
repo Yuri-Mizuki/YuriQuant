@@ -260,29 +260,8 @@ def test_next_run_time():
     )  # 跨零点
 
 
-# ---------------------------------------------------------------------------
-# Windows 计划任务（每日自动化）
-# ---------------------------------------------------------------------------
-@pytest.mark.skipif(sys.platform != "win32", reason="schtasks 计划任务注册仅适用于 Windows")
-def test_task_scheduler_command():
-    from scripts.reporting.monitor_performance import (
-        SCHEDULED_TASK,
-        SYSTEM_PY,
-        task_scheduler_cmd,
-    )
-
-    cmd = task_scheduler_cmd("hs300_2022_2025", "C:/tools/py.exe")
-    assert SCHEDULED_TASK in cmd
-    assert "/SC DAILY /ST 17:30" in cmd
-    assert "C:\\tools\\py.exe" in cmd
-    assert "--dataset hs300_2022_2025" in cmd
-
-    # 默认解析：系统 Python 3.12 存在时固定指向它（真实数据链路依赖其 SDK/凭证）。
-    # Windows 路径大小写不敏感：resolve() 返回磁盘真实大小写，可能与 sys.executable
-    # 字面大小写不同，故按小写比较。
-    default = task_scheduler_cmd("ds")
-    if SYSTEM_PY.exists():
-        assert SYSTEM_PY.resolve().as_posix().lower() in default.replace("\\", "/").lower()
+# 注：原「Windows 计划任务」用例测的是 scripts/reporting/monitor_performance.py，
+# 该脚本已于 2026-11-18 随 HS300 时代监控链下线，用例同步移除。
 
 
 # ---------------------------------------------------------------------------

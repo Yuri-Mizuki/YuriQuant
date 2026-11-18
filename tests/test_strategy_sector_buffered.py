@@ -1,6 +1,6 @@
 """`SectorCappedBufferedTopKLongOnly` 单测（2026-11-10 新增）。
 
-这个类是小资金档 `yqcore-solo` 的实现，锁四件事：
+这个类是小资金档 `yqcore-focus-k8` 的实现，锁四件事：
 
 1. **行业去重真的生效** —— 每行业最多 `max_per_sector` 只，且欠仓（不越界补足）。
 2. **缓冲带与行业名额叠加时语义不变** —— 上期持仓只要排名仍在 `k·exit_mult` 内、

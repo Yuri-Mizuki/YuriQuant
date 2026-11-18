@@ -20,35 +20,6 @@ ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / "scripts" / "README.md"
 EXCLUDE_PARTS = {"archive", "oneoff", "__pycache__"}
 
-ARCHIVED = [
-    ("scripts/common/e2e_common.py", "HS300 时代 e2e 编排（数据/中性化/特征漏斗）"),
-    ("scripts/evaluation/ai97_pbo_report.py", "AI97 PBO 报告（一次性）"),
-    ("scripts/evaluation/pv_marginal_quality.py", "PV 边际质量探针（一次性）"),
-    ("scripts/evaluation/tabfm_head_portfolio.py", "TabPFN/TabICL 头部组合验证"),
-    ("scripts/evaluation/tabfm_head_study.py", "TabPFN/TabICL 头部诊断"),
-    ("scripts/factors/phase2_ppo_diag.py", "Phase2 PPO 诊断"),
-    ("scripts/factors/run_gflownet_phase0.py", "GFlowNet phase0 入口（已被 phase1 取代）"),
-    ("scripts/reporting/factor_correlation.py", "因子相关性报告"),
-    ("scripts/reporting/risk_decomposition_report.py", "风险分解报告"),
-    ("scripts/evaluation/cheap_lever_probe.py", "廉价杠杆探针"),
-    ("scripts/evaluation/impact_cost_probe.py", "冲击成本探针"),
-    ("scripts/evaluation/multihorizon_fusion_probe.py", "多 horizon 融合探针"),
-    ("scripts/builders/backfill_delisted_backward.py", "退市股后复权回补"),
-    ("scripts/builders/backfill_delisted_equity.py", "退市股股本结构回补"),
-    ("scripts/builders/backfill_delisted_kline.py", "退市股 K 线回补"),
-    ("scripts/builders/build_alla_e4_interaction_factors.py", "E4 交互因子构建"),
-    ("scripts/builders/refetch_status_all_a.py", "全A状态重取"),
-    ("scripts/factors/fetch_textmining.py", "文本挖掘数据拉取"),
-    ("scripts/factors/gflownet_library_ingest.py", "GFlowNet 因子入库"),
-    ("scripts/data_tools/cleanup_data.py", "数据清理工具"),
-    ("scripts/data_tools/split_zz1000.py", "ZZ1000 拆分工具"),
-    ("scripts/textmining/build_enhanced_top25.py", "增强 Top25 构建"),
-    ("scripts/textmining/build_rawtone_factor.py", "原始情绪因子构建"),
-    ("scripts/textmining/encode_fadt_seg.py", "FADT 分段编码"),
-    ("scripts/textmining/evaluate_fadt_ablation.py", "FADT 消融评估"),
-    ("scripts/textmining/fetch_all_a_backfill.py", "全A文本数据回补"),
-    ("scripts/textmining/register_text_factors.py", "文本因子入库"),
-]
 
 
 def _tracked_scripts() -> list[str]:
@@ -60,6 +31,9 @@ def _tracked_scripts() -> list[str]:
     for rel in out.stdout.splitlines():
         p = Path(rel)
         if p.name == "__init__.py" or EXCLUDE_PARTS & set(p.parts):
+            continue
+        # 已删除但尚未提交（git ls-files 仍会列出）的条目不算活跃入口
+        if not (ROOT / rel).exists():
             continue
         rows.append(rel)
     return sorted(rows)
@@ -92,7 +66,7 @@ def render() -> str:
         "`--check` 校验是否过期。",
         "",
         "约定：`python -m scripts.<目录>.<文件名>` 运行；"
-        "退役入口在 `scripts/archive/`（仍可运行，但不再维护）；"
+        "`scripts/archive/` 已于 2026-11-18 整体下线（活代码已上移，其余删除）；"
         "实验结论查 `reports/README.md` §一「结论速查」，产物落盘规则见其 §1.6。",
         "",
     ]
@@ -102,12 +76,6 @@ def render() -> str:
             rel_p = Path(rel).relative_to("scripts").as_posix()
             out.append(f"| `{rel_p}` | {_summary(ROOT / rel)} |")
         out.append("")
-    out += ["## 2026-10-19 归档（三类引用全零，无文档/产物引用）", "",
-            "| 原路径 | 归档到 | 说明 |", "|---|---|---|"]
-    for old, desc in ARCHIVED:
-        name = Path(old).name
-        out.append(f"| `{old}` | `scripts/archive/{name}` | {desc} |")
-    out.append("")
     return "\n".join(out)
 
 

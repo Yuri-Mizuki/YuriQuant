@@ -1,8 +1,8 @@
 # scripts 入口索引
 
-> 自动生成（189 个活跃入口；archive/oneoff 不计）。改脚本 docstring 后运行 `python -m scripts.data_tools.gen_scripts_index` 更新；`--check` 校验是否过期。
+> 自动生成（257 个活跃入口；archive/oneoff 不计）。改脚本 docstring 后运行 `python -m scripts.data_tools.gen_scripts_index` 更新；`--check` 校验是否过期。
 
-约定：`python -m scripts.<目录>.<文件名>` 运行；退役入口在 `scripts/archive/`（仍可运行，但不再维护）；实验结论查 `reports/README.md` §一「结论速查」，产物落盘规则见其 §1.6。
+约定：`python -m scripts.<目录>.<文件名>` 运行；`scripts/archive/` 已于 2026-11-18 整体下线（活代码已上移，其余删除）；实验结论查 `reports/README.md` §一「结论速查」，产物落盘规则见其 §1.6。
 
 ## builders
 
@@ -17,6 +17,7 @@
 | `builders/build_alla_barra_styles.py` | Barra CNE6 风格因子原始暴露面板（简化版）→ all_a_2018_2026/panels_barra/。 |
 | `builders/build_alla_constructed_factors.py` | 构造型基本面因子族（B++）→ 并入 all_a_2018_2026 数据集。 |
 | `builders/build_alla_disc_holder_dyn.py` | 大宗折价率 + 股东明细动态因子 → 并入 all_a_2018_2026 数据集。 |
+| `builders/build_alla_ev_rd_factors.py` | EV 分母价值因子 + 研发加回盈利因子（华泰 AI95 两项数据改造，P0 增量）。 |
 | `builders/build_alla_event_factors.py` | 全A事件驱动短周期因子面板（evt 族）→ 并入 all_a_2018_2026 数据集。 |
 | `builders/build_alla_factor_neutralized.py` | 预计算全注册因子的因子层中性化面板（#3 优化）。 |
 | `builders/build_alla_factor_neutralized_fundind.py` | E5 变体：基本面族「只对行业中性化」的面板变体（TODO_ARCHIVE 册Ⅲ 批次 6）。 |
@@ -34,6 +35,7 @@
 | `builders/build_replica_factors.py` | 研报复现专用个股因子构建（只在 `reports/report_replica/` 落盘，不进 920 因子库）。 |
 | `builders/common.py` | 全A builder 共用件（2026-09-11 自 11 个 build_alla_* builder 收敛）。 |
 | `builders/fetch_alla_history.py` | 全A历史数据回填（2015~now）——分批断点续拉版。 |
+| `builders/industry_context.py` | 申万一级行业上下文：PIT 行业归属 + 自由流通市值权重 + 调仓日 |
 | `builders/run_evt_margin_build.py` | 事件/两融/资金流数据回补 + 因子构建编排器（串行，防止 SDK 单连接竞争）。 |
 
 ## common
@@ -44,7 +46,7 @@
 | `common/atomic_io.py` | 原子写面板 + 抗瞬时文件占用（Windows 原生锁）。 |
 | `common/cli_common.py` | 脚本层公共 CLI 骨架 |
 | `common/fundamental_common.py` | 财报长表的 TTM / 单季拆解公共函数（2026-09-11 收敛）。 |
-| `common/portfolio_common.py` | 跨实验脚本共享的组合 / 模型编排组件（无 CLI 入口） |
+| `common/portfolio_common.py` | 跨实验脚本共享的组合编排组件（无 CLI 入口） |
 | `common/power.py` | 任务运行期间请求系统保持唤醒（**在本机 S0 连接待机下无效，见下**）。 |
 | `common/task_scheduler.py` | Windows 计划任务注册收口 + 调度体检（单一真源）。 |
 
@@ -56,18 +58,17 @@
 | `data_tools/dump_pdf_text.py` | 把研报 PDF 抽成带页码标记的纯文本，便于按关键词定位口径参数。 |
 | `data_tools/fix_meta.py` | 修复 e:/data/parquet/_meta.json：对齐实际日期 + 补文本表 + 加 pool 口径。 |
 | `data_tools/gen_scripts_index.py` | 生成 ``scripts/README.md`` 入口索引（2026-10-19 审计 ③）。 |
+| `data_tools/memory_lint.py` | 记忆层治理校验（memory_lint，2026-11-03）。 |
+| `data_tools/new_experiment.py` | 新建实验目录：一条命令完成「建目录 + 复制模板 + 登记判定」。 |
 
 ## evaluation
 
 | 脚本 | 说明 |
 |---|---|
 | `evaluation/backtest_two_periods.py` | sig_composite_pca 两时段样本外回测：2025 全年 vs 2026 上半年。 |
-| `evaluation/blend_verdict_920.py` | 慢腿权重 λ **正式裁决**（2026-11-07）：0.05 步长密集网格 + **预注册七门**（收益/风险/回撤/逐年/换手/平台/可分辨）+ 费率 ×1/×2/×3 敏感性；七门写死在 `GATES` 里先定后看，产物 `lam_dense.csv` / `gate_check.csv` / `cost_sens.csv` |
-| `evaluation/blend_weight_920.py` | 定版信号快慢融合权重 λ 网格（h1020 底座，2026-11-06）：补上历史只在 `ens_h1h5` 扫过、投产底座只测过一个点的缺口；锚 λ=0.5 逐位自检。装配抽成 `build_ctx()` / `run_arms()` 供裁决脚本复用（同一份快慢信号+执行切分+成本，避免两处口径漂移）。 |
-| `evaluation/horizon_verdict_920.py` | h20-only 正式裁决（2026-11-06）：把 horizon 维搬到**生产壳**（buffer 15/40 + T+1 open）并与慢腿组合，**门槛写死在 `GATES` 里先定后看**；含 naive 壳对拍（复现归档口径）、horizon×λ 2×2 因子格、锚 `h1020_s0.5` 逐位自检。 |
-| `evaluation/vol_target_920.py` | 目标波动 overlay 在定版信号上复验（2026-11-06）：含**恒定仓位对照臂**，用来把「长期半仓」的水平效应与择时信息效应拆开；锚满仓逐位自检。 |
+| `evaluation/blend_verdict_920.py` | 定版信号慢腿权重 λ 的正式裁决：0.5 要不要动。 |
+| `evaluation/blend_weight_920.py` | 定版信号「快慢融合权重」λ 在**正确底座（h1020）**上的补齐扫描。 |
 | `evaluation/buffer_arm_920.py` | 批次 1.4：定版信号（h1020）的 buffer(20/30) 臂 vs naive top20。 |
-| `evaluation/buffer_tune.py` | 执行阻尼实验：排名缓冲带 vs 硬切 Top20%（2026-09-01） |
 | `evaluation/caliber.py` | 统一评估口径 —— 全项目**唯一真源**（2026-10-13 建立）。 |
 | `evaluation/capacity_table.py` | 组合层容量表：集中度 × AUM（统一口径，2026-10-13）。 |
 | `evaluation/cheap_lever_revalidate.py` | cheap_lever_scan 候选的多窗口复验（2026-10-14）。 |
@@ -75,13 +76,21 @@
 | `evaluation/chip_behavior_probe.py` | 筹码 / 处置效应 / 凸显理论：现有算子造廉价近似，先证残差有没有空间（2026-10-27）。 |
 | `evaluation/cost_penalty_probe.py` | 成本感知优化探针（P0-2，2026-10-13）。 |
 | `evaluation/cpcv_eval.py` | CPCV 多路径评估 —— 挖因子方法选型决策工具。 |
-| `evaluation/cpcv_h1_eval.py` | h=1 模型 CPCV 无偏评估 |
 | `evaluation/cvar_arm_920.py` | 批次 12⑤：CVaR 约束组合臂 vs Top10% 等权 vs buffer 形态（production 口径）。 |
+| `evaluation/daily_survivorship_probe.py` | 日频策略幸存者偏差对照 —— 同一因子、同一执行，只换评估池。 |
 | `evaluation/deliverable_portfolio.py` | 可交付组合：集中度 × 行业约束（P0 落地，2026-10-10 固化）。 |
-| `evaluation/factor_half_life_probe.py` | 因子信息半衰期探针（2026-11-11）：算 952 个中性化因子的 h∈{1,5,10,20} 截面 IC。🔑 **先跑 `--from-library`**（**0.5 秒**，直读因子库现成的 `ic_h*.parquet`，只支持 G0/G1/G2 三关）；需要 t 值/非重叠对照才重算（8 worker 37 分钟，断点续跑），那版用**定向配对差** `sign(ic_h20)×(ic_h5−ic_h20)`，并落 v1 带符号差 / v2 逐日绝对值差两列作诊断（**v2 已证为方差假象**：`E\|IC_t\|≈σ√(2/π)` ⇒ 必须用定向差）。两版产物分开存、**不可混用**（库版 `stride 3` 只取 1/3 票 + 不同 close_adj，复权价差 3.5%）。产物 `reports/factor_half_life/` |
-| `evaluation/factor_half_life_verdict.py` | 半衰期**判定**（读上一行的 CSV，不重算 IC）：181 族去重 + BH-FDR + **G0 方差假象守卫**（`\|corr(d,Δstd)\|>0.70` 判假）+ G1 符号检验（主判据，二项不依赖重叠结构）+ G2 中位数 + G3 族覆盖 + G4 非重叠符号。产出 `verdict.json`（判定真源）。改门槛须同步改 `reports/factor_half_life/README.md` §三 |
+| `evaluation/dup_caliber_probe.py` | 判重口径探针：同一批因子在三种相关口径下到底有多像。 |
+| `evaluation/ev_rd_backtest.py` | EV / 研发 四因子的组合层验证：IC 好不等于赚钱。 |
+| `evaluation/ev_rd_validate.py` | EV 分母 / 研发加回 四个候选因子的三段式 + 增量检验。 |
+| `evaluation/exec_phase_probe.py` | 成交日相位：能不能把成交提前到「当月第 1 个交易日开盘」。 |
+| `evaluation/factor_half_life_probe.py` | 因子信息半衰期探针：有没有一批因子在「周频尺度」上显著更强？ |
+| `evaluation/factor_half_life_verdict.py` | 因子信息半衰期的**判定**（读 `factor_half_life_probe` 的 CSV，不重算 IC）。 |
+| `evaluation/factor_library_diversity.py` | 因子库有效独立维度（n_eff）度量：判断"挖出很多因子"里有多少是新的。 |
 | `evaluation/factor_pool_composition.py` | 因子池构成体检：量价占比到底多少、口径在哪、哪些族是真被用上了。 |
-| `evaluation/freq_tune.py` | 调仓频率补充精修：horizon ∈ {1,5} × rebalance ∈ {D,W,M} |
+| `evaluation/focus_holding_probe.py` | 持仓数与持仓权重探针 —— `yqcore-focus-k15` 能压到几只、权重该不该动。 |
+| `evaluation/focus_micro_probe.py` | 小资金（10 万）整手实跑选型 —— K × 缓冲带 × 行业去重 × 仓位。 |
+| `evaluation/focus_sector_probe.py` | focus + 行业去重（每申万一级 ≤N 只）的生产口径完整评估。 |
+| `evaluation/focus_upgrade_probe.py` | 集中档信号选型探针 —— horizon 集 × 稠密 K 网格 × IS/OOS 切分。 |
 | `evaluation/fundamental_blend.py` | E3 基本面慢信号 ⊕ 快信号双层融合（信达式分域建模 + 预测层 λ 加权）。 |
 | `evaluation/fuse_placebo.py` | 融合增益的**安慰剂检验**：区分「真信号」与「覆盖率掩码 / 暴露」假象。 |
 | `evaluation/galaxy_l1.py` | 银河 0608 复现 L1：三标签 GBDT + 验证集 RankIC 质量门槛（stage2 Phase 2 前置）。 |
@@ -90,77 +99,101 @@
 | `evaluation/horizon_cross_eval.py` | A1 同目标交叉评估 + 组合层对照（2026-10-19）。 |
 | `evaluation/horizon_mix.py` | E1'' horizon 混合消融：把慢 horizon OOS 预测混入 ens_h1h5 的对照实验。 |
 | `evaluation/horizon_probe.py` | Horizon 探针：主信号在 h1–h120 上的 IC 衰减与独立样本数（2026-10-19）。 |
+| `evaluation/horizon_verdict_920.py` | 定版 horizon 结构的正式裁决：h20-only 该不该取代 h1020 坐上快信号腿。 |
 | `evaluation/hp_search_ic.py` | 超参 × 预测 IC 小规模对照（**滚动口径**，只比预测 IC，不跑组合回测）。 |
 | `evaluation/hp_sensitivity.py` | 模型层超参敏感度探针（P2）。 |
 | `evaluation/index_enhance_probe.py` | B1 探针：现有 α 能不能在**中证500 成分约束下**做出可投的指数增强？ |
 | `evaluation/intraday_analysis.py` | 日内收益分解 + 时段效应分析 |
+| `evaluation/intraday_composite_probe.py` | im_ 因子复合的方向纠错 —— 上一轮「复合更差」是实现 bug 还是真结论。 |
+| `evaluation/intraday_daily_probe.py` | 日内因子日频组合探针 —— 期限对齐：h1 信号 × 持有 1 天。 |
 | `evaluation/jq_factor_probe.py` | 聚宽因子看板候选探针（2026-10-26）。 |
-| `evaluation/top10_sharpe_eval.py` | 「中国因子十强」增量检验：残差 IC / 全库去重 / 控最相似因子 / 月度多空（2026-11-02）。 |
 | `evaluation/market_direction_probe.py` | 大盘方向准入检验：**新信息集**能不能预测下月沪深300？ |
 | `evaluation/member_blend12.py` | 多模型×多标签预测合成对照（Task ⑥ / AI29·国金19 语义）。 |
-| `evaluation/mf10_t_scan.py` | 多因子10 T 扫描：合成权重回看窗 T 的参数敏感性实验（研报 §2.1 口径）。 |
 | `evaluation/model_objective_scan.py` | P2 —— 模型层「目标函数 / 样本权重」扫描。 |
 | `evaluation/model_state_probe.py` | 模型自诊断仓位探针（"信号自身状态 → 仓位乘数"）。 |
-| `evaluation/multiyear_oos.py` | 多年度 OOS 稳健性实验：模型 × horizon × 调仓频率 × 年份 |
 | `evaluation/network_centrality_probe.py` | 跨股票网络中心度：P1 探针（算子空间造不出的那一类，2026-10-27）。 |
 | `evaluation/news_alpha_probe.py` | news 族独立建模 + 可交易口径验真伪 + 组合层融合（2026-10-10，P0 路径）。 |
 | `evaluation/pbo_report.py` | 实验产物接 PBO 出报告（TODO_ARCHIVE 册Ⅰ §二；华泰 AI19/22 方法论落地）。 |
 | `evaluation/pead_alpha_probe.py` | 业绩预告 / 快报事件因子探针（P0 新信息源：PEAD / SUE 口径）。 |
+| `evaluation/pool_ic_diagnose.py` | 分池 IC 诊断 —— 解释「为什么信号在指数池上衰减」。 |
 | `evaluation/pool_maxcorr_probe.py` | 新因子 vs 生产池：最大截面相关扫描（判「是不是老东西换皮」，2026-10-27）。 |
+| `evaluation/pool_scope_probe.py` | 股票池范围探针 —— 同一选股信号在 hs300 / zz500 / zz1000 / zz2000 上的业绩。 |
 | `evaluation/portfolio_weighting.py` | 组合层权重对照（P1）：等权 vs 波动率倒数加权 vs 风险平价。 |
 | `evaluation/prod_baseline_compare.py` | P1b —— 生产基线同口径复验：定版因子 gbdt vs alpha360 gbdt / GRU。 |
 | `evaluation/pv_marginal_curve.py` | 量价因子边际增益曲线 —— 阶段 B（DPP 组合口径）。 |
+| `evaluation/rd_overlay_probe.py` | `rd_to_cap`（研发强度）的生产口径叠加验证 —— P0。 |
+| `evaluation/rebalance_granularity_probe.py` | 调仓粒度探针：solo 档的信息半衰期 + 换手预算（P0 / P1）。 |
+| `evaluation/rebuild_impact_920.py` | 重建前后影响对比：把「重建会改多少」变成可判定的数（2026-11-07）。 |
 | `evaluation/regime_probe.py` | Regime 条件化探针（Phase 0/2 前置诊断，2026-10-15）。 |
 | `evaluation/residual_ic_probe.py` | 残差目标探针：现有 920 因子池里还有没有「主模型漏掉」的正交信息（2026-10-19）。 |
 | `evaluation/residual_overlay_probe.py` | A2 残差负向因子 → 组合层剔除/低配 overlay 探针（2026-10-19）。 |
 | `evaluation/residual_stack_probe.py` | A2 二阶 GBDT：残差收益目标 walk-forward + 融合组合层（2026-10-19）。 |
 | `evaluation/retrain_freq_ic.py` | 重训频率 × 预测 IC 小规模对照（只比预测 IC，**不跑组合回测**）。 |
+| `evaluation/rtl_phase_tiers.py` | 三档 21 相位（RTL）补齐 —— focus / breadth 的相位风险有多大。 |
+| `evaluation/rtl_placebo_phase.py` | 行业去重安慰剂：跨相位重跑（原安慰剂只在 phase=0，无法排除相位选择偏差）。 |
+| `evaluation/rtl_probe.py` | 调仓时点运气（Rebalance Timing Luck, RTL）—— 相位极差的文献口径复现。 |
+| `evaluation/rtl_variant_extra.py` | `rtl_variant_probe` 的补充：换年度轴复核行业去重，并量化分腿能降多少 RTL。 |
+| `evaluation/rtl_variant_probe.py` | 行业去重的增益在多相位下是否还在 —— 以及哪个变体 RTL 最小。 |
 | `evaluation/sdk_table_audit.py` | B2 一次性审计：SDK 未用表（ETF 份额 / 指数日权重 / 可转债 / 期权 / 国债）。 |
+| `evaluation/sector_constraint_tier.py` | 行业约束（每申万一级 ≤N 只）放在**哪个档位**才值钱 —— 七臂 × 相位。 |
+| `evaluation/sector_dedup_probe.py` | 行业去重：逻辑检验 + 不去重的效果对比（五臂权衡）。 |
+| `evaluation/sector_risk_probe.py` | 行业集中度约束：从「标签去重」升级为「风险同源去重」（2026-11-11）。 |
 | `evaluation/select_horizon_features.py` | A1 长 horizon 特征清单选择器：h60 IC 质量窗 + DPP 去冗余（2026-10-19）。 |
 | `evaluation/seq_predictor_compare.py` | P1 —— 时序预测器对照：序列归纳偏置 vs 截面/树归纳偏置。 |
+| `evaluation/solo_freq_probe.py` | 周频可行性 —— 小资金 solo 方案换调仓频率后，参数量是否需要重估。 |
+| `evaluation/solo_live.py` | yqcore-focus-k8 生产持仓生成器（2026-11-10 建立）。 |
+| `evaluation/solo_signal_probe.py` | solo 档的**周期组合**再检验：在 solo 真实执行层下重做 horizon 消融。 |
+| `evaluation/sop_timing_probe.py` | SOP 收益分解择时（P1）：文献唯一通过多重检验的方法，本地化测试。 |
 | `evaluation/stack_blend.py` | E6 stacking：滚动元学习器**学**融合权重（对齐 CFA ensemble / MSIF-OEM 两阶段 |
 | `evaluation/tabfm_rolling.py` | 批次 8：表格基础模型全量滚动对照（TabPFN-3 / TabICL V2 vs LightGBM）。 |
 | `evaluation/tabpfn_rolling_compare.py` | 批次 8：表格基础模型对照（TabPFN-3.5 / TabICL 2.2 vs LightGBM）滚动 runner |
 | `evaluation/text_factor_probe.py` | 论文族 `pap_*` / 情绪族 `txt_*` 的生产口径收尾评估（P0）。 |
+| `evaluation/tier_sector_concentration.py` | 三档形态的**行业集中度 vs 个股集中度**逐调仓日截面诊断。 |
+| `evaluation/timing_conditioned_probe.py` | 条件化月频择时（P0）：复现并本地化「newsy 月」结构。 |
+| `evaluation/timing_daily_train_probe.py` | 日频训练 → 月频策略上的择时乘数（第三个格子）。 |
 | `evaluation/timing_probe.py` | 大盘择时（市场状态 → 仓位乘数）探针。 |
-| `evaluation/timing_daily_train_probe.py` | 择时第三格：**日频训练 + 月频执行**（含 R²/命中率/错位诊断、恒定仓位对照、安慰剂）。 |
-| `evaluation/timing_conditioned_probe.py` | P0 条件化择时：**newsy 月（A股 `{4,8,10}`）** × 12 月动量交互（复现 Guo 2025）。含基准自洽守卫、12-seed 噪声守卫、恒定仓位对照、安慰剂。 |
-| `evaluation/sop_timing_probe.py` | P1 **SOP 收益分解**（复现 Ferreira-Santa-Clara 2011）：`D/P + ΔE/E`，零自由参数。含分红/净利 TTM 量级守卫、**量纲守卫**（年化→月度）、循环平移置换。 |
-| `evaluation/solo_signal_probe.py` | **solo 真实执行层下的周期组合再检验**（14 臂 × 8 格 × 6 相位）：A 组 = 行业去重+整手100+1e5（solo 实际形态），B 组 = 无行业约束+无整手+1e6（复现 `focus_upgrade` 原裁定，逐位一致守卫）。含「构造 vs 落盘 ρ>0.99」守卫、逐相位配对、跨格胜格数统计。结论：`mid13` **6/8 格第一**（K=10 两格被 `drop_h10` 反超）、两周期臂 **0/8**。⚠️ **IC 期限必须对齐持有期**：h=1 日频 IC 的 ρ(IC,组合)=−0.066（p=0.82，无关系，首版误读成"反向 −0.9"已撤），改为月频非重叠口径后 ρ=**+0.648（p=0.012，显著正）**；配对差 6 对里 4 对与组合同号，异号两对均落 IC 不显著带（`drop_h5`/`h20`）⇒ 月频 IC 只作第一道筛。 |
+| `evaluation/top10_sharpe_eval.py` | 十因子增量检验（复用 jq_factor_probe 的评估函数） |
 | `evaluation/views_arm_920.py` | 批次 12④：观点注入三臂对照（BL 优化层 vs 预测层 vs 不注入）。 |
+| `evaluation/vol_target_920.py` | 定版信号上的「目标波动」仓位 overlay 复验（风控层，production 口径）。 |
 | `evaluation/walk_forward.py` | 三段样本外验证（walk-forward）：train 挖 → valid 选 → test 验 |
 | `evaluation/walk_forward_model.py` | 模型层滚动训练 —— Predictor 的 walk-forward 编排 |
+| `evaluation/yearly_breakdown.py` | 分年拆解 —— 策略 / 基准 / IC 的逐年表现，用于解释某一年为什么异常。 |
+| `evaluation/yq_core_report.py` | `yqcore` 族（YQ 核心）产品线报数脚本 —— 三档的统一口径对照 + 净值曲线。 |
 
 ## factors
 
 | 脚本 | 说明 |
 |---|---|
-| `factors/backfill_library.py` | 因子库体检（`--dry-run`）+ 并行补 canonical 评估（`--evaluate`，分块/可续跑）+ 死因子标 `--mark-invalid`；`--force`/`--no-mask`/`--mask-lag`/`--recompute-ic` 用于口径迁移与 A/B（2026-11-02 / 11-04） |
+| `factors/audit_panel_window.py` | 按**定版回测窗口**核对因子库每个成员的面板覆盖（只读）。 |
+| `factors/backfill_library.py` | 因子库回填：体检（dry-run）+ 并行补 canonical 评估。 |
+| `factors/backfill_library_metrics.py` | 因子库指标批量回填：canonical 分层回测 + 显著性 + 路径/公式/族标签（维护工具）。 |
+| `factors/backfill_metadata.py` | registry 元数据回填：``formula`` 与 ``family``（只补空缺，不动任何统计列）。 |
 | `factors/build_alpha_factors.py` | 公开经典因子集（Alpha101 / GTJA Alpha191）→ 构建入库 |
 | `factors/build_fundamental_factors.py` | 基本面因子构建与入库（价值/质量/成长/规模） |
 | `factors/build_intraday_factors.py` | 日内特征 → 日频因子构建与入库 |
 | `factors/build_intraday_stat_factors.py` | 分钟统计特征 → 因子库体检入库（降维路线第一层） |
 | `factors/build_minute_panel.py` | 分钟面板构建入口 |
-| `factors/build_paper_factors.py` | 论文复现因子构建与入库（awesome-systematic-trading 21 式）；`--only`/`--keep-from` 支持单因子全历史重建（**必须显式传 `--begin/--end`**，否则走 `DEFAULT_RANGES["offline"]`=2025 单年，11-12 事故） |
-| `factors/sync_factor_artifacts.py` | **入库后补齐三件套**：`registry.coverage` → 中性化面板 → `ic_h{h}` 列 → `ic_mean_h*`。走 `FactorLibrary.register` 登记的因子没有 neu 面板与 ic 列，看着在库却进不了定版链（12 个 `pap_*` 卡了整轮）；`--fundind-names` 指定只剥行业的口径（2026-11-12） |
-| `factors/audit_panel_window.py` | **按定版窗口核对面板覆盖**（只读）：`registry.coverage` 是「全历史×全代码格点」，分母含未上市代码，答不了「窗口里够不够用」。本脚本查①日期覆盖（缺头/只覆盖一小段）②**有效值覆盖**（分母=当日有行情的股票，排除「索引全、值全空」）。12 个 pap 只覆盖 2025 就是①查出来的；`alpha101_096`（每日中位 1 只）之类是②查出来的。产物 `reports/library_governance/panel_window_coverage.csv`（2026-11-12） |
-| `factors/build_top10_factors.py` | 「中国因子十强」（JKP 口径）11 个因子的复现与入库（独立数据集，2026-11-02） |
-| `factors/dup_audit.py` | 全库冗余审计（签名→相关矩阵→重复簇→registry 回填）；`--reuse` 复用矩阵只重写报告、`--apply` 回填、`--query` 查某因子最像谁（2026-11-03；**11-12 修簇代表退化**——`sharpe_ls_M` 全空时改按 `\|ic_mean_h20\|` 选，原先退化成字母序） |
-| `factors/library_dedup_plan.py` | 去重**决策表**（只出清单不删）：贪心最大独立集 + 残差增量门槛 + 定版 selection 依赖，出 `safe_drop`/`review`/`keep_prod` 五类动作（2026-11-12） |
-| `factors/library_dedup_apply.py` | 去重**执行层**：把 `safe_drop` 从 registry **退登记**（面板/evals/ic 列全保留）；三重校验 + 备份 + 幂等 + `--rollback <batch_id>` 回滚。默认 dry-run（2026-11-12，实跑 950→821） |
-| `factors/dup_precheck.py` | **入库前**冗余预检（只读）：给 `--name`/`--names`/`--panel`，出 top-k 近邻 + 残差 IC/NW t + 判定；`\|ρ\|≥--reject-rho` 时退出码 2 可卡 CI。耗时 0.15~0.41 s（ρ<0.85）/ 8~13 s（疑似重复） |
-| `evaluation/dup_caliber_probe.py` | 判重**口径探针**：同一批因子在 `panels/`、`panels_neu_fundind/`、`ic_h20` 三口径下的相关一致性（11-12 实测秩一致 0.993 / 移植率 92.1%，证明判重层无需改） |
-| `factors/backfill_metadata.py` | registry `formula`/`family` 回填（2026-11-07）：`family` 走库内 `SET_TO_FAMILY`、`formula` 填**定义引用**（alpha 论文编号 / E4 组内 zscore / LLM-MCTS 原始公式 / 兄弟库手写定义 / label 自带定义式）；只补空缺、集级护栏（族标签已人工细化的集不提案）、默认 dry-run，`--apply` 写盘后自检 59 个统计列零漂移 + 不许造行 |
-| `factors/promote_maturity.py` | 成熟度晋升：按 `MATURITY_GATES` 九道门把库分成 `active`/`oos_verified`/`experimental`/`retired`，做「相关 <0.85 + 同族 ≤2」双闸去重；默认 dry-run，`--apply` 写回，`--gate k=v` 做敏感性扫描（2026-11-05） |
+| `factors/build_paper_factors.py` | 论文复现因子构建与入库（awesome-systematic-trading 21 式） |
 | `factors/build_technical_factors.py` | 技术面迭代/累积类指标 → 日频因子构建与入库 |
+| `factors/build_top10_factors.py` | 「中国因子十强」复现与统一评估（JKP 口径榜单，2026-11-02） |
+| `factors/dup_audit.py` | 全库冗余审计：一次性算清 965 个因子的两两截面相关，并把结论写回 registry。 |
+| `factors/dup_criteria.py` | 因子重复性判据——**全仓唯一真源**。 |
+| `factors/dup_precheck.py` | **登记前**冗余预检：这批因子该不该进库，先看一眼它最像谁。 |
+| `factors/factor_board_data.py` | 因子看板数据层：为因子库里每个因子算「分位组合净值 + IC 序列 + 行业 IC」。 |
 | `factors/factor_library.py` | 因子库 CLI |
+| `factors/formula_extract.py` | 从 factor/ 源码反解析因子的**可读公式**，供 registry ``formula`` 列与看板展示。 |
+| `factors/library_dedup_apply.py` | 库内去重的**执行层**：把决策表的 ``safe_drop`` 从 registry 退登记。 |
+| `factors/library_dedup_plan.py` | 因子库去重决策表：把「相关 → 质量 → 生产依赖」三条判据并成一张可拍板的清单。 |
 | `factors/mine_factors.py` | 因子挖掘 CLI |
-| `factors/mine_im_combos.py` | 第二层：im_* 统计特征之上的 GP 组合公式挖掘（降维路线主产出） |
+| `factors/panel_leak_audit.py` | 全库面板前视体检（只读）：把「哪几块面板还在用未来数据」从猜测变成清单。 |
+| `factors/panel_leak_audit_diff.py` | 把两次体检的 CSV 放到**同一套判据**下重判，输出可比的前后对照。 |
+| `factors/promote_maturity.py` | 成熟度晋升：把 :data:`research.factor_library.MATURITY_GATES` 落到全库。 |
 | `factors/run_alphapool_ppo.py` | 华泰 AI97《大模型+强化学习因子挖掘》—— AlphaPool + MaskablePPO 训练入口 |
 | `factors/run_gflownet_phase1.py` | GFlowNet Phase 1：真实 HS300 对齐研报 |
 | `factors/run_llm_mcts.py` | 东吴 LLM-MCTS 因子迭代 Phase 0 —— 同题四引擎对照 runner |
 | `factors/run_portfolio_phase2.py` | stage2 Phase 2：zz1000 主实验（信号管线 + PPO 滚动集成 / 银河口径 QP / 基准）。 |
 | `factors/run_portfolio_ppo.py` | stage2 Phase 1：hs300 平价验证（PPO vs QP vs 等权基准 vs TopN）。 |
+| `factors/sync_factor_artifacts.py` | 入库后补齐「三件套」：中性化面板 + ic_h 列 + registry 统计。 |
 | `factors/synthesize_factors.py` | 多因子合成 CLI |
 | `factors/synthesize_library.py` | 从因子库加载 raw 因子 → 四种合成 → 评估对比 + 入库（带血缘） |
 
@@ -176,12 +209,25 @@
 | `ingest/update_etf_flow.py` | ETF 资金流 / 净值数据更新脚本 |
 | `ingest/update_sw_industry.py` | 更新申万一级行业指数日线（31 条，1999-12 起） |
 
+## live
+
+| 脚本 | 说明 |
+|---|---|
+| `live/show_holdings.py` | yqcore-focus-k8 持仓查询（只读，随时可跑） |
+| `live/yqcore.py` | yqcore-focus-k8 生产入口：出榜 / 看持仓，两个独立子命令 |
+
 ## model_train
 
 | 脚本 | 说明 |
 |---|---|
 | `model_train/decomp_dl_industry.py` | 诊断「个股预测聚合到行业后 IC 归零」：是信息不存在，还是聚合口径丢掉了？ |
-| `model_train/diag_raft_weight.py` | RAFT 式训练样本加权裁决探针（全A 主模型）：等权 / 时间衰减 / 状态相似度 λ 三族臂的折外 IC 配对检验（已判负，见 `reports/raft_weight/`）。 |
+| `model_train/diag_adaptive_window.py` | 「不固定窗口」到底能不能成立：三个前置前提的实测。 |
+| `model_train/diag_capacity.py` | 容量与真实成本诊断：把「10bp」这个假设换成按 AUM 估出来的成本。 |
+| `model_train/diag_daily_rebal.py` | 日频调仓诊断：既然「alpha 只活一天」，那把调仓频率提到每天能不能收到钱？ |
+| `model_train/diag_exec_timing.py` | 成交时点诊断：把行业因子的超额拆到「隔夜 / 日内 / 整周」三段上。 |
+| `model_train/diag_long_window.py` | 长窗腿：把「固定窗口选错了长度」这件事量化，并分辨 IC 增益与组合层拟合。 |
+| `model_train/diag_raft_knn.py` | RAFT 思路的轻量原型：行业层 k-NN 检索预测（不做 MLP，只看「检索本身有没有信息」）。 |
+| `model_train/diag_raft_weight.py` | RAFT 式样本加权在全A 主模型上的裁决探针。 |
 | `model_train/eval_dl_industry.py` | 把自训 GRU / TCN 个股预测聚合成行业因子，出 IC / 组合表 + 诊断报告。 |
 | `model_train/replica_deep.py` | 按研报 §2.1.1 训练 GRU / TCN 行业轮动深度学习因子（个股加权到行业）。 |
 
@@ -200,7 +246,7 @@
 | 脚本 | 说明 |
 |---|---|
 | `portfolio/compare_portfolio_methods.py` | 组合优化方法对比脚本（P2，2026-08-14） |
-| `portfolio/corr_sector.py` | 相关性行业归属面板（"长得像谁"）：β 残差相关 + 季度 PIT 刷新，配套与申万的重合率/迁移报告。 |
+| `portfolio/corr_sector.py` | 相关性行业归属面板（"长得像谁"）—— 构建 + 与申万标签的重叠率诊断 |
 | `portfolio/etf_breaker_h2h.py` | ETF 轮动 · 熔断触发后「降档五衡」能不能救：条件前瞻头对头 |
 | `portfolio/etf_breaker_probe.py` | ETF 轮动 · 熔断降仓实验：「回撤触 −15% 就减仓」到底划不划算 |
 | `portfolio/etf_champ_maxw_scan.py` | ETF 磐石（``champ``）· 单只权重上限 ``max_weight`` 扫描（相位平均口径）。 |
@@ -230,10 +276,10 @@
 | `portfolio/etf_weight_probe.py` | 权重层质疑核查（2026-10-29） |
 | `portfolio/etf_weight_source.py` | 收益来源分解：选标、集中、池子各自贡献多少（README §4.5）。 |
 | `portfolio/generate_signals.py` | 每日交易信号生成脚本（P3，2026-08-20） |
-| `portfolio/industry_neff_probe.py` | 31 个申万一级的「有效独立方向数」诊断：参与率 / 有效秩 / 零假设对照 / Top5 跨簇。 |
+| `portfolio/industry_neff_probe.py` | 31 个申万一级的「有效独立方向数」诊断（P0-1） |
 | `portfolio/industry_rotation.py` | 行业池轮动线（独立实验线，不与 ETF 三锋混跑）。 |
 | `portfolio/multi_period_backtest.py` | 多期组合执行回测脚本（P3，2026-08-20） |
-| `portfolio/neutralize_group_ab.py` | 分组哑变量 A/B：申万 / 相关性簇 / 随机分组安慰剂，看因子可交易 IC 变不变。 |
+| `portfolio/neutralize_group_ab.py` | 分组哑变量 A/B：申万行业 vs 相关性簇 vs 随机分组（P1-1） |
 | `portfolio/report_replica.py` | 研报复现线（国泰海通 2026-10-29《七维共振》）· 只做可行的部分。 |
 | `portfolio/run_etf_rotation.py` | ETF 轮动最小闭环回测脚本 |
 
@@ -244,15 +290,14 @@
 | `reporting/attribution.py` | 收益归因 CLI |
 | `reporting/build_daily_email_body.py` | 从出榜产物生成每日邮件正文（markdown + 配套 HTML）。 |
 | `reporting/build_monitor_seed.py` | 构造 monitor_production_ic 的生产口径历史种子面板（一次性，2026-10-17）。 |
-| `reporting/factor_explorer_report.py` | 交互式因子检测报告：时间段选择 + 来源筛选 + 指标排序 + 因子详情。 |
+| `reporting/factor_board.py` | 因子看板前端（仿聚宽因子库：列表页 + 因子详情页）。 |
 | `reporting/factor_dashboard.py` | 聚宽式因子看板：筛选 + 排序表 + 点行看详情（自包含 HTML）。 |
-| `factors/backfill_library_metrics.py` | 因子库指标批量回填：canonical 分层回测 + 显著性 + 路径/公式/族标签（维护工具）。 |
 | `reporting/factor_library_full_report.py` | 全因子库检验报告：821 个因子的标准检验汇总（自包含 HTML）。 |
-| `reporting/generate_report.py` | 一键端到端研究报告生成 |
 | `reporting/jq_style_report.py` | 最佳策略收益曲线页（聚宽模拟交易风格）——策略 vs 中证全指口径基准。 |
 | `reporting/md_to_email_html.py` | 日报 markdown → 邮件 HTML（内联样式，适配 163 / QQ / Gmail 等客户端）。 |
-| `reporting/monitor_performance.py` | 生产化监控调度 CLI —— 因子与模型预测的性能监控。 |
+| `reporting/model_performance.py` | 主模型回测表现页（净值 / 回撤 / 分年 / 月度热图，单文件 HTML）。 |
 | `reporting/monitor_production_ic.py` | 生产口径每日 IC / 风格暴露监控 CLI（全A · 定版 dingban · 2026-10-17 起）。 |
+| `reporting/picks_board.py` | 本期出榜解释页（为什么买这些）—— 接在模拟交易页之后。 |
 | `reporting/rolling_grid_report.py` | 全A滚动训练实验报告生成器：收益曲线 + 分年绩效 + 维度对比（自包含 HTML）。 |
 
 ## textmining
@@ -275,35 +320,3 @@
 | `textmining/train_fadt.py` | FADT 训练与因子构建（对齐华泰 AI 57 文本FADT选股） |
 | `textmining/train_fadt_bert.py` | BERT 版 FADT 训练（对齐华泰 AI 63 文本表示升级） |
 | `textmining/train_sue_txt.py` | SUE.txt 训练与因子构建（对齐华泰 AI 51 文本PEAD） |
-
-## 2026-10-19 归档（三类引用全零，无文档/产物引用）
-
-| 原路径 | 归档到 | 说明 |
-|---|---|---|
-| `scripts/common/e2e_common.py` | `scripts/archive/e2e_common.py` | HS300 时代 e2e 编排（数据/中性化/特征漏斗） |
-| `scripts/evaluation/ai97_pbo_report.py` | `scripts/archive/ai97_pbo_report.py` | AI97 PBO 报告（一次性） |
-| `scripts/evaluation/pv_marginal_quality.py` | `scripts/archive/pv_marginal_quality.py` | PV 边际质量探针（一次性） |
-| `scripts/evaluation/tabfm_head_portfolio.py` | `scripts/archive/tabfm_head_portfolio.py` | TabPFN/TabICL 头部组合验证 |
-| `scripts/evaluation/tabfm_head_study.py` | `scripts/archive/tabfm_head_study.py` | TabPFN/TabICL 头部诊断 |
-| `scripts/factors/phase2_ppo_diag.py` | `scripts/archive/phase2_ppo_diag.py` | Phase2 PPO 诊断 |
-| `scripts/factors/run_gflownet_phase0.py` | `scripts/archive/run_gflownet_phase0.py` | GFlowNet phase0 入口（已被 phase1 取代） |
-| `scripts/reporting/factor_correlation.py` | `scripts/archive/factor_correlation.py` | 因子相关性报告 |
-| `scripts/reporting/risk_decomposition_report.py` | `scripts/archive/risk_decomposition_report.py` | 风险分解报告 |
-| `scripts/evaluation/cheap_lever_probe.py` | `scripts/archive/cheap_lever_probe.py` | 廉价杠杆探针 |
-| `scripts/evaluation/impact_cost_probe.py` | `scripts/archive/impact_cost_probe.py` | 冲击成本探针 |
-| `scripts/evaluation/multihorizon_fusion_probe.py` | `scripts/archive/multihorizon_fusion_probe.py` | 多 horizon 融合探针 |
-| `scripts/builders/backfill_delisted_backward.py` | `scripts/archive/backfill_delisted_backward.py` | 退市股后复权回补 |
-| `scripts/builders/backfill_delisted_equity.py` | `scripts/archive/backfill_delisted_equity.py` | 退市股股本结构回补 |
-| `scripts/builders/backfill_delisted_kline.py` | `scripts/archive/backfill_delisted_kline.py` | 退市股 K 线回补 |
-| `scripts/builders/build_alla_e4_interaction_factors.py` | `scripts/archive/build_alla_e4_interaction_factors.py` | E4 交互因子构建 |
-| `scripts/builders/refetch_status_all_a.py` | `scripts/archive/refetch_status_all_a.py` | 全A状态重取 |
-| `scripts/factors/fetch_textmining.py` | `scripts/archive/fetch_textmining.py` | 文本挖掘数据拉取 |
-| `scripts/factors/gflownet_library_ingest.py` | `scripts/archive/gflownet_library_ingest.py` | GFlowNet 因子入库 |
-| `scripts/data_tools/cleanup_data.py` | `scripts/archive/cleanup_data.py` | 数据清理工具 |
-| `scripts/data_tools/split_zz1000.py` | `scripts/archive/split_zz1000.py` | ZZ1000 拆分工具 |
-| `scripts/textmining/build_enhanced_top25.py` | `scripts/archive/build_enhanced_top25.py` | 增强 Top25 构建 |
-| `scripts/textmining/build_rawtone_factor.py` | `scripts/archive/build_rawtone_factor.py` | 原始情绪因子构建 |
-| `scripts/textmining/encode_fadt_seg.py` | `scripts/archive/encode_fadt_seg.py` | FADT 分段编码 |
-| `scripts/textmining/evaluate_fadt_ablation.py` | `scripts/archive/evaluate_fadt_ablation.py` | FADT 消融评估 |
-| `scripts/textmining/fetch_all_a_backfill.py` | `scripts/archive/fetch_all_a_backfill.py` | 全A文本数据回补 |
-| `scripts/textmining/register_text_factors.py` | `scripts/archive/register_text_factors.py` | 文本因子入库 |

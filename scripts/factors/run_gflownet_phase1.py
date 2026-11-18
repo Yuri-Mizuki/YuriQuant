@@ -61,7 +61,7 @@ from factor.gflownet.net import TBPolicy  # noqa: E402
 from factor.gflownet.reward import RewardCache, make_reward_fn  # noqa: E402
 from factor.gflownet.selection import select_low_corr  # noqa: E402
 from factor.gflownet.tb import sample_formulas, sample_uniform, train_tb  # noqa: E402
-from scripts.archive.e2e_common import (  # noqa: E402
+from scripts.common.im_features import (  # noqa: E402
     FEAT_SOURCES,
     RAW_FEATURES,
     aligned_eval_masks,
@@ -111,7 +111,7 @@ OP_NAMES = [
 ]
 WINDOWS = (5, 10, 20, 30, 60)  # 研报 §2.2 为 5 个可选窗口；正文未列具体值，按华泰同族惯例补 30
 #: ``--feat-source raw`` 时的终端特征（= 改动前的行为）。启用 im 后实际特征集由
-#: :func:`scripts.archive.e2e_common.attach_im_features` 在 main 内动态给出。
+#: :func:`scripts.common.im_features.attach_im_features` 在 main 内动态给出。
 FEATURES = list(RAW_FEATURES)
 
 
@@ -129,8 +129,9 @@ def main():
                     choices=list(FEAT_SOURCES),
                     help="终端特征集来源：raw=6 原始量价（改动前行为）；"
                          "im_*=因子库分钟特征；raw+im_*=并用。见模块 docstring")
-    ap.add_argument("--im-dataset", dest="im_dataset", default="hs300_2022_2025",
-                    help="im_* 特征的因子库数据集名")
+    ap.add_argument("--im-dataset", dest="im_dataset", default=None,
+                    help="im_* 特征的因子库数据集名（启用 --feat-source im_* 时必填；"
+                         "不设默认值，避免静默读已归档的 hs300 库）")
     ap.add_argument("--keep-window", dest="keep_window", action="store_true",
                     help="启用 im 时不把评估段裁到 im 覆盖区间（会告警：不可比）")
     ap.add_argument("--eval-begin", dest="eval_begin", type=int, default=None,

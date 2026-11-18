@@ -312,7 +312,8 @@ _TESTS_ONLY_PRIVATE: set[tuple[str, str]] = {
     ("scripts.pipelines.alla_daily_rank", "_rank_average_single_day"),
     # 2026-09-18 T 扫描/PBO：窗口截断与平均秩是模块内部实现细节，
     # 白盒单测直连验证（防未来函数边界、并列秩取平均）。
-    ("scripts.evaluation.mf10_t_scan", "_usable_train_dates"),
+    # 2026-11-18：``scripts.evaluation.mf10_t_scan`` 随 HS300 时代下线删除，
+    # 该白盒用例同步移除（``stats.pbo._avg_rank`` 仍保留）。
     ("stats.pbo", "_avg_rank"),
     ("scripts.factors.mine_factors", "_apply_gtja_preset"),
     # 2026-09-11 把守卫改为**通用规则**后新暴露的测试白盒用例（生产侧已一并清干净）
@@ -353,8 +354,7 @@ _TESTS_ONLY_PRIVATE: set[tuple[str, str]] = {
     ("data.altdata.cninfo_holder", "_to_int_date"),
     # （2026-10-14 清欠：holder_dyn 的 _apply_lag/_rolling_sum_panel 已公开化为
     #  apply_lag/rolling_sum_panel —— 生产跨模块消费，白名单条目随之移除）
-    # e2e_backtest 归档（09-24 三口同裁）后 mock 链路测试改指 archive，钉子随路径
-    ("scripts.archive.e2e_backtest", "_enforce_caps"),
+    # e2e_backtest 已随 HS300 时代链路于 2026-11-18 下线，白名单条目同步移除
     # 2026-09-24 清欠：以下为守卫在 master 上的存量红灯（各会话白盒用例），
     # 逐条登记而非放行整文件——规则保持"白名单按 (模块, 私有名) 精确放行"
     ("factor.classic", "_rolling_zscore"),

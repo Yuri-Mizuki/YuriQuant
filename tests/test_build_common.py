@@ -58,7 +58,7 @@ def test_make_data_context_offline_defaults():
     _, _, begin, end, dataset = make_data_context(args)
     assert begin == 20250101
     assert end == 20251231
-    assert dataset == "hs300_2025"
+    assert dataset == "all_a_2018_2026"
 
 
 def test_make_data_context_override_dataset():

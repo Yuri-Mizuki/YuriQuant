@@ -420,28 +420,3 @@ def test_missing_pvalue_nw_is_backfilled(tmp_path):
     assert ((tbl["p_value_nw"] >= 0) & (tbl["p_value_nw"] <= 1)).all()
 
 
-def test_report_pipeline_shows_raw_and_fdr_side_by_side(tmp_path, monkeypatch):
-    """a 项：报告层**并排**展示 raw 与整库 FDR 计数，且不改默认判据。"""
-    from research import report_pipeline as rp
-
-    lib = _lib_with_factors(tmp_path)
-
-    class _Lib:
-        def __init__(self, dataset=None, root=None):
-            self._lib = lib
-
-        def list_all(self):
-            return self._lib.list_all()
-
-        def significance_table(self, q=0.05, exclude_model=True):
-            return self._lib.significance_table(q=q, exclude_model=exclude_model)
-
-    monkeypatch.setattr("research.factor_library.FactorLibrary", _Lib)
-
-    ctx = rp.ReportContext(dataset="tmpds", report_dir=tmp_path)
-    sec = rp.collect_factor_library(ctx)
-    assert sec is not None
-    assert "raw" in sec.html and "FDR" in sec.html
-    # 默认口径未被动过：raw 入口仍与 registry 的 significant 列一致
-    raw_default = lib.load_significant_features(correction="raw")
-    assert set(raw_default) <= set(lib.list_all()["name"])

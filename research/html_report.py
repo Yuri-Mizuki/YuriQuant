@@ -130,7 +130,7 @@ def _month_cell_style(v: float) -> str:
 # ===========================================================================
 # HTML 模板（CSS / JS）
 # ===========================================================================
-# 统一基础样式：多套报告（html_report / report_pipeline / 各脚本）共用，
+# 统一基础样式：多套报告（html_report / 各脚本）共用，
 # 单一实现。特定报告的个性化主题在 page(css=...) 覆盖。
 BASE_CSS = """
 body{font-family:-apple-system,"Segoe UI","Microsoft YaHei",sans-serif;margin:0;padding:26px 30px;background:#f6f7f9;color:#1f2430}
@@ -395,7 +395,7 @@ def render_table(
 ) -> str:
     """DataFrame → 可排序 HTML 表（thead/tbody 分离 + 表头 data-k 供排序 JS）。
 
-    统一 render_sortable_table 与 report_pipeline._df_to_html_table 的渲染逻辑。
+    统一各报告原先各自实现的「可排序表格」渲染逻辑（2026-11-18 收敛到唯一实现）。
     """
     pct_cols = set(pct_cols or [])
     color_cols = set(color_cols or [])

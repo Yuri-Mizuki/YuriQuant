@@ -348,7 +348,8 @@ def test_ic_max_no_lookahead_v_uses_last_snapshot(synth_parts):
 def test_ic_max_v_decision_point_follows_train_dates(synth_parts):
     """决策时点跟随 ``train_dates``：扰动训练段末之后的因子值不得改变权重。
 
-    2026-09-24 修复回归锚：``mf10_t_scan`` 形态 = 全时段面板 + train_dates，
+    2026-09-24 修复回归锚：T 扫描形态（全时段面板 + train_dates，原
+    ``mf10_t_scan``，该脚本 2026-11-18 随 HS300 下线删除），
     原实现恒取 ``panel.index[-1]``（= 测试段末）算 V 截面 → 09-16 的
     "决策时点截面"修复在该调用形态下未生效（前视换个位置回归）。
     """

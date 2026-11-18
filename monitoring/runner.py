@@ -1,9 +1,9 @@
 """监控编排 —— 扫描因子库 → 计算指标 → 触发告警 → 落盘账本 → HTML 报告。
 
-调度入口（scripts/reporting/monitor_performance.py）：
-- 单次：cron / Windows 计划任务每日调 ``monitor_performance.py --dataset ...``
-- 常驻：``monitor_performance.py --daemon 17:30``（stdlib 循环，无额外依赖）
-- ``next_run_time`` 为纯函数，跨零点正确，可单测。
+状态：HS300 时代监控链，**已停用**（``config/schedule.yaml`` 里 ``key: monitor`` 为 retired）。
+2026-11-18 起其 CLI 入口 ``scripts/reporting/monitor_performance.py`` 已下线冷归档，
+本模块只作为 ``monitoring.metrics`` / ``alerts`` 的编排参考保留，不再有生产入口。
+``next_run_time`` 为纯函数，跨零点正确，可单测。
 """
 
 from __future__ import annotations
