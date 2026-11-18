@@ -13,6 +13,12 @@ build/
 **/settings_local.yaml
 credentials*.yaml
 
+# 工具缓存（二进制，单机可重生成；.mypy_cache 达 20 MiB，误提交进库无法有效 diff）
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.screenshots/
+
 # IDE
 .vscode/
 .idea/
