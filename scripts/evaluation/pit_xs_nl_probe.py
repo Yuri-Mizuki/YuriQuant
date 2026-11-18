@@ -53,10 +53,10 @@ from scripts.common.cli_common import setup_logging  # noqa: E402
 from scripts.evaluation.pit_intraday_probe import (  # noqa: E402
     ONE_WAY_BP,
     OUT,
-    _orient,
     build_features,
     ic_stats,
     load_context,
+    orient,
     run,
     stats,
 )
@@ -244,7 +244,7 @@ def stage_portfolio_xs(feats: dict[str, pd.DataFrame], ind: pd.DataFrame,
         s = ic_stats(ic_of(feats[n], fwd))
         for tag, p in (("raw", feats[n]),
                        ("ind_diff", cross_variant(feats[n], ind, "ind_diff"))):
-            sig = _orient(p, s["ic"])
+            sig = orient(p, s["ic"])
             r = run(sig, fwd, top=top, cost_bp=ONE_WAY_BP)
             gs, ns = stats(r["gross"]), stats(r["net"])
             rows.append({"name": n, "variant": tag,
@@ -292,7 +292,7 @@ def stage_incremental(feats: dict[str, pd.DataFrame], fwd: pd.DataFrame,
                  rows[-1]["sr"] or 0.0, rows[-1]["turn"] or 0.0)
 
     # 基线：单因子全截面
-    add(f"single_{anchor}", _orient(feats[anchor], ics[anchor]))
+    add(f"single_{anchor}", orient(feats[anchor], ics[anchor]))
 
     # 锚因子 gate（无二级排序）—— 与 single 应等价，确认 gate 没走偏
     from scripts.evaluation.pit_intraday_probe import composite_2stage

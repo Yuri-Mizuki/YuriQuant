@@ -634,7 +634,7 @@ def _hold_table(rows: list[dict], total_mv: float | None = None,
     return "".join(out)
 
 
-def _topbar(active: str, generated: str) -> str:
+def topbar(active: str, generated: str) -> str:
     """四页共享顶栏；`active` ∈ {board, backtest, live, picks}。
 
     因子看板是另一个模块（`reports/factor_board/`），必须在这里也给入口，
@@ -715,7 +715,7 @@ def render_live_body(p: dict) -> str:
         for n, v, c, u in kpis)
 
     return f"""
-{_topbar('live', p['generated'])}
+{topbar('live', p['generated'])}
 
 <div class="subbar">
   <span class="title">{p['tier']} · 模拟交易</span>
@@ -934,7 +934,7 @@ def render_backtest_body(p: dict) -> str:
         stat_body += f"<tr><td>{label}</td>{tds}</tr>"
 
     return f"""
-{_topbar('backtest', p['generated'])}
+{topbar('backtest', p['generated'])}
 
 <div class="subbar">
   <span class="title">{p['tier']} · 历史回测</span>

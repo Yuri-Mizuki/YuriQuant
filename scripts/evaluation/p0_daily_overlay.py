@@ -64,9 +64,9 @@ from scripts.evaluation import caliber as cal  # noqa: E402
 from scripts.evaluation.pit_intraday_probe import (  # noqa: E402
     ONE_WAY_BP,
     OUT,
-    _orient,
     ic_stats,
     load_context,
+    orient,
 )
 from scripts.evaluation.pit_weekly_probe import (  # noqa: E402
     daily_ic,
@@ -116,7 +116,7 @@ def daily_leg(feats: dict[str, pd.DataFrame], fwds: dict[int, pd.DataFrame],
     """日频 Top10（H=1）净收益序列 + 指标，与 §三~§九 同口径。"""
     p = feats[name]
     ic = ic_stats(daily_ic(p, fwds[1]))
-    sig = _orient(p, float(ic["ic"]))
+    sig = orient(p, float(ic["ic"]))
     r = run_periodic(sig, fwds[1], hold=1, top=top, cost_bp=ONE_WAY_BP)
     st = _daily_stats(r["net"])
     return r["net"].dropna(), st
@@ -228,7 +228,7 @@ def stage_drop(rf: pd.Series, feats: dict[str, pd.DataFrame],
     p = feats[name]
     fwd1 = fwds[1]
     ic = ic_stats(daily_ic(p, fwd1))
-    sig = _orient(p, float(ic["ic"])).reindex(columns=ctx.pred.columns)
+    sig = orient(p, float(ic["ic"])).reindex(columns=ctx.pred.columns)
 
     rows = []
     for frac in fractions:
@@ -242,7 +242,7 @@ def stage_drop(rf: pd.Series, feats: dict[str, pd.DataFrame],
             if frac > 0 and dt in sig.index:
                 sv = sig.loc[dt].reindex(names).dropna()
                 if len(sv) >= 3:
-                    # 信号低的先剔（_orient 已保证值越大越好）
+                    # 信号低的先剔（orient 已保证值越大越好）
                     n_drop = int(round(len(names) * frac))
                     drop = sv.sort_values().index[:n_drop]
                     keep = [c for c in names if c not in set(drop)]

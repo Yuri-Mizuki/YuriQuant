@@ -55,10 +55,10 @@ if str(ROOT) not in sys.path:
 from scripts.common.cli_common import setup_logging  # noqa: E402
 from scripts.evaluation.pit_intraday_probe import (  # noqa: E402
     ONE_WAY_BP,
-    _orient,
     build_features,
     ic_stats,
     load_context,
+    orient,
 )
 
 log = setup_logging("pit_weekly_probe")
@@ -239,7 +239,7 @@ def main() -> None:
     # 🚨 必须定向：IC<0 是反转因子，直接「买最高分」等于买反了。
     # （第一版漏了这步，日频毛 −33.36% 与 §6.3 的 +47.21% 完全对不上——方向反了。）
     ic_anchor = float(base1.iloc[0]["ic"])
-    siga = _orient(feats[anchor], ic_anchor)
+    siga = orient(feats[anchor], ic_anchor)
     log.info("锚因子定向: IC=%.4f ⇒ %s", ic_anchor,
              "取负（反转）" if ic_anchor < 0 else "原样（延续）")
     rows = []
@@ -275,7 +275,7 @@ def main() -> None:
             continue
         sub = sub.reindex(sub["t"].abs().sort_values(ascending=False).index)
         best = sub.iloc[0]
-        sig_h = _orient(feats[best["name"]], float(best["ic"]))
+        sig_h = orient(feats[best["name"]], float(best["ic"]))
         res = run_periodic(sig_h, fwds[h], hold=h, top=args.top,
                            buffer_mult=args.buffer)
         g = stats_periodic(res["gross"], h)

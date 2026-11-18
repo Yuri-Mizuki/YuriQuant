@@ -36,9 +36,9 @@ import pandas as pd
 
 from factor.intraday_features import (
     MIN_BAR_FRAC,
-    _autocorr,
-    _bar_returns,
-    _n,
+    autocorr,
+    bar_returns,
+    n_obs,
 )
 
 #: IC 计算所需最少有效 bar 数（低于则当日该特征记 NaN）
@@ -165,7 +165,7 @@ def _range_efficiency(r: np.ndarray) -> np.ndarray:
     path = np.nansum(np.abs(r), axis=1)
     with np.errstate(invalid="ignore", divide="ignore"):
         out = net / path
-    return np.where(_n(r) >= _MIN_BARS, out, np.nan)
+    return np.where(n_obs(r) >= _MIN_BARS, out, np.nan)
 
 
 def _zero_cross_rate(r: np.ndarray) -> np.ndarray:
@@ -200,7 +200,7 @@ def _vol_stability(r: np.ndarray, groups: int = 6) -> np.ndarray:
     sd = np.nanstd(blocks, axis=1)
     with np.errstate(invalid="ignore", divide="ignore"):
         out = sd / mu
-    return np.where(_n(r) >= _MIN_BARS, out, np.nan)
+    return np.where(n_obs(r) >= _MIN_BARS, out, np.nan)
 
 
 def _updown_vol_ratio(r: np.ndarray) -> np.ndarray:
@@ -217,7 +217,7 @@ def _updown_vol_ratio(r: np.ndarray) -> np.ndarray:
         mu = np.sqrt(np.nansum(up, axis=1) / nu)
         md = np.sqrt(np.nansum(dn, axis=1) / nd)
         out = np.log(mu / md)
-    ok = (_n(r) >= _MIN_BARS) & (nu >= 3) & (nd >= 3) & (mu > 0) & (md > 0)
+    ok = (n_obs(r) >= _MIN_BARS) & (nu >= 3) & (nd >= 3) & (mu > 0) & (md > 0)
     return np.where(ok, out, np.nan)
 
 
@@ -239,7 +239,7 @@ def _vol_cluster(r: np.ndarray) -> np.ndarray:
     高 ⇒ 大波动之后还是大波动（GARCH 型记忆）。`shape_autocorr_l1`
     是 **r** 的自相关（方向记忆），这个是 **|r|**（幅度记忆），两回事。
     """
-    return _autocorr(np.abs(r), 1)
+    return autocorr(np.abs(r), 1)
 
 
 #: 非线性特征名 → 中文说明（入库/报告用）
@@ -273,8 +273,8 @@ def extract_nl_from_block(
     B = close.shape[1]
     idx = pd.to_datetime([str(d) for d in days], format="%Y%m%d")
     cols = list(codes)
-    r = _bar_returns(close, open_)
-    ok = _n(r) >= max(2, int(min_bar_frac * B))
+    r = bar_returns(close, open_)
+    ok = n_obs(r) >= max(2, int(min_bar_frac * B))
 
     def panel(a: np.ndarray) -> pd.DataFrame:
         return pd.DataFrame(np.where(ok, a, np.nan), index=idx, columns=cols, dtype=float)

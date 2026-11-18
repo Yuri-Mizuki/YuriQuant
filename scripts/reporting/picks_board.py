@@ -35,7 +35,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from scripts.reporting.yqcore_dashboard import _topbar, render_html
+from scripts.reporting.yqcore_dashboard import render_html, topbar
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFV = ROOT / "reports" / "alla_daily_defv"
@@ -441,7 +441,7 @@ def main() -> None:
     args = ap.parse_args()
 
     payload = build_payload(args.period)
-    body = _topbar("picks", payload["gen"]) + _BODY
+    body = topbar("picks", payload["gen"]) + _BODY
     html = render_html(payload, body, _JS, "本期出榜 · 选股解释")
     out = Path(args.out) if args.out else OUT
     out.parent.mkdir(parents=True, exist_ok=True)

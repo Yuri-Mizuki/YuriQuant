@@ -58,21 +58,21 @@ MIN_BAR_FRAC = 0.5
 # ----------------------------------------------------------------------
 # NaN 感知的向量化统计原语（沿 bar 轴，[D, B, C] → [D, C]）
 # ----------------------------------------------------------------------
-def _n(x: np.ndarray) -> np.ndarray:
+def n_obs(x: np.ndarray) -> np.ndarray:
     return np.isfinite(x).sum(axis=1)
 
 
 def _mean(x: np.ndarray) -> np.ndarray:
     with np.errstate(invalid="ignore", divide="ignore"):
-        return np.nansum(x, axis=1) / _n(x)
+        return np.nansum(x, axis=1) / n_obs(x)
 
 
 def _moments(x: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """返回 (m2, m3)：中心二阶/三阶矩（NaN 感知）。"""
     m1 = _mean(x)
     d = x - m1[:, None, :]
-    m2 = np.nansum(d * d, axis=1) / _n(x)
-    m3 = np.nansum(d ** 3, axis=1) / _n(x)
+    m2 = np.nansum(d * d, axis=1) / n_obs(x)
+    m3 = np.nansum(d ** 3, axis=1) / n_obs(x)
     return m2, m3
 
 
@@ -90,8 +90,8 @@ def _skew(x: np.ndarray) -> np.ndarray:
 def _kurt(x: np.ndarray) -> np.ndarray:
     m1 = _mean(x)
     d = x - m1[:, None, :]
-    m2 = np.nansum(d * d, axis=1) / _n(x)
-    m4 = np.nansum(d ** 4, axis=1) / _n(x)
+    m2 = np.nansum(d * d, axis=1) / n_obs(x)
+    m4 = np.nansum(d ** 4, axis=1) / n_obs(x)
     with np.errstate(invalid="ignore", divide="ignore"):
         return np.where(m2 > 0, m4 / m2 ** 2, np.nan) - 3.0
 
@@ -115,7 +115,7 @@ def _ols_trend(x: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return slope, r2
 
 
-def _autocorr(x: np.ndarray, lag: int) -> np.ndarray:
+def autocorr(x: np.ndarray, lag: int) -> np.ndarray:
     """lag 阶自相关（对日内均值中心化；NaN 成对跳过）。"""
     m1 = _mean(x)
     d = x - m1[:, None, :]
@@ -129,7 +129,7 @@ def _acf_disp(x: np.ndarray, max_lag: int = 5) -> np.ndarray:
     高频低频化文章的多阶自相关变体：单看某一阶会被噪声误导，取前几阶
     绝对值的均值刻画"序列是否长期扎堆"，对阶数选择不敏感。
     """
-    acs = np.stack([_autocorr(x, k) for k in range(1, max_lag + 1)], axis=0)
+    acs = np.stack([autocorr(x, k) for k in range(1, max_lag + 1)], axis=0)
     with np.errstate(invalid="ignore", divide="ignore"):
         return np.nanmean(np.abs(acs), axis=0)
 
@@ -151,7 +151,7 @@ def _ar1_resid_autocorr(x: np.ndarray) -> np.ndarray:
         db = np.where(W, b - mb[:, None, :], np.nan)
         slope = np.nansum(da * db, axis=1) / np.nansum(da * da, axis=1)
     resid = db - slope[:, None, :] * da
-    return _autocorr(resid, 1)
+    return autocorr(resid, 1)
 
 
 def _corr(a: np.ndarray, b: np.ndarray) -> np.ndarray:
@@ -254,7 +254,7 @@ def _segment_slices(bar_times: Sequence[str], period: int) -> list[np.ndarray] |
     return slices
 
 
-def _bar_returns(close: np.ndarray, open_: np.ndarray) -> np.ndarray:
+def bar_returns(close: np.ndarray, open_: np.ndarray) -> np.ndarray:
     """bar 内收益 [D, B, C]：首根 close/open-1，其余 close/prev_close-1。"""
     r = close[:, 1:, :] / close[:, :-1, :] - 1.0
     first = close[:, 0:1, :] / open_[:, 0:1, :] - 1.0
@@ -298,8 +298,8 @@ def _extract_inner(close, open_, high, low, volume, amount,
     def panel(a: np.ndarray) -> pd.DataFrame:
         return pd.DataFrame(a, index=idx, columns=cols, dtype=float)
 
-    r = _bar_returns(close, open_)
-    n_r = _n(r)
+    r = bar_returns(close, open_)
+    n_r = n_obs(r)
     ok = n_r >= max(2, int(min_bar_frac * B))  # 有效 bar 不足的当日置 NaN
 
     def guard(a: np.ndarray) -> np.ndarray:
@@ -375,8 +375,8 @@ def _extract_inner(close, open_, high, low, volume, amount,
                                                                     su + sd, np.nan)))
 
     # ---- 形态/自相关类 ----
-    out["shape_autocorr_l1"] = panel(guard(_autocorr(r, 1)))
-    out["shape_autocorr_l2"] = panel(guard(_autocorr(r, 2)))
+    out["shape_autocorr_l1"] = panel(guard(autocorr(r, 1)))
+    out["shape_autocorr_l2"] = panel(guard(autocorr(r, 2)))
     m1 = _mean(r)
     cross = (r[:, :-1, :] < m1[:, None, :]) & (r[:, 1:, :] >= m1[:, None, :])
     out["shape_crossing_cnt"] = panel(guard(cross.sum(axis=1).astype(np.float64)))
@@ -450,7 +450,7 @@ def _extract_inner(close, open_, high, low, volume, amount,
             # 占比 = 该 bar 量 / 当日总量。自相关对常数缩放不变，故占比化不改变
             # 相关系数，只统一 AR(1) 斜率与残差的量纲；跨截面可比性由 zscore 承担。
             vshare = volume / np.where(vsum[:, None, :] > 0, vsum[:, None, :], np.nan)
-            out["pv_volshare_autocorr_l1"] = panel(guard(_autocorr(vshare, 1)))
+            out["pv_volshare_autocorr_l1"] = panel(guard(autocorr(vshare, 1)))
             out["pv_volshare_acf_disp"] = panel(guard(_acf_disp(vshare)))
             out["pv_volshare_ar1_resid_acf"] = panel(guard(_ar1_resid_autocorr(vshare)))
             # ---- 量价耦合按涨跌方向拆分（混算会让两种机制相互抵消）----

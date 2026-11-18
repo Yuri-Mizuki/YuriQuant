@@ -68,9 +68,9 @@ if str(ROOT) not in sys.path:
 from scripts.common.cli_common import setup_logging  # noqa: E402
 from scripts.evaluation.pit_intraday_probe import (  # noqa: E402
     OUT,
-    _orient,
     ic_stats,
     load_context,
+    orient,
 )
 from scripts.evaluation.pit_weekly_probe import (  # noqa: E402
     daily_ic,
@@ -103,7 +103,7 @@ def sweep_one(p: pd.DataFrame, fwds: dict[int, pd.DataFrame], h: int,
     ic = ic_stats(daily_ic(p, fwds[h]))
     if not ic:
         return None
-    sig = _orient(p, float(ic["ic"]))
+    sig = orient(p, float(ic["ic"]))
     g, n, s, turns = [], [], [], []
     for off in range(0, h):
         r = run_periodic(sig.iloc[off:], fwds[h].iloc[off:], hold=h, top=top)

@@ -405,6 +405,16 @@ _TESTS_ONLY_PRIVATE: set[tuple[str, str]] = {
     ("data.datasource", "_call_with_timeout"),
     ("data.datasource", "_candidate_hosts"),
     ("data.status_guard", "_normalize_date"),
+    # ---- 2026-11-18 日内非线性因子（PIT 链）------------------------------
+    # 这 4 个是 `intraday_xs_nl` 的**单特征估计器**，白盒单测喂合成 bar 序列
+    # 逐条验证数学定义（马尔可夫不对称度 / 排列熵 / 零穿越率 / 区间效率），
+    # 生产侧只经 `extract_nl_block` 统一出面板，无跨模块消费者。
+    # 同批的 3 个原语（`_n` / `_autocorr` / `_bar_returns`）因被 `intraday_xs_nl`
+    # 实际 import，已公开化为 n_obs / autocorr / bar_returns，不进本字典。
+    ("factor.intraday_xs_nl", "_markov_asym"),
+    ("factor.intraday_xs_nl", "_perm_entropy"),
+    ("factor.intraday_xs_nl", "_zero_cross_rate"),
+    ("factor.intraday_xs_nl", "_range_efficiency"),
 }
 
 #: 暂豁免的**被引用方**前缀：

@@ -203,7 +203,7 @@ def stats(x: pd.Series, ppy: int = 252) -> dict:
 def composite_flat(names: list[str], feats: dict[str, pd.DataFrame],
                    ics: dict[str, float]) -> pd.DataFrame:
     """旧口径：全截面定向 rank 平均（会稀释 Q1）。"""
-    panels = [_orient(feats[n], ics[n]) for n in names]
+    panels = [orient(feats[n], ics[n]) for n in names]
     idx = panels[0].index
     cols = panels[0].columns
     for p in panels[1:]:
@@ -226,8 +226,8 @@ def composite_2stage(anchor: str, pool: list[str],
 
     q=1.0 退化回全截面平均；q=0.1 对应「top10% 候选池」（421 只约 42 只）。
     """
-    a = _orient(feats[anchor], ics[anchor])
-    others = [_orient(feats[n], ics[n]) for n in pool if n != anchor]
+    a = orient(feats[anchor], ics[anchor])
+    others = [orient(feats[n], ics[n]) for n in pool if n != anchor]
     idx = a.index
     cols = a.columns
     for p in others:
@@ -260,7 +260,7 @@ def composite_2stage(anchor: str, pool: list[str],
     return sec.where(sec.notna(), a_rank.where(gate))
 
 
-def _orient(p: pd.DataFrame, ic: float) -> pd.DataFrame:
+def orient(p: pd.DataFrame, ic: float) -> pd.DataFrame:
     """按 IC 符号定向 ⇒ 之后一律「越大越好」。"""
     return -p if ic < 0 else p
 
@@ -360,7 +360,7 @@ def run_composite(feats, fwd, base, pool_cols, tab, args) -> None:
 
     feats_a = {k: _prep(v) for k, v in feats.items()}
     arms: dict[str, pd.DataFrame] = {}
-    arms["single"] = _orient(feats_a[anchor], ics[anchor])
+    arms["single"] = orient(feats_a[anchor], ics[anchor])
     arms["flat10"] = composite_flat(t10, feats_a, ics)
     arms["flat_sig"] = composite_flat(sig["name"].tolist(), feats_a, ics)
     arms["q1_2stage10"] = composite_2stage(anchor, t10, feats_a, ics, q=args.q)
