@@ -21,6 +21,12 @@ DATASET = "all_a_2018_2026"
 #: 主实验产物根（``_base`` / ``pred`` / ``selection`` 所在）；与 --preproc 输出
 #: 目录无关——``_base`` 永远由主臂 ``stage_prep`` 落到这里。
 ROLL_DIR = ROOT / "reports" / "alla_rolling"
+#: 🚨 ``_base`` 是**数据不是报告**（中性化要用 market_cap / cov_industry / close），
+#: 20+ 处 builder 与 evaluation 反向依赖它 ⇒ 2026-11-18 实体已迁到
+#: ``E:/data/factor_library/all_a_2018_2026/base``，本路径只是一个 **junction**。
+#: 读路径不变；但**别在清理 reports 时把它当普通目录删**——虽然
+#: ``shutil.rmtree`` 对 junction 只删链接（已实测，目标内容不受影响），
+#: 删了之后所有中性化/builder 仍会 `FileNotFoundError`。
 BASE_DIR = ROLL_DIR / "_base"
 
 #: 基本面慢变量族（A 族股东结构 + B 族财务报表）——用于 DPP 保留席位与
