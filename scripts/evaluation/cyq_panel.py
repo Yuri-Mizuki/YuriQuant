@@ -489,6 +489,110 @@ def cmd_placebo(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_topn(args: argparse.Namespace) -> int:
+    """组合层：单因子 Top-Frac 等权，生产口径 + 多相位（P1）。
+
+    ## 为什么必须跑这一步
+
+    `factor_gate` 只回答「有没有 IC」。IC ≠ 经济价值 —— 残差 IC 0.007 在 5000 只
+    截面上换算成年化是 1pp 量级的**估算**，不是实测。唯一能翻盘的检验是组合层。
+
+    ## 臂设计（每臂都是「月频 Top-Frac 等权 + 27bp 时变成本 + T+1 open + 1e6」）
+
+    | 臂 | 方向 | 为什么 |
+    |---|---|---|
+    | ``low`` | 因子取负，买最低 frac | 顺 **raw IC**（benefit raw IC 为负 ⇒ 低获益盘好） |
+    | ``high`` | 因子原向，买最高 frac | 顺 **残差 IC**（符号与 raw 相反时才有意义） |
+    | ``*_plc`` | 同方向作用于循环平移面板 | 安慰剂臂：同执行层的噪声基准 |
+
+    🚨 **两向都跑**是铁律「拆多空两端」的要求：只跑顺 raw 方向那一端，就没法
+    发现「强度全在另一端（A 股做空受限 ⇒ 吃不到）」。
+
+    ## 相位
+
+    定版收益是 phase 0 的**单点**，21 相位均值才是可期望值。缺省跑全部 21 相位，
+    报 `mean ± std`（std 就是 RTL，调仓时点运气）。
+    """
+    from scripts.evaluation import caliber as cal
+    from scripts.evaluation import gate_core as gc
+    from strategy.examples import TopFracLongOnly
+
+    cost = cal.cost_profile("production")
+    capital = float(cal.PROFILES["production"].capital)
+    ctx = cal.load_context(signal=args.signal, window="prod", execution="open")
+    idx, cols = ctx.pred.index, ctx.pred.columns
+    log.info("%s", cal.describe(ctx, "production", capital))
+    log.info("组合任务：%d 臂 × %d 相位 × frac=%.2f | 月频等权",
+             len(args.arms), len(args.phases), args.frac)
+
+    base = OUT_ROOT / DATASET / "panels_neu"
+    panels: dict[str, pd.DataFrame] = {}
+    for arm in args.arms:
+        name, sign = _arm_spec(arm)
+        if name.endswith("_plc"):
+            src_name = name[: -len("_plc")]
+            raw = gc.load_panel(base / f"{src_name}.parquet", idx, cols)
+            if raw is None:
+                raise FileNotFoundError(f"安慰剂源面板缺失：{src_name}")
+            panels[arm] = gc.cyclic_placebo(raw, seed=args.seed,
+                                            name=src_name) * sign
+        else:
+            raw = gc.load_panel(base / f"{name}.parquet", idx, cols)
+            if raw is None:
+                raise FileNotFoundError(f"面板缺失：{name}.parquet")
+            panels[arm] = raw * sign
+        log.info("臂 %-18s 非空 %.3f", arm,
+                 float(panels[arm].notna().to_numpy(dtype=float).mean()))
+
+    rows = []
+    t0 = time.time()
+    for arm, panel in panels.items():
+        for ph in args.phases:
+            strat = TopFracLongOnly(frac=args.frac)
+            bt = cal.VectorBacktest(strategy=strat, rebalance_freq="M",
+                                    initial_capital=capital, costs=cost)
+            res = cal.run_once(bt, ctx, "open", signal=panel, phase=ph)
+            m = cal.metrics_row(res, capital)
+            rows.append({"arm": arm, "phase": ph, **{
+                k: m[k] for k in ("ann", "sharpe", "sharpe_arith", "max_dd",
+                                  "vol", "turnover", "cost_bp", "n_active",
+                                  "n_days")}})
+            log.info("  %-18s phase=%-2d ann=%6.2f%% SR=%.3f dd=%.2f%% 换手%.2f",
+                     arm, ph, 100 * m["ann"], m["sharpe"], 100 * m["max_dd"],
+                     m["turnover"])
+        log.info("臂 %s 完成 | 累计 %.0fs", arm, time.time() - t0)
+
+    df = pd.DataFrame(rows)
+    out_dir = OUT_ROOT / "topn"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    df.to_csv(out_dir / f"topn_frac{args.frac:.2f}.csv", index=False,
+              encoding="utf-8-sig")
+
+    summary = df.groupby("arm").agg(
+        ann_mean=("ann", "mean"), ann_std=("ann", "std"),
+        sr_mean=("sharpe", "mean"), sr_std=("sharpe", "std"),
+        dd_mean=("max_dd", "mean"), turnover=("turnover", "mean"),
+        cost_bp=("cost_bp", "mean"), n=("phase", "size")).reset_index()
+    summary.to_csv(out_dir / f"topn_summary_frac{args.frac:.2f}.csv", index=False,
+                   encoding="utf-8-sig")
+
+    with pd.option_context("display.width", 200, "display.max_columns", 30,
+                           "display.float_format", lambda v: f"{v: .4f}"):
+        print(summary.to_string(index=False))
+    log.info("落盘 %s | 用时 %.0fs", out_dir, time.time() - t0)
+    return 0
+
+
+def _arm_spec(arm: str) -> tuple[str, float]:
+    """``low:cyq_benefit`` → (``cyq_benefit``, −1)；``high:cyq_benefit`` → (+1)。"""
+    if ":" not in arm:
+        raise ValueError(f"臂名须为 low:<factor> / high:<factor>[_plc]：{arm!r}")
+    side, name = arm.split(":", 1)
+    if side not in ("low", "high"):
+        raise ValueError(f"方向须为 low / high：{arm!r}")
+    return name, -1.0 if side == "low" else 1.0
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description="CYQ 筹码分布面板")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -500,9 +604,20 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("prep", help="中性化 + 注册 + 诊断")
     pl = sub.add_parser("placebo", help="循环平移安慰剂")
     pl.add_argument("--seed", type=int, default=20261118)
+    tn = sub.add_parser("topn", help="组合层：单因子 Top-Frac 等权 + 多相位")
+    tn.add_argument("--arms", nargs="+",
+                    default=["low:cyq_benefit", "high:cyq_benefit",
+                             "low:cyq_benefit_plc", "high:cyq_benefit_plc"],
+                    help="臂：low:<factor> / high:<factor>；后缀 _plc = 安慰剂臂")
+    tn.add_argument("--frac", type=float, default=0.10, help="Top 比例（定版 10%%）")
+    tn.add_argument("--phases", nargs="+", type=int,
+                    default=list(range(21)), help="相位列表（缺省 0..20）")
+    tn.add_argument("--signal", default="ens_h1h5",
+                    help="借其日期轴/股票池（口径上下文），不影响选股")
+    tn.add_argument("--seed", type=int, default=20261118)
     args = p.parse_args(argv)
-    return {"verify": cmd_verify, "build": cmd_build,
-            "prep": cmd_prep, "placebo": cmd_placebo}[args.cmd](args)
+    return {"verify": cmd_verify, "build": cmd_build, "prep": cmd_prep,
+            "placebo": cmd_placebo, "topn": cmd_topn}[args.cmd](args)
 
 
 if __name__ == "__main__":
