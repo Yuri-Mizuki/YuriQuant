@@ -57,7 +57,7 @@ def next_run_time(now: datetime, hhmm: str) -> datetime:
     return target if target > now else target + timedelta(days=1)
 
 
-def _load_ic_series(
+def load_ic_series(
     name: str,
     lib,
     row: pd.Series,
@@ -231,7 +231,7 @@ def run_monitoring(
     missing_ic: list[str] = []
     for _, row in registry.iterrows():
         name = row["name"]
-        ic = _load_ic_series(name, lib, row, board_cache, ic_source)
+        ic = load_ic_series(name, lib, row, board_cache, ic_source)
         if ic.empty:
             missing_ic.append(name)
             continue

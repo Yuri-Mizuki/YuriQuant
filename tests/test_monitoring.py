@@ -698,7 +698,7 @@ def test_load_close_falls_back_to_cache(tmp_path):
 
 def test_ic_series_prefers_board_cache(tmp_path):
     """看板缓存优先于库 evals：巡检读已算好的序列，不重算 41.6 GiB 面板。"""
-    from monitoring.runner import _load_ic_series
+    from monitoring.runner import load_ic_series
 
     board = tmp_path / "board"
     board.mkdir()
@@ -715,12 +715,12 @@ def test_ic_series_prefers_board_cache(tmp_path):
             return None
 
     lib = _Lib()
-    got = _load_ic_series("f1", lib, pd.Series(dtype=object), board, "auto")
+    got = load_ic_series("f1", lib, pd.Series(dtype=object), board, "auto")
     assert len(got) == 10
     assert got.iloc[-1] == pytest.approx(0.2)
     assert lib.called is False            # 命中看板后不再去翻 evals
 
-    empty = _load_ic_series("absent", lib, pd.Series(dtype=object), board, "auto")
+    empty = load_ic_series("absent", lib, pd.Series(dtype=object), board, "auto")
     assert empty.empty and lib.called is True   # 看板缺失 → 回落 evals（此处也没有）
 
 

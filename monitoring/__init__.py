@@ -38,7 +38,12 @@ from monitoring.metrics import (
     load_close_panel,
     load_returns_panel,
 )
-from monitoring.runner import generate_html_report, next_run_time, run_monitoring
+from monitoring.runner import (
+    generate_html_report,
+    load_ic_series,
+    next_run_time,
+    run_monitoring,
+)
 
 __all__ = [
     "MonitorMetrics",
@@ -48,6 +53,7 @@ __all__ = [
     "rollup_status",
     "generate_html_report",
     "load_close_panel",
+    "load_ic_series",
     "load_returns_panel",
     "next_run_time",
     "run_monitoring",
