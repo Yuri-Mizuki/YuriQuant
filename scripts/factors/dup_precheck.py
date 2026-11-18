@@ -102,8 +102,12 @@ def main() -> None:
         print(f"      top{args.topk}: {row['top']}")
 
     df = pd.DataFrame(rows)
+    # 判「独立」的行不跑残差检验 ⇒ resid_t 为 None ⇒ 整列被推断成 object，
+    # `.abs()` 直接 TypeError（2026-11-13 实测：单面板独立判定必崩）。
+    # 这里强制转数值再比，None ⇒ NaN ⇒ fillna(0) ⇒ 视为「无增量」只在 ρ 达标时才生效。
+    resid_t_num = pd.to_numeric(df["resid_t"], errors="coerce")
     bad = df[(df["top_corr"] >= args.reject_rho)
-             & (df["resid_t"].abs().fillna(0) < 2.0)]
+             & (resid_t_num.abs().fillna(0) < 2.0)]
     print(f"\n合计 {len(df)} 个 | 用时 {time.time() - t_all:.1f}s | "
           f"|ρ|≥{args.reject_rho} 且残差无增量：{len(bad)} 个")
     if len(bad):
