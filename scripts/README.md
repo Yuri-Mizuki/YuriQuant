@@ -81,11 +81,13 @@
 | `evaluation/cost_penalty_probe.py` | 成本感知优化探针（P0-2，2026-10-13）。 |
 | `evaluation/cpcv_eval.py` | CPCV 多路径评估 —— 挖因子方法选型决策工具。 |
 | `evaluation/cvar_arm_920.py` | 批次 12⑤：CVaR 约束组合臂 vs Top10% 等权 vs buffer 形态（production 口径）。 |
+| `evaluation/cyq_panel.py` | 筹码分布（CYQ）面板：上游三角分布 + 换手衰减改写为全 A 递推；`verify`/`build`/`prep`/`placebo`/`topn`（2026-11-18）。 |
 | `evaluation/deliverable_portfolio.py` | 可交付组合：集中度 × 行业约束（P0 落地，2026-10-10 固化）。 |
 | `evaluation/dup_caliber_probe.py` | 判重口径探针：同一批因子在三种相关口径下到底有多像。 |
 | `evaluation/ev_rd_backtest.py` | EV / 研发 四因子的组合层验证：IC 好不等于赚钱。 |
 | `evaluation/ev_rd_validate.py` | EV 分母 / 研发加回 四个候选因子的三段式 + 增量检验。 |
 | `evaluation/exec_phase_probe.py` | 成交日相位：能不能把成交提前到「当月第 1 个交易日开盘」。 |
+| `evaluation/factor_gate.py` | **因子检验统一入口**（2026-11-18）：一条命令跑 L1 覆盖 → L2 raw IC → L3 正交残差 IC → L4 共线 → L5 循环平移安慰剂，输出标准表 + 筛选标记（`SIGNFLIP`/`NOIC`/`ABSORBED`/`NOISE`）。新因子一律走这里，别再手搓 IC 脚本。 |
 | `evaluation/factor_half_life_probe.py` | 因子信息半衰期探针：有没有一批因子在「周频尺度」上显著更强？ |
 | `evaluation/factor_half_life_verdict.py` | 因子信息半衰期的**判定**（读 `factor_half_life_probe` 的 CSV，不重算 IC）。 |
 | `evaluation/factor_library_diversity.py` | 因子库有效独立维度（n_eff）度量：判断"挖出很多因子"里有多少是新的。 |
@@ -97,6 +99,7 @@
 | `evaluation/fundamental_blend.py` | E3 基本面慢信号 ⊕ 快信号双层融合（信达式分域建模 + 预测层 λ 加权）。 |
 | `evaluation/fuse_placebo.py` | 融合增益的**安慰剂检验**：区分「真信号」与「覆盖率掩码 / 暴露」假象。 |
 | `evaluation/galaxy_l1.py` | 银河 0608 复现 L1：三标签 GBDT + 验证集 RankIC 质量门槛（stage2 Phase 2 前置）。 |
+| `evaluation/gate_core.py` | 上者的公共件（IC 四口径、NW t、逐日残差正交、循环平移、`SIGNFLIP` 判据）；**库不是入口**，`tests/test_factor_gate.py` 锁死与 `residual_ic_probe` 逐位一致。 |
 | `evaluation/gp_tune_budget.py` | GP 评估预算 × 多 seed 调参实验（三段式，test 段受保护） |
 | `evaluation/gtja_repro_eval.py` | 国君研报复现：因子回测评估与研报基准对比 |
 | `evaluation/horizon_cross_eval.py` | A1 同目标交叉评估 + 组合层对照（2026-10-19）。 |
