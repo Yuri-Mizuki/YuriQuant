@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -106,15 +105,29 @@ def test_frozen_baseline_uses_registered_ic():
     ic = _ic_series(200, head_ic=0.06, tail_ic=0.04)
 
     row = pd.Series({"kind": "raw", "ic_mean": 0.05, "note": ""})
-    m = compute_factor_metrics("f1", row, panel, ic, rets, ic.index[-1], window=60)
+    m = compute_factor_metrics("f1", row, panel, ic, rets, ic.index[-1], window=60,
+                               registry_baseline="all")
     assert m.frozen_baseline == pytest.approx(0.05)          # 显著 → 冻结
     assert m.ic_retention == pytest.approx(m.ic_mean_recent / 0.05)
 
     row0 = pd.Series({"kind": "raw", "ic_mean": 0.002, "note": ""})
-    m0 = compute_factor_metrics("f2", row0, panel, ic, rets, ic.index[-1], window=60)
+    m0 = compute_factor_metrics("f2", row0, panel, ic, rets, ic.index[-1], window=60,
+                                registry_baseline="all")
     assert m0.expected_ic == pytest.approx(0.002)
     assert m0.frozen_baseline != m0.frozen_baseline          # 近 0 → 不冻结 -> nan
     assert m0.ic_retention == pytest.approx(m0.ic_mean_recent / m0.ic_mean_full)
+
+    # 默认 registry_baseline="model"：普通因子**不**取跨源注册基线。
+    # 理由：注册 IC 出自入库评估（抽稀口径），监控序列来自看板缓存（逐日全样本），
+    # 两者有系统差，相除会让保留率整体偏 1.2 倍（见 metrics.compute_factor_metrics）。
+    mf = compute_factor_metrics("f3", row, panel, ic, rets, ic.index[-1], window=60)
+    assert mf.expected_ic != mf.expected_ic                   # 因子 → 不用注册基线
+    assert mf.ic_retention == pytest.approx(mf.ic_mean_recent / mf.ic_mean_full)
+
+    rowm = pd.Series({"kind": "model", "ic_mean_h1": 0.05, "note": "model_id=7"})
+    mm = compute_factor_metrics("model:m7", rowm, panel, ic, rets, ic.index[-1], window=60)
+    assert mm.expected_ic == pytest.approx(0.05)              # 模型 → 用注册基线
+    assert mm.frozen_baseline == pytest.approx(0.05)
 
 
 def test_dual_window_ic_metrics():
@@ -124,7 +137,7 @@ def test_dual_window_ic_metrics():
     ic = _ic_series(200, head_ic=0.06, tail_ic=-0.03, tail=60)  # 后60d反转
     row = pd.Series({"kind": "raw", "ic_mean": 0.05, "note": ""})
     m = compute_factor_metrics("f1", row, panel, ic, rets, ic.index[-1],
-                               window=60, window_long=252)
+                               window=60, window_long=252, registry_baseline="all")
 
     assert m.recent_n_days == 60
     assert m.recent_n_days_252 >= 170            # 数据 170d < 长窗 → 回落全量(=169)
@@ -285,7 +298,9 @@ def env(tmp_path: Path):
     cache_root.mkdir()
     long_close = close.stack().rename("close")
     long_close.index = long_close.index.set_names(["date", "code"])
-    long_close.to_frame().to_parquet(cache_root / "daily_hs300.parquet")
+    # 池名与 run_monitoring 的 pool 默认值一致（all_a）；HS300 时代写的
+    # daily_hs300.parquet 已随监控链改指定版库一并废弃。
+    long_close.to_frame().to_parquet(cache_root / "daily_all_a.parquet")
 
     lib_root = tmp_path / "flib"
     lib = FactorLibrary(root=lib_root, dataset="testds")
@@ -295,9 +310,15 @@ def env(tmp_path: Path):
     decay = good.mul(sign, axis=0)
     lib.register("good_factor", good, rets, kind="raw", formula="good")
     lib.register("decay_factor", decay, rets, kind="raw", formula="decay")
+    # 模型预测不能与 good_factor 秩等价：入库冗余预检会直接拒收
+    # （rel_std<0.001 ⇒ 等价）。掺 15% 噪声保持 IC 显著但留下独立增量。
+    noise_rank = pd.DataFrame(
+        rng.normal(0, 1, good.shape), index=dates, columns=cols
+    ).rank(pct=True, axis=1) - 0.5
+    pred = 0.85 * good.rank(pct=True, axis=1).sub(0.5) + 0.15 * noise_rank
     register_model_as_factor(
         name="model:gbdt_h1",
-        pred_panel=good,
+        pred_panel=pred,
         returns_panel=rets,
         parents=["good_factor"],
         dataset="testds",
@@ -330,8 +351,10 @@ def test_run_monitoring_e2e(env):
 
     assert summary["n_factors"] == 3
     assert summary["n_models"] == 1
+    assert summary["n_crowd"] == 1          # 库级拥挤度是独立类别，不计入因子数
     snap = pd.read_csv(env["ledger_root"] / "snapshots.csv")
-    assert set(snap["name"]) == {"good_factor", "decay_factor", "model:gbdt_h1"}
+    assert {"good_factor", "decay_factor", "model:gbdt_h1"} <= set(snap["name"])
+    assert "cluster:crowding" in set(snap["name"])
     by_name = snap.set_index("name")
     assert float(by_name.loc["model:gbdt_h1", "model_id"]) == 42.0
     assert by_name.loc["decay_factor", "ic_mean_recent"] < 0
@@ -345,7 +368,7 @@ def test_run_monitoring_e2e(env):
     assert len(alerts) > 0
     assert "ic_decay" in set(alerts["rule"])
 
-    report = env["ledger_root"] / "monitor_report.html"
+    report = env["ledger_root"] / "factor_health_report.html"
     assert report.exists()
     text = report.read_text(encoding="utf-8")
     assert "model:gbdt_h1" in text and "svg" in text
@@ -441,7 +464,7 @@ def test_run_monitoring_e2e_signal(env, tmp_path: Path):
     )
     snap = pd.read_csv(tmp_path / "ledger2" / "snapshots.csv")
     assert any(str(n).startswith("signal") for n in snap["name"])
-    text = (tmp_path / "ledger2" / "monitor_report.html").read_text(encoding="utf-8")
+    text = (tmp_path / "ledger2" / "factor_health_report.html").read_text(encoding="utf-8")
     assert "组合 & 信号层" in text
 
 
@@ -633,3 +656,95 @@ def test_style_covariates_fill_neutral_ic_columns():
     assert wired.ic_neutral_mean_recent == wired.ic_neutral_mean_recent
     assert wired.ic_neutral_mean_full == wired.ic_neutral_mean_full
     assert wired.style_exposure_ratio == wired.style_exposure_ratio
+
+
+# ---------------------------------------------------------------------------
+# 定版库数据链（all_a）：base 面板 / 看板 IC / 面板懒加载 / 强度门槛 / 风格归因
+# ---------------------------------------------------------------------------
+def test_load_close_prefers_base_panel(tmp_path):
+    """库自带 base/close_adj.parquet 优先于日线缓存：不乘复权因子、不读 daily_*。"""
+    from monitoring.metrics import load_close_panel
+
+    close, _ = _panel(days=30, codes=5)
+    base = tmp_path / "base"
+    base.mkdir()
+    close.to_parquet(base / "close_adj.parquet")
+
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    long_close = (close * 3.0).stack().rename("close")   # 读错源就会差 3 倍
+    long_close.index = long_close.index.set_names(["date", "code"])
+    long_close.to_frame().to_parquet(cache / "daily_all_a.parquet")
+
+    got = load_close_panel(cache, pool="all_a", base_dir=base)
+    pd.testing.assert_frame_equal(got, close.sort_index(), check_freq=False)
+
+
+def test_load_close_falls_back_to_cache(tmp_path):
+    """无 base 面板时回退 daily_<pool>.parquet —— 池名可配，不再硬编码 hs300。"""
+    from monitoring.metrics import load_close_panel
+
+    close, _ = _panel(days=20, codes=4, seed=3)
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    long_close = close.stack().rename("close")
+    long_close.index = long_close.index.set_names(["date", "code"])
+    long_close.to_frame().to_parquet(cache / "daily_all_a.parquet")
+
+    got = load_close_panel(cache, pool="all_a")
+    assert got.shape == close.shape
+    assert got.index[0] == close.index[0]
+
+
+def test_ic_series_prefers_board_cache(tmp_path):
+    """看板缓存优先于库 evals：巡检读已算好的序列，不重算 41.6 GiB 面板。"""
+    from monitoring.runner import _load_ic_series
+
+    board = tmp_path / "board"
+    board.mkdir()
+    idx = pd.bdate_range("2025-01-01", periods=10)
+    pd.DataFrame({"ic": np.linspace(0.1, 0.2, 10)}, index=idx).to_parquet(
+        board / "f1.parquet")
+
+    class _Lib:
+        def __init__(self):
+            self.called = False
+
+        def _resolve_eval_path(self, row):
+            self.called = True
+            return None
+
+    lib = _Lib()
+    got = _load_ic_series("f1", lib, pd.Series(dtype=object), board, "auto")
+    assert len(got) == 10
+    assert got.iloc[-1] == pytest.approx(0.2)
+    assert lib.called is False            # 命中看板后不再去翻 evals
+
+    empty = _load_ic_series("absent", lib, pd.Series(dtype=object), board, "auto")
+    assert empty.empty and lib.called is True   # 看板缺失 → 回落 evals（此处也没有）
+
+
+def test_weak_factor_flip_not_alerted():
+    """|基线 IC| 低于 min_abs_ic_for_decay 的因子不做翻转判定（噪声不是事故）。"""
+    weak = MonitorMetrics(name="weak", ic_mean_full=0.003, ic_mean_recent=-0.002,
+                          recent_n_days=60, recent_n_days_252=200,
+                          ic_mean_recent_252=-0.001)
+    assert "ic_decay" not in {a["rule"] for a in evaluate_alerts(weak, CFG)}
+
+    strong = MonitorMetrics(name="strong", ic_mean_full=0.05, ic_mean_recent=-0.02,
+                            recent_n_days=60, recent_n_days_252=200,
+                            ic_mean_recent_252=-0.01)
+    got = evaluate_alerts(strong, CFG)
+    assert any(a["rule"] == "ic_decay" and a["level"] == "critical" for a in got)
+
+
+def test_style_rotation_downgrades_critical():
+    """raw IC 翻转但中性化 IC 仍同向 → 风格轮动(warning)，不得判 alpha 报废(critical)。"""
+    m = MonitorMetrics(name="f", ic_mean_full=0.02, ic_mean_recent=-0.01,
+                       recent_n_days=60, recent_n_days_252=200,
+                       ic_mean_recent_252=0.005,
+                       ic_neutral_mean_full=0.018, ic_neutral_mean_recent=0.012,
+                       ic_neutral_drift=-0.006, style_exposure_ratio=0.10)
+    got = evaluate_alerts(m, CFG)
+    assert not any(a["rule"] == "ic_decay" and a["level"] == "critical" for a in got)
+    assert any(a["rule"] == "style_rotation" for a in got)

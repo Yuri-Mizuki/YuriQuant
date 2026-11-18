@@ -223,17 +223,23 @@ def test_monitoring_source_groups(tmp_path: Path):
     cache_root.mkdir()
     long_close = close.stack().rename("close")
     long_close.index = long_close.index.set_names(["date", "code"])
-    long_close.to_frame().to_parquet(cache_root / "daily_hs300.parquet")
+    long_close.to_frame().to_parquet(cache_root / "daily_all_a.parquet")
 
     lib_root = tmp_path / "flib"
     lib = FactorLibrary(root=lib_root, dataset="srcds")
     good = rets.rank(pct=True, axis=1) - 0.5
+    # 三个因子必须互相有独立增量：入库冗余预检按秩空间残差判定，
+    # ρ≥0.95 且 rel_std<0.001 会被直接拒收（good*0.9 与 good*0.8 属单调变换）。
+    # 本用例只验证 source 分组展示，与 IC 强弱无关，掺独立噪声即可。
+    noise = pd.DataFrame(
+        rng.normal(0, 1, (days, codes)), index=dates, columns=cols
+    ).rank(pct=True, axis=1) - 0.5
     lib.register("gp_alpha", good, rets, kind="raw", formula="g",
                  source="gp:mine_factors")
-    lib.register("alpha101_006", good * 0.9, rets, kind="raw", formula="a6",
-                 source="alpha101:build_alpha_factors:2022-2025")
-    lib.register("alpha191_002", good * 0.8, rets, kind="raw", formula="a2",
-                 source="alpha191:build_alpha_factors:2022-2025")
+    lib.register("alpha101_006", 0.55 * good + 0.45 * noise, rets, kind="raw",
+                 formula="a6", source="alpha101:build_alpha_factors:2022-2025")
+    lib.register("alpha191_002", 0.55 * good - 0.45 * noise, rets, kind="raw",
+                 formula="a2", source="alpha191:build_alpha_factors:2022-2025")
 
     from monitoring.runner import run_monitoring
 
@@ -253,7 +259,7 @@ def test_monitoring_source_groups(tmp_path: Path):
     assert by_name.loc["gp_alpha"] == "gp:mine_factors"
     assert by_name.loc["alpha101_006"].startswith("alpha101:")
 
-    html = (tmp_path / "ledger" / "monitor_report.html").read_text(encoding="utf-8")
+    html = (tmp_path / "ledger" / "factor_health_report.html").read_text(encoding="utf-8")
     assert "来源组" in html
     for g in ("gp", "alpha101", "alpha191"):
         assert f">{g}<" in html, f"报告缺少来源组 {g}"
