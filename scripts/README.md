@@ -298,6 +298,7 @@
 | `reporting/jq_style_report.py` | 最佳策略收益曲线页（聚宽模拟交易风格）——策略 vs 中证全指口径基准。 |
 | `reporting/md_to_email_html.py` | 日报 markdown → 邮件 HTML（内联样式，适配 163 / QQ / Gmail 等客户端）。 |
 | `reporting/model_performance.py` | 主模型回测表现页（净值 / 回撤 / 分年 / 月度热图，单文件 HTML）。 |
+| `reporting/monitor_factor_health.py` | 定版因子库健康度巡检（因子 + 模型）：IC 漂移 + 中性化归因 + 告警 + HTML。全库 877 因子约 13 秒（只算 IC 层），对告警因子补面板与中性化后约 3 分钟。 |
 | `reporting/monitor_production_ic.py` | 生产口径每日 IC / 风格暴露监控 CLI（全A · 定版 dingban · 2026-10-17 起）。 |
 | `reporting/picks_board.py` | 本期出榜解释页（为什么买这些）—— 接在模拟交易页之后。 |
 | `reporting/rolling_grid_report.py` | 全A滚动训练实验报告生成器：收益曲线 + 分年绩效 + 维度对比（自包含 HTML）。 |

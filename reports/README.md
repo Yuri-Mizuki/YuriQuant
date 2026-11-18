@@ -24,7 +24,7 @@
 | `alla_rolling_ortho/` | 正交化口径臂——**全A管线默认**（TODO_ARCHIVE 册Ⅰ 附录：全正交 +1.6pp/年 > 不正交），ens_h1h5 集成年化 +13.3% | `scripts/pipelines/rolling_grid_alla.py --preproc ortho` |
 | `alla_attribution/` | 主策略 α/β 分解 + Brinson 归因（结论录于 TODO_ARCHIVE 册Ⅰ §一） | `scripts/pipelines/alla_excess_attribution.py` |
 | `model_portfolio/` | 固化组合交付物（`pipeline=alla_ortho`；legacy 对照，非现行生产） | `scripts/pipelines/run_model_portfolio.py` |
-| `monitoring/` | 监控台账 + 报告。⚠️ 旧链 2026-09-21 退休（计划任务已删，证据 `legacy_monitor_*_20260921.log` / `legacy_task_xml_20260921.xml`）；`production_ic_daily.csv` 为**现役**每日 IC 台账 | `scripts/reporting/monitor_performance.py`（退休，手动可跑）+ `scripts/reporting/monitor_production_ic.py`（现役） |
+| `monitoring/` | 监控台账 + 报告。两条现役线：① `factor_health_report.html` + `snapshots.csv` + `alerts.csv` = 定版库因子/模型健康度巡检（2026-11-18 重建，绑 `all_a_2018_2026`）；② `production_ic_daily.csv` = 生产口径每日 IC 台账。HS300 旧链 2026-09-21 退休，证据 `legacy_monitor_*_20260921.log` | `scripts/reporting/monitor_factor_health.py` + `scripts/reporting/monitor_production_ic.py` |
 | `models/` | 模型注册台账（旧监控链读取；现役链不依赖） | `scripts/evaluation/walk_forward_model.py` |
 | `textmining/` | 文本因子管线（**活跃开发中**，结构见其自带 README） | `scripts/textmining/*` |
 | `alla_rolling_ortho920fundind/` | 定版 `dingban_fundind` 的滚动产物；`selection/` 供每日出榜（`--preset dingban`）读取，**勿动** | `scripts/pipelines/rolling_grid_alla.py --preproc ortho_fundind` |

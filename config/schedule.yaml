@@ -169,7 +169,30 @@ tasks:
     status: retired
     time: '17:30'
     description: '旧因子库监控链（绑 hs300_2022_2025，行情源 2026-08-26 停更）'
-    notes: '2026-09-21 停用后退休：改指 all_a 实测 686 个因子因面板或 eval 缺失被跳过'
+    notes: >-
+      2026-09-21 停用后退休：改指 all_a 实测 686 个因子因面板或 eval 缺失被跳过。
+      根因是两个：① runner 读 registry 的 `panel_path`/`eval_path`，而全A builder
+      批量入库从不写这两列（`FactorLibrary._resolve_panel_path` 2026-09-12 已修，
+      runner 没跟）；② 库里只有汇总 IC（`ic_mean_h*` 880 行），没有逐日 IC 序列，
+      而监控要的正是序列。2026-11-18 由 `monitor_factor_health` 重建，见下条。
+
+  - key: monitor_factor_health
+    name: 'YuriQuantFactorHealth'
+    system: schtasks
+    status: planned
+    time: '17:30'
+    schedule: '工作日（周一至周五）'
+    command: '${YQ_PYTHON:D:\python\Python312\python.exe}'
+    arguments: '-m scripts.reporting.monitor_factor_health --dataset all_a_2018_2026'
+    working_dir: '${YQ_REPO:E:\YuriQuant}'
+    execution_limit: PT1H
+    description: '定版库因子/模型健康度巡检（IC 漂移 + 中性化归因 + 告警 + HTML）'
+    notes: >-
+      2026-11-18 重建，当前**手动跑、未注册计划任务**。与 `monitor_production_ic`
+      （信号级）互补：本任务看因子与模型预测是否退化，那条看生产信号表现。
+      耗时：全库 877 因子约 13 秒（`--panel-mode none`）；默认 `alerted` 对告警
+      因子补面板与中性化，约 3 分钟。前置依赖 `reports/factor_board/cache/`
+      有该期缓存（IC 序列来源），缓存过期会整片跳过并在日志点名。
 
   - key: altdata_cls_backfill
     name: 'YuriQuant AltDataClsBackfill'
