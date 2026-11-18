@@ -849,14 +849,23 @@ baselines:
             cost_bp: 7527.5
             max_dd: 0.3822
             n_active: 15
-          # K 网格（同信号、同执行层）——U 形，不是单调；按 30% 附近预期
-          # ⚠️ 以下六行仍属 36bp 旧基数，只可横向比较 K 的相对优劣，不得与上方相减
-          k8_buf2:  {ann: 0.3094, sharpe: 1.108, max_dd: 0.349, turnover: 0.895, cost_base: "36bp 旧口径"}
-          k10_buf2: {ann: 0.2880, sharpe: 1.055, max_dd: 0.359, turnover: 0.886, cost_base: "36bp 旧口径"}
-          k12_buf2: {ann: 0.2958, sharpe: 1.094, max_dd: 0.367, turnover: 0.884, cost_base: "36bp 旧口径"}
-          k18_buf2: {ann: 0.2947, sharpe: 1.115, max_dd: 0.390, turnover: 0.869, cost_base: "36bp 旧口径"}
-          k25_buf2: {ann: 0.3092, sharpe: 1.184, max_dd: 0.382, turnover: 0.850, cost_base: "36bp 旧口径"}
-          k30_buf2: {ann: 0.3122, sharpe: 1.213, max_dd: 0.382, turnover: 0.830, cost_base: "36bp 旧口径"}
+          # K 网格（同信号、同执行层）——**锯齿，不是单调**；全表落在 28.5%~32.0% 噪声带内。
+          # 🔁 2026-11-17 按 **27bp 时变口径**全部重算（旧 36bp 六行已作废，见下方 history）。
+          # 🚨 **禁止把 K 的差异当结论**：11 个格的 SR 95%CI 全面重叠（极差 0.124 vs
+          # 单个 SE 0.46 ⇒ 效应量仅标准误 1/4）；配对检验 8/8 不显著（最好 p=0.387）；
+          # SR~K 秩相关在 1e6(+0.455) 与 1e5 整手(−0.400) 下**方向相反**。
+          # ⇒ K 是**资金规模与整手约束的派生量**，不是优化出来的参数。证据见
+          # reports/focus_upgrade/README.md §五/§六。
+          k6_buf2:  {ann: 0.328086, sharpe: 1.1302, sharpe_arith: 1.1241, max_dd: 0.3681, turnover: 0.9086, cost_bp: 8962.3}
+          k8_buf2:  {ann: 0.318186, sharpe: 1.1402, sharpe_arith: 1.1310, max_dd: 0.3477, turnover: 0.8952, cost_bp: 8645.2}
+          k10_buf2: {ann: 0.296529, sharpe: 1.0872, sharpe_arith: 1.0901, max_dd: 0.3576, turnover: 0.8860, cost_bp: 7416.0}
+          k12_buf2: {ann: 0.304417, sharpe: 1.1262, sharpe_arith: 1.1199, max_dd: 0.3657, turnover: 0.8835, cost_bp: 7969.7}
+          k18_buf2: {ann: 0.303091, sharpe: 1.1475, sharpe_arith: 1.1359, max_dd: 0.3884, turnover: 0.8692, cost_bp: 7673.9}
+          k20_buf2: {ann: 0.285220, sharpe: 1.0844, sharpe_arith: 1.0870, max_dd: 0.3942, turnover: 0.8624, cost_bp: 7051.6}
+          k22_buf2: {ann: 0.287955, sharpe: 1.1006, sharpe_arith: 1.0995, max_dd: 0.3856, turnover: 0.8578, cost_bp: 7172.4}
+          k25_buf2: {ann: 0.317478, sharpe: 1.2162, sharpe_arith: 1.1884, max_dd: 0.3807, turnover: 0.8497, cost_bp: 7832.6}
+          k28_buf2: {ann: 0.309199, sharpe: 1.1974, sharpe_arith: 1.1741, max_dd: 0.3780, turnover: 0.8349, cost_bp: 7374.7}
+          k30_buf2: {ann: 0.320223, sharpe: 1.2453, sharpe_arith: 1.2105, max_dd: 0.3807, turnover: 0.8305, cost_bp: 7336.7}
           # 同 K 对照：rev1 的旧信号（本档升级的理由）——同为 36bp 旧基数
           rev1_ens_h1h5_k15: {ann: 0.2207, sharpe: 0.833, max_dd: 0.379, cost_base: "36bp 旧口径"}
           rev1_ens_h1h5_k25: {ann: 0.2492, sharpe: 0.961, max_dd: 0.387, cost_base: "36bp 旧口径"}
