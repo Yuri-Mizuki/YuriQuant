@@ -29,7 +29,7 @@
 | `textmining/` | 文本因子管线（**活跃开发中**，结构见其自带 README） | `scripts/textmining/*` |
 | `alla_rolling_ortho920fundind/` | 定版 `dingban_fundind` 的滚动产物；`selection/` 供每日出榜（`--preset dingban`）读取，**勿动** | `scripts/pipelines/rolling_grid_alla.py --preproc ortho_fundind` |
 
-### 结论速查：58 份实验 README（每个目录一行）
+### 结论速查：59 份实验 README（每个目录一行）
 
 > **只做扫描用**：口径、证据与复现命令以各目录 `README.md` 为准；§1.2 说明的是目录职责与
 > 产出脚本，本表给的是**判定**。判定口径：`采纳`（进生产/进定版）/ `判负`（实测无增量或被
@@ -236,6 +236,7 @@
 | `capacity_table` | 集中度 × AUM 二维容量表（`scripts/evaluation/capacity_table.py`） | 工具保留 |
 | `barra_cne6` | CNE6 风格回归产物（因子收益 / t / 残差面板 / sigma 诊断） | 工具保留 |
 | `chip_behavior_probe_2026-10-27` | 行为金融「筹码/换手」廉价探针（全 A 面板 + 三口径 IC） | 判负 |
+| `cyq_probe_2026-11-18` | CYQ 筹码分布三因子（上游三角分布模型递推到全 A 面板）；`conc90` 无效、`benefit` 残差 IC 0.008 但安慰剂也 t=4.24 ⇒ 初判不立项，缺 Top-N | 进行中 |
 | `network_probe_2026-10-27` | 跨股票网络中心度 P1 探针 | 判负 |
 | `cohort_mom_probe` | 建仓后分组动量探针（`group_ic*` / `gate.parquet`） | 判负 |
 | `hp_search_ic` | 超参扫描（**只比可交易 IC** 的收口证据，`scripts/evaluation/hp_search_ic.py`） | 采纳 |
