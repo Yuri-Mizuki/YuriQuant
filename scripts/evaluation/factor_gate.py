@@ -1,4 +1,4 @@
-"""因子检验统一入口 —— 一条命令跑完 L1~L5 并输出标准表（2026-11-18 建立）。
+"""因子检验**准入段**统一入口 —— 一条命令跑完 L1~L5 并输出标准表（2026-11-18 建立）。
 
 ## 用法
 
@@ -20,7 +20,7 @@
 | L1 | ``cov`` ``cov_eff`` ``n_valid`` ``n_days`` | 覆盖 |
 | L2 | ``raw_ic`` ``raw_ir`` ``raw_win`` ``raw_nw_t`` | 原始预测力 |
 | L3 | ``resfac_ic`` ``resfac_nw_t`` ``restgt_*`` ``both_*`` | 正交主信号后（主判据 = ``resfac``） |
-| L4 | ``rank_corr_main`` | 与主信号共线度 |
+| L4 | ``rank_corr_main`` | 与主信号共线度（**不是换皮检测**，见文末） |
 | L5 | ``plc_ic`` ``plc_nw_t`` ``eff_ratio`` ``eff_gap`` | 循环平移安慰剂与效应量 |
 | 判定 | ``verdict`` ``why`` | 筛选标记（**不是结论**） |
 
@@ -33,6 +33,17 @@
    :func:`scripts.evaluation.gate_core.verdict` 的说明）。要引就引
    ``eff_ratio`` + ``eff_gap``。
 4. 跨 horizon 不可并列 —— IC 的期限必须等于持有期，报数必须带 ``h``。
+
+## ⚠️ 本入口只做**准入段**
+
+它回答「对现有主信号有没有增量」，不回答「自己能不能赚钱」——那是晋升段的
+``MATURITY_GATES``（``sharpe_ls_M ≥ 0.5`` + 换皮 + 分段稳定 + 族上限），见
+:mod:`research.factor_criteria` 模块 docstring 的三段说明。两段的判定经常
+相反，**不要互相替代**。
+
+``rank_corr_main`` 是**与主信号的共线度**，不是换皮检测：真正的换皮（vs 全库
+950 个因子）走 :mod:`research.dup_criteria`（``dup_precheck`` /
+``library_dedup_plan`` 已在用）。本入口**没有**接全库查重，跑完 PASS 记得补。
 """
 from __future__ import annotations
 
