@@ -582,7 +582,7 @@ def _family_key(name: str) -> str:
     return stem
 
 
-def _window_stats(dret: pd.Series, ic: pd.Series, *, split_frac: float = 0.7,
+def window_stats(dret: pd.Series, ic: pd.Series, *, split_frac: float = 0.7,
                   recent_days: int = 250, min_days: int = 60) -> dict:
     """把一条日收益序列 + 逐日 IC 切成"前段 / 后段 / 近 250 日"三段统计。
 
@@ -1480,7 +1480,7 @@ class FactorLibrary:
 
             # —— 门槛 6：时间稳健（前 70% / 后 30% 分段，样本外近似）
             if series is not None:
-                st = _window_stats(series[0], series[1],
+                st = window_stats(series[0], series[1],
                                    split_frac=g["split_frac"],
                                    recent_days=int(g["recent_days"]),
                                    min_days=int(g["min_seg_days"]))
@@ -2376,7 +2376,7 @@ class FactorLibrary:
         top_corr, top_name = abs(top[0]["corr"]), top[0]["name"]
         # 残差回归是唯一的重活（全样本逐日截面 OLS，实测 8~13 s/因子）。
         # 只在"疑似重复"时才值得算——ρ 不到触发线的不存在"等价"问题。
-        from scripts.factors.dup_criteria import (
+        from research.dup_criteria import (
             classify, classify_independent, explain, should_check)
 
         if should_check(top_corr):
@@ -2421,7 +2421,7 @@ class FactorLibrary:
 
         **判据（2026-11-12 改口径）**：`dup_corr` 只用来决定「值不值得做残差检验」
         与日志提示，**不参与"是否重复"的判定**。真正判重看秩空间残差
-        （``scripts.factors.dup_criteria``）：
+        （``research.dup_criteria``）：
 
         - ``rel_std < 1e-3`` ⇒ **等价**（单调变换/镜像）⇒ ``reject_dup`` 时直接拒
         - 否则放行，即使 ρ 高达 0.999——实测 129 个「ρ≥0.95 的冗余」里
@@ -2525,7 +2525,7 @@ class FactorLibrary:
         # 这里原来用 raw 值的 resid_t（|t|≥2 算有增量），已被证伪：
         # 纯单调变换（rank 版本）在 raw 空间留下曲线残差，能给出 t=−7.4 的伪增量。
         from scripts.factors.dup_audit import rank_resid_stats
-        from scripts.factors.dup_criteria import (
+        from research.dup_criteria import (
             classify, classify_independent, explain, should_check)
 
         if should_check(top_corr):

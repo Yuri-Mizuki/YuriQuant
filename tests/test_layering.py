@@ -396,7 +396,6 @@ _TESTS_ONLY_PRIVATE: set[tuple[str, str]] = {
     ("research.factor_library", "_collapse_duplicate_names"),
     ("research.factor_library", "_count_changed"),
     ("research.factor_library", "_family_key"),
-    ("research.factor_library", "_window_stats"),
     ("scripts.builders.build_alla_alpha_panels", "_upsert_registry"),
     ("scripts.factors.panel_leak_audit", "_staleness"),
     ("scripts.factors.backfill_metadata", "_alpha_formula"),

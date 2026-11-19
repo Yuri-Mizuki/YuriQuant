@@ -20,7 +20,7 @@ import pytest
 
 from backtest.metrics import sharpe_ratio
 from research.factor_library import (MATURITY_GATES, FactorLibrary, _family_key,
-                                     _window_stats, name_slug)
+                                     name_slug, window_stats)
 
 N = 800          # 约 3.2 年；后段 30% = 240 天，够"近 250 日"窗口取不满时退化
 
@@ -118,7 +118,7 @@ def test_family_key_strips_window_but_keeps_numbering():
 def test_window_stats_sharpe_matches_library_convention():
     """分段夏普必须与 registry 的 ``sharpe_ls_M`` 同口径，否则两者不可比。"""
     r = _series(mu=0.001, seed=7)
-    st = _window_stats(r, r * 0.01)
+    st = window_stats(r, r * 0.01)
     whole = float(sharpe_ratio(r))
     # 前段 + 后段拼接 ≈ 全段（只在两端都够样本时成立）
     assert st["sharpe_back"] == pytest.approx(float(sharpe_ratio(r.iloc[:560])), rel=1e-9)
@@ -129,7 +129,7 @@ def test_window_stats_sharpe_matches_library_convention():
 
 def test_window_stats_returns_nan_when_too_short():
     r = _series(n=40)
-    st = _window_stats(r, r, min_days=60)
+    st = window_stats(r, r, min_days=60)
     assert all(np.isnan(st[k]) for k in st)
 
 
