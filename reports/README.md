@@ -270,6 +270,17 @@
 > 目录本身只是产物。判定一律取 `归档`（有结论、无后续动作）；`工具保留` 的四个是脚本仍在读写的位置。
 > 同期把根部的 9 个 `alphapool_ppo_*.json`、12 个 `gflownet_*.pt`、2 张收尾表归位进目录。
 
+> **2026-11-18 面板清理（零引用归档臂瘦身，17.7GB → 0.4GB）**：下表 14 个 `归档` 臂
+> 在全部 `.py/.yaml` 中引用数为 **0**，其 `pred/ selection/ _base/ equity*/ buffer_defv/
+> signals/ ppo_attempts/` 已整体入回收站，**仅保留顶层 README 与 `metrics_*.csv` /
+> `ic_stats.csv` / `backtest*.log` 等结论表**（各臂剩 ~200KB）。重跑命令见各目录 README，
+> 产物可由 `scripts/pipelines/rolling_grid_alla.py` 重新生成（1~3 min/臂）。
+> 涉及：`ortho920e4` / `e4force` / `fundind2` / `fundind3` / `fundind5` / `fundind_lblco` /
+> `fundind_mf` / `mf` / `nolabels` / `tl_lblco` / `tl_lblgauss` / `tl_lblir` /
+> `portfolio_phase2_full` / `portfolio_phase2_full_parts`。
+> **未清**：`ortho920fundind`（28 处引用，生产在跑）、`ortho920tl`（3 处）、`ortho920v2`
+> 与 `ortho920fundind4`（各 1 处诊断脚本硬编码）、`ortho920fundind_h40`、`report_replica`（17 处）。
+
 | `alla_rolling_ortho920tl` | 批次 1/2/3/8 的 920 治本/消融臂；结论见 `batch_920_consolidated/` | 归档 |
 | `alla_rolling_ortho920v2` | 批次 1/2/3/8 的 920 治本/消融臂；结论见 `batch_920_consolidated/` | 归档 |
 | `alla_rolling_ortho920e4` | 批次 2/3 的 E4 交互因子族臂；结论见 `batch_920_consolidated/` | 归档 |
@@ -316,12 +327,12 @@
 | `mf10_t_scan` | MF10 单因子 t 值扫描（hs300 2022–2025 两口径 IC/IR） | 归档 |
 | `portfolio_phase2` | 组合 Phase-2 实验（equity/signals/summary，24MB） | 归档 |
 | `portfolio_phase2_full` | 组合 Phase-2 全样本版本（同上，22 文件） | 归档 |
-| `portfolio_phase2_full_parts` | Phase-2 消融分解臂（p2024_full / no_alpha / no_excess / no_risk）**5.5GB，全库最大** | 归档 |
+| `portfolio_phase2_full_parts` | Phase-2 消融分解臂（p2024_full / no_alpha / no_excess / no_risk）**原 5.5GB，全库最大；2026-11-18 面板已清，剩 208KB 指标表** | 归档 |
 | `tabfm_rolling` | TabFM 滚动预测产物（all_a / hs300 / zz1000 三池各一个子目录） | 归档 |
 | `views_arm_920_smoke` | views 臂的 smoke 试跑（`meta.json` + `pred_ic.csv`），被 `views_arm_920/README.md` 引用 | 归档 |
 | `vol_target_920_const` | 目标波动 overlay 的恒定敞口对照臂（单文件 `vol_target.csv`） | 归档 |
 | `yelaoshi_first_board_2026-10-25` | 首板策略回测产物（`scripts/oneoff/yelaoshi_first_board_*.py` 产出） | 归档 |
-| `_rebuild_logs` | 前视修复后重建的全程日志 + `HANDOFF.md`（331 文件 59MB），供追溯那次重建 | 归档 |
+| `_rebuild_logs` | 前视修复后重建的全程日志 + `HANDOFF.md`（**2026-11-18 清掉 6 个巨型 stdout，325 文件 6.1MB**；原 331 文件 59MB） | 归档 |
 | `alphapool_ppo` | AlphaPool PPO 三臂 × 三种子训练/评估记录（`run_alphapool_ppo.py` 默认输出目录） | 工具保留 |
 | `gflownet_ckpt` | GFlowNet 因子挖掘的模型权重存档（12 个 `.pt`，按 im/raw/rawim/rre/budget2x 分组） | 工具保留 |
 | `batch_920_consolidated` | 920 批次收尾对照表与结果速览（原在 `reports/` 根部，2026-11-18 归位） | 归档 |
@@ -504,6 +515,35 @@ model层 / ML合成，其余已删、可重跑复现——结论见 §三.13~17�
     `_fresh_panels.txt`、`factor_gp_20261007_150235.csv`（352B，零引用）、
     `alla_rolling_ortho920smoke`（477MB smoke 试跑，零引用）。快照清单（路径/文件数/字节/mtime）
     存 `D:/project/_yq_snapshots/2026-11-18_reports_cleanup.txt`，README 备份同目录。
+
+- **2026-11-18（本机存储瘦身：**reports 26GB → 7.6GB，`D:/data` 162GB → 161GB，共释放 ~18.6GB**）**：
+  起因是「本机数据也要清干净」。先做全量只读扫描再动手，判定依据是**代码引用数**而非目录新旧。
+  - **删除口径**：一个目录在全部 `*.py/*.yaml/*.toml` 里引用数为 0 且判定已是 `归档`，
+    才清其大件；**只删 `pred/ selection/ _base/ equity*/ buffer_defv/ signals/ ppo_attempts/`，
+    顶层 README 与 `metrics_*.csv` / `ic_stats.csv` / `backtest*.log` 全部保留**（结论不丢）。
+  - **reports 清 14 个零引用臂**（82 个目标路径、3,843 文件、17.7GB，分 9 批走回收站）：
+    `ortho920e4` / `e4force` / `fundind2` / `fundind3` / `fundind5` / `fundind_lblco` /
+    `fundind_mf` / `mf` / `nolabels` / `tl_lblco` / `tl_lblgauss` / `tl_lblir` /
+    `portfolio_phase2_full` / `portfolio_phase2_full_parts`。最大的两块是
+    `portfolio_phase2_full_parts`（5.2GB，主体是 PPO 训练 checkpoint `s100~s4xx.zip` ×37MB）
+    与 `ortho920fundind_mf`（1.4GB）。
+  - **明确不清**（引用数 ≥1）：`ortho920fundind`（28 处，生产每日出榜在读）、`ortho920tl`（3 处）、
+    `ortho920v2` 与 `ortho920fundind4`（各 1 处诊断脚本硬编码 `SEL_DIR`/`bdir`）、
+    `ortho920fundind_h40`、`report_replica`（17 处）、`frontier_audit_920_reval`（7 处）。
+  - **`D:/data` 清 5 项**：`ic_h{1,5,10,20}.parquet.bak_20261108`（4×13MB，11-08 重算前的旧评估）、
+    `income.parquet.bak_20261107_q3partial`（57MB 半成品）、6 个 9-24 一次性重建巨型 stdout
+    （17+13+9+7+4+3MB）+ 31 个 `__pycache__`（15MB）+ `.pytest_cache`；另移除 6 个空壳目录
+    （`factor_library/{mock,test_ds,hs300_2025}`、`data/{csv,reports}`、`.screenshots`）。
+  - **保留 `registry.csv.bak_{20261107,basis,dupaudit}`（2.8MB）**：11-12 退登记 129 个因子时
+    「台账可回滚」的回滚依据，成本极低，不删。
+  - **结论性边界**：本机**没有可清的「数据」**——`factor_library/panels*` 139GB 三套面板全在用
+    （`panels` 原始 / `panels_neu` 慢信号 / `panels_neu_fundind` 特征源），`sdk_cache/infodata` 16GB
+    财报 `.h5` 是 `parquet/` 未落盘的**唯一副本**（删了要重拉付费源），`dup_signatures.npy` 2.6GB
+    是入库门禁的秒级查表索引。三者都不可再生或重建代价高。
+  - **顺带查出的环境债**：`config/settings.yaml` 的默认解释器 `D:\python\Python312\python.exe`
+    在本机**不存在**，系统 3.13 也没装 pandas ⇒ `.venv`（5.1GB）是本机唯一可运行环境，
+    **不删**；`.env` 里 `YQ_PYTHON` 已正确指向 `.venv/Scripts/python.exe`，无需改动。
+  - 快照清单存 `D:/project/_yq_snapshots/2026-11-18_data_cleanup.txt`（文件数/字节/mtime/路径）。
   - **未删任何实验产物**：`alla_rolling_ortho920*` 与 `portfolio_phase2_full_parts`（5.5GB）
     全部保留并登记，`reports/` 仍占 ~27GB。要回收空间需另议（`_base/` 可重生成，是主要体积）。
 
