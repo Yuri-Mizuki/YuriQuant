@@ -107,7 +107,7 @@
 | `evaluation/fundamental_blend.py` | E3 基本面慢信号 ⊕ 快信号双层融合（信达式分域建模 + 预测层 λ 加权）。 |
 | `evaluation/fuse_placebo.py` | 融合增益的**安慰剂检验**：区分「真信号」与「覆盖率掩码 / 暴露」假象。 |
 | `evaluation/galaxy_l1.py` | 银河 0608 复现 L1：三标签 GBDT + 验证集 RankIC 质量门槛（stage2 Phase 2 前置）。 |
-| `evaluation/gate_core.py` | 上者的公共件（IC 四口径、NW t、逐日残差正交、循环平移、`SIGNFLIP` 判据）；**库不是入口**，`tests/test_factor_gate.py` 锁死与 `residual_ic_probe` 逐位一致。 |
+| `evaluation/gate_core.py` | **数据装载 + 兼容转出口**（2026-11-19）：只保留 `load_ic_context` / `load_panel`，判据全部 re-export 自 `research/factor_criteria.py`（`tests/test_factor_criteria.py` 断言同一对象）。 |
 | `evaluation/gp_tune_budget.py` | GP 评估预算 × 多 seed 调参实验（三段式，test 段受保护） |
 | `evaluation/gtja_repro_eval.py` | 国君研报复现：因子回测评估与研报基准对比 |
 | `evaluation/horizon_cross_eval.py` | A1 同目标交叉评估 + 组合层对照（2026-10-19）。 |
@@ -202,7 +202,7 @@
 | `factors/build_technical_factors.py` | 技术面迭代/累积类指标 → 日频因子构建与入库 |
 | `factors/build_top10_factors.py` | 「中国因子十强」复现与统一评估（JKP 口径榜单，2026-11-02） |
 | `factors/dup_audit.py` | 全库冗余审计：一次性算清 965 个因子的两两截面相关，并把结论写回 registry。 |
-| `factors/dup_criteria.py` | 因子重复性判据——**全仓唯一真源**。 |
+| `factors/dup_criteria.py` | 兼容转出口（2026-11-19 下沉）：判据真源已迁到 `research/dup_criteria.py`，本文件只转发、**不得加任何逻辑或阈值**。 |
 | `factors/dup_precheck.py` | **登记前**冗余预检：这批因子该不该进库，先看一眼它最像谁。 |
 | `factors/factor_board_data.py` | 因子看板数据层：为因子库里每个因子算「分位组合净值 + IC 序列 + 行业 IC」。 |
 | `factors/factor_library.py` | 因子库 CLI |
