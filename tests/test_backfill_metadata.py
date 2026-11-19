@@ -22,23 +22,34 @@ from scripts.factors.backfill_metadata import (
 # ---------------------------------------------------------------------------
 # 规则
 # ---------------------------------------------------------------------------
+def _quote_part(s: str) -> str:
+    """``<出处引用> = <反解析表达式>`` 取等号左侧；没有表达式时原样返回。
+
+    2026-11-13 起 ``_alpha_formula`` 会在引用后追加 ``= <表达式>``（见其 docstring），
+    引用措辞的断言只该盯左半段，别把「有没有表达式」和「措辞对不对」搅在一起。
+    """
+    return s.split(" = ", 1)[0]
+
+
 def test_alpha101_uses_the_wording_hs300_already_ships():
     got = _alpha_formula("alpha101", "alpha101_001")
-    assert got == "WorldQuant Alpha101 (Kakushadze 2016) #001"
+    head, sep, expr = got.partition(" = ")
+    assert head == "WorldQuant Alpha101 (Kakushadze 2016) #001"
+    assert not sep or expr.strip(), "写了等号就必须带表达式，不能留半截"
 
 
 def test_alpha191_keeps_the_three_digit_id():
-    assert _alpha_formula("alpha191", "alpha191_166").endswith(" #166")
+    assert _quote_part(_alpha_formula("alpha191", "alpha191_166")).endswith(" #166")
 
 
 def test_alpha158_carries_the_feature_name_not_a_number():
     got = _alpha_formula("alpha158", "alpha158_BETA30")
-    assert got.endswith("· BETA30")
+    assert _quote_part(got).endswith("· BETA30")
     assert "Qlib Alpha158" in got
 
 
 def test_alpha360_carries_the_field_and_lag():
-    assert _alpha_formula("alpha360", "alpha360_CLOSE59").endswith("· CLOSE59")
+    assert _quote_part(_alpha_formula("alpha360", "alpha360_CLOSE59")).endswith("· CLOSE59")
 
 
 def test_e4_splits_on_the_separator_because_buckets_contain_underscores():
@@ -58,12 +69,6 @@ def test_llm_label_without_an_expression_is_not_used_as_formula():
     assert propose(row)["formula"] == ""
 
 
-def test_label_that_is_a_definition_is_reused_as_formula():
-    row = pd.Series({"name": "rd_exp_ratio_ttm", "set": "fundamental",
-                     "label": "研发强度=研发TTM/营收TTM"})
-    assert propose(row)["formula"] == "研发强度=研发TTM/营收TTM"
-
-
 def test_equals_sign_inside_prose_is_not_a_definition():
     row = pd.Series({"name": "report_delay", "set": "fundamental",
                      "label": "披露时滞相对偏移(晚披露=坏消息)"})
@@ -74,12 +79,6 @@ def test_label_that_is_a_definition_is_reused_as_formula():
     row = pd.Series({"name": "rd_exp_ratio_ttm", "set": "fundamental",
                      "label": "研发强度=研发TTM/营收TTM"})
     assert propose(row)["formula"] == "研发强度=研发TTM/营收TTM"
-
-
-def test_equals_sign_inside_prose_is_not_a_definition():
-    row = pd.Series({"name": "report_delay", "set": "fundamental",
-                     "label": "披露时滞相对偏移(晚披露=坏消息)"})
-    assert propose(row)["formula"] == ""
 
 
 @pytest.mark.parametrize("set_name,expected", [
@@ -111,7 +110,8 @@ def test_plan_never_overwrites_a_non_empty_value():
     plan = build_plan(reg)
     assert not plan["fill_formula"].iloc[0]
     assert plan["conflict_formula"].iloc[0]
-    assert plan["formula_new"].iloc[0] == "WorldQuant Alpha101 (Kakushadze 2016) #001"
+    assert _quote_part(plan["formula_new"].iloc[0]) == \
+        "WorldQuant Alpha101 (Kakushadze 2016) #001"
 
 
 def test_plan_skips_sets_whose_family_was_already_refined_by_hand():

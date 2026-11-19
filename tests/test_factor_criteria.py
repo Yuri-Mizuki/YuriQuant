@@ -10,8 +10,7 @@
 3. **阈值唯一**：准入阈值只出自 ``factor_criteria``、晋升阈值只出自
    ``factor_library.MATURITY_GATES``、重复性阈值只出自 ``research.dup_criteria``。
 
-白名单里的存量条目（``residual_ic_probe.resid_rank`` 等）是阶段 1 待收口的，
-不是"允许保留"。收口一个就从白名单删一个，数量只会单调下降。
+白名单只减不增；收口一个就从白名单删一个，数量只会单调下降。
 """
 from __future__ import annotations
 
@@ -33,14 +32,19 @@ ROOT = Path(__file__).resolve().parents[1]
 #: （2026-11-19 实测：按 ``verdict`` 守卫一次抓到 4 个语义无关的同名函数）。
 DEFINERS: dict[str, set[str]] = {
     "ic_calibers": {"research/factor_criteria.py"},
-    # 存量：residual_stack_probe 自写了一份逐日残差正交。阶段 1 待收口。
-    "resid_rank": {"research/factor_criteria.py",
-                   "scripts/evaluation/residual_ic_probe.py",
-                   "scripts/evaluation/residual_stack_probe.py"},
+    "resid_rank": {"research/factor_criteria.py"},
     "panel_coverage": {"research/factor_criteria.py"},
     "cyclic_placebo": {"research/factor_criteria.py"},
     "effect_size": {"research/factor_criteria.py"},
     "admission_verdict": {"research/factor_criteria.py"},
+    # 指标口径（2026-11-19 收口）：显著性 / IC 摘要全仓各一处实现。
+    # ``ic_stats`` 8 处复制、``nw_t`` 12 处复制，语义统一后按名字钉死。
+    "ic_stats": {"stats/ic.py"},
+    "nw_t": {"stats/robust_stats.py"},
+    "nw_mean_t": {"stats/robust_stats.py"},
+    # 已消除的逐日 IC 序列别名：再出现即视为重写（空集 = 任何文件都不许定义）。
+    "daily_ic": set(),
+    "ic_of": set(),
 }
 
 #: 阈值常量名 → 允许的定义处。
@@ -58,9 +62,6 @@ def _py_files() -> list[Path]:
     for p in ROOT.rglob("*.py"):
         rel = p.relative_to(ROOT)
         if any(part in _SKIP_DIRS for part in rel.parts):
-            continue
-        # 一次性实验目录与测试本身不算生产实现
-        if rel.parts[:2] == ("scripts", "oneoff"):
             continue
         out.append(p)
     return out
@@ -109,27 +110,6 @@ def test_dup_criteria_shim_is_same_object():
         assert getattr(shim, name) is getattr(real, name), f"{name} 不是同一对象"
     for name in ("CORR_TRIGGER", "REL_STD_DEGENERATE", "RESID_IC_NEGLIGIBLE"):
         assert getattr(shim, name) == getattr(real, name)
-
-
-def test_gate_core_reexports_same_objects():
-    """``gate_core`` 的判据必须逐符号 re-export ``factor_criteria``。"""
-    import research.factor_criteria as fc
-    from scripts.evaluation import gate_core as gc
-
-    for name in ("ic_calibers", "resid_rank", "panel_coverage", "cyclic_placebo",
-                 "effect_size", "verdict", "ic_stats", "yearly_ic", "rank_corr",
-                 "seg_stability"):
-        assert getattr(gc, name) is getattr(fc, name), f"{name} 不是同一对象"
-
-
-def test_gate_core_defaults_is_same_dict():
-    """``gc.DEFAULTS`` 必须**是** ``ADMISSION_GATES`` 本身，不是副本。"""
-    import research.factor_criteria as fc
-
-    assert fc.ADMISSION_GATES is not None
-    from scripts.evaluation import gate_core as gc
-
-    assert gc.DEFAULTS is fc.ADMISSION_GATES
 
 
 # ---------------------------------------------------------------------------

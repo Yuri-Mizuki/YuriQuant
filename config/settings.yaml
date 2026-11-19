@@ -193,8 +193,8 @@ backtest:
 # --- 对照基准指数（各报告/策略"与谁比"的唯一真源，2026-09-11 收敛）---
 # 此前指数字面量散落在 5 处：本段 backtest.benchmark、model_portfolio.benchmark、
 # scripts/rolling_grid_alla.BENCH_INDEX、scripts/jq_style_report.BENCH_INDEX、
-# scripts/run_etf_rotation.BENCH（另有 scripts/textmining/* 4 处待随其链路一并处理）。
-# ⚠️ 四者**取值本就不同**（用途不同，不是同一概念的重复），故按用途分键，
+# scripts/run_etf_rotation.BENCH（该脚本 2026-11-19 已删；另有 scripts/textmining/* 4 处待随其链路一并处理）。
+# ⚠️ 各者**取值本就不同**（用途不同，不是同一概念的重复），故按用途分键，
 #    不合并成一个值——合并会静默改掉某条链路的对照基准。
 # 消费方走 Config.benchmarks()。
 benchmarks:

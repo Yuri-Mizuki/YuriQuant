@@ -897,7 +897,7 @@ baselines:
         capacity_p10: 14800000.0
         source: "python -m scripts.evaluation.yq_core_report --view capacity"
     diagnostics:                  # 非 caliber 产出（探针），只作机制证据，不进判改进基线
-      source: "reports/focus_upgrade/grid.csv（scripts/evaluation/focus_upgrade_probe.py）"
+      source: "reports/focus_upgrade/grid.csv（构造脚本已删，2026-11-19；结论保留）"
       metric: "K=6..30 共 11~12 格年化均值（同窗口同执行层，仅信号不同）"
       arms:
         gbdt_mid13: 0.2953
@@ -987,7 +987,7 @@ baselines:
       capital: 100000.0        # 写成浮点：YAML 1.1 把 `1.0e5` 当字符串
       lot_size: 100
       price_panel: "close_raw.ffill().shift(1)"
-      source_script: "scripts/evaluation/focus_micro_probe.py"
+      source_script: "（脚本已删，2026-11-19；值见 reports/focus_micro/）"
     data_state:
       registered: "882 ortho gbdt_mid13 + close_raw 未复权价，止 2026-09-07"
       caveats: >
@@ -1096,7 +1096,7 @@ baselines:
     reproducible_local: true
     regen_cmd: >
       ① 消融/安慰剂/滚动重估（本档全部判定依据）：
-         /d/Python/Python312/python -m scripts.evaluation.focus_micro_probe
+         （脚本已删，2026-11-19；产物见 reports/focus_micro/）
       ② 产品线口径（10 万 + 整手，report_native.json 里本档那一行）：
          /d/Python/Python312/python -m scripts.evaluation.yq_core_report --view native --tiers yqcore-focus-k8
     source: "reports/focus_micro/grid.csv + reports/yq_core/report_native.json"
