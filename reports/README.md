@@ -545,6 +545,24 @@ model层 / ML合成，其余已删、可重跑复现——结论见 §三.13~17�
     在本机**不存在**，系统 3.13 也没装 pandas ⇒ `.venv`（5.1GB）是本机唯一可运行环境，
     **不删**；`.env` 里 `YQ_PYTHON` 已正确指向 `.venv/Scripts/python.exe`，无需改动。
   - 快照清单存 `D:/project/_yq_snapshots/2026-11-18_data_cleanup.txt`（文件数/字节/mtime/路径）。
+
+- **2026-11-19（`panels_neu_fundind` 改覆盖层：48GB → 4.3GB，省 43.7GB）**：
+  另一台机器已把该目录从「全量副本」改成「覆盖层」（`alla_common.fundind_dirs()`
+  覆盖层优先、未命中回落 `panels_neu`），**代码改造随远端同步本机已有**，缺的只是数据瘦身。
+  - **本机数据态**：基准层 962 / 覆盖层 931，全量 md5 实测 **827 个逐字节相同 = 46.40GB**；
+    有效覆盖仅 104 个。（产出机当时是 863/950，两台数据态不同，数字不可对比。）
+  - **先补 10 个口径缺口**（基本面/股东族在基准层有、覆盖层无 ⇒ 会静默退化成
+    「行业+市值全剥」）：`asset_growth_yoy`/`bonus_freq_3y`/`capex_intensity`/`ccc`/
+    `div_yield_ttm`/`inv_rev_gap`/`piotroski_f`/`report_delay`/`spsr`/`sue_q`，67 s。
+    `div_yield_ttm` 基准层本就全空，`bonus_freq_3y`/`sue_q` 覆盖率 2.9%/5.2% —— 与基准层一致。
+  - **prune 828 个 46.40GB**（`audit_fundind_split --prune`，走回收站）。清单
+    `D:/data/_archive/fundind_prune_20261119_215312/MANIFEST.json`（逐文件 md5 +
+    `recover_from`）；恢复 = 从 `panels_neu` 复制回来（内容本就相同）。
+  - **踩到的边界**：`div_yield_ttm` 两层都是全空面板，判冗余删掉后 `fundind_dirs()`
+    立刻 `SystemExit`。工具加 **`pinned` 规则**：基本面/股东族永不判冗余（828 个里只命中它），
+    已恢复该文件。终态：**冗余 0 / 缺口 0 / 覆盖层 114**。
+  - **验证**：`test_fundind_layer` 6 passed；抽样 6 个回落因子经 `layer_panel_file()`
+    解析到 `panels_neu`，md5 与删除前 **6/6 一致**；`fundind_names()` 仍 962 个。
   - **未删任何实验产物**：`alla_rolling_ortho920*` 与 `portfolio_phase2_full_parts`（5.5GB）
     全部保留并登记，`reports/` 仍占 ~27GB。要回收空间需另议（`_base/` 可重生成，是主要体积）。
 

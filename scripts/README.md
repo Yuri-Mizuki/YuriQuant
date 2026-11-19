@@ -56,7 +56,7 @@
 
 | 脚本 | 说明 |
 |---|---|
-| `data_tools/audit_fundind_split.py` | E5 覆盖层体检：``panels_neu_fundind`` vs 基准层 ``panels_neu``。 |
+| `data_tools/audit_fundind_split.py` | E5 覆盖层体检：``panels_neu_fundind`` vs 基准层 ``panels_neu``。三分类（冗余/有效覆盖/仅覆盖层）+ ``--prune`` 走回收站；基本面/股东族 **永不判冗余**（``pinned``，2026-11-19 加）。 |
 | `data_tools/docs_lint.py` | 文档规范校验（docs 治理 P0，2026-10-28）。 |
 | `data_tools/dump_pdf_text.py` | 把研报 PDF 抽成带页码标记的纯文本，便于按关键词定位口径参数。 |
 | `data_tools/fix_meta.py` | 修复 e:/data/parquet/_meta.json：对齐实际日期 + 补文本表 + 加 pool 口径。 |

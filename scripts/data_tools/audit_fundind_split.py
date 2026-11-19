@@ -12,6 +12,11 @@
 * 覆盖层有、基准层无 = 基准层缺口（``only_fundind``，保留，顺带提示补基准层）
 * 基准层有、覆盖层无、且属基本面/股东族 = **口径错误**（会静默退化成全剥）
 
+**例外（2026-11-19 加）**：基本面/股东族因子即使与基准层逐字节相同也**不判冗余**
+（``pinned``）。因为 ``fundind_dirs()`` 要求这批因子在覆盖层显式存在，缺了会
+``SystemExit``；实测 828 个冗余里只命中 1 个 ``div_yield_ttm``（两层都是全空面板，
+删掉后口径检查立刻挂）。
+
 用法
 ----
     python -m scripts.data_tools.audit_fundind_split              # 只报，不动
@@ -69,10 +74,15 @@ def classify(ds: Path, use_md5: bool = True) -> dict:
             continue
         same = b.stat().st_size == p.stat().st_size and (
             not use_md5 or md5_of(b) == md5_of(p))
-        kind = "redundant" if same else "override"
+        # 基本面/股东族**永不判冗余**：``fundind_dirs()`` 要求这些因子在覆盖层
+        # 显式存在（缺了直接 SystemExit，防静默退化成「行业+市值全剥」），
+        # 即使内容与基准层逐字节相同也必须留。实测 828 个冗余里只命中 1 个
+        # （div_yield_ttm —— 两层都是全空面板，判冗余删掉后口径检查立挂）。
+        pinned = p.stem in FUNDAMENTAL_FAMILY_SETS
+        kind = "redundant" if (same and not pinned) else "override"
         out[kind].append(p.stem)
         out["detail"][p.stem] = {
-            "kind": kind, "bytes": p.stat().st_size,
+            "kind": kind, "bytes": p.stat().st_size, "pinned": pinned,
             "md5": md5_of(p) if (use_md5 and not same) else None,
         }
     out["base_count"] = len(base_files)
