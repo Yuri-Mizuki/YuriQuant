@@ -66,7 +66,7 @@
 >
 > **2026-10-09 刷新**：好机器批次 1–10 全部出数收官（GOOD_MACHINE_TASKS 已标终态），
 > 主模型定版 = fundind 快信号 h1020⊕慢信号 s0.5 + buffer(15/40) 执行层
-> （`reports/batch1_920_收尾对照表.md` §⑭⑯）。原 §一 P0 治本重跑归档、§五批次
+> （`reports/batch_920_consolidated/batch1_920_收尾对照表.md` §⑭⑯）。原 §一 P0 治本重跑归档、§五批次
 > 后续立项全部收官；本文件剩项 = **定版切生产链（唯一高优先）** + 小工程收尾 +
 > 资源墙后置线。
 >
@@ -306,7 +306,7 @@
   （ortho920v2）完整口径定版：h1020⊕s0.5 17.87%/Sharpe 0.781 四项全面占优翻案
   → fundind 快信号 18.68%/0.813（§⑫）→ §⑭ 拍板 fundind+buffer 执行层 →
   §⑯ 网格上修 buffer(15/40)（18.07%/0.805/换手 19.1%）。
-  全程 `reports/batch1_920_收尾对照表.md` §①–⑯。
+  全程 `reports/batch_920_consolidated/batch1_920_收尾对照表.md` §①–⑯。
 - [x] 另类数据 P0 管道（09-20~21）：`data/altdata/` 传输层 7 源落地（巨潮快讯 119.2 万条
   自建历史存档 / 东财宏观日历 64,978 行含补洞 / 巨潮增减持 26.6 万行全历史等，
   见 `reports/docs/另类数据管道_数据源说明.md`）；日增量入口 `fetch_altdata_daily`
@@ -597,7 +597,7 @@
   family=其他 + subfamily 区分三族，下次动 `research/factor_library.py` 时补。
   **完整判读（10-08 结案）**：席位竞争 36 轮 0 入池；慢信号家族并入（--include-alt-news）
   定版 18.68%→16.27% 双路径双败——**alt 三族对主模型无增量**（news 族 h20 反转方向
-  与 macro 择时特征留待未来新信号线），证据 `reports/batch2385_结果速览.md` P-C 节。
+  与 macro 择时特征留待未来新信号线），证据 `reports/batch_920_consolidated/batch2385_结果速览.md` P-C 节。
 - [x] **llm_pool 机制抽取（QuantaAlpha 转译，09-23 完成）**：① AST 结构去重
   （`structure_similarity` 子树 Jaccard ≥0.6 判同族变体——去窗口、终端占位、交换律排序，
   `_update` 求值前拦截省评估预算，`struct_dedup=False` 可关）；② 复杂度三维约束两项新校验
@@ -626,7 +626,7 @@
   OOS≥IS 泛化一致；`build_alla_llmmcts_factors.py` 入库 llm_* 后 v4 席位
   **4/14 入池（唯一产出超门槛因子的挖掘引擎）**，但组合层 +0.16pp 噪声级
   **不采纳**——「席位突破、组合无增量」归档（量价族信息在 DPP 下与既有 alpha
-  高度重叠），证据 `reports/batch2385_结果速览.md` P-A 节 + 终审节。
+  高度重叠），证据 `reports/batch_920_consolidated/batch2385_结果速览.md` P-A 节 + 终审节。
 - [x] **多模型×多标签预测合成对照（09-23 完成）**：12 成员（gbdt/ranker/ridge ×
   h1/h5/h10/h20）等权逐级 + walk-forward 学权（`scripts/evaluation/member_blend12.py`，
   与 stack_blend 同参）。结论：**增量在 horizon（标签）维度不在模型族维度**
@@ -736,7 +736,7 @@
 
 ## 五、好机器批次出数后的后续立项（2026-09-25 立，2026-10-09 全部收官）
 
-> 证据与数字：`reports/batch1_920_收尾对照表.md` §⑫–⑯、`reports/batch2385_结果速览.md`。
+> 证据与数字：`reports/batch_920_consolidated/batch1_920_收尾对照表.md` §⑫–⑯、`reports/batch_920_consolidated/batch2385_结果速览.md`。
 > 定版演进：10-02 v2 口径拍板 h1020⊕s0.5（17.87%/0.781）→ 10-06 §⑭ fundind 快信号
 > +buffer(20/30)（18.68%/0.813）→ 10-08 §⑯ buffer 网格上修 15/40（18.07%/0.805/
 > 换手 19.1%，top20 口径）。五项立项 + 后续 P-A/P-B/P-C/P1 提升路径全部裁决完毕：
@@ -1367,7 +1367,7 @@ astype(float32) 溢出成 inf；状态表缺预测日数据使因子全 NaN；`o
 > +0.16pp 噪声级不采纳（归档）；国金24 残余③④⑤ 闭环（raw+im 定版形态
 > OOS |IC| 0.117、114 因子入库 PBO=0.114）；银河 0706 stage2 全档 24 臂终判
 > （**RL/QP 在 zz1000 无稳健超额，RL 线整体归档**）；mf10 T 扫描出数（T=3 最优、
-> 不显著）。数字真源：`reports/batch2385_结果速览.md`、`reports/batch1_920_收尾对照表.md`。
+> 不显著）。数字真源：`reports/batch_920_consolidated/batch2385_结果速览.md`、`reports/batch_920_consolidated/batch1_920_收尾对照表.md`。
 > **长实验一律不跑、写成显式待办，执行环境 = 另一台更强的机器**。
 
 > **核心判断：全库 87 篇中 2025–2026 年仅 14 篇，恰好覆盖项目全部短板方向。**
@@ -1490,7 +1490,7 @@ OOS 2024-2026-09-22，h=5，3 seed × 50 iters × 5 variants）——750 候选�
 量价族信息在 DPP 去冗余下与既有 alpha 高度重叠。**「席位突破、组合无增量」归档**；
 跨引擎对照由既有线结论替代（GP/GFlowNet 饱和、AlphaPool 失效），hs300 29 Seed
 四臂协议未按原样执行，如实记录。证据 `reports/llm_mcts_phase0/`、
-`reports/batch2385_结果速览.md` P-A 节 + 终审节。
+`reports/batch_920_consolidated/batch2385_结果速览.md` P-A 节 + 终审节。
 
 **立项理由**：MCTS 用 UCT 把有限回测预算集中到高潜分支，直击「GP 盲目试错、因子同质化、
 单 IC 选股不管换手」三个已知短板；六项 reward（0.40 IC+0.30 IR+0.02 覆盖+0.10 换手
@@ -2029,7 +2029,7 @@ python -m scripts.portfolio.etf_contest_probe --specs exit       # B+C 组
   三年不一致，2025/2026 **全部消融臂反超 full**（六项 reward 分量无稳健净价值）、
   QP 仅 2024 正超额（+3.88pp）且 2025 solver 失败——**银河口径 RL/QP 组合优化在
   zz1000 未产生稳健超额**，与 AI97 互证 RL 路线在本项目数据域（日频
-  zz1000/hs300）整体有效性不成立。证据 `reports/batch2385_结果速览.md` 全档判读节。
+  zz1000/hs300）整体有效性不成立。证据 `reports/batch_920_consolidated/batch2385_结果速览.md` 全档判读节。
 
 **生产命令（好机器执行）**：
 
@@ -2177,7 +2177,7 @@ diff +0.0004；负端全是低波动因子负 IC 减弱，非可用 alpha）⇒ 
 > 拍板作废不跑、②③重训出数（verdict 见批次节）。产物 README 真源：
 > `reports/frontier_audit_920_reval/` `reports/cheap_lever_scan/` §四
 > `reports/cvar_arm_920/` `reports/views_arm_920/`。
-> 结果速览真源 `reports/batch2385_结果速览.md` + `reports/batch1_920_收尾对照表.md`
+> 结果速览真源 `reports/batch_920_consolidated/batch2385_结果速览.md` + `reports/batch_920_consolidated/batch1_920_收尾对照表.md`
 > + `reports/cheap_lever_scan/README.md`。命令与验收口径全文保留作复现存档。
 > **资源标注**：每批标 🖥️CPU / 🎮GPU / 💾大内存。
 
@@ -2249,7 +2249,7 @@ diff +0.0004；负端全是低波动因子负 IC 减弱，非可用 alpha）⇒ 
 > 发现基本面族 99 张面板网格污染（§⑨）→ 重建后 v2（ortho920v2）完整口径定版
 > （§⑩-⑪ h1020⊕s0.5 17.87%/0.781）→ fundind 快信号 +0.81pp（§⑫①a，18.68%/0.813）
 > → §⑭ 拍板 + §⑯ buffer(15/40) 终版。**P0 income 补齐复核负结果（§⑮）+ 环境漂移
-> 更正（同配置 ~17.0–17.2%）**。全部数字与裁决见 `reports/batch1_920_收尾对照表.md`。
+> 更正（同配置 ~17.0–17.2%）**。全部数字与裁决见 `reports/batch_920_consolidated/batch1_920_收尾对照表.md`。
 > 下方命令存档备复现。
 
 ### 1.1 主跑（≈5–7h：select 36 轮 ≈2h + predict ≈2–3h + ensemble/backtest ≈0.5h）
@@ -2314,7 +2314,7 @@ buffer 年化 25.32%/换手 53.9% 优于 naive 24.50%/66.1%）。
 
 > ✅ **已收官（09-25 出数、09-26 步长归因）——负结果归档**：九臂臂间差异 < seed
 > 噪声、PBO=0.704、DSR 不显著；100k 步归因 = 真实样本外失效非未收敛。详见
-> `reports/batch2385_结果速览.md` 批次 2 节 + 步长归因补充节。命令存档备复现。
+> `reports/batch_920_consolidated/batch2385_结果速览.md` 批次 2 节 + 步长归因补充节。命令存档备复现。
 
 ```bash
 # 跑前先 1 臂 1 seed 校准真实耗时与产物路径拼写
@@ -2337,7 +2337,7 @@ done
 > ✅ **已收官（09-25 三臂出数，10-05/06 ③④旋钮+⑤入库收官）**：raw+im 0.117 >
 > im 0.109 > raw 0.099（臂间差>种子噪声）为定版形态；RRE≥0.3 中性（0.113）、
 > 预算 2x 饱和（0.1189）；114 个 gf_* 入库（33 个 |t_nw|>2）、PBO=0.114。
-> 详见 `reports/batch2385_结果速览.md` 批次 3 节 + RRE/预算/入库三补充节。
+> 详见 `reports/batch_920_consolidated/batch2385_结果速览.md` 批次 3 节 + RRE/预算/入库三补充节。
 
 ```bash
 # 先 1 臂 1 seed 校准真实耗时（60~90 分钟/轮为外推值）
@@ -2369,7 +2369,7 @@ test_ic_max_v_decision_point_follows_train_dates`），mf10 T 扫描可放心全
 > 基准 / 门槛 zz1000 重校 / 断点持久化+降级）后，PPO full +1.07/+0.25/−3.17 三年
 > 不一致、2025/2026 消融臂普遍反超 full、QP 仅 2024 正超额——**银河口径 RL/QP
 > 在 zz1000 无稳健超额，RL 线整体不成立**（与批次 2 互证）。Phase 3 不启动。
-> 详见 `reports/batch2385_结果速览.md` 批次 5 快档/终局更正/env 修复/门槛重校/全档判读五节。
+> 详见 `reports/batch_920_consolidated/batch2385_结果速览.md` 批次 5 快档/终局更正/env 修复/门槛重校/全档判读五节。
 
 ```bash
 # 快档：先出三臂主对照（约 6-9 小时）
@@ -2552,8 +2552,8 @@ LSTM vs Transformer / IC vs ICIR Pool / 奖励 6 版 / 因子数量扫描。
 > 内加权成立（tabicl_w3m 11.97%/0.739 组件冠军，两窗口稳健）**；② zz1000：tabicl
 > 跨池最优 + **gbdt+tabicl 对集成 20.03%/1.25 全场最优**（集成可行性依池而定）；
 > ③ 全A 大截面：**ICL 优势不跨大截面**（gbdt IC 4.4 倍反超）——主模型基座维持
-> gbdt，tabicl 定位中小池组件。详见 `reports/batch2385_结果速览.md` 批次 8 三节 +
-> `reports/batch1_920_收尾对照表.md` §⑫③。
+> gbdt，tabicl 定位中小池组件。详见 `reports/batch_920_consolidated/batch2385_结果速览.md` 批次 8 三节 +
+> `reports/batch_920_consolidated/batch1_920_收尾对照表.md` §⑫③。
 
 **背景**：项目 2026-08 已实测 TabICL v1（ICML 2025，`model/predictor.py::TabICLPredictor`
 基建现成——ICL 语义、chunk 推理、device 参数齐全）：**滚动 3 个月是唯一 4 窗口全正 IR 的
@@ -2635,7 +2635,7 @@ v1 实测在 HS300 上静态 IR 最差（−2.72）、全靠滚动短窗口翻�
 > 750 候选收编 14、PBO=0.039、OOS≥IS；`build_alla_llmmcts_factors` 入库 llm_* 后
 > v4 席位 4/14（唯一超门槛引擎）；组合层 v4 17.17% vs 同环境 v3 17.01% = +0.16pp
 > 噪声级**不采纳**。含环境漂移更正（income 补齐后同配置 ~17.0–17.2%）。
-> 详见 `reports/batch2385_结果速览.md` P-A 节 + 终审节、`reports/llm_mcts_phase0/`。
+> 详见 `reports/batch_920_consolidated/batch2385_结果速览.md` P-A 节 + 终审节、`reports/llm_mcts_phase0/`。
 > 设计真源：`reports/docs/research_notes/东吴0623_研读_LLM_MCTS因子迭代框架与Phase0设计.md`；
 > 立项理由与复现边界见 RESEARCH_TODO §一 🥈。
 

@@ -441,7 +441,7 @@ def main() -> None:
     # 便于一眼看出「llm 臂用的是模板兜底还是真接口」。
     _arm_tag = args.arm if args.arm != "llm" else f"llm_{args.llm}"
     prefix = args.out_prefix or (
-        f"reports/alphapool_ppo_{args.panel}_{args.policy}_{_arm_tag}_seed{args.seed}")
+        f"reports/alphapool_ppo/alphapool_ppo_{args.panel}_{args.policy}_{_arm_tag}_seed{args.seed}")
     Path(prefix).parent.mkdir(parents=True, exist_ok=True)
 
     # ---- 1. 面板 ----

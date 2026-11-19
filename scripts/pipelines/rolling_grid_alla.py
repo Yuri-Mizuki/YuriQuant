@@ -138,6 +138,18 @@ FORCE_FEATURES: tuple[str, ...] = ()
 # CLI: --models gbdt [--out-tag jqamt]
 MODEL_FILTER: tuple[str, ...] = ()
 
+#: ``--years``：**增量续跑**时只重算这些年份，其余年份沿用既有 pred 面板
+#: （拼接后整块重写）。为什么需要：`_predict_fp` 里不含数据末端日期 ⇒ 数据
+#: 向后延长（如 09-23 → 11-06）时指纹仍匹配，`--stage predict` 会静默跳过，
+#: pred 就永远停在旧日期；而全量重训 9 年 × 4 视野约 2–3 小时，只为最后 6 周。
+#: 安全前提：训练窗 = 折起点前 ``max_train`` 日（500），追加未来数据不会改变
+#: 任何历史折的训练集 ⇒ 早年份预测不变，只补最后一年是等价的（见
+#: ``tests/test_rolling_incremental.py`` 的折集合断言）。
+PREDICT_YEARS: list[int] | None = None
+
+#: ``--force-predict``：忽略指纹跳过、强制重训所选年份（全量传此开关）。
+FORCE_PREDICT = False
+
 # 训练标签口径（2026-09-17 接入，P0 报告 §六 P1-a 的治本项）：
 #   False（默认）= 标签 = 全样本前瞻收益截面 rank —— 主实验现行口径，零回归；
 #   True         = 标签掩掉"买不进的样本"（T+1 成交口径 tradable_mask 为 False
@@ -784,6 +796,16 @@ def stage_predict(quick: bool = False, only_horizons: list[int] | None = None):
     else:
         horizons = only_horizons or HORIZONS
         years = YEARS
+    # 增量续跑：只重算指定年份，其余年份沿用既有面板（拼接后整块重写）。
+    # 为什么等价：每折训练集 = 折起点前的历史（再截尾 max_train 日），追加
+    # 未来数据不会进入任何历史折 ⇒ 早年份的重算结果逐位相同，省掉它们是安全的。
+    years_run = list(PREDICT_YEARS) if PREDICT_YEARS else list(years)
+    if PREDICT_YEARS:
+        _extra = sorted(set(years_run) - set(years))
+        if _extra:
+            raise SystemExit(f"--years 含未覆盖年份 {_extra}（YEARS={years}）")
+        log.info("+++ 增量预测：重算 %s；其余 %s 沿用既有面板",
+                 years_run, sorted(set(years) - set(years_run)))
 
     pred_dir = OUT / "pred"
     pred_dir.mkdir(parents=True, exist_ok=True)
@@ -869,14 +891,18 @@ def stage_predict(quick: bool = False, only_horizons: list[int] | None = None):
                 continue  # 模型/超参/窗口变体只在 h=1 上验证
             out_path = pred_dir / f"{mname}__h{h}.parquet"
             pfp = _predict_fp(years)
-            if _fp_match(out_path, pfp):
+            if not (FORCE_PREDICT or PREDICT_YEARS) and _fp_match(out_path, pfp):
                 continue
-            if out_path.exists():
+            if PREDICT_YEARS and not out_path.exists():
+                raise SystemExit(
+                    f"--years 增量模式要求既有 {out_path}（拼接需要它）；"
+                    "全量请去掉 --years")
+            if out_path.exists() and not PREDICT_YEARS:
                 log.warning("[pred 指纹失配] %s 过期 → 重训（selection/标签"
                             "口径/模型网格已变）", out_path.name)
             t1 = time.time()
             parts = []
-            for year in years:
+            for year in years_run:
                 sel_path = OUT / "selection" / f"y{year}__h{h}.json"
                 if not sel_path.exists():
                     # 兜底：predict 单独重跑时缺选择文件则现算（同口径无前视）
@@ -913,6 +939,13 @@ def stage_predict(quick: bool = False, only_horizons: list[int] | None = None):
                          int(valid.sum(axis=1).median()), n_before // max(1, len(test_days)))
                 parts.append(pred_y)
             pred = pd.concat(parts).astype(np.float32)
+            if PREDICT_YEARS:
+                prev = pd.read_parquet(out_path)
+                keep = prev.loc[~prev.index.year.isin(years_run)]
+                pred = pd.concat([keep, pred]).sort_index().astype(np.float32)
+                log.info("  拼接：保留 %d 日（%s），重算 %d 日（%s）",
+                         len(keep), sorted(set(keep.index.year)),
+                         len(pred) - len(keep), years_run)
             pred.to_parquet(out_path)
             _fp_write(out_path, pfp, {"model": mname, "h": h})
             ic = calc_ic_series(pred, fwd)
@@ -1602,6 +1635,13 @@ def main():
                     help="快讯情绪特征臂（altf P1）：alt_news_* stock-level 面板"
                          "原值旁路并入 GBDT 特征集（模型层非线性利用，"
                          "对照等权合成稀释）。须配 --out-tag")
+    ap.add_argument("--years", default=None,
+                    help="增量续跑：逗号分隔的年份（如 `2026`），只重算这些年份，"
+                         "其余年份沿用既有 pred 面板后整块重写。用于**数据延长**后"
+                         "补最后一年（指纹不含数据末端日期，纯重跑会被跳过）。"
+                         "须配 --out-tag 且要求 pred 面板已存在")
+    ap.add_argument("--force-predict", action="store_true",
+                    help="忽略 pred 指纹跳过、强制重训（配合 --years 时只影响该年）")
     ap.add_argument("--out-tag", default=None,
                     help="消融臂输出目录后缀 -> reports/alla_rolling_<tag>")
     ap.add_argument("--mask-lag", type=int, default=1, choices=[0, 1],
@@ -1619,6 +1659,7 @@ def main():
     global LABEL_MODE, LABEL_WINDOW, LABEL_METHOD, MACRO_FEATURES_ON
     global NEWS_FEATURES_ON
     global MODEL_FILTER
+    global PREDICT_YEARS, FORCE_PREDICT
     if args.sc_model:
         SC_MODEL = args.sc_model
         log.info("+++ smallcap 信号模型 -> %s（产物加 __%s 后缀）",
@@ -1717,6 +1758,18 @@ def main():
             ap.error(f"--models 未知模型 {_bad}；可选 {sorted(_known)}")
         log.info("+++ 模型子集：%s（跳过其余模型，省训练成本）",
                  list(MODEL_FILTER))
+    FORCE_PREDICT = bool(args.force_predict)
+    if args.years:
+        if not args.out_tag:
+            ap.error("--years 须配 --out-tag：增量拼接改的是该目录下的 pred，"
+                     "写错目录会把别的臂的面板拼坏")
+        if args.stage not in ("predict", "all"):
+            ap.error("--years 只在 --stage predict 下有定义")
+        try:
+            PREDICT_YEARS = [int(x) for x in args.years.replace(" ", "").split(",") if x]
+        except ValueError:
+            ap.error(f"--years 须为逗号分隔年份，收到 {args.years!r}")
+        log.info("+++ 增量预测：只重算 %s，其余年份沿用既有面板", PREDICT_YEARS)
     if args.preproc is None:
         args.preproc = "zscore"
         if args.stage == "prep":

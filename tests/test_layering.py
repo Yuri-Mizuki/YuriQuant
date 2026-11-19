@@ -251,7 +251,7 @@ def test_experiment_entry_scripts_are_not_imported_by_other_scripts():
     2026-10-19 架构清理：``rolling_grid_alla`` 原先被 25 个脚本反向 import
     （``load_base`` / ``res_metrics`` / ``FeatureStore`` / ``_rank_average`` …）。
     共享件已下沉 :mod:`scripts.common.alla_common`，本守卫钉住该入口"只进不出"；
-    ``run_model_portfolio`` 已归入 ``scripts/archive/``（legacy）。
+    ``run_model_portfolio`` 已随 ``scripts/archive/`` 于 2026-11-18 整体删除（legacy）。
     """
     entry_mods = {"scripts.pipelines.rolling_grid_alla"}
     entry_files = {m.rsplit(".", 1)[-1] + ".py" for m in entry_mods}
