@@ -35,6 +35,7 @@ import numpy as np
 import pandas as pd
 
 from config import Config
+from research.html_report import page
 from stats.robust_stats import nw_tstat
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -281,18 +282,14 @@ def _cls(v):
 
 
 def _shell(title: str, body: str, scripts: str, root: str = ".") -> str:
-    """页面外壳：自包含（echarts 走同目录 assets，避免 888 份 1MB 内联）。"""
-    return f"""<!DOCTYPE html>
-<html lang="zh-CN"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{html.escape(title)}</title>
-<script src="{root}/assets/echarts.min.js"></script>
-<style>{CSS}</style>
-</head>
-<body>
-{body}
-{scripts}
-</body></html>"""
+    """页面外壳：交给 ``research.html_report.page``（全仓唯一外壳实现）。
+
+    echarts 走同目录 assets 外链，不内联——888 份 1MB 内联会让页面开到卡死。
+    本函数只负责「本看板的主题 CSS + 无页首」这两处差异。
+    """
+    return page(title, body=body, css=CSS, header="",
+                head_extra=f'<script src="{root}/assets/echarts.min.js"></script>',
+                scripts=scripts)
 
 
 def _topbar(n_factor: int, generated: str, active: str, root: str = ".",

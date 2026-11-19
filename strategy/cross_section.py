@@ -23,8 +23,6 @@
 """
 from __future__ import annotations
 
-# ``pool_scope_probe`` 直接用这个确定性排序（并列按列序打破），是模块私有名但
-# 被跨模块消费，故在兼容层显式透出，避免调用方各自重写一遍排序。
 from strategy.examples import (
     BufferedTopFracLongOnly,
     BufferedTopKLongOnly,
@@ -37,13 +35,6 @@ from strategy.examples import (
     build_strategy,
     rank_desc,
 )
-
-#: 向后兼容别名（2026-11-12 临时）。``scripts/evaluation/pool_scope_probe.py`` 仍
-#: ``from strategy.cross_section import _rank_desc``，而该文件因依赖一条尚未入库的
-#: 成本线（``caliber.py`` 的 ``stamp_duty_schedule``）无法同批提交 —— 不留这个别名，
-#: 干净 clone 上 ``pool_scope_probe`` 会直接 ImportError。
-#: 🚨 等 pool_scope_probe 与成本线一并入库后**删除本行**。
-_rank_desc = rank_desc
 
 __all__ = [
     "TopKLongShort",

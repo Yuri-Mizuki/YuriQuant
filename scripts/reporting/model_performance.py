@@ -34,6 +34,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from backtest.engine import VectorBacktest  # noqa: E402
+from backtest.metrics import drawdown_series  # noqa: E402
 from research.benchmarks import segmented_equal_weight_returns  # noqa: E402
 from research.html_report import page  # noqa: E402
 from scripts.evaluation import caliber as cal  # noqa: E402
@@ -83,10 +84,6 @@ def build_benchmark(ctx) -> pd.Series:
 def eq_curve(dr: pd.Series) -> pd.Series:
     s = dr.reindex(dr.index).fillna(0.0)
     return (1.0 + s).cumprod()
-
-
-def drawdown(eq: pd.Series) -> pd.Series:
-    return eq / eq.cummax() - 1.0
 
 
 def yearly(dr: pd.Series) -> dict[str, float]:
@@ -414,7 +411,7 @@ def build(signal: str, window: str, profile: str, buffer: str,
     _, b_vals = week_sample(b_eq)
     eq_sets.append({"label": "等权基准", "data": b_vals, "borderColor": "#c62828",
                     "borderDash": [2, 3]})
-    dd = drawdown(eq_curve(curves[main_tag]))
+    dd = drawdown_series(eq_curve(curves[main_tag]))
     ddw = dd.resample("W-FRI").last().reindex(pd.to_datetime(labels)).ffill()
     y_strat = yearly(curves[main_tag])
     y_bench = yearly(bench_dr)

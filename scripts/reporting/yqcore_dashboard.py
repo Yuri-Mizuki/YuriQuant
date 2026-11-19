@@ -47,6 +47,17 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from backtest.metrics import (
+    PERIODS_PER_YEAR,
+    annual_return,
+    annual_volatility,
+    calmar_ratio,
+    drawdown_series,
+    information_ratio,
+    sharpe_arithmetic,
+    sharpe_ratio,
+)
+
 ROOT = Path(__file__).resolve().parents[2]
 PROD_DIR = ROOT / "reports" / "yq_core"
 LIVE_DIR = PROD_DIR / "live"
@@ -150,13 +161,9 @@ def load_bench(base_dir: Path) -> dict[str, pd.Series]:
     return out
 
 
-def _dd_curve(nav: pd.Series) -> pd.Series:
-    return nav / nav.cummax() - 1.0
-
-
 def _mdd_info(nav: pd.Series) -> dict:
     """最大回撤及其区间（峰 → 谷）。峰值取谷底之前的最高点，与 dd 曲线定义一致。"""
-    dd = _dd_curve(nav)
+    dd = drawdown_series(nav)
     if not len(dd):
         return {"mdd": None, "peak": None, "trough": None, "days": None}
     trough = dd.idxmin()
@@ -189,8 +196,12 @@ def _capm(r: pd.Series, m: pd.Series) -> dict:
     }
 
 
-def _perf(nav: pd.Series, bench_ret: pd.Series, ann: int = 252) -> dict:
-    """一组净值 + 基准日收益 → 页面需要的全部派生指标（自算，不读缓存）。"""
+def _perf(nav: pd.Series, bench_ret: pd.Series, ann: int = PERIODS_PER_YEAR) -> dict:
+    """一组净值 + 基准日收益 → 页面需要的全部派生指标（自算，不读缓存）。
+
+    所有年化/夏普/IR/卡玛一律走 :mod:`backtest.metrics` 真源，本函数只负责
+    序列对齐与超额口径选择（比值 vs 算术差）。
+    """
     nav = nav.dropna()
     if len(nav) < 2:
         return {}
@@ -199,12 +210,13 @@ def _perf(nav: pd.Series, bench_ret: pd.Series, ann: int = 252) -> dict:
     bn = (1.0 + br).cumprod()
     bn = bn / bn.iloc[0]                        # 基准净值与策略同起点
     n = len(nav)
+    rr = r.reindex(br.index).fillna(0.0)
 
     cum_p = float(nav.iloc[-1] / nav.iloc[0] - 1.0)
     cum_b = float(bn.iloc[-1] / bn.iloc[0] - 1.0)
     cum_x = float(nav.iloc[-1] / bn.iloc[-1] - 1.0)
-    ann_p = float((1 + cum_p) ** (ann / n) - 1)
-    ann_b = float((1 + cum_b) ** (ann / n) - 1)
+    ann_p = float(annual_return(r, ann))
+    ann_b = float(annual_return(bn.pct_change().dropna(), ann))
     # 超额曲线：策略净值 / 基准净值（比值，不是两条收益曲线相减）
     ratio = (nav / nav.iloc[0]) / (bn / bn.iloc[0])
 
@@ -216,7 +228,6 @@ def _perf(nav: pd.Series, bench_ret: pd.Series, ann: int = 252) -> dict:
     ann_excess = float((1 + ann_p) / (1 + ann_b) - 1)
     ex_ari = (r - br.reindex(r.index)).dropna()
 
-    rr = r.reindex(br.index).fillna(0.0)
     win = float((rr > 0).mean())
     up, dn = float(rr[rr > 0].sum()), float(abs(rr[rr < 0].sum()))
     pl_ratio = (up / dn) if dn else None
@@ -227,7 +238,7 @@ def _perf(nav: pd.Series, bench_ret: pd.Series, ann: int = 252) -> dict:
     monthly["x"] = (1 + monthly["p"]) / (1 + monthly["b"]) - 1
 
     capm = _capm(r, br)
-    te = float(ex_ari.std() * np.sqrt(ann)) if ex_ari.std() else None
+    te = float(annual_volatility(ex_ari, ann)) if ex_ari.std() else None
     mdd = _mdd_info(nav)
     mdd_x = _mdd_info(ratio)
 
@@ -238,27 +249,30 @@ def _perf(nav: pd.Series, bench_ret: pd.Series, ann: int = 252) -> dict:
         "cum": cum_p, "cum_bench": cum_b, "cum_excess": cum_x,
         "ann": ann_p, "ann_bench": ann_b,
         "ann_excess": ann_excess,
-        "vol": float(rr.std() * np.sqrt(ann)),
-        "vol_bench": float(br.std() * np.sqrt(ann)),
+        "vol": float(annual_volatility(rr, ann)),
+        "vol_bench": float(annual_volatility(br, ann)),
         # 几何 Sharpe = 年化几何收益 / 年化波动（与 report_native.json 的 sharpe 同式）
-        "sharpe_geo": float(ann_p / (rr.std() * np.sqrt(ann))) if rr.std() else None,
-        "sharpe_arith": float(rr.mean() / rr.std() * np.sqrt(ann)) if rr.std() else None,
-        "calmar": float(ann_p / abs(mdd["mdd"])) if mdd["mdd"] else None,
+        "sharpe_geo": (float(sharpe_ratio(rr, periods_per_year=ann))
+                       if rr.std() else None),
+        "sharpe_arith": (float(sharpe_arithmetic(rr, periods_per_year=ann))
+                         if rr.std() else None),
+        "calmar": (float(calmar_ratio(r, ann)) if mdd["mdd"] else None),
         "win_day": win,
         "win_month": float((monthly["p"] > 0).mean()),
         "pl_ratio": pl_ratio,
         "avg_excess_day": float(ex_ari.mean()),
         "te": te,
-        "ir": float((ex_ari.mean() * ann) / te) if te else None,
+        "ir": (float(information_ratio(r, br.reindex(r.index), ann))
+               if te else None),
         "mdd": mdd, "mdd_excess": mdd_x,
         "alpha": capm["alpha"] * ann if capm["alpha"] is not None else None,
         "t_alpha": capm["t_alpha"],
         "beta": capm["beta"], "t_beta": capm["t_beta"],
         "r2": capm["r2"], "rho": capm["rho"],
-        "resid_sr": (float(capm["resid"].mean() / capm["resid"].std() * np.sqrt(ann))
+        "resid_sr": (float(sharpe_arithmetic(capm["resid"], periods_per_year=ann))
                      if capm.get("resid") is not None and capm["resid"].std() else None),
         "monthly": monthly,
-        "dd": _dd_curve(nav),
+        "dd": drawdown_series(nav),
         "nav": nav, "bench_nav": bn,
         "daily_ret": rr, "bench_ret": br,
     }

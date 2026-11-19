@@ -72,7 +72,7 @@ from research.dup_criteria import (
 from research.dup_criteria import (
     explain as dup_explain,
 )
-from stats.robust_stats import nw_tstat
+from stats.ic import ic_stats
 
 # ---------------------------------------------------------------------------
 # 阈值（准入段唯一处；晋升/重复性段的真源在别处，这里只转发）
@@ -170,19 +170,6 @@ def resid_rank(sig_rank: pd.DataFrame, main_rank: pd.DataFrame) -> pd.DataFrame:
     cov = (ya * yb).mean(axis=1)
     beta = cov / var.replace(0.0, np.nan)
     return ya.sub(yb.mul(beta, axis=0)).where(v)
-
-
-def ic_stats(ic: pd.Series) -> dict:
-    """IC 均值 / IR / 胜率 / Newey-West t / 有效天数。"""
-    s = ic.dropna()
-    if len(s) < 2:
-        return dict(ic=float("nan"), ir=float("nan"), win=float("nan"),
-                    nw_t=float("nan"), n=0)
-    sd = float(s.std())
-    t_nw, _se, _lag = nw_tstat(s.to_numpy(dtype=float))
-    return dict(ic=float(s.mean()),
-                ir=float(s.mean() / sd) if sd else float("nan"),
-                win=float((s > 0).mean()), nw_t=float(t_nw), n=int(len(s)))
 
 
 def yearly_ic(ic: pd.Series) -> dict:

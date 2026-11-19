@@ -400,7 +400,7 @@ def set_panel_transform(fn) -> None:
 
     ``fn`` 可以是 2 参 ``(panel, name)``，也可以是旧的 1 参 ``(panel)`` —— 后者
     自动包成 2 参（``name`` 被忽略）。保留 1 参契约是为了不静默打断既有调用方
-    （tests 的零回归探针、scripts/oneoff 下的口径核对脚本）。
+    （tests 的零回归探针等历史调用方）。
     """
     global _PANEL_TRANSFORM
     if fn is None:

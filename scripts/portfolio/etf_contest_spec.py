@@ -1,9 +1,19 @@
-"""正式赛定版参数（单一真源，2026-10-27 锁定）
-=================================================
+"""ETF 轮动定版参数（单一真源，2026-10-27 锁定 / 2026-11-19 去比赛化）
+====================================================================
 
-实盘信号板（``etf_champ_signals``）的 ``contest3`` profile 必须与本模块的
-``FINAL`` 逐键一致，避免"回测用一个参数、下单用另一个"的漂移。改参数只改这里，
-``tests/test_etf_contest_spec.py`` 会断言两边一致。
+实盘信号板（``etf_champ_signals``）的生产档 ``monthly`` / ``balanced`` 全部由本模块
+派生；退役档 ``core`` 以 ``RETIRED_CORE`` 保留，避免"回测用一套参数、下单用另一套"
+的漂移。改参数只改这里，``tests/test_etf_contest_spec.py`` 会断言一致性。
+
+🚨 **2026-11-19 去比赛化**：策略回到正常（非比赛）口径 ——
+① 池子恢复 50 只（``EXCLUDED_5`` 只作历史复现保留，不再默认屏蔽）；
+② 方案改英文功能名：``monthly`` / ``balanced``（原 champ / contest5h）；
+③ 删除「配置不少于 5 只」的合规补位档（原 contest5）；
+④ **``core``（原 contest3「三锋」）退役**：5 相位均值 14.27%/SR 0.52/MDD 39.2%、
+   最差相位 MDD 46.7%、Calmar 0.36，被 ``monthly`` 支配 ⇒ 不进生产 ``PROFILES``，
+   参数以 ``RETIRED_CORE`` 保留（历史复现与探针基准）。
+下文的 45 只池成绩是比赛期口径，**不可与 50 只口径混引**；50 只口径见
+``EXEC_CALIBER`` 与 ``reports/etf_contest5/README.md``。
 
 赛后变体探针 ``etf_contest_probe``（``SPECS`` / ``CONC_SPECS`` / ``LT_SPECS`` /
 ``NEXT_SPECS`` / ``REV_SPECS`` 等分组）已于 2026-10-28 回收，采纳/判否的结论与
@@ -35,27 +45,26 @@ from __future__ import annotations
 
 from data.etf_universe import ETF_CANDIDATES
 
-# 比赛指定池不含、必须屏蔽的 5 只（否则选标会落到不可交易品种）。
+# 比赛指定池不含的 5 只（酒 / 国债 / 转债 / 豆粕 / 能化）。
+# 🚨 2026-11-19 起**只在历史复现时使用**：生产默认不再屏蔽（见 ``POOL``）。
 EXCLUDED_5 = ["512690.SH", "511090.SH", "511380.SH", "159985.SZ", "159981.SZ"]
 
-#: 🚨 **可投池唯一真源（2026-10-30 收口）**：45 只 = ``ETF_CANDIDATES`` 50 只 − ``EXCLUDED_5``。
+#: 🚨 **可投池唯一真源**：50 只 = ``ETF_CANDIDATES`` 全量（2026-11-19 去比赛化恢复）。
 #:
 #: 任何地方要"池有多大"一律引 ``POOL_SIZE``，**不得再手写数字**。历史文档里的
 #: 「46 只」是拿本地行情表列数（51）直接减 5 得到的漂移：行情表多一个孤儿代码
 #: **512580 环保 ETF（日均额 0.15 亿）**，它早在 41→50 扩容时已剔出候选池，只是
-#: 缓存没清。``EtfUniverse.load_close`` 第 117 行按 ``ETF_CANDIDATES`` 过滤，孤儿
-#: 进不了面板，所以回测**实际一直是 45 只**，只是文字写错了。
+#: 缓存没清。``EtfUniverse.load_close`` 按 ``ETF_CANDIDATES`` 过滤，孤儿进不了面板。
 #:
-#: 🚨 **为什么是 45 而不是 50（放回被屏蔽的 5 只）——理由必须是「合规」，不是「更好」**：
-#: 50 只口径实测 24.23%/0.89 vs 45 只 30.63%/1.16，但配对检验**不显著**
-#: （NW-t 1.85、非重叠 41 期配对 t 0.89、胜率 22/41），且差异集中在 2023-02/03 两期
-#: （各 +24.7pp）。⇒ 拿"45 更好"当选池理由等于用后视结果调池，违反"基线不得自造"。
-#: 真实理由：这 5 只不在比赛指定清单内（可交易性无问题，转债 511380 日均额 100.3 亿）。
-#: 复现：``-m scripts.oneoff.pool45_vs_50_20261030``。
-POOL: tuple[str, ...] = tuple(
+#: 比赛期口径为 45 只（减去 ``EXCLUDED_5``），成绩 30.63%/1.16 是那一档的对外数字；
+#: 50 只口径 24.23%/0.89（NW-t 1.85，配对不显著，差异集中在 2023-02/03 两期各 +24.7pp）。
+#: 比赛已结束，策略按「自有资金、无白名单」运行 ⇒ 恢复到 50 只，两个口径**不可混引**。
+POOL: tuple[str, ...] = tuple(ETF_CANDIDATES)
+POOL_SIZE: int = len(POOL)
+#: 比赛期 45 只口径（仅用于复现 §一–§十三 的历史数字，不参与实盘选标）。
+POOL_CONTEST: tuple[str, ...] = tuple(
     c for c in ETF_CANDIDATES if c not in set(EXCLUDED_5)
 )
-POOL_SIZE: int = len(POOL)
 
 # 定版参数（不含 name；具体 profile 名由调用方补）。
 FINAL: dict = {
@@ -69,6 +78,14 @@ FINAL: dict = {
     "dedup_corr": 0.90,
     "dedup_fill": True,
 }
+
+#: 🚨 **2026-11-19 退役档**：core（Top3 集中轮动）不再进生产 ``PROFILES``。
+#: 退役依据（50 只池、T+1 open、5 相位）：相位均值 14.27%/SR 0.52/MDD 39.2%、
+#: 最差相位 MDD 46.7%、Calmar 0.36，被 ``monthly``（13.18%/1.04/MDD 13.42%、Calmar 0.98）
+#: 与 ``balanced``（12.53%/0.59/MDD 31.3%）在风险调整后支配；24.20% 的 k=1 成绩是
+#: 五个相位里唯一的正偏（其余 10.14%~13.31%）。
+#: **参数保留**：历史回测复现、判否清单与若干探针仍以它为基准，不得删改。
+RETIRED_CORE: dict = {**FINAL, "name": "core"}
 
 # 执行口径（2026-10-29 切换，见 reports/etf_contest5/README.md §九）：
 # 「收盘成交」33.58%/Sharpe 1.28 是**理论上界**，要求盘中 14:55 出信号 + 收盘集合竞价；
@@ -116,46 +133,45 @@ DEFAULT_EXEC_CALIBER = "open"
 #: 引用数字必须同时标 caliber 与流程。
 EXEC_CALIBER = {
     # 现状流程：18:30 批量出信号 → 次日开盘下单。**对外口径**。
+    # core = 50 只口径（2026-11-19 复评），🚨 已退役，仅存档；
+    # balanced = 50 只相位均值口径（12.53%/0.59，k=1 为 14.75%/0.70）；
+    # monthly = 50 只口径（2026-10-30）；比赛期 45 只数字见 §一–§十三。
     "open": {
-        "contest3": {"annual_return": 0.2611, "sharpe": 1.00, "max_drawdown": 0.2637,
-                     "win_2m_mean": 0.0461, "win_2m_median": 0.0279, "win_2m_p10": -0.0511,
-                     "win_2m_worst": -0.1274, "win_rate": 0.675},
-        "contest5": {"annual_return": 0.1399, "sharpe": 0.56, "max_drawdown": 0.3234,
-                     "win_2m_mean": 0.0301, "win_2m_median": 0.0183, "win_2m_p10": -0.0673,
-                     "win_2m_worst": -0.1650, "win_rate": 0.613},
-        "contest5h": {"annual_return": 0.2461, "sharpe": 1.07, "max_drawdown": 0.3077,
-                      "win_2m_mean": 0.0434, "win_2m_median": 0.0335, "win_2m_p10": -0.0660,
-                      "win_2m_worst": -0.1347, "win_rate": 0.650},
-        # 磐石（长线档）：月频 12 次/年 + 单只 17.6% ⇒ 执行税只有 contest3 的 1/20。
-        "champ": {"annual_return": 0.1317, "sharpe": 1.05, "max_drawdown": 0.1342,
-                  "win_2m_mean": 0.0236, "win_2m_median": 0.0114, "win_2m_p10": -0.0243,
-                  "win_2m_worst": -0.0795, "win_rate": 0.675},
+        "core": {"annual_return": 0.2424, "sharpe": 0.89, "max_drawdown": 0.2772,
+                 "win_2m_mean": 0.0419, "win_2m_median": 0.0280, "win_2m_p10": -0.0554,
+                 "win_2m_worst": -0.1041, "win_rate": 0.667},
+        "balanced": {"annual_return": 0.1475, "sharpe": 0.70, "max_drawdown": 0.2636,
+                     "win_2m_mean": 0.0273, "win_2m_median": 0.0181, "win_2m_p10": -0.0646,
+                     "win_2m_worst": -0.1515, "win_rate": 0.654},
+        # monthly（长线档）：月频 12 次/年 + 单只 17.6% ⇒ 执行税只有集中档的 1/20。
+        "monthly": {"annual_return": 0.1318, "sharpe": 1.04, "max_drawdown": 0.1342,
+                    "win_2m_mean": 0.0236, "win_2m_median": 0.0114, "win_2m_p10": -0.0243,
+                    "win_2m_worst": -0.0795, "win_rate": 0.675},
     },
     # 盘中 14:50 出信号 + 收盘集合竞价成交。**备选路径（模式 B），不对外引用。**
     # 技术可行性已实测通过（数据/耗时/信号误差/成交通道四项，§九 9.2.1–9.2.5），
     # 但 2026-10-29 决策不进定版 ⇒ 本栏仅作上界参照。
+    # ⚠️ core/balanced 两栏是 45 只比赛池历史值，未按 50 只重算。
     "close_intraday": {
-        "contest3": {"annual_return": 0.3358, "sharpe": 1.28, "max_drawdown": 0.2535,
-                     "win_2m_mean": 0.0559, "win_2m_median": 0.0376, "win_2m_p10": -0.0364,
-                     "win_2m_worst": -0.1234, "win_rate": 0.725},
-        "contest5": {"annual_return": 0.1223, "sharpe": 0.49, "max_drawdown": 0.3305,
-                     "win_2m_mean": 0.0279, "win_2m_median": 0.0153, "win_2m_p10": -0.0704,
-                     "win_2m_worst": -0.1845, "win_rate": 0.600},
-        "contest5h": {"annual_return": 0.2040, "sharpe": 0.89, "max_drawdown": 0.3068,
-                      "win_2m_mean": 0.0385, "win_2m_median": 0.0241, "win_2m_p10": -0.0589,
-                      "win_2m_worst": -0.1380, "win_rate": 0.650},
-        # 磐石：这一栏是「调仓日收盘成交」实测值，同时也当 `close_intraday` 的代理 ——
+        "core": {"annual_return": 0.3358, "sharpe": 1.28, "max_drawdown": 0.2535,
+                 "win_2m_mean": 0.0559, "win_2m_median": 0.0376, "win_2m_p10": -0.0364,
+                 "win_2m_worst": -0.1234, "win_rate": 0.725},
+        "balanced": {"annual_return": 0.2040, "sharpe": 0.89, "max_drawdown": 0.3068,
+                     "win_2m_mean": 0.0385, "win_2m_median": 0.0241, "win_2m_p10": -0.0589,
+                     "win_2m_worst": -0.1380, "win_rate": 0.650},
+        # 长线档：这一栏是「调仓日收盘成交」实测值，同时也当 `close_intraday` 的代理 ——
         # 它的信号（12-1 动量 + 份额拥挤度）不依赖 T 日收盘价，故盘中出信号与收盘出
-        # 信号等价；不像 contest3 有个 `pre10` 筛子依赖当天价（见 §九 9.2）。
-        "champ": {"annual_return": 0.1352, "sharpe": 1.07, "max_drawdown": 0.1377,
-                  "win_2m_mean": 0.0242, "win_2m_median": 0.0118, "win_2m_p10": -0.0217,
-                  "win_2m_worst": -0.0845, "win_rate": 0.662},
+        # 信号等价；不像 core 有个 `pre10` 筛子依赖当天价（见 §九 9.2）。
+        "monthly": {"annual_return": 0.1352, "sharpe": 1.07, "max_drawdown": 0.1377,
+                    "win_2m_mean": 0.0242, "win_2m_median": 0.0118, "win_2m_p10": -0.0217,
+                    "win_2m_worst": -0.0845, "win_rate": 0.662},
     },
 }
 
-#: ⚠️ 三档同口径对比（PIT 修复后，2026-10-29）：
-#: `open` 相对 `close_intraday`，contest3 **变差** 2.95pp（33.58%→30.63%），
-#: 而 contest5/5h 基本持平或略好（12.23%→13.99% 未重跑 / 20.40%→20.65%）。原因是隔夜跳空项
+#: ⚠️ 三档同口径对比（PIT 修复后，2026-10-29；以下名称为比赛期旧名，对应关系见文件头）：
+#: `open` 相对 `close_intraday`，原 contest3（今 core）**变差** 2.95pp（33.58%→30.63%），
+#: 而原 contest5/5h（今删 / balanced）基本持平或略好（12.23%→13.99% 未重跑 / 20.40%→20.65%）。
+#: 原因是隔夜跳空项
 #: `Σ Δw·gap` 在持仓越分散时越接近 0（Top3 单只 80% 时动量标的次日系统性高开，
 #: 买入腿稳定吃亏；Top5 摊薄后退化为噪声，符号可翻）。⇒ **不要跨 Profile 比较
 #: 绝对收益后再做取舍**：这 3 档的口径差不是"哪档更优"的证据，是集中度的副作用。
@@ -173,9 +189,11 @@ EXEC_CALIBER = {
 #: 出手 1 次、亏 −40.0pp ⇒ **优势只存在于 2024 之后，事前不可识别**。
 #: 🚨 日 Sharpe 1.30 亦含水分：低换手（14.4%）使日收益正相关，√252 系统性高估；
 #: 期 Sharpe 上两者几乎相同（0.46 vs 0.45）⇒ **引用用期 Sharpe，不要用 1.30**。
-#: ⇒ 原「降档（回撤触 −15%）保留 contest5h」已于 **2026-10-30 拍板取消**：五衡 20.65%/
-#: 0.89/MDD 33.27% 全面落后三锋，且**触发之后仍落后 −3.46pp、胜率仅 16.7%**（README §8.2），
-#: 连「深跌换防守」这个最后理由也不成立。contest5h 保留为**对照档**，不承担风控职能。
+#: ⇒ 原「降档（回撤触 −15%）保留五衡」已于 **2026-10-30 拍板取消**：五衡（今 balanced）
+#: 20.65%/0.89/MDD 33.27% 全面落后三锋（今 core），且**触发之后仍落后 −3.46pp、胜率仅 16.7%**
+#: （README §8.2），连「深跌换防守」这个最后理由也不成立。balanced 保留为**对照档**，
+#: 不承担风控职能。50 只正常口径复评（2026-11-19）：14.75% / 0.70 / MDD 26.36%，
+#: 收益仍差 core 9.5pp/年，仅 MDD 低 1.4pp。
 #: 降仓替代闸（k0.7/21 日）同样不采纳（−5.13pp/年）；风控只能靠账户层事前少放钱。
 #: 复现：`python -m scripts.portfolio.etf_contest5_eval`（固定档位）
 #: 与 `-m scripts.portfolio.etf_contest5_buffer_oos`（选档验证）；

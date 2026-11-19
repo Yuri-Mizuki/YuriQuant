@@ -351,7 +351,7 @@ CANONICAL_COLUMNS: list[str] = [
 #: ``old.combine_first(new)`` —— 旧值非空即胜，于是**任何计算型字段一旦写过，
 #: 后续修正值永远进不去 registry**。holder_dyn 踩得最狠：dtype bug 态跑出
 #: ``active_day_frac=0.008``，修好重跑、stats 已是正确值，registry 仍是 0.008
-#: （当时只能在 ``scripts/oneoff/_fix_holder_dyn_registry.py`` 里外科回填）。
+#: （当时只能在外科回填脚本里改，该脚本已删 2026-11-19）。
 #: 更隐蔽的是 ``coverage``：数据天天长，重建后面板覆盖变了，registry 却冻结在
 #: 首次入库态 —— 而 ``MIN_COVERAGE`` / ``MIN_NEU_COVERAGE`` / ``MIN_IC_COVERAGE``
 #: 三道过滤正是读它。
@@ -675,12 +675,16 @@ def _forward_returns(returns_panel: pd.DataFrame, horizon: int) -> pd.DataFrame:
     return np.expm1(g.rolling(horizon, min_periods=horizon).sum().shift(-(horizon - 1)))
 
 
-def ic_stats(ic: pd.Series) -> dict:
+def registry_ic_stats(ic: pd.Series) -> dict:
     """IC 序列 → registry 的检验统计列（均值/IR/显著性/胜率）。
 
     从 ``_panel_ic_stats`` 抽出，供两处复用：ingest（算完就写）与
     evaluate（回填老因子时只有 eval 文件里的 ic 列，不必重算面板）。
+
+    ⚠️ 与 :func:`stats.ic.ic_stats`（口径摘要）**不是同一个东西**：本函数产出
+    registry 的 8 个列（含 ``p_value_nw`` / ``significant``），命名保持隔离。
     """
+    from stats.ic import ic_stats
     from stats.significance import mean_inference
 
     ok = ic.notna()
@@ -699,7 +703,7 @@ def ic_stats(ic: pd.Series) -> dict:
         "t_stat": _inf["t_stat"],
         "t_stat_nw": _inf["t_stat_nw"],
         "p_value_nw": _inf["p_value_nw"],
-        "ic_win_rate": float((ic_valid > 0).mean()) if n else float("nan"),
+        "ic_win_rate": float(ic_stats(ic)["win"]) if n else float("nan"),
         # |t_nw| > 2：ingest/evaluate 一次只处理一个因子，调用内不存在
         # 可言的"检验族"；整库校正走 significance_table(correction="fdr")。
         "significant": bool(abs(_inf["t_stat_nw"]) > 2.0),
@@ -721,7 +725,7 @@ def _panel_ic_stats(panel: pd.DataFrame, returns_panel: pd.DataFrame, *,
     时不计算、置 NaN——批量入库靠这个开关把 109 s 压到 7 s。
     """
     ic = calc_ic_series(panel, returns_panel, method=ic_method)
-    summary = ic_stats(ic)
+    summary = registry_ic_stats(ic)
     ic_mean = summary["ic_mean"]
 
     if evidence:
@@ -1084,7 +1088,7 @@ class FactorLibrary:
         # 顺手把 IC 检验统计写回 registry：老因子（builder 通道）的
         # ic_mean / t_stat_nw 一直是空的，只有 ic_mean_h*，导致"按显著性
         # 排序"在半个库上失效。ic 序列就在手上，重算代价可忽略。
-        ic_fields = ic_stats(ic_series) if ic_series is not None else {}
+        ic_fields = registry_ic_stats(ic_series) if ic_series is not None else {}
 
         upd = {
             **ic_fields,
@@ -1772,7 +1776,7 @@ class FactorLibrary:
             # 两种模式都是「非空才写」：空值不再清空任何已有字段。此前
             # False 分支走 concat 整行替换，stats 行没有的列（source /
             # formula / created_at…）会被洗成 NaN，这正是 holder_dyn 只敢用
-            # oneoff 脚本外科回填的原因。
+            # 一次性脚本外科回填的原因。
             old = (reg[dup].set_index("name")
                    .replace(r"^\s*$", np.nan, regex=True))
             # 空串一律视同缺失：否则 ``stats`` 里的 "" 会盖掉旧值（写回 CSV

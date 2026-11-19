@@ -37,6 +37,7 @@ def run_main_strategy_backtest(frac: float = 0.10):
     """重跑单组合回测，返回 (日收益, 权重历史, base dict, OOS 交易日)。"""
     from backtest.costs import default_costs
     from backtest.engine import VectorBacktest
+    from backtest.metrics import annual_return
     from scripts.common.alla_common import load_base
     from strategy.examples import TopFracLongOnly
 
@@ -56,7 +57,7 @@ def run_main_strategy_backtest(frac: float = 0.10):
                         initial_capital=1_000_000.0, costs=default_costs())
     res = bt.run(pred, fwd, executable_mask=mask_oos, horizon=1)
     dr = res.daily_returns.dropna()
-    ann = (1 + dr).prod() ** (252 / len(dr)) - 1
+    ann = annual_return(dr)
     log.info("回测复跑完成：%d 日（%s ~ %s），年化 %.2f%%",
              len(dr), dr.index[0].date(), dr.index[-1].date(), ann * 100)
     return dr, res.weights_history, base, oos_days

@@ -31,7 +31,7 @@ import numpy as np
 import pandas as pd
 
 from backtest.engine import BacktestResult
-from backtest.metrics import METRIC_LABELS
+from backtest.metrics import METRIC_LABELS, drawdown_series
 from research.metrics_format import is_pos_neg, monthly_returns
 
 # ===========================================================================
@@ -481,7 +481,7 @@ def _build_factor_dict(name: str, result: BacktestResult,
     metrics = dict(result.metrics())
     equity = _series_pairs(result.equity_curve)
     cum = (1 + result.daily_returns).cumprod()
-    drawdown = _series_pairs((cum - cum.cummax()) / cum.cummax())
+    drawdown = _series_pairs(drawdown_series(cum))
     ic = _series_pairs(summary["ic_series"]) if summary and "ic_series" in summary else []
     ic_cum = []
     if ic:

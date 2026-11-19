@@ -31,7 +31,7 @@ from typing import Sequence
 import numpy as np
 from scipy import stats
 
-__all__ = ["auto_lag", "nw_tstat", "ols_newey_west"]
+__all__ = ["auto_lag", "nw_tstat", "nw_t", "nw_mean_t", "ols_newey_west"]
 
 
 def auto_lag(n: int, method: str = "andrews") -> int:
@@ -98,6 +98,34 @@ def nw_tstat(
     else:
         t = mean / se
     return (t, se, lag)
+
+
+def nw_t(
+    series: Sequence[float] | np.ndarray,
+    lag: int | None = None,
+    method: str = "andrews",
+) -> float:
+    """只返回 NW t 值的便捷包装（等价 ``nw_tstat(...)[0]``）。
+
+    供只需要显著性、不需要（se, lag）的调试点/探针使用，避免各脚本
+    再复制一遍 Bartlett 核循环。
+    """
+    return nw_tstat(series, lag=lag, method=method)[0]
+
+
+def nw_mean_t(
+    series: Sequence[float] | np.ndarray,
+    lag: int | None = None,
+    method: str = "andrews",
+) -> tuple[float, float]:
+    """返回 ``(均值, NW t)`` 的便捷包装。
+
+    「均值 + 稳健显著性」是因子探针的标准输出形态；此前有 8 个脚本各自
+    复制了同一条公式。
+    """
+    s = _clean_series(series)
+    mean = float(s.mean()) if s.size else float("nan")
+    return mean, nw_tstat(s, lag=lag, method=method)[0]
 
 
 def ols_newey_west(

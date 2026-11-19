@@ -29,9 +29,10 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+from backtest.metrics import annual_return  # noqa: E402
 from scripts.common.cli_common import setup_logging  # noqa: E402
 from scripts.textmining._paths import Out  # noqa: E402
-from stats.robust_stats import nw_tstat  # noqa: E402
+from stats.ic import ic_stats  # noqa: E402
 
 OUT_DIR = Out("senti")
 log = setup_logging("senti_eval")
@@ -68,9 +69,9 @@ def rank_ic_stats(factor: pd.DataFrame, ret: pd.DataFrame) -> dict:
     ics = m.groupby("month").apply(
         lambda g: g["factor"].corr(g["ret"], method="spearman"),
         include_groups=False).dropna()
-    t, _, _ = nw_tstat(ics.values)
-    return {"ic_mean": ics.mean(), "icir": ics.mean() / ics.std() if ics.std() else np.nan,
-            "ic_positive": (ics > 0).mean(), "ic_nw_t": t, "n_months": len(ics)}
+    s = ic_stats(ics)
+    return {"ic_mean": s["ic"], "icir": s["ir"],
+            "ic_positive": s["win"], "ic_nw_t": s["nw_t"], "n_months": s["n"]}
 
 
 def stratified(factor: pd.DataFrame, ret: pd.DataFrame, bench: pd.Series,
@@ -87,7 +88,7 @@ def stratified(factor: pd.DataFrame, ret: pd.DataFrame, bench: pd.Series,
 
     def annual(s: pd.Series) -> float:
         s = s.dropna()
-        return (1 + s).prod() ** (12 / len(s)) - 1 if len(s) >= 12 else np.nan
+        return annual_return(s, 12) if len(s) >= 12 else np.nan
 
     out = {"n_months": int(layer_ret["bench"].notna().sum()),
            "bench_annual": annual(layer_ret["bench"])}
@@ -159,10 +160,10 @@ def neutralized_ic_stats(factor: pd.DataFrame, ret: pd.DataFrame,
         if len(gg) >= 30:
             ics.append(gg["factor"].corr(gg["ret"], method="spearman"))
     ics = pd.Series(ics).dropna()
-    t, _, _ = nw_tstat(ics.values)
-    return {"neu_ic_mean": ics.mean(),
-            "neu_ic_nw_t": t,
-            "neu_ic_positive": (ics > 0).mean(), "neu_n_months": len(ics)}
+    s = ic_stats(ics)
+    return {"neu_ic_mean": s["ic"],
+            "neu_ic_nw_t": s["nw_t"],
+            "neu_ic_positive": s["win"], "neu_n_months": s["n"]}
 
 
 def run(pool: str = "zz1000", begin: str = "20190101"):

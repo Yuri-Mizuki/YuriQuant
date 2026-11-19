@@ -59,8 +59,10 @@ import numpy as np
 import pandas as pd
 import pyarrow.parquet as pq
 
+from config import Config
+
 ROOT = Path(__file__).resolve().parents[2]
-PQ = Path("D:/data/parquet")
+PQ = Path(Config.paths()["cache_root"])
 DEFAULT_OUT = ROOT / "reports" / "inc_pure_live"
 
 HOLD = 20                      # 持有交易日数（与回测 H=20 一致）

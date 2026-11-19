@@ -57,6 +57,7 @@ from scripts.common.alla_common import (  # noqa: E402
     existence_mask, fundind_dirs, load_base, rank_average as _rank_average,
     res_metrics, yearly_rows as _yearly_rows,
 )
+from stats.ic import calc_ir, ic_stats  # noqa: E402
 
 log = setup_logging("rolling_grid_alla")
 
@@ -960,15 +961,14 @@ def stage_predict(quick: bool = False, only_horizons: list[int] | None = None):
 
 def _append_ic_stats(model: str, horizon: int, ic: pd.Series) -> None:
     """追加/覆盖一行模型 OOS IC 统计（ic_stats.csv，报告用；幂等）。"""
-    from backtest.metrics import PERIODS_PER_YEAR
     p = OUT / "ic_stats.csv"
     ic = ic.dropna()
+    st = ic_stats(ic)
     row = {
         "model": model, "horizon": horizon,
-        "ic_mean": float(ic.mean()), "ic_std": float(ic.std()),
-        "ic_ir": float(ic.mean() / ic.std() * np.sqrt(PERIODS_PER_YEAR))
-        if ic.std() > 0 else 0.0,
-        "ic_win": float((ic > 0).mean()),
+        "ic_mean": st["ic"], "ic_std": st["ic_std"],
+        "ic_ir": calc_ir(ic),
+        "ic_win": st["win"],
         **{f"ic_{int(y)}": float(v) for y, v in ic.groupby(ic.index.year).mean().items()},
     }
     if p.exists():

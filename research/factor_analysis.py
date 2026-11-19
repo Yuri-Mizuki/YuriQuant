@@ -27,6 +27,7 @@ from stats.ic import (  # noqa: F401  re-export：保持历史 import 路径可�
     calc_ic_series,
     calc_ir,
     factor_autocorr,
+    ic_stats,
     quantile_backtest,
 )
 
@@ -78,7 +79,7 @@ def standard_factor_summary(
         "t_stat_nw": t_nw,
         "p_value_nw": p_nw,
         "nw_lag": nw_lag,
-        "ic_win_rate": float((ic_valid > 0).mean()) if n else float("nan"),
+        "ic_win_rate": float(ic_stats(ic_valid)["win"]) if n else float("nan"),
         "ic_decay": {int(k): float(v) for k, v in decay.items()},
         "autocorr": factor_autocorr(factor_panel),
         "n": n,
@@ -98,7 +99,7 @@ def factor_summary(
     return {
         "ic_mean": ic.mean(),
         "ic_std": ic.std(),
-        "ic_win_rate": (ic > 0).mean(),
+        "ic_win_rate": float(ic_stats(ic)["win"]),
         "ir": ir,
         "ic_decay": decay.to_dict(),
         "layer_returns": layers.iloc[-1].to_dict(),

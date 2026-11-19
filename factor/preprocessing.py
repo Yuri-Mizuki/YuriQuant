@@ -255,8 +255,8 @@ def neutralize_batch(
       保持在 float64（老实现 ``y[valid].astype(float)`` / ``size[valid].astype(float)``；
       市值先按 float32 取 log 再升位，与生产 float32 面板同精度）。
 
-    因此残差应与 :func:`neutralize` **逐位一致**（``max|Δ| = 0``），由
-    ``scripts/oneoff/probe_neutralize_batch.py`` 在真实面板上锁定。
+    因此残差应与 :func:`neutralize` **逐位一致**（``max|Δ| = 0``），
+    由真实面板回归测试锁定。
 
     性能：真实全A形态（801 日 × 5801 只 × 31 行业）下，逐日 ``lstsq`` 只占
     总耗时 ~41%，其余 ~59% 是 pandas 的逐日取行 / ``get_dummies`` /
@@ -426,8 +426,7 @@ def neutralize_grouped(
     neutralize_grouped   1.4s     8.3x（86 因子外推 16.6 → 2.0 分钟）
     ==================  ========  =========
 
-    等价性与计时由 ``scripts/oneoff/probe_neutralize_batch.py`` 与
-    ``scripts/oneoff/probe_neutralize_phase2.py`` 在真实面板上锁定。
+    等价性与计时由真实面板回归测试锁定。
 
     Args / Returns 同 :func:`neutralize`。
     """

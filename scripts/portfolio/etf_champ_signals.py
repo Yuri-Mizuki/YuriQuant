@@ -1,16 +1,19 @@
 """
-ETF 轮动生产信号板（三锋 / 五衡 / 磐石）
-=============================================
+ETF 轮动生产信号板（monthly / balanced）
+========================================
 
-三个 profile 共用同一套面板与回测引擎，参数全部来自 `etf_contest_spec`
-（方案唯一真源：`reports/etf_contest5/README.md`）：
+两个 profile 共用同一套面板与回测引擎，参数全部来自 `etf_contest_spec`
+（方案唯一真源：`reports/etf_contest5/README.md`）。2026-11-19 去比赛化：方案改英文
+功能名，池子恢复 50 只，删除原 `contest5`（合规补位档）。
 
-  - `contest3`「**三锋**」：正式赛定版（`FINAL`：Top3 + 拥挤软惩罚 + 剔除 20 日涨幅 >10%
-    + 周频 + HRP 无上限）——**默认对外口径 T+1 开盘成交**；
-  - `contest5h`「**五衡**」：**对照档**（同选标、Top5 + HRP）。原定位是「三锋回撤触 −15% 时的
-    降档预案」，**该纪律已于 2026-10-30 拍板取消**（三个状态下全无优势，README §8.1/§8.2）；
-  - `champ`「**磐石**」：长线定版（月频 Top5 + 12-1 动量 + 拥挤度剔除 + 逆波动 +
-    15% 波动目标 + 债金防御腿 + 去重 0.90 + buffer 15/40）。
+  - `monthly`「月频稳健」：**默认档**（月频 Top5 + 12-1 动量 + 拥挤度剔除 + 逆波动 +
+    15% 波动目标 + 债金防御腿 + 去重 0.90 + buffer 15/40）。50 只池 T+1 open：
+    13.18% / Sharpe 1.04 / MDD 13.42%，Calmar 0.98；
+  - `balanced`「均衡轮动」：同选标、Top5 + HRP，中间档。5 相位均值 12.53% / 0.59 /
+    MDD 31.3%，相位极差 5.14pp；
+  - 🚨 原 `core`「集中轮动」已于 2026-11-19 **退役**：5 相位均值 14.27%/0.52/MDD 39.2%、
+    最差相位 MDD 46.7%、Calmar 0.36；参数保留在 `etf_contest_spec.RETIRED_CORE`，
+    仅供历史复现与探针基准。
 
 落成可直接照单执行的信号板：
 
@@ -22,10 +25,12 @@ ETF 轮动生产信号板（三锋 / 五衡 / 磐石）
      不做截面过滤）。
   4. **监控**：持仓与候选的拥挤度分位（份额 250 日）、溢价、成交额；
      候选榜单标注「拥挤剔除 / 动量非正 / 备选」。
-  5. 输出 `reports/etf_champ/`：`signals.csv`、`monitor.csv`、`board.html`、`meta.json`。
+  5. 输出：`balanced` → `reports/etf_contest5/`，`monthly` → `reports/etf_champ/`
+     （目录名为历史遗留，产物均为 `signals.csv`、`monitor.csv`、`board.html`、`meta.json`）。
 
 用法:
-    python -m scripts.portfolio.etf_champ_signals                       # 1000 万、空仓建仓
+    python -m scripts.portfolio.etf_champ_signals                       # monthly 档、1000 万、空仓建仓
+    python -m scripts.portfolio.etf_champ_signals --profile balanced
     python -m scripts.portfolio.etf_champ_signals --capital 5000000
     python -m scripts.portfolio.etf_champ_signals --positions 当前持仓.csv
 
@@ -45,9 +50,8 @@ from data.datasource import create_datasource
 from research.html_report import page
 from scripts.portfolio.etf_contest_spec import (
     DEFAULT_EXEC_CALIBER,
-    EXCLUDED_5,
     EXEC_NOTE,
-    FINAL,
+    RETIRED_CORE,
 )
 from scripts.portfolio.etf_rotation_panels import (
     CHAMP_BASE,
@@ -67,52 +71,37 @@ from scripts.portfolio.etf_rotation_probe import (
 ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / "reports" / "etf_champ"
 
-CHAMP = {**CHAMP_BASE, "name": "champ", "signal": "mom_crowd_f20", "defense": "mix",
-         "dedup_corr": 0.90,
-         # A3（2026-10-27 邻域检验）：去重后每个调仓日的有效候选清单很短，
-         # 两个缓冲区宽度都不 binding，规则退化为「已持有且仍在清单里就不卖」。
-         # 月换手 39.8%→32.1%（−19%）、成本 1.01%→0.80%/年，Sharpe +0.019。
-         "enter_rank": 15, "exit_rank": 40}
-# 正式赛合规版（2026-10-27 规则确认后）：规则要求「配置不少于 5 只产品」，
-# Top3 不合规，故改为 Top5；信号用 12-1（带拥挤度过滤的 champ 信号在约 10%
-# 的调仓日会只剩 1-4 只，违反只数约束），周频、等权、满仓。
-CONTEST5 = {"name": "contest5_2m", "signal": "mom12_1", "freq": "W", "top_k": 5,
-            "absolute": True, "weighting": "equal", "commission_bp": 1.0,
-            "slippage_bp": 5.0, "dedup_corr": 0.90, "dedup_fill": True,
-            # 绝对动量过滤后候选不足 5 只时（真实白名单下约 0.6% 的调仓日），
-            # 用国债/黄金占位，满足「配置不少于 5 只产品」的硬约束。
-            "fill_to": 5, "fill_codes": ["511010.SH", "511260.SH", "518880.SH"]}
-# 集中版（2026-10-27 定版）：规则里的「配置不少于 5 只产品」按**赛期内累计**
-# 买入过的不同产品计数，而不是每个调仓日同时持有 ≥5 只，因此 Top3 合法。
-# 参数真源见 ``scripts/portfolio/etf_contest_spec.py`` 的 FINAL（回测探针共用同一
-# 份字典，``tests/test_etf_contest_spec.py`` 断言两边一致）。
-# 依据：45 只比赛池 80 个滚动 2 月窗口（v2）：均值 +5.59% / 中位 +3.76% / 最差 −12.3%。
-# 执行建议：首次建仓先各买 5 只不同产品完成累计计数，之后按 Top3 集中。
-CONTEST3 = {**FINAL, "name": "contest_2m_top3"}
-PROFILES = {"champ": CHAMP, "contest5": CONTEST5, "contest3": CONTEST3,
-            # 同一选标 + HRP 风险平价权重（60 日协方差）。
-            # 2026-10-27 定版：去掉单只 30% 上限（用户选择博上限）。依据是真实白名单
-            # 下 80 个 2 月窗口：无上限中位 +2.41% / Sharpe 0.89 / 最差 −13.8%，
-            # 优于带上限的 +2.05% / 0.79 / −15.3%；代价是今日煤炭单只约 52%。
-            # 想控集中度时用 --max-weight 0.30 临时加回。
-            # 对照档「五衡」：同选标、Top5 + HRP 风险平价（60 日协方差）。
-            # 定版为「三锋」（Top3 + 拥挤软惩罚）。五衡不参与选型、不再调参。
-            # 🚨 2026-10-29 PIT 修复后：五衡 20.65% / SR 0.89 / MDD 33.27%，
-            # 三锋的收益、p10、最差窗口、MDD **四项全优**，配对差 −1.36%/窗（t=−1.97）
-            # **显著落后**。原「降档预案」用途已于 **2026-10-30 拍板取消**（处置 A）：
-            # 全样本 −9.98pp/年、贴近触发线 −2.62pp、**触发之后 −3.46pp（胜率仅 16.7%）**，
-            # 连"深跌时换防守"这个最后理由也不成立（README §8.2）⇒ 保留仅为对照。
-            # 🚨 同日 buffer 档位经**三轮修正**（见 README §4.1–4.2）：
-            # ① `enter_rank` 是死参数（3/5/8/10/15 净值逐位相同），buffer 只有 `exit_rank`
-            #    一个自由度；
-            # ② 非重叠 41 期下 `exit=20` 尾部确实更好（p10 −4.86% vs −7.54%、胜率 70.7%
-            #    vs 63.4%），但 **PIT 修复后年化不再打平**：25.43% vs 30.63%（落后 5.2pp），
-            #    期 Sharpe 0.46 vs 0.45 几乎相同；日 Sharpe 1.30 含 √252 对低换手的高估。
-            # ③ **样本外验证失败**：前 20 期 buffer +52.4% vs 三锋 +131.2%，优势只在 2024 之后，
-            #    逐年滚动选档 6 年出手 1 次亏 40pp ⇒ 事前不可识别，是付费的降波选项。
-            # ⇒ 五衡保留为**对照档**（原「单只暴雷保护」用途已于 2026-10-30 取消）。
-            # 见 reports/etf_contest5/README.md §4.1、§8.1、§8.2。
-            "contest5h": {**CONTEST5, "name": "contest5_2m_hrp", "weighting": "hrp"}}
+MONTHLY = {**CHAMP_BASE, "name": "monthly", "signal": "mom_crowd_f20", "defense": "mix",
+           "dedup_corr": 0.90,
+           # A3（2026-10-27 邻域检验）：去重后每个调仓日的有效候选清单很短，
+           # 两个缓冲区宽度都不 binding，规则退化为「已持有且仍在清单里就不卖」。
+           # 月换手 39.8%→32.1%（−19%）、成本 1.01%→0.80%/年，Sharpe +0.019。
+           "enter_rank": 15, "exit_rank": 40}
+# 集中轮动（原默认档「三锋」/ contest3）：🚨 **2026-11-19 退役**，不再进 PROFILES。
+# 退役依据：50 只池 5 相位均值 14.27%/SR 0.52/MDD 39.2%、最差相位 MDD 46.7%、Calmar 0.36；
+# 24.20% 的 k=1 是五个相位里唯一的正偏（其余 10.14%~13.31%）。参数见
+# ``etf_contest_spec.RETIRED_CORE``（历史复现与探针基准仍用，不得删改）。
+# 均衡轮动（原 contest5h「五衡」）：同选标、Top5 + HRP 风险平价（60 日协方差）。
+# 50 只池 5 相位：12.53%/SR 0.59/MDD 31.3%（最差相位 36.2%），相位极差 5.14pp，
+# 比 core 的 14.06pp 稳得多 ⇒ 现在的中间档。
+# 🚨 2026-10-29 PIT 修复后：五衡 20.65% / SR 0.89 / MDD 33.27%，
+# 三锋的收益、p10、最差窗口、MDD **四项全优**，配对差 −1.36%/窗（t=−1.97）
+# **显著落后**。原「降档预案」用途已于 **2026-10-30 拍板取消**（处置 A）：
+# 全样本 −9.98pp/年、贴近触发线 −2.62pp、**触发之后 −3.46pp（胜率仅 16.7%）**，
+# 连"深跌时换防守"这个最后理由也不成立（README §8.2）⇒ 保留仅为对照。
+# 🚨 同日 buffer 档位经**三轮修正**（见 README §4.1–4.2）：
+# ① `enter_rank` 是死参数（3/5/8/10/15 净值逐位相同），buffer 只有 `exit_rank`
+#    一个自由度；
+# ② 非重叠 41 期下 `exit=20` 尾部确实更好（p10 −4.86% vs −7.54%、胜率 70.7%
+#    vs 63.4%），但 **PIT 修复后年化不再打平**：25.43% vs 30.63%（落后 5.2pp），
+#    期 Sharpe 0.46 vs 0.45 几乎相同；日 Sharpe 1.30 含 √252 对低换手的高估。
+# ③ **样本外验证失败**：前 20 期 buffer +52.4% vs 三锋 +131.2%，优势只在 2024 之后，
+#    逐年滚动选档 6 年出手 1 次亏 40pp ⇒ 事前不可识别，是付费的降波选项。
+# ⇒ 保留为**对照档**。见 reports/etf_contest5/README.md §4.1、§8.1、§8.2。
+BALANCED = {**RETIRED_CORE, "name": "balanced", "top_k": 5, "weighting": "hrp"}
+#: 生产方案（2026-11-19 起两档）：``monthly`` 默认，``balanced`` 中间档。
+#: 原 ``core`` 已退役，参数保留在 ``etf_contest_spec.RETIRED_CORE``。
+PROFILES = {"balanced": BALANCED, "monthly": MONTHLY}
 DEF_PARTS = {"511010.SH": 0.5, "518880.SH": 0.5}
 PARTICIPATION = 0.05      # 单只单边下单 / 60 日均成交额
 PREMIUM_WARN = 0.01       # 20 日折溢价告警线
@@ -190,18 +179,17 @@ def _table(rows: list[dict], cols: list[tuple[str, str]]) -> str:
 
 
 def main(argv: list[str] | None = None) -> None:
-    ap = argparse.ArgumentParser(description="ETF 轮动生产信号板（三锋 / 五衡 / 磐石）")
+    ap = argparse.ArgumentParser(description="ETF 轮动生产信号板（balanced / monthly）")
     ap.add_argument("--capital", type=float, default=1e7, help="总资金（元）")
     ap.add_argument("--positions", default=None, help="当前持仓 CSV（code,weight）")
-    ap.add_argument("--profile", choices=tuple(PROFILES), default="champ",
-                    help="champ=长线版「磐石」；contest5=合规版「五衡·等权」（≥5 只）；"
-                         "contest5h=对照档「五衡」（Top5/HRP，非降档）；contest3=定版「三锋」"
-                         "（Top3 + 拥挤软惩罚 + HRP）")
+    ap.add_argument("--profile", choices=tuple(PROFILES), default="monthly",
+                    help="monthly=月频稳健（默认）；balanced=均衡轮动（Top5/HRP，中间档）。"
+                         "原 core（Top3 集中档）已于 2026-11-19 退役")
     ap.add_argument("--out", default=None,
                     help="输出目录（默认按 profile 落到 reports/etf_*）")
     ap.add_argument("--exclude", default=None,
-                    help="不可交易的代码（逗号分隔）。比赛版默认自动排除 5 只非指定池"
-                         "品种（etf_contest_spec.EXCLUDED_5），传空串 '' 可关闭")
+                    help="不可交易的代码（逗号分隔）。默认不排除任何标的（50 只全池）；"
+                         "复现比赛期 45 只口径时传 etf_contest_spec.EXCLUDED_5 的五个代码")
     ap.add_argument("--max-premium", type=float, default=None,
                     help="选标层折溢价闸门：|prem20| 超过该值（如 0.01）视为当日不可买。"
                          "PIT：prem20 只用当日及以前数据；避免补位时反复补进溢价品")
@@ -210,8 +198,7 @@ def main(argv: list[str] | None = None) -> None:
                          "用于观察 HRP 原始权重形状")
     args = ap.parse_args(argv)
     out = Path(args.out or (ROOT / "reports" / (
-        {"champ": "etf_champ", "contest5": "etf_contest5",
-         "contest5h": "etf_contest5", "contest3": "etf_contest5"}[args.profile])))
+        {"balanced": "etf_contest5", "monthly": "etf_champ"}[args.profile])))
     out.mkdir(parents=True, exist_ok=True)
     spec = dict(PROFILES[args.profile])
     if args.max_weight is not None:
@@ -219,10 +206,8 @@ def main(argv: list[str] | None = None) -> None:
             spec.pop("max_weight", None)
         else:
             spec["max_weight"] = args.max_weight
-    label = {"champ": "长线版「磐石」（月度/波动目标/债金防御）",
-             "contest5": "合规版「五衡·等权」（Top5/周频/去重）",
-             "contest5h": "对照档「五衡」（Top5/HRP，非降档）",
-             "contest3": "定版「三锋」v2（Top3/HRP/拥挤软惩罚/剔除 20 日过热）"}[args.profile]
+    label = {"balanced": "均衡轮动（Top5/HRP，中间档）",
+             "monthly": "月频稳健（月度/波动目标/债金防御，默认档）"}[args.profile]
 
     cache = DataCache(create_datasource())
     bundle = load_bundle(cache, WARMUP_BEGIN, None)
@@ -231,8 +216,6 @@ def main(argv: list[str] | None = None) -> None:
                  .reindex(index=close.index, columns=close.columns))
     panels = build_extra_panels(close, build_panels(close, amount), raw_close)
     excluded = [c.strip() for c in (args.exclude or "").split(",") if c.strip()]
-    if not excluded and args.profile.startswith("contest"):
-        excluded = list(EXCLUDED_5)
     if excluded:
         # 只把 mask 置 False：run_variant 会把因子 where(mask)，等价于这些标的
         # 在选标与建仓时不可交易（不影响已算好的因子历史，无前视）。
@@ -359,37 +342,20 @@ def main(argv: list[str] | None = None) -> None:
     exec_txt = ("收盘后按当日截面批量出信号 → **次日开盘**按目标权重下单成交"
                 "（T+1 open；对外成绩口径）")
     rule_txt = {
-        "contest5": ("TopK=5（正式赛要求 ≥5 只）；12-1 动量 + 绝对动量过滤；"
-                     "120 日相关 ≥0.90 同簇只留最强（去重）；等权；无波动目标"),
-        "contest5h": ("TopK=5（正式赛要求 ≥5 只）；12-1 动量 + 绝对动量过滤；"
-                      "120 日相关 ≥0.90 去重；HRP 风险平价（60 日协方差）；无波动目标"),
-        "contest3": ("TopK=3（累计口径：赛期内累计买入 ≥5 只不同产品即合规，**已达标**）；"
-                     "12-1 动量扣拥挤软惩罚（份额 250 日分位 >0.80 起线性扣，最多 10pp）"
-                     " 并剔除最近 20 日涨幅 >10% 的过热标的"
-                     " + 绝对动量过滤；120 日相关 ≥0.90 去重；HRP 风险平价；无波动目标"),
-        "champ": "TopK=5；逆波动加权；15% 年化波动目标；防御腿 = 0.5·511010.SH + 0.5·518880.SH",
+        "balanced": ("TopK=5；12-1 动量 + 绝对动量过滤；"
+                     "120 日相关 ≥0.90 去重；HRP 风险平价（60 日协方差）；无波动目标"),
+        "monthly": "TopK=5；逆波动加权；15% 年化波动目标；防御腿 = 0.5·511010.SH + 0.5·518880.SH",
     }[args.profile]
     evidence_txt = {
-        "contest5": ("正式赛合规版依据 <code>reports/etf_contest5/README.md</code>"
-                     "（80 个滚动 2 月窗口、**T+1 开盘成交**：均值 +3.01%、中位 +1.83%、"
-                     "p10 −6.73%、最差 −16.50%、胜率 61.3%、Sharpe 0.56、年化 13.99%）。"),
-        "contest5h": ("对照档依据 <code>reports/etf_contest5/README.md</code> §四"
-                      "（80 个滚动 2 月窗口、**T+1 开盘成交**：均值 +3.87%、中位 +3.08%、"
-                      "p10 −5.99%、最差 −13.46%、胜率 63.7%、Sharpe 0.89、年化 20.65%）。"
-                      "<b>⚠️ 本档在 PIT 修复后全面落后三锋</b>（年化 −10pp、MDD 33.3% 更深），"
-                      "<b>原「−15% 降档」用途已于 2026-10-30 取消</b>（触发之后仍落后 3.46pp、"
-                      "胜率仅 16.7%，§8.2），保留仅为对照。"),
-        "contest3": ("定版 v2 依据 <code>reports/etf_contest5/README.md</code> §三（口径 §零）"
-                     "（45 只比赛池 80 个滚动 2 月窗口、**T+1 开盘成交**：均值 +5.23%、"
-                     "中位 +3.07%、p10 −4.86%、最差 −12.73%、胜率 70.0%、Sharpe 1.16、"
-                     "年化 30.63%）。⚠️ 这些是**上界**：同一策略把调仓日挪到周内其他天，"
-                     "年化落到 10.6%~19.9%（§七 #17，该区间为 PIT 修正前口径），"
-                     "不要做线性外推。"),
-        "champ": ("T+1 开盘口径 <b>12.97% / Sharpe 1.02 / MDD 14.03%</b>（2020-01–2026-10，"
-                  "80 个 2 月窗口：均值 +2.34%、最差 −8.24%、胜率 65.0%）；"
-                  "收盘成交口径为 13.19% / 1.04 ⇒ <b>执行税仅 −0.22pp/年</b>"
-                  "（月频 12 次/年 + 单只 17.7%，是「三锋」−2.95pp 的 1/13）。"
-                  "⚠️ 上界：月内相位 k=1..5 年化 9.8%~13.5%，路径摆动 3.8pp，勿线性外推。"),
+        "balanced": ("中间档依据 <code>reports/etf_contest5/README.md</code> §四、§14.7。"
+                     "50 只正常口径、T+1 开盘成交：<b>5 相位均值年化 12.53%、Sharpe 0.59、"
+                     "MDD 31.3%（最差相位 36.2%）</b>，相位极差 5.14pp；"
+                     "k=1 单相位为 14.79%/0.70/MDD 26.36%。"
+                     "⚠️ 原「−15% 降档」用途已于 2026-10-30 取消（§8.2）。"),
+        "monthly": ("<b>T+1 开盘口径 13.18% / Sharpe 1.04 / MDD 13.42%</b>"
+                    "（2020-01 起，80 个 2 月窗口）；收盘成交口径 13.52%/1.07"
+                    " ⇒ <b>执行税 −0.34pp/年</b>（月频 12 次/年 + 单只 17.6%，远低于集中档）。"
+                    "月内调仓日摆动见 §五，勿线性外推。"),
     }[args.profile]
     body = f"""<div class="page">
 <header>

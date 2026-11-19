@@ -197,8 +197,7 @@ class DataCache:
             # 405MB 宽表整份复制、再做一次布尔掩码全量拷贝（峰值约 2.8GB），是
             # 2026-09-16 两次静默死亡（疑似 OOM）的直接原因。列集合、列顺序与
             # 索引语义（union）均与原实现逐位等价——同名列以 new 为准，等价于
-            # 原先的 duplicated(keep="last")（见 scripts/oneoff/
-            # _probe_wide_table_merge_eq.py，14 组穷举输入 max|Δ|=0）。
+            # 原先的 duplicated(keep="last")（14 组穷举输入 max|Δ|=0，探针已删）。
             local_only = local_df.columns.difference(new_df.columns, sort=False)
             if not len(local_only) and bool(local_df.index.isin(new_df.index).all()):
                 # 快路径：new 已覆盖 local 的全部列与行——零拷贝，不并表

@@ -38,6 +38,23 @@ STAMP_DUTY_CHANGES: tuple[tuple[str, float], ...] = (
 )
 
 
+def turnover_cost(turnover, one_way_bp: float):
+    """单边换手 → 收益扣减（小数，不是 bp）。
+
+    口径：``turnover`` 是**单边**换手（``|Δw|.sum()/2``），成交额是它的 2 倍，
+    故 ``cost = 2 × turnover × one_way_bp / 1e4``。早期实现少乘这个 2
+    （见 ``TransactionCosts.calc`` docstring），脚本里各写一遍很容易复发。
+
+    Args:
+        turnover: 单边换手（标量或数组）。
+        one_way_bp: 单边费率（bp），如 13.5 表示万 1.35。
+
+    Returns:
+        与 ``turnover`` 同形状的收益扣减。
+    """
+    return turnover * 2.0 * one_way_bp / 1e4
+
+
 def stamp_duty_on(date) -> float:
     """返回 ``date`` 当日适用的证券交易印花税税率（卖出单边）。
 
@@ -62,6 +79,23 @@ def stamp_duty_on(date) -> float:
         if stamp >= eff:
             rate = r
     return rate
+
+
+def default_one_way_bp() -> float:
+    """配置口径的**平均单边**交易成本（bp）。
+
+    = 佣金 + 滑点 + 印花税/2（印花税仅卖出单边）。``config/settings.yaml``
+    当前取值 1 + 10 + 5/2 = **13.5bp** ⇒ 往返 27bp。
+
+    探针脚本一律引用本函数，不要再写字面量（历史上 13.5 / 36.0 两套
+    都自称「项目统一口径」）。
+    """
+    from config import Config
+
+    c = Config.get()["costs"]
+    return (float(c["commission_rate"]) * 1e4
+            + float(c["slippage_bp"])
+            + float(c["stamp_duty"]) * 1e4 / 2.0)
 
 
 @dataclass

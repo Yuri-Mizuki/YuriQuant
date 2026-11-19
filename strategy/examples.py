@@ -16,7 +16,7 @@ tie-break 语义（2026-09-11 统一，全仓单一规则）
 与 :func:`strategy.constraints.build_signal_weights` 以及
 :class:`BufferedTopFracLongOnly` 的内部实现是**同一语义**。
 
-实测影响面（``scripts/oneoff/probe_tie_stable_sort.py``，HS300 2025 真实因子库
+实测影响面（HS300 2025 真实因子库
 40 面板 / 46930 截面）：约 **4.4%** 的截面在 top-k 边界存在并列，而且几乎每个
 并列截面新旧实现选出的持仓**集合都不同**（最坏 Jaccard = 0，即完全无交集）。
 故本次改动会让受影响实验的持仓与换手发生可辨识变化，需按新口径重跑。

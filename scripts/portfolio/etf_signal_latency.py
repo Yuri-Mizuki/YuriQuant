@@ -22,8 +22,8 @@ ETF 轮动信号链端到端耗时探针
 
 用法::
 
-    python -m scripts.portfolio.etf_signal_latency                 # 默认 contest3
-    python -m scripts.portfolio.etf_signal_latency --profile champ --json out.json
+    python -m scripts.portfolio.etf_signal_latency                 # 默认 core
+    python -m scripts.portfolio.etf_signal_latency --profile monthly --json out.json
 
 ⚠️ 会把结果同时打印到 stdout 并（可选）落 JSON；不写 reports/ 以外的路径。
 """
@@ -66,14 +66,13 @@ class _Stopwatch:
                 for k, v in self.t.items()}
 
 
-def run(profile: str = "contest3") -> dict:
+def run(profile: str = "monthly") -> dict:
     sw = _Stopwatch()
     import pandas as pd
 
     from data.cache import DataCache
     from data.datasource import create_datasource
     from scripts.portfolio.etf_champ_signals import PROFILES
-    from scripts.portfolio.etf_contest_spec import EXCLUDED_5
     from scripts.portfolio.etf_rotation_panels import (
         build_defense,
         build_extra_panels,
@@ -107,9 +106,6 @@ def run(profile: str = "contest3") -> dict:
     sw.start("s3_panels")
     panels = build_extra_panels(close, build_panels(close, amount), raw_close)
     sw.record("s3_panels")
-    excluded = list(EXCLUDED_5) if profile.startswith("contest") else []
-    for c in excluded:
-        panels["mask"].loc[:, c] = False
 
     extra = (pd.DataFrame({"DEF": level_from_returns(build_defense(close)["mix"])})
              if spec.get("defense") else None)
@@ -169,8 +165,8 @@ def run(profile: str = "contest3") -> dict:
 
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description="ETF 信号链各段耗时")
-    ap.add_argument("--profile", default="contest3",
-                    choices=("contest3", "contest5", "contest5h", "champ"))
+    ap.add_argument("--profile", default="monthly",
+                    choices=("balanced", "monthly"))
     ap.add_argument("--json", default=None, help="把结果写到该 JSON")
     args = ap.parse_args(argv)
 

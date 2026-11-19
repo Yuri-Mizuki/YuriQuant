@@ -158,7 +158,7 @@ def cmd_fill_ic(lib: FactorLibrary, args) -> None:
     是空的——于是「按显著性排序」在半个库上失效。这些因子已经补过 eval，
     ``ic`` 序列就存在 eval 文件里，直接读出来算即可（毫秒级/个）。
     """
-    from research.factor_library import ic_stats  # noqa: PLC0415
+    from research.factor_library import registry_ic_stats  # noqa: PLC0415
 
     reg = lib._load_registry()
     t = pd.to_numeric(reg["t_stat_nw"], errors="coerce")
@@ -178,7 +178,7 @@ def cmd_fill_ic(lib: FactorLibrary, args) -> None:
         except Exception:  # noqa: BLE001
             skipped += 1
             continue
-        filled[r["name"]] = ic_stats(ev["ic"])
+        filled[r["name"]] = registry_ic_stats(ev["ic"])
 
     if filled:
         # 分批落盘，避免单次 registry 太大 + 中途被杀丢全部

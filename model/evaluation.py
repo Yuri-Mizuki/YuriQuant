@@ -16,10 +16,9 @@ from __future__ import annotations
 
 from typing import Any
 
-import numpy as np
 import pandas as pd
 
-from stats.ic import calc_ic_decay, calc_ic_series, calc_ir, quantile_backtest
+from stats.ic import calc_ic_decay, calc_ic_series, calc_ir, ic_stats, quantile_backtest
 from stats.robust_stats import nw_tstat
 from stats.significance import t_pvalue
 
@@ -71,8 +70,8 @@ def eval_row(tag: str, pred: pd.DataFrame, fwd: pd.DataFrame,
     pred = pred.loc[days]
     tgt = fwd.loc[days]
     ic = calc_ic_series(pred, tgt).dropna()
-    t_nw, _, _ = nw_tstat(ic.values) if len(ic) > 1 else (0.0, 0.0, 0)
-    p = t_pvalue(t_nw, df=max(len(ic) - 1, 1))
+    st = ic_stats(ic)
+    p = t_pvalue(st["nw_t"], df=max(st["n"] - 1, 1))
     ev = evaluate_model(pred, tgt)
     qb = ev["quantile_backtest"]
     ls = None
@@ -82,11 +81,11 @@ def eval_row(tag: str, pred: pd.DataFrame, fwd: pd.DataFrame,
         if "Q5" in ret.columns and "Q1" in ret.columns:
             ls = float((ret["Q5"] - ret["Q1"]).mean())
     return {
-        "name": tag, "ic_mean": float(ic.mean()),
-        "ic_ir": float(ic.mean() / ic.std()) if len(ic) > 1 and ic.std() > 0 else np.nan,
-        "ic_t_nw": float(t_nw), "ic_p_nw": float(p),
-        "ic_win_rate": float((ic > 0).mean()),
-        "n_days": int(len(ic)),
+        "name": tag, "ic_mean": st["ic"],
+        "ic_ir": st["ir"],
+        "ic_t_nw": st["nw_t"], "ic_p_nw": float(p),
+        "ic_win_rate": st["win"],
+        "n_days": int(st["n"]),
         "ls_daily": ls,
     }
 

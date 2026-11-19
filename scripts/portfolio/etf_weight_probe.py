@@ -27,13 +27,14 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from backtest.engine import build_execution_split  # noqa: E402
+from backtest.metrics import annual_return  # noqa: E402
 from scripts.portfolio.etf_contest5_eval import (  # noqa: E402
     BEGIN,
     EXCLUDED_5,
     two_month_windows,
     yearly,
 )
-from scripts.portfolio.etf_contest_spec import FINAL  # noqa: E402
+from scripts.portfolio.etf_contest_spec import RETIRED_CORE  # noqa: E402
 from scripts.portfolio.etf_rotation_panels import build_extra_panels  # noqa: E402
 from scripts.portfolio.etf_rotation_probe import (  # noqa: E402
     WARMUP_BEGIN,
@@ -41,10 +42,16 @@ from scripts.portfolio.etf_rotation_probe import (  # noqa: E402
     load_bundle,
     run_variant,
 )
+from stats import PERIODS_PER_YEAR  # noqa: E402
 from stats.significance import mean_t  # noqa: E402
 
 
-def load_env():
+def load_env(contest_pool: bool = False):
+    """装载回测环境。
+
+    ``contest_pool=False``（默认）= 2026-11-19 去比赛化后的 **50 只正常口径**；
+    传 ``True`` 才屏蔽 ``EXCLUDED_5`` 复现比赛期 45 只历史数字。
+    """
     from data.cache import DataCache
     from data.datasource import create_datasource
 
@@ -56,8 +63,9 @@ def load_env():
     ro = raw["open"].unstack("code").reindex(index=close.index, columns=close.columns)
     open_adj = (ro * (close / rc)).astype(np.float32)
     panels = build_extra_panels(close, build_panels(close, amount), rc)
-    for x in EXCLUDED_5:
-        panels["mask"].loc[:, x] = False
+    if contest_pool:
+        for x in EXCLUDED_5:
+            panels["mask"].loc[:, x] = False
     mfs = pd.DatetimeIndex(
         pd.Series(close.index, index=close.index)
         .groupby(close.index.to_period("M")).first().to_numpy())
@@ -66,13 +74,20 @@ def load_env():
 
 
 def run(env, spec: dict, rebalance_days=None, begin=BEGIN):
-    """跑 close 口径取调仓日，再跑 T+1 open 口径（与 eval 同源）。"""
+    """跑 close 口径取调仓日，再跑 T+1 open 口径（与 eval 同源）。
+
+    若 ``env["extra_close"]`` 非空（monthly 的合成防御腿 DEF），同时补进
+    ``close`` / ``open_adj`` 执行价面板，否则该腿拿不到执行价、权重被吞。
+    """
+    ex = env.get("extra_close")
+    cl = env["close"].join(ex) if ex is not None else env["close"]
+    od = env["open_adj"].join(ex) if ex is not None else env["open_adj"]
     r0 = run_variant(env["bundle"], env["panels"], spec, begin, None,
-                     rebalance_days=rebalance_days)
-    spl = build_execution_split(env["open_adj"], env["close"],
+                     rebalance_days=rebalance_days, extra_close=ex)
+    spl = build_execution_split(od, cl,
                                 set(pd.DatetimeIndex(r0["rebalance_dates"])))
     r1 = run_variant(env["bundle"], env["panels"], spec, begin, None,
-                     rebalance_days=rebalance_days,
+                     rebalance_days=rebalance_days, extra_close=ex,
                      execution_split=spl, execution_shift=True)
     return r0, r1
 
@@ -143,7 +158,7 @@ def mode_conc(env, spec):
         cols = list(row.index)
         if len(cols) < 2:
             continue
-        cov = rets60.loc[:d].tail(60)[cols].dropna(how="all").cov().to_numpy() * 252
+        cov = rets60.loc[:d].tail(60)[cols].dropna(how="all").cov().to_numpy() * PERIODS_PER_YEAR
         wv = row.reindex(cols).to_numpy()
         wv = wv / wv.sum()
         port = float(wv @ cov @ wv)
@@ -617,7 +632,7 @@ def mode_focus(env, spec, topn: int = 10):
     corr = rets.corr(min_periods=120)
     np.fill_diagonal(corr.values, np.nan)
     mc = corr.mean()                       # 与全池其余标的的平均相关
-    ann = (1.0 + rets).prod() ** (252.0 / max(len(rets), 1)) - 1.0
+    ann = annual_return(rets)
     cnt = f["top"].value_counts()
     tot = len(f)
     print(f"  调仓日 {tot}；被押过 {len(cnt)} 只（池内 45 只）")
@@ -822,10 +837,51 @@ def mode_loo(env, spec):
     return d
 
 
+# ------------------------------------------- 6. dedup_corr × pre10（50 只口径重选）
+#: 去重阈值候选。0.90 是 45 只比赛池上定的，池子恢复 50 只后需重新确认。
+DEDUP_GRID = (0.85, 0.88, 0.90, 0.92, 0.95)
+#: 两项待验：``pre10`` 开/关对应的信号名（见 ``etf_rotation_panels`` 第 218–223 行）。
+SIGNAL_GRID = {"pre10": "mom12_1_crowdsoft_pre10", "no_pre10": "mom12_1_crowdsoft"}
+
+
+def mode_dedup(env, spec):
+    """池子换回 50 只后重选 ``dedup_corr`` 与 ``pre10`` 筛子（T+1 open 口径）。
+
+    两个参数都受池子直接影响：去重阈值比较的是相关矩阵，而新增的国债/转债/商品
+    与股票 ETF 相关性极低；``pre10`` 剔除 20 日涨幅 >10%，对新入池的高波动品种
+    （酒 ETF）触发频率更高。这里只产数，选档规则见 reports/etf_contest5/README.md §十四。
+    """
+    print("\n== 6. dedup_corr × pre10（50 只正常口径，T+1 open）==")
+    print(f"  {'信号':<10}{'dedup':>7}{'年化':>9}{'SR':>7}{'MDD':>9}"
+          f"{'2月均值':>10}{'p10':>9}{'最差':>9}{'最大单只':>9}")
+    rows = []
+    for lab, sig in SIGNAL_GRID.items():
+        for thr in DEDUP_GRID:
+            s = dict(spec)
+            s["signal"] = sig
+            s["dedup_corr"] = thr
+            _, r1 = run(env, s)
+            hw = hold_matrix(r1["weights"])
+            wt = two_month_windows(r1["equity"], env["mfs"])
+            print(f"  {lab:<10}{thr:>7.2f}{r1['annual_return']:>9.2%}"
+                  f"{r1['sharpe']:>7.2f}{r1['max_drawdown']:>9.2%}"
+                  f"{wt.mean():>+10.2%}{wt.quantile(.1):>+9.2%}{wt.min():>+9.2%}"
+                  f"{hw.max(axis=1).median():>9.1%}")
+            rows.append({"signal": lab, "dedup_corr": thr,
+                         "ann": r1["annual_return"], "sharpe": r1["sharpe"],
+                         "mdd": r1["max_drawdown"], "w_mean": wt.mean(),
+                         "w_p10": wt.quantile(.1), "w_worst": wt.min(),
+                         "max_single": float(hw.max(axis=1).median())})
+    return pd.DataFrame(rows)
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="权重层质疑核查")
     ap.add_argument("--mode", default="conc,ret,maxw",
-                    help="conc,ret,maxw,rule,struct,attr,phase,loo,wf,placebo,covwin,focus")
+                    help="conc,ret,maxw,rule,struct,attr,phase,loo,wf,placebo,covwin,"
+                         "focus,dedup")
+    ap.add_argument("--contest-pool", action="store_true",
+                    help="屏蔽 EXCLUDED_5 复现比赛期 45 只口径（默认 50 只全池）")
     ap.add_argument("--rules", default="",
                     help="逗号分隔的权重规则（默认 12 档全跑，见 ALL_RULES）")
     ap.add_argument("--min-train", type=int, default=8,
@@ -835,11 +891,20 @@ def main(argv=None) -> int:
     ap.add_argument("--placebo", type=int, default=20,
                     help="随机单押安慰剂的 seed 数")
     ap.add_argument("--csv-dir", default="reports/etf_contest5")
+    ap.add_argument("--profile", default="core",
+                    choices=("core", "balanced", "monthly"),
+                    help="被测方案（默认 core=已退役的集中档，仅用于历史复现/对照）")
     args = ap.parse_args(argv)
     modes = [s.strip() for s in args.mode.split(",")]
-    env = load_env()
-    spec = dict(FINAL)
-    print(f"窗口 {BEGIN}→末日；spec = FINAL（三锋）")
+    env = load_env(contest_pool=args.contest_pool)
+    from scripts.portfolio.etf_champ_signals import PROFILES
+    spec = dict(RETIRED_CORE if args.profile == "core" else PROFILES[args.profile])
+    if args.profile == "monthly":
+        from scripts.portfolio.etf_rotation_panels import build_defense, level_from_returns
+        env["extra_close"] = pd.DataFrame(
+            {"DEF": level_from_returns(build_defense(env["close"])["mix"])})
+    print(f"窗口 {BEGIN}→末日；spec = {args.profile}；"
+          f"池 {'45 只（比赛期复现）' if args.contest_pool else '50 只（正常口径）'}")
     out = {}
     if "conc" in modes:
         out["conc"] = mode_conc(env, spec)
@@ -867,6 +932,8 @@ def main(argv=None) -> int:
         out["covwin"] = mode_covwin(env, spec)
     if "focus" in modes:
         out["focus"] = mode_focus(env, spec)
+    if "dedup" in modes:
+        out["dedup"] = mode_dedup(env, spec)
     d = Path(args.csv_dir)
     d.mkdir(parents=True, exist_ok=True)
     for k, v in out.items():

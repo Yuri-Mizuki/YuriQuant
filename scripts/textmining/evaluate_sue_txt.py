@@ -24,6 +24,7 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+from backtest.metrics import annual_return  # noqa: E402
 from scripts.textmining._paths import Out  # noqa: E402
 OUT_DIR = Out("sue")
 
@@ -89,8 +90,7 @@ def stratified_backtest(factor: pd.DataFrame, n_layers: int = 5,
         s = col.dropna()
         if len(s) < 12:
             return np.nan
-        nav = (1 + s).prod()
-        return nav ** (12 / len(s)) - 1
+        return annual_return(s, 12)
 
     rows = []
     for col in layer_ret.columns:

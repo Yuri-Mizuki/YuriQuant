@@ -34,6 +34,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from scripts.common.atomic_io import write_json_atomic  # noqa: E402
 from scripts.common.cli_common import setup_logging  # noqa: E402
 
 log = setup_logging("fetch_alla_hist")
@@ -48,7 +49,8 @@ def _load_progress(path: Path) -> dict:
 
 
 def _save_progress(path: Path, prog: dict) -> None:
-    path.write_text(json.dumps(prog, ensure_ascii=False), encoding="utf-8")
+    # 原子写：中断时不能留半截 JSON，否则下次 _load_progress 直接崩
+    write_json_atomic(prog, path, indent=None)
 
 
 def main():

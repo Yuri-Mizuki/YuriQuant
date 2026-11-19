@@ -32,6 +32,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from backtest.metrics import drawdown_series  # noqa: E402
 from stats import PERIODS_PER_YEAR  # noqa: E402
 
 log = logging.getLogger("portfolio_ppo")
@@ -280,7 +281,7 @@ def evaluate_arm(name: str, weights: dict[pd.Timestamp, np.ndarray],
         "ir": float(np.mean(ex) / ex_vol) if ex_vol > 0 else np.nan,
         "avg_turnover": float(np.mean([r["turnover"] for r in rows[1:]])) if n > 1 else 0.0,
         "avg_te": float(np.mean([r["te"] for r in rows])),
-        "max_dd": float((eq["nav"] / eq["nav"].cummax() - 1.0).min()),
+        "max_dd": float(drawdown_series(eq["nav"]).min()),
     }
     return metrics, eq
 

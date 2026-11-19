@@ -34,6 +34,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from backtest.metrics import drawdown_series  # noqa: E402
 from stats import PERIODS_PER_YEAR  # noqa: E402
 
 log = logging.getLogger("phase2")
@@ -553,7 +554,7 @@ def _evaluate(name, weights, codes, decision_dates, period_returns, bw):
         "ir": float(np.mean(ex) / exv) if exv > 0 else np.nan,
         "avg_turnover": float(np.mean([r["turnover"] for r in rows[1:]]))
             if len(rows) > 1 else 0.0,
-        "max_dd": float((eq["nav"] / eq["nav"].cummax() - 1).min()),
+        "max_dd": float(drawdown_series(eq["nav"]).min()),
     }, eq
 
 

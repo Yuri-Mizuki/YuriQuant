@@ -33,6 +33,7 @@ if str(ROOT) not in sys.path:
 
 from config import Config  # noqa: E402
 from data.cache import DataCache  # noqa: E402
+from scripts.common.atomic_io import write_json_atomic  # noqa: E402
 
 
 def main() -> None:
@@ -88,7 +89,7 @@ def main() -> None:
                 n_new += len(out)
             ok += len(batch)
             prog.add(bi)
-            prog_path.write_text(json.dumps(sorted(prog)), encoding="utf-8")
+            write_json_atomic(sorted(prog), prog_path, indent=None)
             print(f"[{t}] 批{bi}/{len(batches)} 累计完成{ok}/{len(missing)}只 "
                   f"({time.time()-t0:.0f}s)", flush=True)
 

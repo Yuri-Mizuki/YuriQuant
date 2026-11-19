@@ -33,7 +33,7 @@ from backtest.engine import build_execution_split
 from data.cache import DataCache
 from data.datasource import create_datasource
 from scripts.portfolio.etf_champ_signals import PROFILES
-from scripts.portfolio.etf_contest_spec import EXCLUDED_5
+from scripts.portfolio.etf_contest_spec import EXCLUDED_5, RETIRED_CORE
 from scripts.portfolio.etf_rotation_panels import build_extra_panels
 from scripts.portfolio.etf_rotation_probe import (
     WARMUP_BEGIN,
@@ -43,7 +43,7 @@ from scripts.portfolio.etf_rotation_probe import (
 )
 
 BEGIN = 20200101
-BASE = dict(PROFILES["contest3"])
+BASE = dict(RETIRED_CORE)
 
 #: 有效档位（``enter_rank`` 已证明无效，只列 ``exit_rank``）。None = 三锋（无缓冲）。
 EXITS: dict[str, int | None] = {"c3": None, "x10": 10, "x15": 15, "x20": 20, "x30": 30}

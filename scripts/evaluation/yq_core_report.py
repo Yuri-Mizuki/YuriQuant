@@ -48,6 +48,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from backtest.metrics import drawdown_series  # noqa: E402
 from scripts.evaluation import caliber as cal  # noqa: E402
 from strategy.registry import TIERS, describe, get_tier  # noqa: E402
 
@@ -82,10 +83,6 @@ def panel_for(name: str, ctx: cal.CaliberContext) -> pd.DataFrame:
     """注册表声明的外部面板（`industry`）→ 对齐到信号面板的截面。"""
     ind = pd.read_parquet(cal.BASE_DIR / f"{name}.parquet")
     return ind.reindex(index=ctx.pred.index, columns=ctx.pred.columns)
-
-
-def _drawdown(nav: pd.Series) -> pd.Series:
-    return nav / nav.cummax() - 1.0
 
 
 def run_tier(name: str, cost, capital: float, lot_size: int | None,
@@ -130,7 +127,7 @@ def run_tier(name: str, cost, capital: float, lot_size: int | None,
         "sharpe_t_stat": m["sharpe_t_stat"],
         "max_dd": m["max_dd"],
         "vol": m["vol"],
-        "calmar": m["ann"] / m["max_dd"] if m["max_dd"] > 0 else float("nan"),
+        "calmar": m["calmar"],
         "turnover": m["turnover"],
         "cost_bp": m["cost_bp"],
         "n_active": m["n_active"],
@@ -185,7 +182,7 @@ def run_grid(names: list[str], cost, capitals: list[float]) -> pd.DataFrame:
             nh = (whr > 1e-9).sum(axis=1)
             row = dict(tier=n, capital=cap, ann=m["ann"], sharpe=m["sharpe"],
                        sharpe_arith=m["sharpe_arith"], max_dd=m["max_dd"],
-                       calmar=m["ann"] / m["max_dd"] if m["max_dd"] > 0 else float("nan"),
+                       calmar=m["calmar"],
                        turnover=m["turnover"],
                        invest_mean=float(inv.mean()), invest_min=float(inv.min()),
                        nhold_mean=float(nh.mean()), nhold_min=int(nh.min()))
@@ -350,7 +347,7 @@ def main(argv: list[str] | None = None) -> int:
         nav = pd.DataFrame(curves).sort_index()
         nav.index.name = "date"
         nav.to_csv(outdir / f"nav{suffix}.csv", encoding="utf-8-sig")
-        dd = nav.apply(_drawdown)
+        dd = nav.apply(drawdown_series)
         dd.to_csv(outdir / f"drawdown{suffix}.csv", encoding="utf-8-sig")
         print(f"净值/回撤: {outdir}/nav{suffix}.csv, drawdown{suffix}.csv")
     return 0

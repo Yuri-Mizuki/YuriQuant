@@ -41,8 +41,11 @@ import pandas as pd  # noqa: E402
 
 from backtest.costs import default_costs  # noqa: E402
 from backtest.engine import VectorBacktest, build_execution_split  # noqa: E402
+from backtest.metrics import drawdown_series, sharpe_arithmetic  # noqa: E402
 from config import Config  # noqa: E402
 from scripts.evaluation.caliber import next_day_rebalance, rebalance_dates  # noqa: E402
+from stats import PERIODS_PER_YEAR  # noqa: E402
+from stats.ic import calc_ic_series, ic_stats  # noqa: E402
 from strategy.base import Strategy  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -50,7 +53,7 @@ BASE = ROOT / "reports" / "alla_rolling" / "_base"
 OUT = ROOT / "reports" / "factor_board" / "cache"
 START = "2019-01-01"
 WINDOWS = {"1y": 1, "3y": 3, "5y": 5, "all": None}
-PPY = 244            # A 股年均交易日
+PPY = PERIODS_PER_YEAR  # 年化口径唯一真源（禁止再写 244/252 字面量）
 MIN_NAMES = 100      # 当日有效样本少于此值不建组合
 MIN_UNIQUE = 10      # 截面有效取值少于 10 种 ⇒ 分位切不开（见下）
 
@@ -119,17 +122,6 @@ def _init(base: Path, panel_dir: Path) -> None:
 # ---------------------------------------------------------------------------
 # 单因子计算
 # ---------------------------------------------------------------------------
-def _ic_series(panel: pd.DataFrame, fwd: pd.DataFrame,
-               mask: pd.DataFrame) -> pd.Series:
-    """日频截面 spearman IC（秩相关，缺失不参与）。"""
-    a = panel.where(mask).rank(axis=1, method="average")
-    b = fwd.where(mask).rank(axis=1, method="average")
-    both = a.notna() & b.notna()
-    n = both.sum(axis=1)
-    ic = a.corrwith(b, axis=1)
-    return ic.where(n >= 100)
-
-
 def _industry_ic(panel: pd.DataFrame, fwd: pd.DataFrame, ind: pd.DataFrame,
                  dates: pd.DatetimeIndex, n_sample: int = 36) -> dict:
     """行业 IC：按月抽样，行业内 spearman IC 的时间均值。"""
@@ -178,13 +170,13 @@ def _window_metrics(nav: pd.Series, bench_nav: pd.Series,
         cum = float(seg.iloc[-1] / seg.iloc[0] - 1)
         ann = float((seg.iloc[-1] / seg.iloc[0]) ** (PPY / n) - 1)
         bann = float((bseg.iloc[-1] / bseg.iloc[0]) ** (PPY / n) - 1)
-        dd = seg / seg.cummax() - 1
+        dd = drawdown_series(seg)
         to = turnover.loc[turnover.index >= seg.index[0]]
         out[wname] = {
             "cum": cum, "ann": ann, "bench_ann": bann,
             "excess_ann": float((1 + ann) / (1 + bann) - 1),
             "mdd": float(dd.min()),
-            "sharpe": float(r.mean() / r.std() * np.sqrt(PPY)) if r.std() else None,
+            "sharpe": float(sharpe_arithmetic(r, PPY)) if r.std() else None,
             "turnover": float(to.mean() * 12) if len(to) else None,
             "n_days": n,
         }
@@ -202,13 +194,13 @@ def _ic_metrics(ic: pd.Series) -> dict:
         seg = seg.dropna()
         if len(seg) < 20:
             continue
-        sd = seg.std()
+        s = ic_stats(seg)
         out[wname] = {
-            "ic_mean": float(seg.mean()),
-            "ic_ir": float(seg.mean() / sd) if sd else None,
+            "ic_mean": s["ic"],
+            "ic_ir": s["ir"],
             "ic_gt": float((seg.abs() > 0.02).mean()),
-            "ic_win": float((seg > 0).mean()),
-            "ic_t": float(seg.mean() / sd * np.sqrt(len(seg))) if sd else None,
+            "ic_win": s["win"],
+            "ic_t": s["nw_t"],
         }
     return out
 
@@ -245,7 +237,7 @@ def compute_one(name: str) -> dict | None:
     m = mask.reindex(columns=codes)
     rcc_ic = CTX["rcc_ic"].reindex(columns=codes)
     fwd = rcc_ic.shift(-1)
-    ic = _ic_series(panel, fwd, m)
+    ic = calc_ic_series(panel, fwd, tradable=m, min_samples=100)
     n_uniq = _unique_levels(panel)
     ind_ic = _industry_ic(panel, fwd, CTX["ind"].reindex(columns=codes), panel.index)
 

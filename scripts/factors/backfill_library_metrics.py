@@ -58,6 +58,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, ROOT)
 
+from scripts.builders.common import load_close_adj  # noqa: E402
 from scripts.common.cli_common import setup_logging  # noqa: E402
 
 log = setup_logging("backfill_library_metrics")
@@ -79,21 +80,6 @@ def slug(name: str) -> str:
     return hashlib.md5(name.encode("utf-8")).hexdigest()[:12]
 
 
-def load_close_adj(cache_root: Path) -> pd.DataFrame:
-    """后复权 close 面板——与 build_alla_alpha_panels.load_alla_panels 的
-    close 分支逐行同构（raw × backward_factor，ffill 复权因子）。"""
-    daily = pd.read_parquet(cache_root / "daily_all_a.parquet")
-    daily.index = daily.index.set_levels(daily.index.levels[0].normalize(), level=0)
-    d = daily.reset_index()
-    d["date"] = d["date"].dt.normalize()
-    c = d.pivot(index="date", columns="code", values="close").sort_index()
-    bf = pd.read_parquet(cache_root / "backward_factor.parquet")
-    bf = bf[[x for x in c.columns if x in bf.columns]]
-    f = bf.reindex(index=c.index, columns=c.columns).ffill()
-    out = (c.values * f.values)
-    return pd.DataFrame(out, index=c.index, columns=c.columns)
-
-
 def resolve_panel(panels_dir: Path, name: str) -> Path | None:
     """alpha 批量按因子名存盘；走 register() 通道的按 slug 存盘——两种都试。"""
     for cand in (panels_dir / f"{name}.parquet", panels_dir / f"{slug(name)}.parquet"):
@@ -113,7 +99,7 @@ def main() -> None:
     ap.add_argument("--flush-every", type=int, default=50)
     args = ap.parse_args()
 
-    from research.factor_analysis import calc_ir
+    from research.factor_analysis import calc_ir, ic_stats
     from research.factor_library import FactorLibrary
     from research.factor_library import METRIC_COLS, CANONICAL_CONFIGS
     from stats.significance import mean_inference
@@ -131,13 +117,10 @@ def main() -> None:
     # 收益面板（全量一次进内存，串行用）
     returns_panel = None
     if not args.skip_backtest:
-        from config import Config
         t0 = time.time()
-        close_adj = load_close_adj(Path(str(Config.cache()["root"])))
-        k0 = pd.Timestamp("20160701")   # 与批量链 keep_from 一致
-        close_kept = close_adj.loc[close_adj.index >= k0]
-        returns_panel = close_kept.pct_change(1, fill_method=None).shift(-1)
-        del close_adj, close_kept
+        close_adj = load_close_adj()   # 已按 KEEP_FROM 截断（builders.common 同源）
+        returns_panel = close_adj.pct_change(1, fill_method=None).shift(-1)
+        del close_adj
         log.info("收益面板: %d 日 × %d 股（%.0fs）", *returns_panel.shape, time.time() - t0)
 
     ic1 = pd.read_parquet(ds_dir / "ic_h1.parquet") if (ds_dir / "ic_h1.parquet").exists() else None
@@ -205,7 +188,7 @@ def main() -> None:
                 reg.at[i, "t_stat"] = inf["t_stat"]
                 reg.at[i, "t_stat_nw"] = inf["t_stat_nw"]
                 reg.at[i, "p_value_nw"] = inf["p_value_nw"]
-                reg.at[i, "ic_win_rate"] = float((ic > 0).mean())
+                reg.at[i, "ic_win_rate"] = float(ic_stats(ic)["win"])
                 reg.at[i, "significant"] = bool(abs(inf["t_stat_nw"]) > 2.0)
         # ---- canonical 回测 ----
         if not args.skip_backtest:
