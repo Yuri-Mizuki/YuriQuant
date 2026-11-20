@@ -97,8 +97,8 @@
 - **长实验队列**：好机器批次 1–14 **全部终判**（册Ⅲ）；增量方向线终结
   （批次 13 三臂全败，册Ⅰ §六 / 册Ⅲ 批次 13）；链路优化线 10-15 收口
   （QP/集中化/aim/HRP 全关，册Ⅱ 链路优化线）；择时线三线收口（册Ⅰ）。
-- **ETF 轮动**：**2026-11-19 去比赛化**（→§一）：池子 45→50、方案改 `core`（默认）/
-  `balanced`（对照）/ `monthly`（长线）、删合规补位档；50 只口径 `core` 24.24%/0.89/MDD 27.72%。
+- **ETF 轮动**：**2026-11-19 去比赛化**（→§一）：池子 45→50、方案改 `monthly`（默认）/
+  `balanced`（中间档）、原 `core` 同日退役、删合规补位档；50 只口径 `core` 24.24%/0.89/MDD 27.72%。
   文档真源 = `reports/etf_contest5/README.md`（§十四 记录去比赛化，§一–§十三 为比赛期历史；
   判否 **41 条**）。🚨 **三套语境别混引**：**50 只正常** = `24.24%/0.89/MDD 27.72%`；
   **比赛期 45 只** = k=1 单点 `30.63%/1.16/MDD 24.97%`；**长期实盘** = **5 相位平均 × 2019 起跑
@@ -579,7 +579,8 @@
     三条独立证据指向同一句——**事件类信息在 K15 集中组合上无法兑现**，不是数据不够
     （六张表全在本地全历史），是分子 spread 比分母 K 更小。
 - [x] **⑨·补·9 事件驱动「独立组合」口径重测：董监高主动增持通过（2026-11-15）**
-  → `reports/event_driven_probe/README.md`。
+  → 实现与复现见 `strategy/event_driven.py`（原 `reports/event_driven_probe/` 目录
+  2026-11-19 已删，结论行保留在 `reports/README.md` §1.6）。
   **起点是口径纠正**：补·8 测的是「事件能不能剔掉 K15 的持仓」，那是横截面框架下的否决权；
   事件驱动的定义是「事件发生→买入→持有 H 日→卖出」的**独立日历组合**，与选股模型无关。
   三条独立证据（`pead_probe` 截面 IC、`em_rating_probe` 触及度、补·8 否决）此前**没有一条**
@@ -746,7 +747,8 @@
     （封涨停 0.00%、跳空中位 0.00%）；H=10 建仓笔数约 1.4 倍、跳空分布未测。
   - **H=10 的负面证据只有 2025 年 −5.1%**（H=20 同年 +7.5%），但 H=5 同一年 +40.4%——
     非单调 ⇒ 少数极端交易主导，既不足以否掉也不足以支持，**列为待验证**。
-  - **已改三处文档**：`reports/event_driven_probe/README.md`（持有期表加成本口径注 + 风险段重写）、
+  - **已改三处文档**：`reports/event_driven_probe/README.md`（持有期表加成本口径注 + 风险段重写；
+    该目录 2026-11-19 已删，口径以 `strategy/event_driven.py` 为准）、
     `reports/inc_pure_playbook/README.md`（§三 加「为什么是 H=20 而不是 H=10」、
     §八 第 5 条改口、§九 未闭环 3→4 项）。
   - ✅ **下一步已做（同日）**：`exec_fill_probe --hold 10` 跑完 → `reports/exec_fill_probe_h10`。
@@ -974,12 +976,78 @@
   证据 `reports/etf_contest5/README.md` §14.6 + `weight_probe_{phase,maxw,dedup}.csv`。
 - **✅ 2026-11-19 core 退役（§14.7）**：balanced 五相位补测后三档同口径对比 →
   `core` 5 相位均值 14.27%/0.52/MDD 39.2%（最差相位 46.7%、Calmar 0.36）、单只上限
-  救不回来，被 `monthly`（13.18%/1.04/MDD 13.42%、Calmar 0.98）支配；`balanced`
+  救不回来，被 `monthly`（相位均值 10.63%/0.87/MDD 17.10%、Calmar 0.62）支配；`balanced`
   5 相位均值 12.53%/0.59/MDD 31.3%、极差仅 5.14pp。
   ⇒ `PROFILES` 只留 `monthly`（**默认**）/ `balanced`；core 参数以
   `etf_contest_spec.RETIRED_CORE` 保留（历史复现与 buffer/breaker 探针基准）。
   同步改 `etf_contest5_eval` / `etf_breaker_h2h` / `etf_contest5_buffer_oos` /
   `etf_pool_monitor` / `etf_signal_latency` / `etf_weight_probe` 与测试。
+- **✅ 2026-11-19 monthly 月内相位复测（§14.8）**：50 只池 k=1..5 =
+  13.18 / 11.52 / 9.80 / 8.94 / 9.71%，**相位均值 10.63% / SR 0.87 / MDD 17.10% /
+  Calmar 0.62**，极差 4.24pp（45 只池 4.16pp，结构未变）。k=1 优势有持续性
+  （7 年中 5 年最优、序列单调递减），但含 2.55pp 相位红利 ⇒ **对外引用改相位均值**。
+  `monthly`（0.62）> `balanced`（0.40）> `core`（0.36），默认档结论不变。
+- **✅ 2026-11-19 monthly 参数复核（§14.9）**：① `target_vol` 0.12 优于 0.15
+  （SR +0.07 / MDD −1.1pp / 换手 −5pp，年化 −0.49pp，Calmar 仅 +0.02）⇒ **已采纳**
+  （换档后 k=1 12.27%/1.11/MDD 13.97%，五相位均值 10.15%/0.95/15.97%，§14.10）；
+  ② 防御腿 50/50 首次 A/B：纯债后段掉到 6.96%、纯金后段冲到
+  13.97%，**只有 50/50 两段持平（10.72/10.58）**，判定保留（「不押注」而非最优）；
+  ③ monthly 60% + balanced 40% 相位平均 Calmar **0.79**（单档 0.64 / 0.40、相关 0.652），
+  但该口径靠**日频再平衡**，两腿调仓日 M/W 不同步 ⇒ **实施后撤销**（§14.10 ②），
+  策略维持两个独立档运行。
+- **✅ 2026-11-19 balanced 权重 HRP → ERC（§14.11）**：HRP 在 5 只波动 12%~57% 的
+  标的上给出 69.5% / 0.18%（碎仓 5.9%）；ERC 相位均值 13.33%/0.64/MDD 29.89%，
+  最大单只 51.3%→34.7%、碎仓归零、换手 −28%。`max_weight=0.35` 与 equal /
+  inverse_vol 均判否。收益优势集中在 1 个相位（2 胜 2 平 1 负），采纳主因是集中度。
+- **✅ 2026-11-19 monthly 逆波动加 σ 下限 10%（§14.12）**：池内 1~2% 波动的国债 ETF
+  被 1/σ 顶到权益腿 83.9%（2023-03-02）。`weight_vol_floor=0.10` 后相位均值
+  10.14%→10.65%、Calmar 0.64→0.67、最大单只 42.7%→31.1%，MDD/换手不变；
+  cap50~cap30 四档逐项不如 vf10，vf15 更平但年化 −0.12pp。优势集中 2024 后（+1.57pp）。
+- **✅ 2026-11-19 动量回看窗口扫描（§14.13，判否，两档维持 12-1）**：6-1 两档均更差；
+  12-0 虽两档更高（balanced 13.86%、monthly 11.86%），但 balanced 前段 −2.48pp、优势全在
+  2024 后且集中在 1 个相位，monthly 的 9-1 也高于 12-1 ⇒ 锯齿非平台，不采纳。
+  周频 IC 0.035→0.034 几乎不变。明细 `reports/etf_contest5/signal_lookback.csv`。
+- **✅ 2026-11-19 前端展示页改造（`reports/strategies/`）**：策略首页（卡片列出两档 ETF +
+  yqcore 股票线 + 因子看板）→ 点击进详情页（历史回测 + 模拟持仓）。生成器
+  `scripts/reporting/strategy_home.py`（约 40s，含数据装载）；持仓快照与回测权重同源，
+  当前目标持仓走生产同路径 `_sleeve_target`（信号日 2026-11-02）。yqcore 与因子看板的
+  顶栏已加「策略首页」入口。页面数字 = **k=1 单相位**（monthly 13.08%/SR 1.13/MDD 13.97%、
+  balanced 13.23%/0.64/25.54%），与 §14.9.3 / §14.11 逐位一致。
+  **同日收敛**：三份生成器（策略首页/因子看板/股票线）的顶栏与主题统一到
+  `research/html_report.py` 的 `CHROME_CSS` + `site_nav`（`SITE_TABS` 为 tab 真源），
+  因子看板 echarts 改指共享 `docs/design/_shared/js/`；守卫测试
+  `tests/test_report_shell.py::test_frontends_share_one_site_nav_and_theme`。
+  **策略层轻统一（同日拍板）**：新增 `strategy/catalog.py` 登记 ETF 两档 + yqcore 三档
+  （只登记入口/报告目录/文案 key，不搬实现），首页卡片改读 `CATALOG`；
+  `yqcore_dashboard.TIERS` 改读 `strategy/registry.DISPLAY_ORDER`，双源消除；
+  守卫 `tests/test_strategy_catalog.py`（catalog ↔ PROFILES/TIERS 漂移即红）。
+  不做重统一：ETF 端到端策略与 yqcore 排序壳不共用参数接口。
+- **✅ 2026-11-19 首页补齐事件驱动 + 股票线另两档（同日续做）**：首页由 4 张卡片扩到
+  7 张（ETF 两档 / K8 / K15 / 广度 / 事件驱动 / 因子看板）。新增
+  `strategy/event_driven.py` = `inc_pure` 事件定义 + 日频组合回测（唯一真源），
+  `scripts/live/inc_pure_live.py` 改为从它导入 `ACTIVE_REASONS`/`HOLD`/`MIN_RATIO`/
+  成本/代码归一化，不再各写一份；详情页 `reports/strategies/inc_pure.html`
+  数字现算（2018-01~2026-11-16：年化 24.41%、超额 12.66%、NW t 2.91、MDD −33.02%、
+  在持 15 只 / 事件 4668 条）。归档口径 +14.53% / t 3.23 / 9/9 与当前差额来自
+  `_base` 市值面板 2026-11-17 重建（年化与 Sharpe 不变），页面已写明。
+  股票线三档的回测正文复用 `yqcore_dashboard`（详见下条页面结构定稿），
+  避免同一份回测画两遍。守卫 `test_event_driven_entry_and_rule_single_source`。
+- **✅ 2026-11-19 页面结构定稿：点击只进回测，模拟持仓独立成页**：首页按
+  `横截面策略 / 事件驱动策略 / ETF 策略` 三组排列 6 张策略卡（因子看板只留顶栏 tab，
+  不占首页卡片位），卡片指标统一为年化 / Sharpe / MDD、去掉卡片小字；点开只到
+  `reports/strategies/<key>.html` 的**历史回测**详情；股票三档详情页正文复用
+  `yqcore_dashboard.build_backtest_payload` + `render_backtest_body(with_nav=False,
+  with_cross=False)`（脚本块走 `render_backtest_script`），catalog 三档 `href/page` 同步改到
+  `strategies/`。新增 `reports/strategies/live.html` 模拟持仓首页，只列真源 `LIVE_KEYS`
+  （当前仅 `yqcore-focus-k8`）里**已开立纸面账户**的策略，点开
+  `live_yqcore-focus-k8.html`（`build_live_payload` + `render_live_body`，K 线前 12 只）；
+  K15 / 广度没有账户，不上这一页、不编持仓。顶栏 `SITE_TABS` 收敛为
+  策略首页 / 模拟持仓 / 因子看板 / 本期出榜（`yq_core/backtest*.html`、`live.html`
+  降级为老链接落地页）。因子看板与出榜页已按新 `SITE_TABS` 重生成，顶栏右侧文案也
+  统一为默认（因子数改在列表卡计数里显示）。浏览器实测首页→K8 回测、模拟持仓→K8
+  持仓+K 线均正常；
+  `pytest tests/test_strategy_catalog.py tests/test_report_shell.py tests/test_docs_lint.py`
+  15 passed，`docs_lint --check` 0 违规。
 - 以下为比赛期（45 只口径）历史记录，**仅作复现依据**：
 
 - **比赛定版「三锋 v2」**：Top3 + 拥挤软惩罚 + 剔除 20 日涨幅 >10% + 120 日
@@ -2221,9 +2289,12 @@ Q1−Q5 年化 +12.9%（t 2.24），但多头端 15% 超额仅 **+0.196%/月（t
   同样是静态站，口径见该目录 `README.md`；**不构成改进结论**。
   ↳ 分类重建（2026-11-18）：旧口径 739/888（83%）落「量价」、且 family 与 source 一一对应
   ⇒ 筛选形同虚设。改为**按逻辑族分 13 类**（原始序列 352 / 均线通道 38 / 趋势强度 25 /
-  连续涨跌 26 / 极值形态 28 / 动量波动 17 / 价量衍生 245 / 基本面质量 66 / 盈余与成长 13 /
-  股东治理 28 / 资金与情绪 9 / 事件与宏观 28 / 论文策略 12），**只改展示层映射，不动
-  `registry.csv`**；因子集 19 → 7 组（组可展开子集）。同时修 `yq_core` 两页缺「因子看板」
+  连续涨跌 26 / 极值形态 28 / 动量波动 17 / 价量衍生 244 / 基本面质量 66 / 盈余与成长 13 /
+  股东治理 28 / 资金与情绪 9 / 事件与宏观 28 / 论文策略 20），逻辑族仍是展示层映射
+  （`registry.family` 不动）；因子集 19 → 7 组（组可展开子集）。
+  ↳ 因子集落库（2026-11-19）：7 组映射唯一真源 = `research/factor_library.py::SET_TO_GROUP`
+  （看板直接 import，不再自维护），`backfill_metadata` 支持按 source 前缀兜底集名并把
+  `set_group` 回写 registry（896 行全有值，空 `set` 也补齐，统计列零漂移）；同时修 `yq_core` 两页缺「因子看板」
   导航入口、统一回测页超额口径（累计/年化用比值、TE/IR 用算术差）。
   ↳ 再推进（2026-11-18）：出榜解释页 `python -m scripts.reporting.picks_board` →
   `reports/yq_core/picks.html`（**为什么是这些票**：选股 Top20 的 SHAP 前三驱动 +
@@ -2245,13 +2316,96 @@ Q1−Q5 年化 +12.9%（t 2.24），但多头端 15% 超额仅 **+0.196%/月（t
   `fd_ent30`，`factor/factor_dict_factors.py`，跑 `scripts/factors/build_fd_factors.py`）。
   全部过 L5 安慰剂（效应量 4.6~6.4×），但 🚨 **4 个日频实为同一个低波因子**：两两秩相关
   \|ρ\| = 0.81~0.94（`fd_rnbr` 与 `fd_tcc` **−0.94**、`fd_grp_abn` 与 `fd_tcc` −0.88），
-  换分组口径只换皮。代表留 `fd_tcc`（IC +0.0628 / NW-t 19.8 / canonical SR 1.889@ls_W /
+  换分组口径只换皮。代表留 `fd_tcc`（IC +0.0628 / NW-t 19.8 / canonical SR 1.897@ls_W /
   对库内最近邻 `alpha191_159` 残差 IC +0.0273 保留 43%）；唯一正交维度的 `fd_ent30`
-  与其余 4 个 \|ρ\|≤0.17 但弱（IC +0.0268 / SR 0.207，且只有 hs300 覆盖 2022 起）。
-  doc IC 复现 4/5（差 ≤0.012），**熵因子掉一半**（0.044→0.0268），与原作者「5 分钟很差、
+  与其余 4 个 \|ρ\|≤0.17 但弱（IC +0.0266 / SR 0.230，且只有 hs300 覆盖 2022 起）。
+  doc IC 复现 4/5（差 ≤0.012），**熵因子掉一半**（0.044→0.0266），与原作者「5 分钟很差、
   30 分钟最优」的标注一致。L3（对主信号正交化）未做，只做了对最近邻的残差代理。
   证据 `reports/factor_dict_probe/`（`README.md` + `checkup.csv`）。**未实现**：筹码乖离率
   （需筹码分布逐档递推，且原文作者自称代码写错，口径存疑）。
+  🔧 **由此修掉两条流水线缺口（2026-11-19）**：① `register/evaluate` 原先只要调用方自带
+  `returns_panel` 就硬写 `ret_basis=caller_supplied`，晋升第 2 关 `stale_caliber` 对**全部**
+  已评估因子亮红灯 → 改为与库内默认收益抽样逐值核对，一致才继承 `adj_close_pct_v1`
+  （`research/factor_library.py` `_ret_basis_for` / `returns_panels_equal`）；② 库内冗余索引
+  是快照，同批新因子互不比较 → `register_panels` 增同批两两查重（`|ρ|≥0.85` 告警并自动归族，
+  `≥0.95` 再做秩空间等价判定并跳过；在**各自面板交集**上算，不用全批交集）。
+  5 个 fd 因子改走库标准收益重跑：`ret_basis=adj_close_pct_v1`、`mask_basis=tradable_t0`，
+  同批 4 对过 0.85（0.851/0.852/0.874/0.937）自动归入「波动率」，`fd_ent30` 独立 → registry 里
+  4 个日频同族，`max_per_family=2` 能咬住。
+  同轮清理（2026-11-19）：7 个生产 builder（fundamental / technical / paper / intraday /
+  intraday_stat / top10 / alpha）与 `extend_alpha_factors` 一律不再自算收益，`extend_gp_factors`
+  生产调用传 `None`；删 `returns_from_daily` 调用点、`build_returns` 包装与 `_row_rank_zscore`
+  兼容别名；`register_panels` 的 family 改为 `families=` 入参（intraday_stat 不再逐行补 tag）。
+  🔧 **入库标准统一（2026-11-19）**：批量 builder 通道（`upsert_rows`）与单因子通道
+  （`ingest`+`evaluate`）原先状态字段不对等——876 行 `eval_status`/`panel_path` 为空、
+  `maturity` 全 experimental，晋升第一道 `no_eval` 全部挡住，但"证据缺口"看起来像
+  "字段没填"。现在两条通道写同一套字段：`upsert_rows` 固定落 `eval_status=ingested`、
+  `ret_basis=adj_close_pct_v1`、`panel_path=panels/<name>.parquet`，`mask_basis` 留空
+  （批量 IC 不套可交易掩码，如实标注不冒充）；`eval_status` 虽在 `STAT_COLUMNS` 里，
+  已 evaluated 的行重建时不会降级。补齐评估统一走 `backfill_library_metrics` →
+  `FactorLibrary.evaluate(persist=False)`：掩码 / 三套 canonical / eval 文件 / 口径标记
+  同一实现，IC 由库内 `ic_h1` 注入（省 3 s/因子），证据列默认关（`--with-evidence` 开）。
+  同时修掉该脚本 `ds_dir` 双重拼接 dataset 的旧 bug（2026-11-05 以来默认路径实际不可用）。
+  **回填结果（2026-11-19 16:42）**：873 个成功 / 0 缺面板，总耗时 4,138 s；全库
+  **893/893 `evaluated`**，`mask_basis` 全部 `tradable_t0`，`ret_basis` 881 个
+  `adj_close_pct_v1` + 12 个历史 `pap_*` 仍为 `caller_supplied`（需重跑对应 builder
+  才会转库口径）；`panel_path` 881/893。晋升漏斗（dry-run）从「第一道 `no_eval`
+  挡住 876」变为 no_eval 4 / stale_caliber 12 / dup_unknown 14 / low_sharpe 755 /
+  redundant 23 / unstable 0 / fading 14 / crowded 16 / family_cap 41 / uncovered 0，
+  剩余 **14 个可 active**（另有 57 个个体证据齐全但受队列类门槛限制）。
+  汇总落 `reports/library_governance/backfill_summary_20261119.json`。
+  🔧 **库与看板口径统一（2026-11-19）**：看板原先从 `reports/alla_rolling/_base/`
+  快照读复权价/掩码/基准，快照时点落后时净值与 registry 指标漂移。现在
+  `FactorLibrary` 新增公开价格源 `adjusted_close_panel()` / `adjusted_open_panel()`
+  （同一份后复权因子）、`benchmark_eqw_returns(forward=True|False)`（与
+  `_canonical_eval` 超额基准同一定义）；看板收盘/开盘/掩码/基准全部改读库，
+  `_base` 只剩 `industry.parquet` 一个用途。实测新旧基准 2,518 日逐日相等
+  （max|Δ|=1.4e-17），数值不变、但不再依赖快照新鲜度。`factor_board._bench_nav`
+  同步改走库，避免页面与数据层两条基准。
+  🔧 **端到端编排入口（2026-11-19）**：新增 `scripts.factors.run_factor_pipeline`
+  （builder → `backfill_library_metrics` → `factor_board_data --resume` →
+  `factor_board`），只拼命令、不含计算；支持 `--names/--builders/--builder-args/
+  --steps/--dry-run/--log-file/--keep-going`。`config/schedule.yaml` 登记
+  `factor_pipeline`（status=planned，工作日 12:00，`--skip-build`）——builder 需要
+  `--real/--begin` 上下文，交给人显式触发；激活前需确认与 `rebuild_panels`
+  （06:00 起、数小时）的顺序，避免读到半新面板。
+  **首跑验证（2026-11-19 17:05）**：`--skip-build` 全量 resume 通过（evaluate 6 s /
+  board_data 补算 register 通道因子 / board 渲染）；看板缓存 887 → **892 个因子**，
+  仅 `alpha101_096`、`div_yield_ttm` 因面板不可用未入。顺带修掉看板数据层两个
+  不一致：① `compute_one` 只认 `panels/<name>.parquet`，register 通道的 slug 面板
+  被**静默跳过**（5 个 `fd_*` 从未上看板），改读 registry `panel_path`；
+  ② 契约规则 `evaluated_but_nan` 从"死盯 `sharpe_ls_M`"放宽为"三套 canonical
+  夏普全空"（4 个 alpha191/alpha360 因子月频多空退化但 `best_sharpe` 正常）。
+  另修 `scripts/reporting/strategy_home.py` 跨模块导入私有函数：
+  `etf_champ_signals` 的 `expand_defense` / `sleeve_target` / `next_rebalance` 公开化
+  （`test_layering` 转绿）。
+  🆕 **第二轮 3 个日频因子（2026-11-19 18:01）**：同一份字典里补 `fd_csad21`（CSAD std_21）/
+  `fd_mmd21`（MMD 不对称性，**日频近似**——5 分钟面板只有 48 根/日）/ `fd_tr_resid`
+  （特质换手波动率），2018-2025 全量（1942 日 × 5468 股，构建 29 分钟）入库并上看板
+  （`run_factor_pipeline --names ... --skip-build` 全通，看板 894 个因子）。
+  三个都过 L1/L2/L5（IC −0.0592 / −0.0126 / −0.0521，NW-t −20.8 / −8.7 / −15.7，安慰剂
+  6.5~7.3×），但 **`fd_csad21` 又是低波换皮**（与 `fd_grp_abn` +0.899、`fd_tcc` −0.874、
+  `fd_rnbr` +0.854），`fd_tr_resid` 半正交（对低波簇 0.59~0.70），只有 `fd_mmd21` 真正交
+  （8 个 fd 内 ≤0.20、库内最近邻 `alpha158_WVMA60` 0.14）但弱（best SR −0.073）。
+  结论：低波族已 5 张脸（进池只留 `fd_tcc` 一个代表），新维度候选只有 `fd_ent30` / `fd_mmd21`。
+  证据 `reports/factor_dict_probe/` README 表 4/5 + `run_log.txt` 18:01 段。
+  🆕 **第三轮 4 个日频因子（2026-11-19 18:32）**：`fd_umr_tr`（UMR2.0 换手风险）/
+  `fd_umr_trv`（真实波动风险）/ `fd_illiq_ds`（DS 改造版非流动性）/ `fd_fear_std`（原始惊恐因子），
+  同样 2018-2025 全量 1942 日入库并上看板（898 个因子；面板计算+评估约 8 分钟）。
+  🎯 **`fd_umr_tr` 是 12 个 fd 里唯一正夏普**：IC +0.0512、NW-t 20.0、best SR **+2.209 @ls_W**
+  （全库 p95.7），`fd_umr_trv` +2.062（p95.1），与低波簇 \|ρ\| 仅 0.42~0.61；两者互为同族（0.749）
+  ⇒ 只留 `fd_umr_tr`。`fd_fear_std` **是低波第 6 张脸**（对 `fd_tcc` −0.962）；
+  `fd_illiq_ds` 最正交（≤0.48）但方向朝下（SR −0.654）。安慰剂 12.9 / 11.7 / 6.9 / 5.6×。
+  证据 README 表 6/7 + `run_log.txt` 18:32 段。**未做**：UMR 的 EMA 合成、分组单调性检验。
+  🆕 **第四轮 3 个分钟频因子（2026-11-20）**：`fd_hf_cs`（Corwin-Schultz 价差）/ `fd_smart_vwap`
+  （聪明钱跟随 vwap）/ `fd_net_support`（净支撑成交量），hs300 池 2022-01-04~2025-12-31（969 日 ×
+  421 只），入库并上看板（903 行 registry / 901 个因子）。IC −0.0453 / −0.0129 / +0.0201，
+  NW-t −7.0 / −2.9 / +5.6，best SR 0.151 / 0.310 / 0.160。结论：`fd_smart_vwap` 与
+  `fd_net_support` **真正正交**（对 12 个 fd 因子 \|ρ\|≤0.18）但都弱；`fd_hf_cs` 是**低波第 7 张脸**
+  （对 `fd_fear_std` 0.753）且安慰剂只 1.82× **未过 L5** ⇒ 不建议进池。分钟类 cov 0.88~0.90 是
+  **池内口径**，与全 A 不可横比。🔧 顺带修 `research/factor_library.py` 冗余预检缺陷：单日有效
+  样本 <10 仍算秩相关（2 点相关恒 ±1），把非空率 0.0001 的 `alpha101_096` 顶成最近邻
+  （`fd_net_support` dup 假 1.0000 → 修复后 0.254）。证据 README 表 8/9 + 结论表 13~16。
 
 - [x] ~~**AlphaSAGE（ICLR 2026, arXiv:2509.25055）编码器探针**~~ → **工具保留 · 增量不可分辨
   （2026-11-03）**：只搬「RGCN 编码 AST 替掉序列编码器」这一项（论文消融里增益最大项），
