@@ -17,7 +17,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from research.factor_library import FactorLibrary, name_slug
+from research.factor_library import FactorLibrary, name_slug, returns_panels_equal
 
 
 def _panel_and_returns(n_dates: int = 260, n_codes: int = 40, seed: int = 0):
@@ -67,6 +67,54 @@ def test_evaluate_without_ingest_raises(tmp_path):
     lib = FactorLibrary(root=tmp_path, dataset="t")
     with pytest.raises(KeyError):
         lib.evaluate("nobody", _panel_and_returns()[1])
+
+
+# ---------------------------------------------------------------------------
+# 1b. 批量通道与单因子通道同一状态机（2026-11-19 统一）
+# ---------------------------------------------------------------------------
+def test_benchmark_eqw_returns_backward_is_forward_shift(tmp_path):
+    """看板基准（价格指数口径）= 库内远期收益基准平移一天，同一价格源。"""
+    lib = FactorLibrary(root=tmp_path, dataset="t")
+    idx = pd.date_range("2024-01-02", periods=8, freq="B")
+    rets = pd.DataFrame({"A": np.linspace(-.01, .01, 8),
+                         "B": np.linspace(.02, -.02, 8)}, index=idx)
+    lib.default_returns_panel = lambda: rets
+    fwd = lib.benchmark_eqw_returns()
+    bwd = lib.benchmark_eqw_returns(forward=False)
+    assert np.allclose(bwd.iloc[1:], fwd.iloc[:-1])
+    assert np.isnan(bwd.iloc[0])
+
+
+def test_upsert_rows_marks_ingested_and_resolves_panel_path(tmp_path):
+    """批量通道也必须写 eval_status / ret_basis / panel_path，不留空值。"""
+    lib = FactorLibrary(root=tmp_path, dataset="t")
+    panel, _ = _panel_and_returns(60, 20)
+    pdir = tmp_path / "t" / "panels"
+    pdir.mkdir(parents=True, exist_ok=True)
+    panel.to_parquet(pdir / "b_fac.parquet")
+
+    lib.upsert_rows([{"name": "b_fac", "label": "b", "ic_mean_h1": 0.01}],
+                    source="alpha101:builders:t", family="量价",
+                    set_name="alpha101")
+    row = lib.list_all().set_index("name").loc["b_fac"]
+    assert row["eval_status"] == "ingested"
+    assert row["ret_basis"] == "adj_close_pct_v1"
+    assert "b_fac.parquet" in str(row["panel_path"])
+
+
+def test_upsert_rows_does_not_downgrade_evaluated(tmp_path):
+    """重建链重跑 builder 不能把已评估的行写回 ingested。"""
+    lib = FactorLibrary(root=tmp_path, dataset="t")
+    panel, rets = _panel_and_returns()
+    lib.ingest("f_keep", panel, rets, evidence=False)
+    lib.evaluate("f_keep", rets)
+
+    lib.upsert_rows([{"name": "f_keep", "label": "keep"}],
+                    source="alpha101:builders:t", family="量价",
+                    set_name="alpha101")
+    row = lib.list_all().set_index("name").loc["f_keep"]
+    assert row["eval_status"] == "evaluated"
+    assert str(row["evaluated_at"]).strip() != ""
 
 
 # ---------------------------------------------------------------------------
@@ -200,6 +248,23 @@ def test_evaluate_records_basis_columns(tmp_path):
     lib.evaluate("f_fake", fake_r, mask_lag=0)
     row2 = lib.list_all().set_index("name").loc["f_fake"]
     assert str(row2["mask_basis"]).strip() in ("", "nan")
+
+
+def test_ret_basis_inherits_when_panel_matches_library_default(tmp_path, monkeypatch):
+    """与库内默认收益逐值一致 ⇒ 继承库口径，而不是一律 ``caller_supplied``。
+
+    2026-11-19 之前只要调用方传了 ``returns_panel`` 就硬写 ``caller_supplied``，
+    晋升第 2 关 ``stale_caliber`` 因此对**全部**已评估因子亮红灯。
+    """
+    lib = FactorLibrary(root=tmp_path, dataset="t")
+    _, rets = _panel_and_returns()
+    monkeypatch.setattr(FactorLibrary, "default_returns_panel", lambda self: rets)
+    monkeypatch.setattr(FactorLibrary, "_ret_basis", "adj_close_pct_v1",
+                        raising=False)
+
+    assert returns_panels_equal(rets.iloc[:80, :20], rets)   # 子区间/子池同源
+    assert lib._ret_basis_for(rets.copy()) == "adj_close_pct_v1"
+    assert lib._ret_basis_for(rets + 1e-3) == "caller_supplied"
 
 
 def test_returns_basis_survives_cache_hit(monkeypatch):
