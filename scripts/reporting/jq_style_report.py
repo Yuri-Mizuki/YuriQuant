@@ -34,7 +34,8 @@ from config import Config  # noqa: E402
 from scripts.common.cli_common import setup_logging  # noqa: E402
 from research.html_report import page  # noqa: E402
 from backtest.metrics import (  # noqa: E402
-    annual_return, annual_volatility, calmar_ratio, information_ratio, sharpe_ratio,
+    annual_return, annual_volatility, calmar_ratio, drawdown_series,
+    information_ratio, sharpe_ratio,
 )
 
 log = setup_logging("jq_style_report")
@@ -128,7 +129,7 @@ def stats_block(dr: pd.Series, bench: pd.Series, turnover: pd.Series | None) -> 
     b_cum = float((1 + bench).prod() - 1)
     b_ann = float(annual_return(bench))
     eq = (1 + dr).cumprod()
-    mdd = float((eq / eq.cummax() - 1).min())
+    mdd = float(drawdown_series(eq).min())
     vol = float(annual_volatility(dr))
     # β/α：OLS 回归真源（research.attribution.alpha_beta）——α 为年化回归截距
     # （附 NW t/p），β 为回归斜率。旧实现 alpha = ann − β·b_ann 是几何恒等式
@@ -158,12 +159,12 @@ def yearly_rows(dr: pd.Series, bench: pd.Series) -> list[dict]:
         b = bench.reindex(sub.index).fillna(0.0)
         if len(sub) < 20:
             continue
-        ann = float((1 + sub).prod() ** (252 / len(sub)) - 1)
-        b_ann = float((1 + b).prod() ** (252 / len(b)) - 1)
+        ann = float(annual_return(sub))
+        b_ann = float(annual_return(b))
         eq = (1 + sub).cumprod()
         rows.append({
             "year": int(y), "ann": ann, "bench": b_ann, "excess": ann - b_ann,
-            "mdd": float((eq / eq.cummax() - 1).min()),
+            "mdd": float(drawdown_series(eq).min()),
             "sharpe": _sharpe(sub),
         })
     return rows
@@ -200,8 +201,7 @@ def main():
     strat_cum = (1 + dr).cumprod() - 1
     bench_cum = (1 + bench).cumprod() - 1
     excess_cum = strat_cum - bench_cum
-    dd = (1 + dr).cumprod()
-    dd = dd / dd.cummax() - 1
+    dd = drawdown_series((1 + dr).cumprod())
 
     data = {
         "strat": _pts(strat_cum), "bench": _pts(bench_cum),

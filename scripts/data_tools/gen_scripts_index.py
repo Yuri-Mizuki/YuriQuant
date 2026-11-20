@@ -2,7 +2,7 @@
 
 背景：全仓 190 个脚本，31 个「三类引用全零」——不是都能删（数据回补/研报
 数据准备仍有人工流程），但至少要让每个入口可被发现。本生成器按目录列出
-每个 tracked 脚本的首行 docstring；archive/oneoff 不计入活跃入口。
+每个 tracked 脚本的首行 docstring。`archive/` 已于 2026-11-18 整体下线。
 
 用法:
     python -m scripts.data_tools.gen_scripts_index          # 写入
@@ -18,7 +18,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / "scripts" / "README.md"
-EXCLUDE_PARTS = {"archive", "oneoff", "__pycache__"}
+EXCLUDE_PARTS = {"archive", "__pycache__"}
 
 
 
@@ -60,7 +60,7 @@ def render() -> str:
     out = [
         "# scripts 入口索引",
         "",
-        f"> 自动生成（{total} 个活跃入口；archive/oneoff 不计）。"
+        f"> 自动生成（{total} 个活跃入口）。"
         "改脚本 docstring 后运行 "
         "`python -m scripts.data_tools.gen_scripts_index` 更新；"
         "`--check` 校验是否过期。",

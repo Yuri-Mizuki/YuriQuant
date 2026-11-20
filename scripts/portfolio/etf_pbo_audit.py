@@ -75,15 +75,29 @@ S_PERIOD = 8
 
 
 # --------------------------------------------------------------- 收益矩阵来源
+#: 2026-11-19 去比赛化改名：旧 CSV 用旧档名，重跑后是新功能名 ⇒ 读列时两种都认。
+_ALIAS = {
+    "contest3": ("contest3", "core"),
+    "contest5h": ("contest5h", "balanced"),
+    "champ": ("champ", "monthly"),
+    "c3_buffer10": ("c3_buffer10", "core_buffer10"),
+    "c3_buffer15_40": ("c3_buffer15_40", "core_buffer15_40"),
+    "c3_buffer5_20": ("c3_buffer5_20", "core_buffer5_20"),
+    "c3_buffer30": ("c3_buffer30", "core_buffer30"),
+}
+
+
 def _read_csv_grid(cols_map: dict[str, str], path: Path) -> pd.DataFrame:
     """从评测 CSV 取若干列；``cols_map`` = {输出名: CSV 原列名}。"""
     df = pd.read_csv(path, index_col=0, parse_dates=True)
     df.columns = [c.strip() for c in df.columns]
-    src = list(cols_map.values())
+    src = [next((a for a in _ALIAS.get(c, (c,)) if a in df.columns), c)
+           for c in cols_map.values()]
     missing = [c for c in src if c not in df.columns]
     if missing:
         raise KeyError(f"{path.name} 缺列 {missing}，实际列 {list(df.columns)}")
-    out = df[src].rename(columns={v: k for k, v in cols_map.items()})
+    out = df[src]
+    out.columns = list(cols_map)
     return out.astype(float).dropna()
 
 
@@ -96,7 +110,7 @@ def grid_buffer6() -> tuple[pd.DataFrame, pd.DataFrame]:
 
 
 def grid_pool4() -> tuple[pd.DataFrame, pd.DataFrame]:
-    """每个池一个独立 CSV（列名都是 `contest3`）⇒ 逐文件取单列再拼。"""
+    """每个池一个独立 CSV（列名旧档为 `contest3`、重跑后为 `core`）⇒ 逐文件取单列再拼。"""
 
     def _load(suffix: str) -> pd.DataFrame:
         cols = {}
@@ -104,8 +118,10 @@ def grid_pool4() -> tuple[pd.DataFrame, pd.DataFrame]:
             f = OUT / f"eval_{p}{suffix}.csv"
             if not f.exists():
                 continue
-            s = pd.read_csv(f, index_col=0, parse_dates=True)["contest3"]
-            cols[p] = s.astype(float)
+            df = pd.read_csv(f, index_col=0, parse_dates=True)
+            df.columns = [c.strip() for c in df.columns]
+            col = next(c for c in ("contest3", "core") if c in df.columns)
+            cols[p] = df[col].astype(float)
         if len(cols) < 2:
             raise RuntimeError(f"池候选 CSV{suffix} 不足 2 个")
         return pd.DataFrame(cols).dropna()

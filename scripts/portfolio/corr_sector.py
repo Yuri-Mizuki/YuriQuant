@@ -6,11 +6,7 @@
 映翡量化 2026-11-09 转述的论文《Synthetic Sector Classification for
 Statistical Relative Valuation》用「个股与 11 只行业 SPDR ETF 的历史相关性」
 替代官方行业标签，再拿这个分组当回归里的行业哑变量。本模块只复刻它的**分组
-算子**，用于两个探针：
-
-1. ``industry_neff_probe``（P0-1）：申万标签与"走势同类"的分配重合率是多少；
-2. ``neutralize_group_ab``（P1-1）：换掉 ``neutralize(industry_panel=...)``
-   喂的面板，因子 IC 变不变。
+算子**，用于 ``industry_neff_probe``：申万标签与"走势同类"的分配重合率是多少。
 
 与论文的口径差异（**都是我们比它严的地方**，不是偷懒）
 ------------------------------------------------------

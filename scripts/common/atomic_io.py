@@ -22,6 +22,7 @@
 """
 from __future__ import annotations
 
+import json
 import os
 import sys
 import time
@@ -98,6 +99,58 @@ def write_parquet_atomic(df: pd.DataFrame, path: Path | str, **kwargs) -> None:
     print(f"[atomic_io] 原子改名重试 {RETRIES} 次仍被拒（{last_exc}）⇒ 降级就地覆写 "
           f"{path.name}", file=sys.stderr, flush=True)
     _fallback(df, path, last_exc, **kwargs)
+
+
+def write_text_atomic(text: str, path: Path | str, *, encoding: str = "utf-8") -> None:
+    """把字符串原子写到 ``path``（``write_json_atomic`` / ``write_csv_atomic`` 的底座）。
+
+    重试策略同 :func:`write_parquet_atomic`：pid 专属 tmp → 指数退避改名 →
+    仍被拒则清掉 tmp 并降级就地覆写。
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(text, encoding=encoding)
+    last_exc: PermissionError | None = None
+    for i in range(RETRIES):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError as exc:  # 瞬时占用 → 退避重试
+            last_exc = exc
+            time.sleep(BACKOFF * (2 ** i))
+    try:
+        tmp.unlink(missing_ok=True)
+    except OSError:
+        pass
+    print(f"[atomic_io] 文本原子改名重试 {RETRIES} 次仍被拒（{last_exc}）⇒ 降级就地覆写 "
+          f"{path.name}", file=sys.stderr, flush=True)
+    path.write_text(text, encoding=encoding)
+
+
+def write_json_atomic(obj, path: Path | str, *, indent: int | None = 2,
+                      ensure_ascii: bool = False, **kwargs) -> None:
+    """把 JSON 可序列化对象原子写到 ``path``（同 ``write_parquet_atomic`` 的重试策略）。
+
+    用途：**进度 / 清单类**小文件 —— 中途崩掉时不能留下半截 JSON，否则
+    ``--resume`` 读回即崩。``kwargs`` 透传给 ``json.dumps``（默认
+    ``ensure_ascii=False, indent=2, default=str``，与仓库既有落盘口径一致）。
+    """
+    kwargs.setdefault("default", str)
+    text = json.dumps(obj, ensure_ascii=ensure_ascii, indent=indent, **kwargs)
+    write_text_atomic(text, path)
+
+
+def write_csv_atomic(df: pd.DataFrame, path: Path | str, **kwargs) -> None:
+    """DataFrame → CSV 原子写。
+
+    ``kwargs`` 透传给 ``DataFrame.to_csv``（默认 ``index=False``）。用于
+    registry / 决策表这类**小表** —— 被别的进程读着的同时改写时，Windows
+    直接覆写会偶发 ``PermissionError`` 并留下半截 CSV。大表用
+    :func:`write_parquet_atomic`。
+    """
+    kwargs.setdefault("index", False)
+    write_text_atomic(df.to_csv(**kwargs), path)
 
 
 def sweep_stale_tmp(directory: Path | str, *, min_age_seconds: float = 600.0) -> int:

@@ -30,9 +30,17 @@ CACHE_ROOT = Path(str(Config.cache()["root"]))
 
 BOND, GOLD = "511010.SH", "518880.SH"
 
-#: 长线档「磐石」的参数基底（其它字段由 ``etf_champ_signals.CHAMP`` 覆盖）。
+#: 长线档「monthly」的参数基底（其它字段由 ``etf_champ_signals.MONTHLY`` 覆盖）。
+#: 2026-11-19 → ``target_vol`` 0.15→0.12：50 只池五相位均值
+#: Sharpe 0.88→0.95、MDD 17.10%→15.97%、换手 29.2%→25.3%，代价年化 −0.49pp
+#: （Calmar 0.62→0.64）。依据 ``reports/etf_contest5/README.md`` §14.9.1。
+#: 2026-11-19 → ``weight_vol_floor`` 0.10：池内国债/短融 ETF 波动 1~2%、行业 ETF 25%，
+#: 1/σ 会把单只国债顶到权益腿 80%+（2023-03-02 511260 占 83.9%）。给权重用的 σ 设 10%
+#: 下限后五相位均值 10.14%→10.65%、Calmar 0.64→0.67、最大单只 42.7%→31.1%，
+#: MDD 与换手不变。依据 §14.12。
 CHAMP_BASE = {"signal": "mom12_1", "freq": "M", "top_k": 5, "absolute": True,
-              "weighting": "inverse_vol", "target_vol": 0.15}
+              "weighting": "inverse_vol", "target_vol": 0.12,
+              "weight_vol_floor": 0.10}
 
 
 def level_from_returns(ret: pd.Series) -> pd.Series:

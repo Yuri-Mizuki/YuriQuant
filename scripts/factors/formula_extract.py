@@ -50,6 +50,8 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from scripts.common.atomic_io import write_csv_atomic  # noqa: E402
+
 # ---------------------------------------------------------------------------
 # AST → 表达式字符串
 # ---------------------------------------------------------------------------
@@ -520,8 +522,6 @@ def backfill_batch(ds_dir: Path, names: list[str]) -> int:
     Returns:
         实际写入的行数（无法提取的不计）。
     """
-    import os
-
     import pandas as pd
 
     reg_path = Path(ds_dir) / "registry.csv"
@@ -572,9 +572,7 @@ def backfill_batch(ds_dir: Path, names: list[str]) -> int:
         reg.at[i, "formula_src"] = src
         n += 1
     if n:
-        tmp = reg_path.with_suffix(".csv.tmp")
-        reg.to_csv(tmp, index=False, encoding="utf-8")
-        os.replace(tmp, reg_path)
+        write_csv_atomic(reg, reg_path)
     return n
 
 
@@ -624,7 +622,6 @@ def main() -> None:
         print("\n（--check / 默认：不写盘；加 --apply 回填）")
         return
 
-    import os
     import time
     old = (reg["formula"].fillna("").astype(str).str.strip()
            if "formula" in reg.columns else pd.Series([""] * len(reg)))
@@ -648,9 +645,7 @@ def main() -> None:
     ts = time.strftime("%Y%m%d-%H%M%S")
     bak = reg_path.with_name(f"registry.csv.bak-formula-{ts}")
     reg.to_csv(bak, index=False, encoding="utf-8")
-    tmp = reg_path.with_suffix(".csv.tmp")
-    reg.to_csv(tmp, index=False, encoding="utf-8")
-    os.replace(tmp, reg_path)
+    write_csv_atomic(reg, reg_path)
     print(f"\n写入 {int(write.sum())} 行（其中内容变化 {changed} 行）；"
           f"保护手写 {int(is_manual.sum())} 行")
     print(f"备份 {bak.name}")

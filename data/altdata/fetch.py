@@ -15,7 +15,7 @@
 ``alt_mgmt_hold.parquet``        高管增减持                     全量一次（滚动 1 年）
 ``alt_macro_calendar.parquet``   宏观日历 + 预期值              按日增量（断点续传）
 ``alt_news/news_YYYYMMDD.parquet`` 快照源（同花顺/新浪）         按日累积（**无历史可补**）
-``alt_cls/cls_YYYYMMDD.parquet`` 财联社电报（**可回补历史**）     游标回补 + 前向增量
+``alt_cls/cls_YYYY.parquet`` 财联社电报（**可回补历史**）     游标回补 + 前向增量
 ``_meta.json``                   增量水位（已抓日期 / 每日行数统计）
 ============================  ==============================  ============================
 
@@ -36,7 +36,7 @@
   ``(rows, forecast_notna)`` 统计，用于**缺失日检测** —— 实测有整列
   「预期」缺失的交易日（2026-09-14 预期 0 条），必须能与「真无预期」区分。
 - **游标翻页类**（财联社）：接口按 ``last_time`` 往回给 ⇒ 用
-  ``cls_backfill_cursor``（unix 秒）做断点续传，按发布日分片落盘。
+  ``cls_backfill_cursor``（unix 秒）做断点续传，按发布年分区落盘。
 
 ⚠️ PIT：本层写出的 ``ann_date`` 是**唯一合法对齐轴**。其中 ``holder_control``
 与 ``inner_trade`` 的 ``ann_date`` 是**乐观可得日**（无公告日，回填变动日），
@@ -546,20 +546,24 @@ class AltDataCache:
         return d
 
     def cls_path(self, date: str | int | pd.Timestamp) -> Path:
-        ds = str(date).replace("-", "")[:8]
+        """按**年**分区的存档路径（``cls_2026.parquet``）。
+
+        2026-11-20 由「按日分片」改为年分区：原来 4,337 个 98KB 小文件，每次遍历
+        要 open 四千次、列式压缩也用不上。改成 8 个文件后追加仍只重写当年那一份
+        （≈36MB），远低于当初担心的「单表 GB 级」。
+        """
+        ds = str(date).replace("-", "")[:4]
         return self.cls_dir / f"cls_{ds}.parquet"
 
     def append_cls(self, df: pd.DataFrame) -> dict:
-        """把一页/一批电报按**发布日分片**合并落盘（``news_id`` 幂等）。
-
-        分片而非单表的原因：全量回补 ≈ 240 万行，单表每次断点落盘都要重写
-        整个文件（GB 级）；按日分片时每次只重写当天那一片（≈580 行）。
-        """
+        """把一页/一批电报按**发布年分区**合并落盘（``news_id`` 幂等）。"""
         if df is None or df.empty:
             return {"added": 0, "days": 0}
         out = df.copy()
         out["_d"] = pd.to_datetime(out["pub_time"]).dt.strftime("%Y%m%d")
         added, days = 0, 0
+        by_year: dict = self._meta.setdefault("cls_days_by_year", {})
+        seen_days: list[str] = []
         for ds, part in out.groupby("_d", sort=True):
             part = part.drop(columns="_d")
             p = self.cls_path(ds)
@@ -574,34 +578,73 @@ class AltDataCache:
                 added += len(merged)
             merged = merged.sort_values("pub_time").reset_index(drop=True)
             merged.to_parquet(p, compression="snappy", index=False)
+            # 日数按**内容**统计（文件数已不再等于天数）
+            by_year[str(ds)[:4]] = int(
+                pd.to_datetime(merged["pub_time"]).dt.strftime("%Y%m%d").nunique())
+            seen_days.append(ds)
             days += 1
+        if seen_days:
+            first = [d for d in (self._meta.get("cls_first_day"), min(seen_days)) if d]
+            last = [d for d in (self._meta.get("cls_last_day"), max(seen_days)) if d]
+            self._meta["cls_first_day"] = min(first)
+            self._meta["cls_last_day"] = max(last)
+        self._save_meta()
         return {"added": int(added), "days": int(days)}
 
     def load_cls(self, begin: str | int | None = None,
                  end: str | int | None = None) -> pd.DataFrame:
-        """合并读取区间内的电报分片（缺失日自动跳过）。"""
+        """合并读取电报存档，并按发布日**行级**裁到 ``[begin, end]``。
+
+        年分区只能按年裁剪文件，精确到日靠读完后按 ``pub_time`` 过滤。
+        """
         files = sorted(self.cls_dir.glob("cls_*.parquet"))
-        if begin is not None:
-            b = str(begin).replace("-", "")[:8]
-            files = [f for f in files if f.stem.replace("cls_", "") >= b]
-        if end is not None:
-            e = str(end).replace("-", "")[:8]
-            files = [f for f in files if f.stem.replace("cls_", "") <= e]
+        py = [f for f in files if len(f.stem.replace("cls_", "")) == 4]
+        if py:  # 新布局：按年选文件
+            if begin is not None:
+                y = str(begin).replace("-", "")[:4]
+                files = [f for f in py if f.stem.replace("cls_", "") >= y]
+            elif end is not None:
+                files = py
+            if end is not None:
+                y = str(end).replace("-", "")[:4]
+                files = [f for f in files if f.stem.replace("cls_", "") <= y]
+        else:  # 旧布局（按日分片）兜底
+            if begin is not None:
+                b = str(begin).replace("-", "")[:8]
+                files = [f for f in files if f.stem.replace("cls_", "") >= b]
+            if end is not None:
+                e = str(end).replace("-", "")[:8]
+                files = [f for f in files if f.stem.replace("cls_", "") <= e]
         if not files:
             return pd.DataFrame(columns=cls_src.CLS_COLS)
         out = pd.concat([pd.read_parquet(f) for f in files], ignore_index=True)
         sort_col = "ctime" if "ctime" in out.columns else "pub_time"
-        return out.drop_duplicates(subset="news_id").sort_values(sort_col).reset_index(drop=True)
+        out = out.drop_duplicates(subset="news_id").sort_values(sort_col).reset_index(drop=True)
+        if begin is not None or end is not None:
+            d = pd.to_datetime(out["pub_time"]).dt.strftime("%Y%m%d")
+            keep = pd.Series(True, index=out.index)
+            if begin is not None:
+                keep &= d >= str(begin).replace("-", "")[:8]
+            if end is not None:
+                keep &= d <= str(end).replace("-", "")[:8]
+            out = out[keep].reset_index(drop=True)
+        return out
 
     def cls_coverage(self) -> dict:
         """已存档覆盖范围（最早/最新时间 + 天数 + 条数）—— 用于快速判断缺口。"""
         files = sorted(self.cls_dir.glob("cls_*.parquet"))
         if not files:
             return {"days": 0, "items": 0, "first": None, "last": None}
-        days = [f.stem.replace("cls_", "") for f in files]
+        by_year = self._meta.get("cls_days_by_year") or {}
+        first, last = self._meta.get("cls_first_day"), self._meta.get("cls_last_day")
+        if not by_year:  # 旧布局（按日分片）或 meta 未迁移：用文件名兜底
+            names = [f.stem.replace("cls_", "") for f in files]
+            days = len(names)
+        else:
+            days = int(sum(by_year.values()))
         items = int(self._meta.get("cls_items", 0))
-        return {"days": len(files), "items": items,
-                "first": days[0], "last": days[-1],
+        return {"days": days, "items": items,
+                "first": first, "last": last,
                 "oldest_ts": self._meta.get("cls_oldest_ts"),
                 "newest_ts": self._meta.get("cls_newest_ts")}
 

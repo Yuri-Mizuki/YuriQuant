@@ -52,6 +52,36 @@ def annual_volatility(daily_returns: pd.Series, periods_per_year: int = PERIODS_
     return daily_returns.std() * np.sqrt(periods_per_year)
 
 
+# --- 探针/分场景统计用的 NaN 语义包装 -------------------------------
+# 生产口径（``annual_return`` / ``sharpe_ratio``）对空序列返回 0.0，便于表格
+# 展示；但探针把逐月/逐窗指标再求均值时，0.0 会被当成真实观测。下列包装只
+# 改**退化输入的返回值**（空序列 / 零波动 → NaN），公式与生产完全一致，
+# 供 ``scripts/evaluation/*_probe.py`` 统一 import，禁止再各自复制公式。
+def annual_return_nan(daily_returns: pd.Series,
+                      periods_per_year: int = PERIODS_PER_YEAR) -> float:
+    """空序列返回 NaN 的年化收益（公式同 :func:`annual_return`）。"""
+    r = daily_returns.dropna()
+    return float("nan") if r.empty else annual_return(r, periods_per_year)
+
+
+def sharpe_ratio_nan(daily_returns: pd.Series, rf: float = 0.0,
+                     periods_per_year: int = PERIODS_PER_YEAR) -> float:
+    """空序列或零波动返回 NaN 的几何夏普（公式同 :func:`sharpe_ratio`）。"""
+    r = daily_returns.dropna()
+    if r.empty or annual_volatility(r, periods_per_year) <= 0:
+        return float("nan")
+    return sharpe_ratio(r, rf, periods_per_year)
+
+
+def sharpe_arithmetic_nan(daily_returns: pd.Series, rf: float = 0.0,
+                          periods_per_year: int = PERIODS_PER_YEAR) -> float:
+    """空序列或零波动返回 NaN 的算术夏普（公式同 :func:`sharpe_arithmetic`）。"""
+    r = daily_returns.dropna()
+    if r.empty or float(r.std()) <= 0:
+        return float("nan")
+    return sharpe_arithmetic(r, rf, periods_per_year)
+
+
 def _rf_daily(rf: float, periods_per_year: int) -> float:
     """年化 rf → 日频 rf（复利折算），用于超额收益序列。"""
     if rf <= 0:
@@ -137,12 +167,14 @@ def sortino_ratio(daily_returns: pd.Series, rf: float = 0.0, periods_per_year: i
     return ar / downside_vol
 
 
+def drawdown_series(nav: pd.Series) -> pd.Series:
+    """回撤曲线（≤0）：``nav / nav.cummax() - 1``。全项目唯一实现。"""
+    return nav / nav.cummax() - 1.0
+
+
 def max_drawdown(daily_returns: pd.Series) -> float:
     """最大回撤 Max Drawdown（正值）。"""
-    cum = (1 + daily_returns).cumprod()
-    peak = cum.cummax()
-    dd = (cum - peak) / peak
-    return abs(dd.min())
+    return abs(drawdown_series((1 + daily_returns).cumprod()).min())
 
 
 def calmar_ratio(daily_returns: pd.Series, periods_per_year: int = PERIODS_PER_YEAR) -> float:

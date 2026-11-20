@@ -26,6 +26,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from scipy.stats import spearmanr
 
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
@@ -36,6 +37,11 @@ from scripts.textmining.build_sue_txt_samples import _load_daily, _to_naive  # n
 OUT_DIR = Out("fadt")
 BENCH = "000905.SH"
 BENCH_EQ = "EQ_ALL_A"  # 全A等权合成指数（all_a 池用）
+
+
+def _rank_ic(factor, target) -> float:
+    """单次 Spearman RankIC（本模块唯一实现；成对样本由调用方先 dropna）。"""
+    return float(spearmanr(factor, target).statistic)
 
 
 def _load_pred_with_factor(task: str, model: str, pool: str) -> pd.DataFrame:
@@ -292,7 +298,6 @@ def _daily_rank_ic_decay(df: pd.DataFrame, k_max: int = 5) -> pd.DataFrame:
 
     全样本一个 IC（不分日期，因为事件 T+k 收益本身就是相对该事件的短窗口）。
     """
-    from scipy.stats import spearmanr
     rows = []
     for k in range(1, k_max + 1):
         col = f"cum_excess_t{k}"
@@ -300,7 +305,7 @@ def _daily_rank_ic_decay(df: pd.DataFrame, k_max: int = 5) -> pd.DataFrame:
         if len(sub) < 30:
             rows.append({"k": k, "ic": np.nan, "n": len(sub)})
             continue
-        ic, _ = spearmanr(sub["sue0"], sub[col])
+        ic = _rank_ic(sub["sue0"], sub[col])
         rows.append({"k": k, "ic": ic, "n": len(sub)})
     return pd.DataFrame(rows).set_index("k")
 
@@ -447,9 +452,7 @@ def _orthogonal_ic(df: pd.DataFrame, factor: str, target_col: str,
     X = sub[bench_cols].rank().values
     y = sub[factor].rank().values
     resid = y - LinearRegression().fit(X, y).predict(X)
-    from scipy.stats import spearmanr
-    ic, _ = spearmanr(resid, sub[target_col])
-    return float(ic)
+    return _rank_ic(resid, sub[target_col])
 
 
 def ablation_sue0_vs_price(task: str, model: str, pool: str, k_max: int = 5):
@@ -462,7 +465,6 @@ def ablation_sue0_vs_price(task: str, model: str, pool: str, k_max: int = 5):
       - 漂移表（T+2~T+5）：加入 ar（T+1 收盘后才可知，T+2 开盘可交易）
       - 增量 IC：sue0 对价格基准 rank 正交化后的残差 RankIC
     """
-    from scipy.stats import spearmanr
     print(f"\n== {task.upper()} ({model}) 无泄漏 ablation: sue0 vs 价格基准 ==")
     pred = _load_pred_with_factor(task, model, pool)
     ar_df = _load_samples_ar(task, pool)
@@ -493,9 +495,9 @@ def ablation_sue0_vs_price(task: str, model: str, pool: str, k_max: int = 5):
         if len(sub) < 30:
             print(f"{k:>3} {'nan':>10} {'nan':>14} {'nan':>13} {'nan':>20} {len(sub):>7}")
             continue
-        ic_s, _ = spearmanr(sub["sue0"], sub[col])
-        ic_p, _ = spearmanr(sub["pre_mom5"], sub[col])
-        ic_d, _ = spearmanr(sub["day_ret"], sub[col])
+        ic_s = _rank_ic(sub["sue0"], sub[col])
+        ic_p = _rank_ic(sub["pre_mom5"], sub[col])
+        ic_d = _rank_ic(sub["day_ret"], sub[col])
         inc = _orthogonal_ic(df, "sue0", col, bench_cols)
         inc_s = "nan" if inc is None else f"{inc:.4f}"
         print(f"{k:>3} {ic_s:>10.4f} {ic_p:>14.4f} {ic_d:>13.4f} {inc_s:>20} {len(sub):>7}")
@@ -511,9 +513,9 @@ def ablation_sue0_vs_price(task: str, model: str, pool: str, k_max: int = 5):
         if len(sub) < 30:
             print(f"{k:>3} {'nan':>10} {'nan':>10} {'nan':>14} {'nan':>24} {len(sub):>7}")
             continue
-        ic_s, _ = spearmanr(sub["sue0"], sub[col])
-        ic_a, _ = spearmanr(sub["ar"], sub[col])
-        ic_p, _ = spearmanr(sub["pre_mom5"], sub[col])
+        ic_s = _rank_ic(sub["sue0"], sub[col])
+        ic_a = _rank_ic(sub["ar"], sub[col])
+        ic_p = _rank_ic(sub["pre_mom5"], sub[col])
         inc = _orthogonal_ic(df, "sue0", col, bench_cols + ["ar"])
         inc_s = "nan" if inc is None else f"{inc:.4f}"
         print(f"{k:>3} {ic_s:>10.4f} {ic_a:>10.4f} {ic_p:>14.4f} {inc_s:>24} {len(sub):>7}")
@@ -555,9 +557,9 @@ def ablation_sue0_vs_price(task: str, model: str, pool: str, k_max: int = 5):
             sub = df.dropna(subset=["sue0"] + bench_cols + [col])
             if len(sub) < 30:
                 continue
-            ic_s, _ = spearmanr(sub["sue0"], sub[col])
-            ic_p, _ = spearmanr(sub["pre_mom5"], sub[col])
-            ic_d, _ = spearmanr(sub["day_ret"], sub[col])
+            ic_s = _rank_ic(sub["sue0"], sub[col])
+            ic_p = _rank_ic(sub["pre_mom5"], sub[col])
+            ic_d = _rank_ic(sub["day_ret"], sub[col])
             inc = _orthogonal_ic(df, "sue0", col, bench_cols)
             inc_s = "nan" if inc is None else f"{inc:.4f}"
             fh.write(f"{k:>3} {ic_s:>10.4f} {ic_p:>14.4f} {ic_d:>13.4f} {inc_s:>20} "
@@ -568,9 +570,9 @@ def ablation_sue0_vs_price(task: str, model: str, pool: str, k_max: int = 5):
             sub = df.dropna(subset=["sue0", "ar"] + bench_cols + [col])
             if len(sub) < 30:
                 continue
-            ic_s, _ = spearmanr(sub["sue0"], sub[col])
-            ic_a, _ = spearmanr(sub["ar"], sub[col])
-            ic_p, _ = spearmanr(sub["pre_mom5"], sub[col])
+            ic_s = _rank_ic(sub["sue0"], sub[col])
+            ic_a = _rank_ic(sub["ar"], sub[col])
+            ic_p = _rank_ic(sub["pre_mom5"], sub[col])
             inc = _orthogonal_ic(df, "sue0", col, bench_cols + ["ar"])
             inc_s = "nan" if inc is None else f"{inc:.4f}"
             fh.write(f"{k:>3} {ic_s:>10.4f} {ic_a:>10.4f} {ic_p:>14.4f} {inc_s:>24} "

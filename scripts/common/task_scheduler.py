@@ -549,8 +549,9 @@ def _product_check(name: str):
     return _deco
 
 
-#: altdata 日更链的**末位分片表**。``fetch_altdata_daily.py`` 的 ``ALL_TABLES`` 顺序
-#: 固定，链尾分片存在 ⇒ 整轮跑到底了；缺 ⇒ 中途死掉（按日分片，缺片=当日没跑）。
+#: altdata 日更链的**末位表**。``fetch_altdata_daily.py`` 的 ``ALL_TABLES`` 顺序
+#: 固定，链尾数据存在 ⇒ 整轮跑到底了；缺 ⇒ 中途死掉（news 按日分片缺片即当日没跑，
+#: cls 2026-11-20 起按年分区，改看文件内 max(pub_time)）。
 _ALT_TAIL_SHARDS = (("cls", "alt_cls"), ("news", "alt_news"))
 
 #: altdata 里「每个交易日必有新数据」的表 ⇒ 直接判数据日期水位。
@@ -609,10 +610,24 @@ def _check_altdata_tables(latest_day: int | None) -> tuple[list[str], list[str],
             problems.append(f"altdata 表 {table} 无任何分片（{sub}/ 为空）")
             continue
         newest = max(f.stem.split("_")[-1] for f in shards)
+        if table == "cls":
+            # 2026-11-20 起 alt_cls 改为**按年分区**（cls_2026.parquet），文件名不再是
+            # 日期 ⇒ 增量日数改看当年文件里的 max(pub_time)；旧布局（8 位分片名）
+            # 仍按文件名判定，两者取大。
+            year_shards = [s for s in shards
+                           if len(s.stem.split("_")[-1]) == 4]
+            if year_shards:
+                latest_year = max(s.stem.split("_")[-1] for s in year_shards)
+                p = d / f"cls_{latest_year}.parquet"
+                try:
+                    last = pd.read_parquet(p, columns=["pub_time"])["pub_time"].max()
+                    newest = max(newest, pd.Timestamp(last).strftime("%Y%m%d"))
+                except Exception:  # noqa: BLE001 - 空文件/坏文件回退到文件名判定
+                    pass
         if newest < target:
             problems.append(
-                f"altdata 表 {table} 最新分片 {newest} < 最近交易日 {target}"
-                "（按日分片，缺片=当日没跑）"
+                f"altdata 表 {table} 最新数据 {newest} < 最近交易日 {target}"
+                "（缺片/本轮没跑到）"
             )
         else:
             ok += 1

@@ -243,6 +243,37 @@ SET_TO_FAMILY: dict[str, str] = {
 }
 
 
+#: 因子集 → **来源分组**（7 组，只做筛选取值的快捷全选）。
+#:
+#: 与 ``SET_TO_FAMILY`` 的分工：family 回答「因子在算什么」（受控词表，量价 /
+#: 基本面 / 股东…），group 回答「从哪儿收的」（公开 Alpha 库 / 论文策略…）。
+#: 键同时接受 ``source.split(":")[0]`` 的 19 个来源前缀与库内 ``set`` 名——
+#: 两者不完全一致（如 ``style`` 归入 set=fundamental），按前缀查能得到原始来源。
+#: 因子看板（``scripts/reporting/factor_board.py``）import 本表，不再自维护一份。
+SET_TO_GROUP: dict[str, str] = {
+    "alpha101": "公开 Alpha 库", "alpha158": "公开 Alpha 库",
+    "alpha191": "公开 Alpha 库",
+    "alpha360": "原始序列",
+    "fundamental": "基本面", "constructed": "基本面", "p5": "基本面",
+    "style": "基本面", "sue_pledge": "基本面",
+    "holder": "股东治理", "holder_dyn": "股东治理",
+    "disc_holder_dyn": "股东治理", "pledge": "股东治理",
+    "event": "事件与宏观", "evt": "事件与宏观", "status": "事件与宏观",
+    "altf": "事件与宏观",
+    "moneyflow": "资金与两融", "margin": "资金与两融",
+    "paper": "论文策略",
+}
+
+#: 分组展示顺序（看板侧边栏按此排列）。
+GROUP_ORDER: tuple[str, ...] = ("公开 Alpha 库", "原始序列", "基本面", "股东治理",
+                                "事件与宏观", "资金与两融", "论文策略")
+
+
+def group_for_set(set_name: str) -> str:
+    """按因子集名 / 来源前缀取粗分组；未收录返回 ``""``（不猜）。"""
+    return SET_TO_GROUP.get((set_name or "").strip(), "")
+
+
 def family_for_set(set_name: str) -> str:
     """按因子集名推断因子族；未收录返回 ``""``（不猜）。"""
     return SET_TO_FAMILY.get((set_name or "").strip(), "")
@@ -351,7 +382,7 @@ CANONICAL_COLUMNS: list[str] = [
 #: ``old.combine_first(new)`` —— 旧值非空即胜，于是**任何计算型字段一旦写过，
 #: 后续修正值永远进不去 registry**。holder_dyn 踩得最狠：dtype bug 态跑出
 #: ``active_day_frac=0.008``，修好重跑、stats 已是正确值，registry 仍是 0.008
-#: （当时只能在 ``scripts/oneoff/_fix_holder_dyn_registry.py`` 里外科回填）。
+#: （当时只能在外科回填脚本里改，该脚本已删 2026-11-19）。
 #: 更隐蔽的是 ``coverage``：数据天天长，重建后面板覆盖变了，registry 却冻结在
 #: 首次入库态 —— 而 ``MIN_COVERAGE`` / ``MIN_NEU_COVERAGE`` / ``MIN_IC_COVERAGE``
 #: 三道过滤正是读它。
@@ -582,7 +613,7 @@ def _family_key(name: str) -> str:
     return stem
 
 
-def _window_stats(dret: pd.Series, ic: pd.Series, *, split_frac: float = 0.7,
+def window_stats(dret: pd.Series, ic: pd.Series, *, split_frac: float = 0.7,
                   recent_days: int = 250, min_days: int = 60) -> dict:
     """把一条日收益序列 + 逐日 IC 切成"前段 / 后段 / 近 250 日"三段统计。
 
@@ -627,6 +658,8 @@ _DUP_INDEX_CACHE: dict[str, dict] = {}
 # 放在模块级而不是实例级：测试里每个用例都新建 FactorLibrary，实例缓存等于没有，
 # 77 个用例会重复读 20 次盘（实测把 30 s 的测试拖到 322 s）。
 _ADJ_CACHE: dict[str, tuple] = {}
+# 其他复权价字段（open 等）：键 = (cache_root, field)
+_PX_CACHE: dict[tuple[str, str], pd.DataFrame] = {}
 
 # --- 可交易掩码与 1 日收益面板：同样按 cache root 缓存 ---
 # 掩码建一次 13 s（2851×5822），收益面板 ~2 s。二者都只取决于市场数据，
@@ -657,9 +690,37 @@ def row_rank_zscore(a: np.ndarray) -> np.ndarray:
     return z.astype(np.float32)
 
 
-#: 旧私有名的兼容别名：本模块内部与 `dup_audit` 曾各有一份同名实现，
-#: 已收敛为上面这一个。别名只是为了不在同一夜打断其它脚本，新代码请用公开名。
-_row_rank_zscore = row_rank_zscore
+def returns_panels_equal(a: pd.DataFrame | None, b: pd.DataFrame | None, *,
+                         n_days: int = 120, n_codes: int = 2000,
+                         rtol: float = 1e-6, atol: float = 1e-9,
+                         min_cover: float = 0.99) -> bool:
+    """两张收益面板是否**逐值一致**（抽样格子、NaN 感知）。
+
+    只要求「调用方覆盖到的格子」全部一致：调用方可能只取子池/子区间
+    （hs300、2022 起），这与库口径同源，不该因此判成 ``caller_supplied``。
+    抽样（约 120 日 × 2000 股）是为了让「每个因子都核一次」的成本落在毫秒级。
+    """
+    if a is None or b is None or a.empty or b.empty:
+        return False
+    idx = a.index.intersection(b.index)
+    cols = a.columns.intersection(b.columns)
+    if len(idx) < 10 or len(cols) < 10:
+        return False
+    idx = idx[::max(1, len(idx) // n_days)]
+    cols = cols[::max(1, len(cols) // n_codes)]
+    try:
+        x = a.reindex(index=idx, columns=cols).to_numpy(dtype=np.float64)
+        y = b.reindex(index=idx, columns=cols).to_numpy(dtype=np.float64)
+    except (TypeError, ValueError):
+        return False
+    fx, fy = np.isfinite(x), np.isfinite(y)
+    nx = int(fx.sum())
+    if nx == 0:
+        return False
+    both = fx & fy
+    if int(both.sum()) < min_cover * nx:
+        return False
+    return bool(np.allclose(x[both], y[both], rtol=rtol, atol=atol))
 
 
 def _forward_returns(returns_panel: pd.DataFrame, horizon: int) -> pd.DataFrame:
@@ -675,12 +736,16 @@ def _forward_returns(returns_panel: pd.DataFrame, horizon: int) -> pd.DataFrame:
     return np.expm1(g.rolling(horizon, min_periods=horizon).sum().shift(-(horizon - 1)))
 
 
-def ic_stats(ic: pd.Series) -> dict:
+def registry_ic_stats(ic: pd.Series) -> dict:
     """IC 序列 → registry 的检验统计列（均值/IR/显著性/胜率）。
 
     从 ``_panel_ic_stats`` 抽出，供两处复用：ingest（算完就写）与
     evaluate（回填老因子时只有 eval 文件里的 ic 列，不必重算面板）。
+
+    ⚠️ 与 :func:`stats.ic.ic_stats`（口径摘要）**不是同一个东西**：本函数产出
+    registry 的 8 个列（含 ``p_value_nw`` / ``significant``），命名保持隔离。
     """
+    from stats.ic import ic_stats
     from stats.significance import mean_inference
 
     ok = ic.notna()
@@ -699,7 +764,7 @@ def ic_stats(ic: pd.Series) -> dict:
         "t_stat": _inf["t_stat"],
         "t_stat_nw": _inf["t_stat_nw"],
         "p_value_nw": _inf["p_value_nw"],
-        "ic_win_rate": float((ic_valid > 0).mean()) if n else float("nan"),
+        "ic_win_rate": float(ic_stats(ic)["win"]) if n else float("nan"),
         # |t_nw| > 2：ingest/evaluate 一次只处理一个因子，调用内不存在
         # 可言的"检验族"；整库校正走 significance_table(correction="fdr")。
         "significant": bool(abs(_inf["t_stat_nw"]) > 2.0),
@@ -721,7 +786,7 @@ def _panel_ic_stats(panel: pd.DataFrame, returns_panel: pd.DataFrame, *,
     时不计算、置 NaN——批量入库靠这个开关把 109 s 压到 7 s。
     """
     ic = calc_ic_series(panel, returns_panel, method=ic_method)
-    summary = ic_stats(ic)
+    summary = registry_ic_stats(ic)
     ic_mean = summary["ic_mean"]
 
     if evidence:
@@ -862,7 +927,7 @@ class FactorLibrary:
         self,
         name: str,
         panel: pd.DataFrame,
-        returns_panel: pd.DataFrame,
+        returns_panel: pd.DataFrame | None = None,
         kind: str = "raw",
         formula: str | None = None,
         parents: list[str] | None = None,
@@ -885,7 +950,7 @@ class FactorLibrary:
         reject_dup: bool = True,
         dup_include_builder_rows: bool = False,
         persist: bool = True,
-        ret_basis: str = "close_pct_v1",
+        ret_basis: str | None = None,
     ) -> dict:
         """因子登记的**便宜半段**：面板落盘 + IC 序列 + 多周期 IC + registry 行。
 
@@ -917,17 +982,23 @@ class FactorLibrary:
             name: 因子唯一名。
             panel: date×code 因子面板（建议已截面标准化）。
             returns_panel: date×code **1 日**远期收益面板（``shift(-1)`` 口径）。
+                省略时用库内默认收益面板（:meth:`default_returns_panel`）。
                 多周期 IC 由本面板累乘推导，保证与 1 日 IC 严格同源。
             horizons: 需补算的多周期 IC；``None`` 或 ``()`` 表示只算 1 日。
             evidence: 是否计算 ``ic_decay5`` / ``monotonicity`` / ``pfs`` 三列
                 （合计约 91 s，all_a 规模）。批量入库关掉，逐因子精读时开。
             write_panel: ``False`` 时不动已有面板文件，只更新 registry（回填用）。
             persist: ``False`` 时不写 registry，供 :meth:`register` 合并成一次写入。
-            ret_basis: 收益口径标记，写入 ``ret_basis`` 列供追溯（当前全库均为
-                ``close_pct_v1`` = 未复权收盘的 1 日收益）。
+            ret_basis: 收益口径标记，省略时按 :meth:`_ret_basis_for` 与库内默认
+                收益逐值核对得出（``adj_close_pct_v1`` / ``close_pct_v1`` /
+                ``caller_supplied``），供晋升门槛 ``stale_caliber`` 判定。
         Returns:
             该因子的 registry 行（dict）；canonical 指标列为空。
         """
+        if returns_panel is None:
+            returns_panel = self.default_returns_panel()
+        if ret_basis is None:
+            ret_basis = self._ret_basis_for(returns_panel)
         # 标签先过受控词表（越界只告警）：登记是唯一入口，入口不校验，
         # 后面每个消费者都得各自防漂移。
         family, frequency, maturity = normalize_tags(
@@ -994,6 +1065,7 @@ class FactorLibrary:
         use_mask: bool = True,
         mask_lag: int = 0,
         recompute_ic: bool = False,
+        ic_series: pd.Series | None = None,
     ) -> dict:
         """补算 canonical 回测（**评估那半段**），回填 registry 指标。
 
@@ -1022,6 +1094,9 @@ class FactorLibrary:
                 ⇒ T 日收盘建仓 ⇒ 默认 0。
             recompute_ic: 强制按当前收益面板重算 IC 序列（换口径迁移时用），
                 否则沿用 eval 文件里已有的 ic 列。
+            ic_series: 外部注入的 IC 序列（批量回填时直接用库内预计算的
+                ``ic_h1``，省掉 3 s/因子的面板重算）。注入即视为权威，
+                不再读旧 eval 文件、也不再现算。
         Returns:
             指标 dict（``*_ls_M`` / ``best_sharpe`` / ``evaluated_at`` …）。
         """
@@ -1034,10 +1109,9 @@ class FactorLibrary:
         if panel is None:
             raise FileNotFoundError(f"因子面板缺失：{name}（registry 的 panel_path 无效）")
         rp = returns_panel if returns_panel is not None else self.default_returns_panel()
-        # 收益口径只如实登记，不猜：调用方自带的面板无从判断是哪一种；
-        # 库内面板由 default_returns_panel() 自己记在实例上（含缓存命中路径）。
-        ret_basis = ("caller_supplied" if returns_panel is not None
-                     else getattr(self, "_ret_basis", "close_pct_v1"))
+        # 口径如实登记，但「调用方自带面板」不再等于「口径不明」：
+        # 与库内默认收益逐值一致时继承库口径（见 :meth:`_ret_basis_for`）。
+        ret_basis = self._ret_basis_for(returns_panel)
 
         # 回测用可交易面板；掩码不可用（缺状态表/复权文件）时退化为全可交易，
         # 但 mask_basis 会如实标成 ""，不让"没套上"看起来像"套上了"。
@@ -1064,27 +1138,27 @@ class FactorLibrary:
         # 保留 ingest 阶段落的 ic 列；回填的老因子没有 ic 列，现算一次补上
         # （3 s 级），保证「eval 文件一定有 ic」这个不变量对两条路径都成立。
         # ``recompute_ic`` 用于口径迁移：换收益面板后旧 ic 已经不是同一个数。
-        ic_series = None
-        if not recompute_ic and eval_path.exists():
+        ic_s = ic_series
+        if ic_s is None and not recompute_ic and eval_path.exists():
             try:
                 old = pd.read_parquet(eval_path)
                 if "ic" in old.columns:
-                    ic_series = old["ic"]
+                    ic_s = old["ic"]
             except Exception:  # noqa: BLE001
                 log.warning("旧 eval 读取失败，按全新写入：%s", eval_path)
-        if ic_series is None:
+        if ic_s is None:
             try:
-                ic_series = calc_ic_series(panel, rp)
+                ic_s = calc_ic_series(panel, rp)
             except Exception:  # noqa: BLE001
                 log.warning("IC 序列重算失败，eval 将缺 ic 列：%s", name)
-        if ic_series is not None:
-            eval_cols = {"ic": ic_series, **eval_cols}
+        if ic_s is not None:
+            eval_cols = {"ic": ic_s, **eval_cols}
         _write_parquet_robust(pd.DataFrame(eval_cols).sort_index(), eval_path)
 
         # 顺手把 IC 检验统计写回 registry：老因子（builder 通道）的
         # ic_mean / t_stat_nw 一直是空的，只有 ic_mean_h*，导致"按显著性
         # 排序"在半个库上失效。ic 序列就在手上，重算代价可忽略。
-        ic_fields = ic_stats(ic_series) if ic_series is not None else {}
+        ic_fields = registry_ic_stats(ic_s) if ic_s is not None else {}
 
         upd = {
             **ic_fields,
@@ -1163,6 +1237,9 @@ class FactorLibrary:
         metric_rows: dict = {}
         best_sharpe = -np.inf
         best_config = CANONICAL_CONFIGS[0].key
+        # 超额基准 = 全A等权日收益（截面均值，NaN=停牌自动剔除）。
+        # 只对纯多（lo_*）算超额；LS 对基准求超额无经济含义。
+        bench = returns_panel.mean(axis=1, skipna=True)
         for cfg in CANONICAL_CONFIGS:
             bt = VectorBacktest(cfg.strategy(k=cfg.k), rebalance_freq=cfg.freq,
                                 short_costs=short_costs, deleverage=deleverage)
@@ -1173,10 +1250,17 @@ class FactorLibrary:
             dret = res.daily_returns
             eval_cols[f"dret_{cfg.key}"] = dret
             eval_cols[f"equity_{cfg.key}"] = res.equity_curve
+            # 换手序列（调仓日有值）：看板按时间区间重算区间换手要用
+            eval_cols[f"turnover_{cfg.key}"] = res.turnover_series
             m = res.metrics()
             for mc in METRIC_COLS:
                 if mc in m:
                     metric_rows[f"{mc}_{cfg.key}"] = m[mc]
+            if cfg.key.startswith("lo"):
+                me = res.metrics(benchmark_returns=bench)
+                for ek in ("excess_return", "information_ratio", "excess_t_stat"):
+                    if ek in me:
+                        metric_rows[f"{ek}_{cfg.key}"] = me[ek]
             if m["sharpe"] > best_sharpe:
                 best_sharpe = m["sharpe"]
                 best_config = cfg.key
@@ -1308,6 +1392,88 @@ class FactorLibrary:
         self._ret_basis = "close_pct_v1"
         return self._rp_cache
 
+    # ------------------------------------------------------------------
+    # 价格 / 基准：看板与库评估共用的唯一价格源（2026-11-19 统一）
+    # ------------------------------------------------------------------
+    def adjusted_close_panel(self) -> pd.DataFrame | None:
+        """复权收盘宽表——库内 IC / canonical 回测 / 看板共用的唯一价格源。"""
+        return self._adjusted_close()
+
+    def adjusted_open_panel(self) -> pd.DataFrame | None:
+        """复权开盘宽表（与收盘同一份后复权因子，供 T+1 开盘执行口径）。"""
+        return self._adjusted_price("open")
+
+    def _adjusted_price(self, field: str) -> pd.DataFrame | None:
+        """未复权 ``field`` × 累积后复权因子；缺文件时返回 None。
+
+        与 :meth:`_adjusted_close` 同源（同一个 ``backward_factor.parquet``），
+        区别只是取的原始列不同。看板原先从 ``reports/alla_rolling/_base/``
+        快照读复权价，快照过期时净值与 registry 指标漂移；统一改读这里后，
+        "库的数字"和"看板的数字"不再有两份价格。
+        """
+        from config import Config
+
+        root = Path(str(Config.cache()["root"]))
+        key = (str(root), field)
+        if key in _PX_CACHE:
+            return _PX_CACHE[key]
+        if self._adjusted_close() is None:      # 顺带确保 _bwd_cache 已就绪
+            return None
+        try:
+            raw = pd.read_parquet(root / "daily_all_a.parquet",
+                                  columns=[field])[field].unstack()
+            raw.index = pd.to_datetime(raw.index).normalize()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("复权 %s 读取失败：%s", field, exc)
+            return None
+        bwd = self._bwd_cache
+        cols = raw.columns.intersection(bwd.columns)
+        if len(cols) < 100:
+            log.warning("复权 %s 与后复权因子交集过小（%d）", field, len(cols))
+            return None
+        bwd = bwd.reindex(index=raw.index, columns=cols).ffill()
+        adj = raw[cols] * bwd
+        _PX_CACHE[key] = adj
+        return adj
+
+    def benchmark_eqw_returns(self, *, forward: bool = True) -> pd.Series:
+        """全A等权日收益（基准），与库内收益面板同一价格源。
+
+        ``forward=True``：与 :meth:`default_returns_panel` 对齐（T 行 = T→T+1），
+        供超额/IR 这类与策略日收益逐日对齐的指标使用。
+        ``forward=False``：价格指数口径（T 行 = T-1→T），供看板画基准净值。
+
+        注意与 ``_base/bench_eqw.parquet`` 的差别：那边是独立现算的
+        ``close_adj.pct_change().mean(axis=1)``，价格源同为 backward_factor，
+        但快照时点可能落后；统一后基准净值随库一起更新。
+        """
+        b = self.default_returns_panel().mean(axis=1, skipna=True)
+        return b if forward else b.shift(1)
+
+    def _ret_basis_for(self, returns_panel: pd.DataFrame | None) -> str:
+        """判定本次评估用的收益口径——**逐值核对过才敢写库标准口径**。
+
+        2026-11-19 之前只要调用方自带 ``returns_panel`` 就硬写
+        ``caller_supplied``，后果是晋升第 2 关 ``stale_caliber`` 对**全部**
+        已评估因子亮红灯（库内 17 个有 eval 的因子无一例外），阶梯结构上
+        不可达。而多数调用方只是把 ``adj_close.pct_change().shift(-1)`` 自己又
+        算了一遍，与 :meth:`default_returns_panel` 逐值相同。
+
+        现在：与库内默认收益抽样逐值比对，一致就继承库口径
+        （``adj_close_pct_v1`` / ``close_pct_v1``）；**只有真的不同**才记
+        ``caller_supplied``。该标记的含义随之收窄成「口径与库不同」。
+        """
+        if returns_panel is None:
+            return getattr(self, "_ret_basis", "") or "close_pct_v1"
+        try:
+            dflt = self.default_returns_panel()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("库内默认收益不可用（%s），收益口径记 caller_supplied", exc)
+            return "caller_supplied"
+        if returns_panels_equal(returns_panel, dflt):
+            return getattr(self, "_ret_basis", "") or "close_pct_v1"
+        return "caller_supplied"
+
     def contract_violations(self) -> list[dict]:
         """因子库**契约**检查：把"什么算一个合格的库"变成可执行断言。
 
@@ -1339,9 +1505,12 @@ class FactorLibrary:
                     bad.append({"name": name, "rule": "eval_file_missing",
                                 "detail": str(p)})
             if status == "evaluated":
-                if not _finite(r.get("sharpe_ls_M")):
+                # 判据是"至少一套 canonical 留下可用夏普"，不是死盯 ls_M：
+                # 个别因子月频多空退化（调仓日截面不足 / 零换手），sharpe_ls_M
+                # 为 NaN 但 ls_W、lo_M 正常，best_sharpe 有值——那仍是已评估。
+                if not _finite(r.get("sharpe_ls_M")) and not _finite(r.get("best_sharpe")):
                     bad.append({"name": name, "rule": "evaluated_but_nan",
-                                "detail": "sharpe_ls_M 为空"})
+                                "detail": "三套 canonical 夏普全空"})
             elif status == "ingested":
                 leaked = [c for c in metric_cols if _finite(r.get(c))]
                 if leaked:
@@ -1480,7 +1649,7 @@ class FactorLibrary:
 
             # —— 门槛 6：时间稳健（前 70% / 后 30% 分段，样本外近似）
             if series is not None:
-                st = _window_stats(series[0], series[1],
+                st = window_stats(series[0], series[1],
                                    split_frac=g["split_frac"],
                                    recent_days=int(g["recent_days"]),
                                    min_days=int(g["min_seg_days"]))
@@ -1602,7 +1771,7 @@ class FactorLibrary:
         self,
         name: str,
         panel: pd.DataFrame,
-        returns_panel: pd.DataFrame,
+        returns_panel: pd.DataFrame | None = None,
         kind: str = "raw",
         formula: str | None = None,
         parents: list[str] | None = None,
@@ -1632,14 +1801,20 @@ class FactorLibrary:
         写好 ``panels/<name>.parquet``** 的场景：跳过 ``panels/<slug>.parquet``
         落盘，避免同一份 58MB 面板在库里存两份，也让中性化 / ic 融合这些按
         原名找文件的 builder 侧工具能直接命中。
+
+        ``returns_panel=None``（2026-11-19 起）表示**走库标准收益**
+        （:meth:`default_returns_panel`，复权收盘 1 日远期）。新脚本不要再
+        自己 ``pct_change``：自带面板只有在与库内默认值逐值一致时才会被认成
+        ``adj_close_pct_v1``，否则记 ``caller_supplied`` 并卡住晋升。
         """
+        rp = returns_panel if returns_panel is not None else self.default_returns_panel()
         row = self.ingest(
-            name, panel, returns_panel, kind=kind, formula=formula, parents=parents,
+            name, panel, rp, kind=kind, formula=formula, parents=parents,
             source=source, ic_method=ic_method, family=family, frequency=frequency,
             maturity=maturity, note=note, check_dup=check_dup, dup_corr=dup_corr,
             reject_dup=reject_dup, write_panel=write_panel,
             dup_include_builder_rows=dup_include_builder_rows, persist=True)
-        upd = self.evaluate(name, returns_panel, panel=panel,
+        upd = self.evaluate(name, rp, panel=panel,
                             short_costs=short_costs, deleverage=deleverage,
                             persist=True)
         row.update(upd)
@@ -1650,7 +1825,7 @@ class FactorLibrary:
 
     def upsert_rows(self, rows: list[dict], *, source: str = "", family: str = "",
                     kind: str = "raw", maturity: str = "experimental",
-                    frequency: str = "", set_name: str = "",
+                    frequency: str = "", set_name: str = "", set_group: str = "",
                     fill_missing_only: bool = True) -> dict:
         """批量**轻量登记**：把已有统计行并入 registry，不重算任何指标。
 
@@ -1675,6 +1850,8 @@ class FactorLibrary:
             maturity: experimental / oos_verified / active / retired。
             frequency: 日频 / 周频 / 月频 / 日内。
             set_name: 因子集名（alpha101/evt/moneyflow…），写入 ``set`` 列。
+            set_group: 来源分组（7 组之一），写入 ``set_group`` 列；缺省按
+                ``set_name`` 查 :data:`SET_TO_GROUP` 推出。
             fill_missing_only: True（默认）时**只有** :data:`STAT_COLUMNS`
                 （计算型统计）允许用新值覆盖旧值，其余列只补空缺——builder
                 重跑不该把人工补过的标签冲掉。False 时本批带来的所有列都以
@@ -1714,8 +1891,13 @@ class FactorLibrary:
                         "（来源 jsonl 追加写，见 read_stats）", n_dup)
             new_df = new_df.drop_duplicates(subset="name", keep="last")
 
+        reg = self._load_registry()
+        before = len(reg)
+        known = set(reg["name"])
+
         batch = {"source": source, "family": family, "kind": kind,
-                 "maturity": maturity, "frequency": frequency, "set": set_name}
+                 "maturity": maturity, "frequency": frequency, "set": set_name,
+                 "set_group": set_group or group_for_set(set_name)}
         for col, val in batch.items():
             if not val:
                 continue
@@ -1726,9 +1908,49 @@ class FactorLibrary:
                 blank = new_df[col].isna() | (new_df[col].astype(str).str.strip() == "")
                 new_df.loc[blank, col] = val
 
-        reg = self._load_registry()
-        before = len(reg)
-        known = set(reg["name"])
+        # 🔑 轻量登记档 = 明确的状态，不是"字段全空"（2026-11-19 统一）。
+        #
+        # 本通道只接收 builder 自算的汇总统计，不跑逐日 IC / canonical 回测，
+        # 所以状态固定写 ``ingested``；``backfill_library_metrics`` 补齐评估后
+        # 由 :meth:`evaluate` 翻成 ``evaluated``。两条入库通道从此写同一套
+        # 状态字段，下游（晋升 / 监控 / 看板）不必再靠"列是否为空"猜证据等级。
+        #
+        # ``ret_basis`` 与 evaluate 同源（复权收盘 1 日远期）；``mask_basis``
+        # 留空是**真实差异**——批量 IC 不套可交易掩码，不冒充已套。
+        #
+        # ``eval_status`` 在 STAT_COLUMNS 里（新值胜出），所以**已评估过的
+        # 行不能重写回 ingested**：这里只给空缺 + 未评估的行打标记。
+        if "eval_status" in reg.columns:
+            done = set(reg.loc[reg["eval_status"].notna()
+                               & (reg["eval_status"].astype(str).str.strip()
+                                  == "evaluated"), "name"])
+        else:
+            done = set()
+        status = {"eval_status": "ingested", "ret_basis": "adj_close_pct_v1"}
+        for col, val in status.items():
+            if col not in new_df.columns:
+                new_df[col] = val
+                if col == "eval_status" and done:
+                    new_df.loc[new_df["name"].isin(done), col] = np.nan
+            else:
+                new_df[col] = new_df[col].astype(object)
+                blank = (new_df[col].isna()
+                         | (new_df[col].astype(str).str.strip() == ""))
+                if col == "eval_status" and done:
+                    blank &= ~new_df["name"].isin(done)
+                new_df.loc[blank, col] = val
+        for col, val in (("evaluated_at", ""), ("mask_basis", ""),
+                         ("panel_path", "")):
+            if col not in new_df.columns:
+                new_df[col] = val
+        # builder 面板落在 panels/<name>.parquet：显式登记后
+        # _resolve_panel_path 走快路径，不必每次猜文件名。
+        blank_pp = (new_df["panel_path"].isna()
+                    | (new_df["panel_path"].astype(str).str.strip() == ""))
+        for pos in new_df.index[blank_pp]:
+            fb = self.panels_dir / f"{new_df.at[pos, 'name']}.parquet"
+            if fb.exists():
+                new_df.at[pos, "panel_path"] = str(fb)
 
         # 🚨 退登记台账过滤（2026-11-13）。
         #
@@ -1772,7 +1994,7 @@ class FactorLibrary:
             # 两种模式都是「非空才写」：空值不再清空任何已有字段。此前
             # False 分支走 concat 整行替换，stats 行没有的列（source /
             # formula / created_at…）会被洗成 NaN，这正是 holder_dyn 只敢用
-            # oneoff 脚本外科回填的原因。
+            # 一次性脚本外科回填的原因。
             old = (reg[dup].set_index("name")
                    .replace(r"^\s*$", np.nan, regex=True))
             # 空串一律视同缺失：否则 ``stats`` 里的 "" 会盖掉旧值（写回 CSV
@@ -2360,7 +2582,7 @@ class FactorLibrary:
         for k in range(len(dates)):
             zk = zq[k]
             if zk.any():
-                num += sig[k] @ zk
+                num += sig[k].astype(np.float32) @ zk
         snew = float((zq.astype(np.float64) ** 2).sum())
         if snew <= 0:
             return {"available": False, "reason": "样本全同值，无截面变异"}
@@ -2376,7 +2598,7 @@ class FactorLibrary:
         top_corr, top_name = abs(top[0]["corr"]), top[0]["name"]
         # 残差回归是唯一的重活（全样本逐日截面 OLS，实测 8~13 s/因子）。
         # 只在"疑似重复"时才值得算——ρ 不到触发线的不存在"等价"问题。
-        from scripts.factors.dup_criteria import (
+        from research.dup_criteria import (
             classify, classify_independent, explain, should_check)
 
         if should_check(top_corr):
@@ -2393,7 +2615,8 @@ class FactorLibrary:
                 from scripts.factors.dup_audit import rank_resid_stats_from_sig
 
                 j = [str(n) for n in idx["names"]].index(top_name)
-                st = rank_resid_stats_from_sig(zq, np.asarray(idx["sig"][:, j, :]))
+                st = rank_resid_stats_from_sig(
+                    zq, np.asarray(idx["sig"][:, j, :], dtype=np.float32))
                 v = classify(st)
                 if not v.tested:
                     # 兜底也没测成 ⇒ 「无法检验」，**不能**当「不相似」
@@ -2421,7 +2644,7 @@ class FactorLibrary:
 
         **判据（2026-11-12 改口径）**：`dup_corr` 只用来决定「值不值得做残差检验」
         与日志提示，**不参与"是否重复"的判定**。真正判重看秩空间残差
-        （``scripts.factors.dup_criteria``）：
+        （``research.dup_criteria``）：
 
         - ``rel_std < 1e-3`` ⇒ **等价**（单调变换/镜像）⇒ ``reject_dup`` 时直接拒
         - 否则放行，即使 ρ 高达 0.999——实测 129 个「ρ≥0.95 的冗余」里
@@ -2503,8 +2726,14 @@ class FactorLibrary:
             a = panel.loc[common_dates, common_codes]
             b = old.loc[common_dates, common_codes]
             valid = a.notna() & b.notna()
-            ra = a.where(valid).rank(axis=1)
-            rb = b.where(valid).rank(axis=1)
+            # 单日有效样本过少的截面相关没有意义：2 个点的秩相关恒为 ±1，
+            # 会把几乎全空的旧面板（如 alpha101_096，非空率 0.000）顶成"最近邻"
+            # ——2026-11-20 fd_net_support 实测 dup=1.0000 就是这个假象。
+            enough = valid.sum(axis=1) >= 10
+            if not enough.any():
+                continue
+            ra = a.where(valid).rank(axis=1).loc[enough]
+            rb = b.where(valid).rank(axis=1).loc[enough]
             corr = ra.corrwith(rb, axis=1, method="pearson").mean()
             if not np.isnan(corr):
                 hits.append((float(corr), r["name"]))
@@ -2525,7 +2754,7 @@ class FactorLibrary:
         # 这里原来用 raw 值的 resid_t（|t|≥2 算有增量），已被证伪：
         # 纯单调变换（rank 版本）在 raw 空间留下曲线残差，能给出 t=−7.4 的伪增量。
         from scripts.factors.dup_audit import rank_resid_stats
-        from scripts.factors.dup_criteria import (
+        from research.dup_criteria import (
             classify, classify_independent, explain, should_check)
 
         if should_check(top_corr):
@@ -2614,7 +2843,8 @@ class FactorLibrary:
     # ---- 标签管理（六维标签子集：家族/频率/成熟度） ----
     def set_tag(self, name: str, family: str | None = None, frequency: str | None = None,
                 maturity: str | None = None, note: str | None = None,
-                source: str | None = None) -> bool:
+                source: str | None = None, set_name: str | None = None,
+                set_group: str | None = None) -> bool:
         """给因子补打/更新标签（不重算任何指标）。
 
         ``source`` 也走这里补写：批量入库（``merge_outputs()``）的因子从未经过
@@ -2635,7 +2865,8 @@ class FactorLibrary:
         if not hit.any():
             return False
         for col, val in (("family", family), ("frequency", frequency),
-                         ("maturity", maturity), ("note", note), ("source", source)):
+                         ("maturity", maturity), ("note", note), ("source", source),
+                         ("set", set_name), ("set_group", set_group)):
             if val is not None:
                 if col not in reg.columns:
                     reg[col] = ""

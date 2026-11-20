@@ -31,10 +31,18 @@
 
 用法::
 
-    python -m scripts.reporting.yqcore_dashboard                 # → backtest.html + live.html
+    python -m scripts.reporting.yqcore_dashboard                 # → backtest + live
     python -m scripts.reporting.yqcore_dashboard --open          # 生成后打开回测页
     python -m scripts.reporting.yqcore_dashboard --period 20261102
     python -m scripts.reporting.yqcore_dashboard --tier yqcore-focus-k15
+
+回测页按三档各出一份（``backtest_k8.html`` / ``backtest_k15.html`` /
+``backtest_breadth.html``），外加 ``backtest.html`` 承载 ``--tier`` 那一档。
+
+**入口在策略站点**（``scripts.reporting.strategy_home``）：股票三档的回测详情页由本模块的
+``build_backtest_payload`` + ``render_backtest_body(with_nav=False, with_cross=False)`` +
+``render_backtest_script`` 渲染；模拟持仓在 ``reports/strategies/live.html``。
+本目录的 ``backtest*.html`` / ``live.html`` 只是老链接的落地页。
 """
 from __future__ import annotations
 
@@ -47,13 +55,26 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from backtest.metrics import (
+    PERIODS_PER_YEAR,
+    annual_return,
+    annual_volatility,
+    calmar_ratio,
+    drawdown_series,
+    information_ratio,
+    sharpe_arithmetic,
+    sharpe_ratio,
+)
+from strategy.registry import DISPLAY_ORDER
+
 ROOT = Path(__file__).resolve().parents[2]
 PROD_DIR = ROOT / "reports" / "yq_core"
 LIVE_DIR = PROD_DIR / "live"
 BASE_DIR = ROOT / "reports" / "alla_rolling" / "_base"
 ECHARTS_JS = ROOT / "reports" / "docs" / "design" / "_shared" / "js" / "echarts.min.js"
 
-TIERS = ("yqcore-focus-k8", "yqcore-focus-k15", "yqcore-breadth")
+#: 档位与展示顺序的唯一真源 = ``strategy/registry.DISPLAY_ORDER``（新增档位只改那里）
+TIERS = DISPLAY_ORDER
 TIER_COLORS = ("#1f4e79", "#d98324", "#5a7d9a")
 #: K 线回溯的自然日跨度（前端再按区间切片，后端只读一次）
 KLINE_LOOKBACK_DAYS = 420
@@ -150,13 +171,9 @@ def load_bench(base_dir: Path) -> dict[str, pd.Series]:
     return out
 
 
-def _dd_curve(nav: pd.Series) -> pd.Series:
-    return nav / nav.cummax() - 1.0
-
-
 def _mdd_info(nav: pd.Series) -> dict:
     """最大回撤及其区间（峰 → 谷）。峰值取谷底之前的最高点，与 dd 曲线定义一致。"""
-    dd = _dd_curve(nav)
+    dd = drawdown_series(nav)
     if not len(dd):
         return {"mdd": None, "peak": None, "trough": None, "days": None}
     trough = dd.idxmin()
@@ -189,8 +206,12 @@ def _capm(r: pd.Series, m: pd.Series) -> dict:
     }
 
 
-def _perf(nav: pd.Series, bench_ret: pd.Series, ann: int = 252) -> dict:
-    """一组净值 + 基准日收益 → 页面需要的全部派生指标（自算，不读缓存）。"""
+def _perf(nav: pd.Series, bench_ret: pd.Series, ann: int = PERIODS_PER_YEAR) -> dict:
+    """一组净值 + 基准日收益 → 页面需要的全部派生指标（自算，不读缓存）。
+
+    所有年化/夏普/IR/卡玛一律走 :mod:`backtest.metrics` 真源，本函数只负责
+    序列对齐与超额口径选择（比值 vs 算术差）。
+    """
     nav = nav.dropna()
     if len(nav) < 2:
         return {}
@@ -199,12 +220,13 @@ def _perf(nav: pd.Series, bench_ret: pd.Series, ann: int = 252) -> dict:
     bn = (1.0 + br).cumprod()
     bn = bn / bn.iloc[0]                        # 基准净值与策略同起点
     n = len(nav)
+    rr = r.reindex(br.index).fillna(0.0)
 
     cum_p = float(nav.iloc[-1] / nav.iloc[0] - 1.0)
     cum_b = float(bn.iloc[-1] / bn.iloc[0] - 1.0)
     cum_x = float(nav.iloc[-1] / bn.iloc[-1] - 1.0)
-    ann_p = float((1 + cum_p) ** (ann / n) - 1)
-    ann_b = float((1 + cum_b) ** (ann / n) - 1)
+    ann_p = float(annual_return(r, ann))
+    ann_b = float(annual_return(bn.pct_change().dropna(), ann))
     # 超额曲线：策略净值 / 基准净值（比值，不是两条收益曲线相减）
     ratio = (nav / nav.iloc[0]) / (bn / bn.iloc[0])
 
@@ -216,7 +238,6 @@ def _perf(nav: pd.Series, bench_ret: pd.Series, ann: int = 252) -> dict:
     ann_excess = float((1 + ann_p) / (1 + ann_b) - 1)
     ex_ari = (r - br.reindex(r.index)).dropna()
 
-    rr = r.reindex(br.index).fillna(0.0)
     win = float((rr > 0).mean())
     up, dn = float(rr[rr > 0].sum()), float(abs(rr[rr < 0].sum()))
     pl_ratio = (up / dn) if dn else None
@@ -227,7 +248,7 @@ def _perf(nav: pd.Series, bench_ret: pd.Series, ann: int = 252) -> dict:
     monthly["x"] = (1 + monthly["p"]) / (1 + monthly["b"]) - 1
 
     capm = _capm(r, br)
-    te = float(ex_ari.std() * np.sqrt(ann)) if ex_ari.std() else None
+    te = float(annual_volatility(ex_ari, ann)) if ex_ari.std() else None
     mdd = _mdd_info(nav)
     mdd_x = _mdd_info(ratio)
 
@@ -238,27 +259,30 @@ def _perf(nav: pd.Series, bench_ret: pd.Series, ann: int = 252) -> dict:
         "cum": cum_p, "cum_bench": cum_b, "cum_excess": cum_x,
         "ann": ann_p, "ann_bench": ann_b,
         "ann_excess": ann_excess,
-        "vol": float(rr.std() * np.sqrt(ann)),
-        "vol_bench": float(br.std() * np.sqrt(ann)),
+        "vol": float(annual_volatility(rr, ann)),
+        "vol_bench": float(annual_volatility(br, ann)),
         # 几何 Sharpe = 年化几何收益 / 年化波动（与 report_native.json 的 sharpe 同式）
-        "sharpe_geo": float(ann_p / (rr.std() * np.sqrt(ann))) if rr.std() else None,
-        "sharpe_arith": float(rr.mean() / rr.std() * np.sqrt(ann)) if rr.std() else None,
-        "calmar": float(ann_p / abs(mdd["mdd"])) if mdd["mdd"] else None,
+        "sharpe_geo": (float(sharpe_ratio(rr, periods_per_year=ann))
+                       if rr.std() else None),
+        "sharpe_arith": (float(sharpe_arithmetic(rr, periods_per_year=ann))
+                         if rr.std() else None),
+        "calmar": (float(calmar_ratio(r, ann)) if mdd["mdd"] else None),
         "win_day": win,
         "win_month": float((monthly["p"] > 0).mean()),
         "pl_ratio": pl_ratio,
         "avg_excess_day": float(ex_ari.mean()),
         "te": te,
-        "ir": float((ex_ari.mean() * ann) / te) if te else None,
+        "ir": (float(information_ratio(r, br.reindex(r.index), ann))
+               if te else None),
         "mdd": mdd, "mdd_excess": mdd_x,
         "alpha": capm["alpha"] * ann if capm["alpha"] is not None else None,
         "t_alpha": capm["t_alpha"],
         "beta": capm["beta"], "t_beta": capm["t_beta"],
         "r2": capm["r2"], "rho": capm["rho"],
-        "resid_sr": (float(capm["resid"].mean() / capm["resid"].std() * np.sqrt(ann))
+        "resid_sr": (float(sharpe_arithmetic(capm["resid"], periods_per_year=ann))
                      if capm.get("resid") is not None and capm["resid"].std() else None),
         "monthly": monthly,
-        "dd": _dd_curve(nav),
+        "dd": drawdown_series(nav),
         "nav": nav, "bench_nav": bn,
         "daily_ret": rr, "bench_ret": br,
     }
@@ -414,8 +438,16 @@ def period_frame(codes: list[str], holdings: pd.DataFrame,
 
 
 def kline_payload(holdings: pd.DataFrame, signal_date: pd.Timestamp,
-                  exec_date: pd.Timestamp, end: pd.Timestamp | None) -> dict:
-    """每只持仓股的日 K（前复权锚定最新日 = 真实报价，历史按比例回溯）。"""
+                  exec_date: pd.Timestamp, end: pd.Timestamp | None,
+                  max_codes: int | None = None) -> dict:
+    """每只持仓股的日 K（前复权锚定最新日 = 真实报价，历史按比例回溯）。
+
+    ``max_codes``：只画市值最大的前 N 只（广度档 620+ 只，全画会把页面撑到几十 MB）。
+    持仓表仍是全量，只有 K 线网格被截断。
+    """
+    if max_codes is not None and len(holdings) > max_codes:
+        holdings = holdings.reindex(
+            holdings["cost"].sort_values(ascending=False).index[:max_codes])
     codes = [c for c in holdings.index]
     start = signal_date - pd.Timedelta(days=KLINE_LOOKBACK_DAYS)
     raw = _read_daily(["open", "high", "low", "close", "volume"], start=start, codes=codes)
@@ -468,8 +500,12 @@ def kline_payload(holdings: pd.DataFrame, signal_date: pd.Timestamp,
 
 
 def build_live_payload(prod_dir: Path = PROD_DIR, live_dir: Path = LIVE_DIR,
-                       tier: str = "yqcore-focus-k8", period: str | None = None) -> dict:
-    """模拟交易页数据：当前一期持仓 + 持仓期表现 + K 线（**不含**历史回测序列）。"""
+                       tier: str = "yqcore-focus-k8", period: str | None = None,
+                       kline_max: int | None = None) -> dict:
+    """模拟交易页数据：当前一期持仓 + 持仓期表现 + K 线（**不含**历史回测序列）。
+
+    ``kline_max``：K 线只画前 N 只大仓位（见 :func:`kline_payload`），不影响持仓表。
+    """
     bt = load_backtest(prod_dir, tier)
     ds, holdings, meta = load_period(live_dir, period)
 
@@ -579,7 +615,8 @@ def build_live_payload(prod_dir: Path = PROD_DIR, live_dir: Path = LIVE_DIR,
         },
         "period": per,
         "contrib": contrib,
-        "kline": kline_payload(holdings, signal_date, exec_date, today),
+        "kline": kline_payload(holdings, signal_date, exec_date, today,
+                               max_codes=kline_max),
         "check": check,
         "sources": {
             "backtest": str((prod_dir / "report_native.json").relative_to(ROOT)),
@@ -635,31 +672,27 @@ def _hold_table(rows: list[dict], total_mv: float | None = None,
 
 
 def topbar(active: str, generated: str) -> str:
-    """四页共享顶栏；`active` ∈ {board, backtest, live, picks}。
+    """站点顶栏（共享实现：``research.html_report.site_nav``）。
 
-    因子看板是另一个模块（`reports/factor_board/`），必须在这里也给入口，
-    否则从看板点进回测/模拟后回不去（2026-11-18 修）。
-    `picks` 页在 `picks_board.py` 里生成，同目录 `picks.html`。
+    ``active`` ∈ {home, live, board, picks}（见 ``SITE_TABS``）；本目录只有
+    ``picks.html``，用 ``local`` 覆盖共享默认路径。历史回测已并入策略详情页，
+    ``backtest.html`` 只是老链接的落地页，顶栏高亮「策略首页」。
     """
-    def tab(key: str, href: str, label: str) -> str:
-        cls = " class='on'" if key == active else ""
-        return f'<a href="{href}"{cls}>{label}</a>'
-    return (
-        '<div class="topbar">'
-        '<div class="brand"><i></i>YuriQuant</div>'
-        '<div class="sep"></div>'
-        '<div class="nav">'
-        + tab("board", "../factor_board/index.html", "因子看板")
-        + tab("backtest", "backtest.html", "历史回测")
-        + tab("live", "live.html", "模拟交易")
-        + tab("picks", "picks.html", "本期出榜")
-        + '</div>'
-        '<div class="right"><span>只读 · 零后端 · 可离线打开</span>'
-        f'<span>{generated}</span></div></div>'
-    )
+    from research.html_report import site_nav
+
+    return site_nav(active, generated=generated, root="..", local={
+        "picks": "picks.html",
+    })
 
 
-def render_live_body(p: dict) -> str:
+def render_live_body(p: dict, with_nav: bool = True, with_cross: bool = True) -> str:
+    """模拟持仓正文。``with_nav=False`` / ``with_cross=False`` 供策略详情页组合使用
+    （同一页里已有顶栏，且不需要跨页跳转）。"""
+    nav_html = topbar("live", p["generated"]) if with_nav else ""
+    cross_btn = ('<button class="btn" onclick="location.href=\'backtest.html\'">'
+                 '历史回测 →</button>' if with_cross else "")
+    bt_ref = ('<a href="backtest.html">backtest.html</a>' if with_cross
+              else "策略首页里该策略的回测详情")
     t = p["hold"]["totals"]
     per = p["period"]
     per_port = next((v for v in reversed(per["port"]) if v is not None), 0.0) or 0.0
@@ -715,7 +748,7 @@ def render_live_body(p: dict) -> str:
         for n, v, c, u in kpis)
 
     return f"""
-{topbar('live', p['generated'])}
+{nav_html}
 
 <div class="subbar">
   <span class="title">{p['tier']} · 模拟交易</span>
@@ -725,7 +758,7 @@ def render_live_body(p: dict) -> str:
   <span class="badge gray">T+1 开盘</span>
   <span class="badge gray">信号日 {p['hold']['signal_date']} · 持仓 {n_days} 日</span>
   <div class="acts">
-    <button class="btn" onclick="location.href='backtest.html'">历史回测 →</button>
+    {cross_btn}
     <button class="btn"
       onclick="document.getElementById('caliber').scrollIntoView()">口径说明</button>
     <button class="btn pri" onclick="window.print()">导出 PDF</button>
@@ -816,7 +849,7 @@ def render_live_body(p: dict) -> str:
         数据源：<code>{p['sources']['live']}</code> · <code>daily_all_a.parquet</code>（OHLCV）·
         <code>_base/close_adj.parquet</code>（复权）<br>
         本页只回答「现在拿着什么、这一期到现在怎么样」；历史七年的收益/风险见
-        <a href="backtest.html">backtest.html</a>，两页口径不同，<b>不可相减</b>。<br>
+        {bt_ref}，两页口径不同，<b>不可相减</b>。<br>
         生成命令：<code>python -m scripts.reporting.yqcore_dashboard</code> ·
         本页只读、零后端、可离线打开。
       </div>
@@ -832,7 +865,13 @@ def _mcell(label: str, value: str, cls: str = "", sub: str = "") -> str:
             f'<b class="{cls}">{value}</b>{inner}</div>')
 
 
-def render_backtest_body(p: dict) -> str:
+def render_backtest_body(p: dict, with_nav: bool = True, with_cross: bool = True) -> str:
+    """历史回测正文。``with_nav=False`` / ``with_cross=False`` 供策略详情页组合使用。"""
+    nav_html = topbar("home", p["generated"]) if with_nav else ""
+    cross_btn = ('<button class="btn" onclick="location.href=\'live.html\'">'
+                 '模拟持仓 →</button>' if with_cross else "")
+    live_ref = ('<a href="live.html">live.html</a>' if with_cross
+                else "顶栏「模拟持仓」")
     c = p["cur"]
     k = p["kpi"]
     bshort = p["bench"]["short"].get(p["bench"]["primary"], "基准")
@@ -934,7 +973,7 @@ def render_backtest_body(p: dict) -> str:
         stat_body += f"<tr><td>{label}</td>{tds}</tr>"
 
     return f"""
-{topbar('backtest', p['generated'])}
+{nav_html}
 
 <div class="subbar">
   <span class="title">{p['tier']} · 历史回测</span>
@@ -943,7 +982,7 @@ def render_backtest_body(p: dict) -> str:
   <span class="badge gray">T+1 开盘 · 整手 100</span>
   <span class="badge gray">{p['window']} · {p['n_days']} 日 · 资金 ¥{_num(p['capital'])}</span>
   <div class="acts">
-    <button class="btn" onclick="location.href='live.html'">模拟交易 →</button>
+    {cross_btn}
     <button class="btn pri" onclick="window.print()">导出 PDF</button>
   </div>
 </div>
@@ -1063,7 +1102,7 @@ def render_backtest_body(p: dict) -> str:
           <b>未</b>控制市值/波动暴露，因此 α 偏乐观。超额、胜率、盈亏比、超额回撤均由
           净值与基准现场计算，不落盘缓存。<br>
           本页只回答「这套历史挣了多少」；当前持仓与本期表现见
-          <a href="live.html">live.html</a>。两页时间轴不同（回测末日 {c['end']} vs 持仓估值日），
+          {live_ref}。两页时间轴不同（回测末日 {c['end']} vs 持仓估值日），
           <b>不可相减</b>。
         </div>
       </div>
@@ -1093,17 +1132,7 @@ body{font-family:-apple-system,"Segoe UI","Microsoft YaHei",sans-serif;margin:0;
      background:var(--bg);color:var(--ink);font-size:13px;line-height:1.6}
 h1,h2,h3{font-weight:600;margin:0}
 
-/* 顶栏 */
-.topbar{background:var(--navy);color:#fff;height:50px;display:flex;align-items:center;
-        padding:0 20px;gap:12px;position:sticky;top:0;z-index:30}
-.brand{display:flex;align-items:center;gap:8px;font-size:15px;font-weight:600}
-.brand i{width:17px;height:17px;border-radius:3px;background:#3f7ad6;display:inline-block;
-         box-shadow:inset 0 0 0 4px rgba(255,255,255,.85)}
-.topbar .sep{width:1px;height:17px;background:rgba(255,255,255,.28)}
-.topbar .nav{display:flex;gap:20px;font-size:13px;color:rgba(255,255,255,.8)}
-.topbar .nav b{color:#fff;font-weight:500}
-.topbar .right{margin-left:auto;display:flex;gap:16px;font-size:12px;
-               color:rgba(255,255,255,.7)}
+/* 顶栏样式见 ``research.html_report.CHROME_CSS``（三份前端共用） */
 
 /* 策略副栏 */
 .subbar{background:#fff;border-bottom:1px solid var(--line);min-height:54px;display:flex;
@@ -1183,13 +1212,10 @@ code{font-family:Consolas,monospace;font-size:11.5px;color:#5b6478;background:#f
 .chip:hover{border-color:#d5dae4}
 @media(max-width:960px){
   .kpibar{flex-wrap:wrap}.kpibar .kpi{flex:1 0 33%;border-bottom:1px solid #f0f2f5}
-  .topbar .nav{display:none}.wrap{padding:10px 10px 32px}
+  .wrap{padding:10px 10px 32px}
 }
 
-/* ===== 两页共享：顶栏 tab ===== */
-.topbar .nav a{color:rgba(255,255,255,.72);text-decoration:none;padding:3px 0}
-.topbar .nav a:hover{color:#fff}
-.topbar .nav a.on{color:#fff;font-weight:600;box-shadow:inset 0 -2px 0 #5b9bf5}
+/* ===== 两页共享：顶栏 tab 样式在 CHROME_CSS（见上） ===== */
 
 /* ===== 回测页：左导航 + 指标墙（聚宽「回测详情」布局） ===== */
 .bt{display:flex;gap:14px;padding:14px 18px 48px;max-width:1680px;margin:0 auto;
@@ -1592,17 +1618,31 @@ syncNav();
 
 
 
+def payload_script(p: dict, js: str) -> str:
+    """``window.__YQ__`` 数据块 + 页面脚本（供组合页复用，不必自己拼转义）。"""
+    data = json.dumps(p, ensure_ascii=False).replace("</", "<\\/")
+    return f"<script>window.__YQ__ = {data};</script>\n<script>{js}</script>"
+
+
+def render_backtest_script(p: dict) -> str:
+    """回测页脚本块（``render_backtest_body`` 的配套，组合页用）。"""
+    return payload_script(p, _BT_JS)
+
+
+def render_live_script(p: dict) -> str:
+    """模拟持仓页脚本块（``render_live_body`` 的配套，组合页用）。"""
+    return payload_script(p, _LIVE_JS)
+
+
 def render_html(payload: dict, body: str, js: str, title: str) -> str:
-    from research.html_report import page
-    data = json.dumps(payload, ensure_ascii=False).replace("</", "<\\/")
-    scripts = f"<script>window.__YQ__ = {data};</script>\n<script>{js}</script>"
+    from research.html_report import CHROME_CSS, page
     return page(
         title=title,
         header="",
         body=body,
-        extra_css=_EXTRA_CSS,
+        extra_css=CHROME_CSS + _EXTRA_CSS,
         head_extra=_echarts_tag(),
-        scripts=scripts,
+        scripts=payload_script(payload, js),
     )
 
 
@@ -1631,17 +1671,25 @@ def main() -> None:
     wrote: list[tuple[Path, float]] = []
 
     if args.only in ("both", "backtest"):
-        bt = build_backtest_payload(prod, base, args.tier, args.bench)
-        out = out_dir / "backtest.html"
-        out.write_text(render_html(bt, render_backtest_body(bt), _BT_JS,
-                                   f"{args.tier} 历史回测"), encoding="utf-8")
-        wrote.append((out, out.stat().st_size / 1e6))
-        c = bt["cur"]
-        print(f"[回测] {out}  ({out.stat().st_size / 1e6:.2f} MB)")
-        print(f"        {c['start']} ~ {c['end']} · {c['n_days']} 日 · "
-              f"累计 {c['cum'] * 100:+.2f}% · 年化 {c['ann'] * 100:+.2f}% · "
-              f"α {c['alpha'] * 100:+.2f}% · β {c['beta']:.3f} · "
-              f"SR {c['sharpe_geo']:.3f} · MDD {c['mdd']['mdd'] * 100:.2f}%")
+        # 三档各出一页：``backtest_<档>.html`` 给策略首页的分子卡片直接落地；
+        # ``backtest.html`` 是 ``--tier``（默认 K8 定版）的主页，老链接不改。
+        for tier in TIERS:
+            bt = build_backtest_payload(prod, base, tier, args.bench)
+            body = render_backtest_body(bt)
+            html = render_html(bt, body, _BT_JS, f"{tier} 历史回测")
+            outs = [out_dir / f"backtest_{tier.split('-')[-1]}.html"]
+            if tier == args.tier:
+                outs.append(out_dir / "backtest.html")
+            for out in outs:
+                out.write_text(html, encoding="utf-8")
+                wrote.append((out, out.stat().st_size / 1e6))
+            c = bt["cur"]
+            print(f"[回测] {tier} → {', '.join(o.name for o in outs)}"
+                  f"  ({outs[0].stat().st_size / 1e6:.2f} MB)")
+            print(f"        {c['start']} ~ {c['end']} · {c['n_days']} 日 · "
+                  f"累计 {c['cum'] * 100:+.2f}% · 年化 {c['ann'] * 100:+.2f}% · "
+                  f"α {c['alpha'] * 100:+.2f}% · β {c['beta']:.3f} · "
+                  f"SR {c['sharpe_geo']:.3f} · MDD {c['mdd']['mdd'] * 100:.2f}%")
 
     if args.only in ("both", "live"):
         lp = build_live_payload(prod, live, args.tier, args.period)

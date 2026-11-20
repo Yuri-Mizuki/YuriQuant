@@ -40,6 +40,7 @@ if str(ROOT) not in sys.path:
 from config import Config  # noqa: E402
 from research.html_report import page  # noqa: E402
 from scripts.common.cli_common import setup_logging  # noqa: E402
+from stats import PERIODS_PER_YEAR  # noqa: E402
 
 log = setup_logging("factor_dashboard")
 
@@ -183,7 +184,7 @@ def window_ic_metrics(mats: dict[str, pd.DataFrame]) -> dict[str, dict[str, dict
     return out
 
 
-def _ann(series: pd.Series | None, ppy: int = 252) -> float | None:
+def _ann(series: pd.Series | None, ppy: int = PERIODS_PER_YEAR) -> float | None:
     """净值序列 → 年化收益（几何；按交易日计年）。样本不足返回 None。"""
     if series is None:
         return None

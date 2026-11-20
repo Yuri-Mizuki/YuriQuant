@@ -70,7 +70,9 @@ from backtest.engine import (  # noqa: E402
 from backtest.metrics import (  # noqa: E402
     annual_return,
     annual_volatility,
+    calmar_ratio,
     max_drawdown,
+    sharpe_arithmetic,
     sharpe_ratio,
     years_to_prove_from_sharpe,
 )
@@ -330,7 +332,7 @@ def sharpe_pair(dr: pd.Series) -> dict:
         return {"sharpe": float("nan"), "sharpe_arith": float("nan")}
     return {
         "sharpe": float(sharpe_ratio(dr)),
-        "sharpe_arith": float(dr.mean() / dr.std() * np.sqrt(252.0)),
+        "sharpe_arith": float(sharpe_arithmetic(dr)),
     }
 
 
@@ -579,6 +581,7 @@ def metrics_row(res: BacktestResult, capital: float) -> dict:
         **sp,
         "vol": float(annual_volatility(dr)),
         "max_dd": float(max_drawdown(dr)),
+        "calmar": float(calmar_ratio(dr)),
         "turnover": float(res.turnover_series.dropna().mean()),
         "cost_bp": float(res.cost_series.sum() / float(capital) * 1e4),
         # 冲击成本单列（cost_bp 已含佣金+印花+冲击）—— 容量表的 AUM 敏感项。

@@ -24,6 +24,7 @@ from backtest.costs import EtfCosts
 from backtest.engine import VectorBacktest
 from config import Config
 from data.etf_universe import EtfUniverse
+from stats import PERIODS_PER_YEAR
 from strategy.base import Strategy
 from strategy.etf_rotation import EtfRotationAdvanced
 from strategy.multi_signal import compose_signals
@@ -72,7 +73,7 @@ def build_panels(close: pd.DataFrame, amount: pd.DataFrame) -> dict:
     return {
         "composite": composite,
         "mom12_1": close.shift(21) / close.shift(252) - 1.0,
-        "vol": ret.rolling(20).std() * np.sqrt(252.0),
+        "vol": ret.rolling(20).std() * np.sqrt(PERIODS_PER_YEAR),
         "mask": amount.rolling(60, min_periods=40).mean() >= MIN_AMOUNT,
     }
 
@@ -456,6 +457,7 @@ def run_variant(bundle, panels: dict, spec: dict, w0: int | None = None,
         weighting=spec.get("weighting", "equal"),
         vol_panel=vol_for_strategy,
         target_vol=spec.get("target_vol"),
+        weight_vol_floor=spec.get("weight_vol_floor"),
         enter_rank=spec.get("enter_rank"),
         exit_rank=spec.get("exit_rank"),
         cash_code=cash,

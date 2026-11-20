@@ -8,8 +8,11 @@
   另跑一遍 ``factor_cost=False`` 的无成本路径，供页面「手续费」开关对照。
 - 业绩：直接走 :class:`backtest.engine.VectorBacktest`，**不自己写回测循环**——
   与 ``calibration`` 主链同源，避免「看板数字和定版数字对不上」。
-- IC：截面 spearman(因子, 次一期收益)，收益为 ``close_adj.pct_change().shift(-1)``
-  （因子库 canonical 口径）。
+- IC：截面 spearman(因子, 次一期收益)，收益与库评估同一张面板
+  （``FactorLibrary.default_returns_panel()``，复权收盘 1 日远期）。
+- 价格 / 掩码 / 基准：收盘、开盘、可交易掩码、全A等权基准全部从
+  ``FactorLibrary`` 取（2026-11-19 起不再读 ``reports/alla_rolling/_base``
+  快照）；``_base`` 只剩行业分类一个用途。
 
 产物（默认 ``reports/factor_board/cache/``）
 --------------------------------------------
@@ -41,8 +44,11 @@ import pandas as pd  # noqa: E402
 
 from backtest.costs import default_costs  # noqa: E402
 from backtest.engine import VectorBacktest, build_execution_split  # noqa: E402
+from backtest.metrics import drawdown_series, sharpe_arithmetic  # noqa: E402
 from config import Config  # noqa: E402
 from scripts.evaluation.caliber import next_day_rebalance, rebalance_dates  # noqa: E402
+from stats import PERIODS_PER_YEAR  # noqa: E402
+from stats.ic import calc_ic_series, ic_stats  # noqa: E402
 from strategy.base import Strategy  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -50,7 +56,7 @@ BASE = ROOT / "reports" / "alla_rolling" / "_base"
 OUT = ROOT / "reports" / "factor_board" / "cache"
 START = "2019-01-01"
 WINDOWS = {"1y": 1, "3y": 3, "5y": 5, "all": None}
-PPY = 244            # A 股年均交易日
+PPY = PERIODS_PER_YEAR  # 年化口径唯一真源（禁止再写 244/252 字面量）
 MIN_NAMES = 100      # 当日有效样本少于此值不建组合
 MIN_UNIQUE = 10      # 截面有效取值少于 10 种 ⇒ 分位切不开（见下）
 
@@ -80,16 +86,41 @@ class _Group(Strategy):
 CTX: dict = {}
 
 
-def _init(base: Path, panel_dir: Path) -> None:
-    close = pd.read_parquet(base / "close_adj.parquet")
+def _init(lib_root: str, dataset: str, base: Path, panel_dir: Path) -> None:
+    """加载共享上下文：价格/收益/基准全部走库（`FactorLibrary`），不再读 _base 快照。
+
+    2026-11-19 统一：``_base/close_adj.parquet`` 是 ``rolling_grid_alla --stage prep``
+    的**快照**，与库 ``default_returns_panel()`` 同源但时点可能落后，导致看板
+    净值与 registry 指标漂移。现在收盘/开盘/掩码/基准都从 ``FactorLibrary`` 取，
+    只有行业分类仍读 ``_base/industry.parquet``（库不提供行业面板）。
+    """
+    from research.factor_library import FactorLibrary
+
+    lib = FactorLibrary(root=Path(lib_root), dataset=dataset)
+    reg_all = lib.list_all()
+    panel_paths: dict[str, str] = {}
+    if "panel_path" in reg_all.columns:
+        for nm, pp in zip(reg_all["name"], reg_all["panel_path"]):
+            if isinstance(pp, str) and pp.strip():
+                panel_paths[str(nm)] = pp
+    close = lib.adjusted_close_panel()
+    if close is None:
+        raise RuntimeError("复权收盘不可用（缺 backward_factor / daily_all_a）")
     close = close.loc[close.index >= pd.Timestamp(START)]
-    fill = pd.read_parquet(base / "open_adj.parquet").reindex(index=close.index,
-                                                              columns=close.columns)
-    mask = pd.read_parquet(base / "tradable_mask.parquet").reindex(
-        index=close.index, columns=close.columns).fillna(True)
+    fill = lib.adjusted_open_panel()
+    if fill is None:
+        raise RuntimeError("复权开盘不可用（T+1 开盘执行口径需要 open×后复权）")
+    fill = fill.reindex(index=close.index, columns=close.columns)
+    # 信号日 T 收盘出信号、T+1 开盘成交 ⇒ 掩码取执行日状态（execution_lag=1）
+    mask = lib.tradable_mask(1)
+    if mask is None:
+        mask = pd.DataFrame(True, index=close.index, columns=close.columns)
+    else:
+        mask = mask.reindex(index=close.index, columns=close.columns).fillna(True)
     ind = pd.read_parquet(base / "industry.parquet").reindex(
         index=close.index, columns=close.columns)
-    bench = pd.read_parquet(base / "bench_eqw.parquet")["ret"]
+    # 价格指数口径（T 行 = T-1→T），与画基准净值同向
+    bench = lib.benchmark_eqw_returns(forward=False)
     bench = (bench.replace([np.inf, -np.inf], np.nan).dropna()
              .loc[lambda s: s.index >= pd.Timestamp(START)])
     bench_nav = (1 + bench).cumprod()
@@ -109,6 +140,7 @@ def _init(base: Path, panel_dir: Path) -> None:
         return _raw(df).fillna(0.0)
 
     CTX.update(close=close, fill=fill, mask=mask, ind=ind, panel_dir=str(panel_dir),
+               panel_paths=panel_paths,
                bench_ret=bench, bench_nav=bench_nav,
                rcc=_clean(close.pct_change(fill_method=None)),
                rcc_ic=_raw(close.pct_change(fill_method=None)),
@@ -119,17 +151,6 @@ def _init(base: Path, panel_dir: Path) -> None:
 # ---------------------------------------------------------------------------
 # 单因子计算
 # ---------------------------------------------------------------------------
-def _ic_series(panel: pd.DataFrame, fwd: pd.DataFrame,
-               mask: pd.DataFrame) -> pd.Series:
-    """日频截面 spearman IC（秩相关，缺失不参与）。"""
-    a = panel.where(mask).rank(axis=1, method="average")
-    b = fwd.where(mask).rank(axis=1, method="average")
-    both = a.notna() & b.notna()
-    n = both.sum(axis=1)
-    ic = a.corrwith(b, axis=1)
-    return ic.where(n >= 100)
-
-
 def _industry_ic(panel: pd.DataFrame, fwd: pd.DataFrame, ind: pd.DataFrame,
                  dates: pd.DatetimeIndex, n_sample: int = 36) -> dict:
     """行业 IC：按月抽样，行业内 spearman IC 的时间均值。"""
@@ -178,13 +199,13 @@ def _window_metrics(nav: pd.Series, bench_nav: pd.Series,
         cum = float(seg.iloc[-1] / seg.iloc[0] - 1)
         ann = float((seg.iloc[-1] / seg.iloc[0]) ** (PPY / n) - 1)
         bann = float((bseg.iloc[-1] / bseg.iloc[0]) ** (PPY / n) - 1)
-        dd = seg / seg.cummax() - 1
+        dd = drawdown_series(seg)
         to = turnover.loc[turnover.index >= seg.index[0]]
         out[wname] = {
             "cum": cum, "ann": ann, "bench_ann": bann,
             "excess_ann": float((1 + ann) / (1 + bann) - 1),
             "mdd": float(dd.min()),
-            "sharpe": float(r.mean() / r.std() * np.sqrt(PPY)) if r.std() else None,
+            "sharpe": float(sharpe_arithmetic(r, PPY)) if r.std() else None,
             "turnover": float(to.mean() * 12) if len(to) else None,
             "n_days": n,
         }
@@ -202,13 +223,13 @@ def _ic_metrics(ic: pd.Series) -> dict:
         seg = seg.dropna()
         if len(seg) < 20:
             continue
-        sd = seg.std()
+        s = ic_stats(seg)
         out[wname] = {
-            "ic_mean": float(seg.mean()),
-            "ic_ir": float(seg.mean() / sd) if sd else None,
+            "ic_mean": s["ic"],
+            "ic_ir": s["ir"],
             "ic_gt": float((seg.abs() > 0.02).mean()),
-            "ic_win": float((seg > 0).mean()),
-            "ic_t": float(seg.mean() / sd * np.sqrt(len(seg))) if sd else None,
+            "ic_win": s["win"],
+            "ic_t": s["nw_t"],
         }
     return out
 
@@ -230,7 +251,10 @@ def _unique_levels(panel: pd.DataFrame, n_sample: int = 40) -> float:
 
 
 def compute_one(name: str) -> dict | None:
-    panel_path = Path(CTX["panel_dir"]) / f"{name}.parquet"
+    # 面板路径以 registry 的 panel_path 为准（register 通道落的是 slug 文件名，
+    # 不是 <name>.parquet）；旧 builder 面板没有 panel_path 时回退到 <name>.parquet。
+    p = CTX["panel_paths"].get(name)
+    panel_path = Path(p) if p else Path(CTX["panel_dir"]) / f"{name}.parquet"
     if not panel_path.exists():
         return None
     close, mask = CTX["close"], CTX["mask"]
@@ -245,7 +269,7 @@ def compute_one(name: str) -> dict | None:
     m = mask.reindex(columns=codes)
     rcc_ic = CTX["rcc_ic"].reindex(columns=codes)
     fwd = rcc_ic.shift(-1)
-    ic = _ic_series(panel, fwd, m)
+    ic = calc_ic_series(panel, fwd, tradable=m, min_samples=100)
     n_uniq = _unique_levels(panel)
     ind_ic = _industry_ic(panel, fwd, CTX["ind"].reindex(columns=codes), panel.index)
 
@@ -330,7 +354,8 @@ def _scan_one(job) -> tuple[str, float | None]:
     return name, _unique_levels(pd.read_parquet(p))
 
 
-def _scan_degenerate(names, out, reg, workers, base, panel_dir) -> None:
+def _scan_degenerate(names, out, reg, workers, base, panel_dir,
+                     lib_root, dataset) -> None:
     """扫描全库面板的截面取值数；对「切不开分位」的因子按新口径重算。"""
     flagged = []
     with ProcessPoolExecutor(max_workers=workers) as ex:
@@ -346,7 +371,7 @@ def _scan_degenerate(names, out, reg, workers, base, panel_dir) -> None:
 
     if not flagged:
         return
-    _init(base, panel_dir)
+    _init(lib_root, dataset, base, panel_dir)
     for n, _ in flagged:
         r = compute_one(n)
         if r is None:
@@ -362,7 +387,8 @@ def main() -> None:
     ap.add_argument("--root", default=str(
         Path(Config.paths()["factor_library_root"]) / "all_a_2018_2026"))
     ap.add_argument("--out", default=str(OUT))
-    ap.add_argument("--base", default=str(BASE))
+    ap.add_argument("--base", default=str(BASE),
+                    help="行业分类快照目录（只读取 industry.parquet）")
     ap.add_argument("--names", default=None, help="逗号分隔的因子名（缺省 = 库内全部）")
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 4) - 2))
@@ -372,6 +398,7 @@ def main() -> None:
     args = ap.parse_args()
 
     root = Path(args.root)
+    lib_root, dataset = str(root.parent), root.name
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     reg = pd.read_csv(root / "registry.csv").set_index("name", drop=False)
@@ -383,17 +410,19 @@ def main() -> None:
     if args.limit:
         names = names[: args.limit]
 
-    _init(Path(args.base), root / "panels")
+    _init(lib_root, dataset, Path(args.base), root / "panels")
     print(f"因子 {len(names)} 个 · 日期 {CTX['close'].index[0].date()} ~ "
           f"{CTX['close'].index[-1].date()} · 进程 {args.workers}")
 
     if args.scan_unique:
-        _scan_degenerate(names, out, reg, args.workers, Path(args.base), root / "panels")
+        _scan_degenerate(names, out, reg, args.workers, Path(args.base),
+                         root / "panels", lib_root, dataset)
         return
 
     rows, done, failed = [], 0, []
     with ProcessPoolExecutor(max_workers=args.workers, initializer=_init,
-                             initargs=(Path(args.base), root / "panels")) as ex:
+                             initargs=(lib_root, dataset, Path(args.base),
+                                       root / "panels")) as ex:
         futs = {ex.submit(compute_one, n): n for n in names}
         for fut in as_completed(futs):
             n = futs[fut]

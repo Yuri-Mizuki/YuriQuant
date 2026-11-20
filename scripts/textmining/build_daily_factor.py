@@ -32,6 +32,7 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+from backtest.metrics import PERIODS_PER_YEAR, sharpe_arithmetic  # noqa: E402
 from scripts.textmining.build_sue_txt_samples import _load_daily, _to_naive  # noqa: E402
 from scripts.textmining.evaluate_short_window import (  # noqa: E402
     _load_pred_with_factor, _load_samples_ar,
@@ -149,12 +150,12 @@ def main(task: str = "sue", model: str = "xgb", pool: str = "hs300",
     layer_ret = m.groupby(["date", "layer"])["ret"].mean().unstack("layer")
     # 多空日频收益
     ls = layer_ret[5] - layer_ret[1]
-    ls_annual = ls.mean() * 250 * 100
+    ls_annual = ls.mean() * PERIODS_PER_YEAR * 100
     print("\n[分层日频回测]")
-    print(f"  L5 年化 {(layer_ret[5].mean()*250*100):.2f}%")
-    print(f"  L1 年化 {(layer_ret[1].mean()*250*100):.2f}%")
+    print(f"  L5 年化 {(layer_ret[5].mean()*PERIODS_PER_YEAR*100):.2f}%")
+    print(f"  L1 年化 {(layer_ret[1].mean()*PERIODS_PER_YEAR*100):.2f}%")
     print(f"  多空年化 {ls_annual:.2f}%")
-    print(f"  多空 Sharpe {(ls.mean()/ls.std()*(250**0.5)):.2f}")
+    print(f"  多空 Sharpe {sharpe_arithmetic(ls):.2f}")
 
     # 存盘
     out_path = OUT_DIR / f"{task}_daily_factor_{factor_col}_{model}_{pool}.parquet"
@@ -170,10 +171,10 @@ def main(task: str = "sue", model: str = "xgb", pool: str = "hs300",
         fh.write(f"[日频 RankIC] {len(ics)} 个交易日\n")
         fh.write(f"  IC 均值 {ic_mean:.4f} | ICIR {icir:.2f} | 正占比 {pos_ratio:.0%}\n\n")
         fh.write("[分层日频回测]\n")
-        fh.write(f"  L5 年化 {(layer_ret[5].mean()*250*100):.2f}%\n")
-        fh.write(f"  L1 年化 {(layer_ret[1].mean()*250*100):.2f}%\n")
+        fh.write(f"  L5 年化 {(layer_ret[5].mean()*PERIODS_PER_YEAR*100):.2f}%\n")
+        fh.write(f"  L1 年化 {(layer_ret[1].mean()*PERIODS_PER_YEAR*100):.2f}%\n")
         fh.write(f"  多空年化 {ls_annual:.2f}%\n")
-        fh.write(f"  多空 Sharpe {(ls.mean()/ls.std()*(250**0.5)):.2f}\n")
+        fh.write(f"  多空 Sharpe {sharpe_arithmetic(ls):.2f}\n")
     print(f"评估已存: {out_txt}")
 
 

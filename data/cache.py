@@ -197,8 +197,7 @@ class DataCache:
             # 405MB 宽表整份复制、再做一次布尔掩码全量拷贝（峰值约 2.8GB），是
             # 2026-09-16 两次静默死亡（疑似 OOM）的直接原因。列集合、列顺序与
             # 索引语义（union）均与原实现逐位等价——同名列以 new 为准，等价于
-            # 原先的 duplicated(keep="last")（见 scripts/oneoff/
-            # _probe_wide_table_merge_eq.py，14 组穷举输入 max|Δ|=0）。
+            # 原先的 duplicated(keep="last")（14 组穷举输入 max|Δ|=0，探针已删）。
             local_only = local_df.columns.difference(new_df.columns, sort=False)
             if not len(local_only) and bool(local_df.index.isin(new_df.index).all()):
                 # 快路径：new 已覆盖 local 的全部列与行——零拷贝，不并表
@@ -735,8 +734,36 @@ class DataCache:
     # ORA-00942，而同池同口径 20 分钟前还全部成功——服务端在抖）。
     # 不熔断的话，全 A（5807 只 = 59 批）会在这张坏表上白烧约 2 小时。
     _FINANCIAL_CIRCUIT_BREAK = 2
+    #: 财报表本地「新鲜」天数（``refreshed_on`` 水位）。1 = 同一天重复调用不再
+    #: 回源；调大 = N 天内只回源一次（``update_data --financial-refresh-days``）。
+    FINANCIAL_REFRESH_DAYS = 1
+    #: 财报增量回补的**兜底**回溯年数（本地表读不出最新报告期时用）。
+    FINANCIAL_LOOKBACK_YEARS = 5
+    #: 财报表身份列：区间增量落盘时按它们去重（新拉到的覆盖旧的）。
+    _FINANCIAL_KEYS = ("code", "report_period", "ann_date",
+                       "statement_type", "report_type")
 
-    def _fetch_batched(self, filename: str, codes: list[str], fetch_fn):
+    def _merge_financial_table(self, p: Path, codes: list[str],
+                               df: pd.DataFrame) -> pd.DataFrame:
+        """区间增量落盘：concat + 身份键去重，**保留区间外的历史行**。
+
+        与 :meth:`_merge_sparse_table` 的区别：那张表拿的是「整段全历史」，
+        可以按 code 整块替换；这里只取了最近 N 年报告期，整块替换会把更早的
+        历史清掉。
+        """
+        if p.exists():
+            old = pd.read_parquet(p)
+            df = pd.concat([old, df], ignore_index=True)
+            keys = [k for k in self._FINANCIAL_KEYS if k in df.columns]
+            if keys:
+                df = df.drop_duplicates(subset=keys, keep="last")
+        df.to_parquet(p, compression="snappy")
+        return df
+
+    def _fetch_batched(self, filename: str, codes: list[str], fetch_fn,
+                       begin_date: int | None = None,
+                       end_date: int | None = None,
+                       merge_fn=None):
         """分批 + 每批重试 + 每批落盘；返回 (已得 parts, 受限批次, 是否熔断)。
 
         ``parts`` 只含真正取到的批次；``failed`` 是重试耗尽仍失败的批次；
@@ -753,7 +780,8 @@ class DataCache:
             part: pd.DataFrame | None = None
             for attempt in range(1, self._FINANCIAL_ATTEMPTS + 1):
                 try:
-                    part = fetch_fn(sub)
+                    part = (fetch_fn(sub, begin_date=begin_date, end_date=end_date)
+                            if (begin_date or end_date) else fetch_fn(sub))
                     break
                 except Exception as exc:  # noqa: BLE001 - 服务端偶发，重试后再定论
                     if attempt == self._FINANCIAL_ATTEMPTS:
@@ -780,14 +808,75 @@ class DataCache:
                 continue
             consecutive_fail = 0
             # 每批即合并落盘——后续批次全部失败也不丢已得数据
-            self._merge_sparse_table(self._root / filename, sub, part)
+            (merge_fn or self._merge_sparse_table)(self._root / filename, sub, part)
             parts.append(part)
         return parts, failed, aborted
 
-    def _get_financial(self, filename: str, table_name: str,
-                       codes: list[str], fetch_fn) -> pd.DataFrame:
+    def _financial_cached(self, filename: str, table_name: str,
+                          codes: list[str], max_age_days: int) -> pd.DataFrame | None:
+        """本地财报已覆盖且未过期 → 直接返回切片，不回源。
+
+        财报是「按代码整段全历史」查询，**没有增量接口**（SDK 的
+        ``get_income(code_list)`` 收完代码就拉全量），所以每次 ``update_data``
+        都会把 5,830 只的全历史重拉一遍。以前靠 SDK 的 ``sdk_cache/infodata``
+        分片缓存把那 36 GB 挡在本地（代价是磁盘），这里改成在数据层做**水位
+        短路**：``refreshed_on`` 未超期 + 本地覆盖了请求的代码 → 直接读 parquet，
+        一次请求都不发。``max_age_days<=0`` 表示强制回源。
+        """
         p = self._root / filename
-        parts, failed, aborted = self._fetch_batched(filename, codes, fetch_fn)
+        if not p.exists() or self._refresh_stale(table_name, max_age_days):
+            return None
+        try:
+            have = set(pd.read_parquet(p, columns=["code"])["code"].unique())
+        except Exception as e:  # noqa: BLE001 - 列不存在/文件损坏都按未命中处理
+            log.debug("财报 %s 本地探测失败，回源: %s", table_name, e)
+            return None
+        missing = len(set(codes) - have)
+        # 新股/退市股常年缺财报，留 5% 容差，不然一次新上市就把整表重拉变成常态
+        if missing > max(1, int(0.05 * len(codes))):
+            log.info("财报 %s 本地缺 %d/%d 只代码，仍回源", table_name, missing, len(codes))
+            return None
+        cached = pd.read_parquet(p)
+        log.info("财报 %s 命中本地（刷新于 %s，阈值 %d 天），跳过回源",
+                 table_name, self._get_refreshed_on(table_name), max_age_days)
+        return cached[cached["code"].isin(codes)] if "code" in cached.columns else cached
+
+    def _financial_report_begin(self, p: Path) -> int:
+        """增量回源的报告期起点：本地最新报告期往前推一年（覆盖年报重述）。
+
+        无本地文件 → 19900101 全量；读不出报告期 → 兜底回溯
+        ``FINANCIAL_LOOKBACK_YEARS`` 年。
+        """
+        if not p.exists():
+            return 19900101
+        try:
+            periods = pd.read_parquet(p, columns=["report_period"])["report_period"]
+            latest = pd.to_datetime(periods).max()
+        except Exception as e:  # noqa: BLE001 - 列缺失/文件损坏都走兜底
+            log.debug("读取本地报告期失败，走兜底窗口: %s", e)
+            latest = pd.NaT
+        if pd.isna(latest):
+            return int(f"{dt.date.today().year - self.FINANCIAL_LOOKBACK_YEARS}0101")
+        return int(f"{latest.year - 1}0101")
+
+    def _get_financial(self, filename: str, table_name: str,
+                       codes: list[str], fetch_fn,
+                       max_age_days: int | None = None) -> pd.DataFrame:
+        p = self._root / filename
+        age = self.FINANCIAL_REFRESH_DAYS if max_age_days is None else max_age_days
+        hit = self._financial_cached(filename, table_name, codes, age)
+        if hit is not None:
+            return hit
+        # 区间参数组（手册 4.4）：本地已有历史则只回补最近一年起的报告期，
+        # 首次（无本地文件）从 1990 全量拉；两条都不写 SDK 分片缓存。
+        # ⚠ begin_date/end_date **必须成对传**，只给 begin 时服务端会忽略区间、返回全历史
+        begin = self._financial_report_begin(p)
+        end = int(dt.date.today().strftime("%Y%m%d"))
+        log.info("财报 %s 回源区间 %d-%d（%d 只）", table_name, begin, end, len(codes))
+        parts, failed, aborted = self._fetch_batched(
+            filename, codes, fetch_fn, begin_date=begin, end_date=end,
+            merge_fn=self._merge_financial_table,
+        )
 
         if parts:
             if failed or aborted:
@@ -798,6 +887,10 @@ class DataCache:
                 int(pd.Timestamp(merged_full["ann_date"].max()).strftime("%Y%m%d"))
                 if "ann_date" in merged_full.columns and not merged_full["ann_date"].isna().all() else 0
             )
+            if not failed and not aborted:
+                # 只有整表取全才打「刷新水位」：熔断/缺批时不打，
+                # 否则接下来 N 天都会被 _financial_cached 短路、缺的批次补不回来
+                self._meta[table_name]["refreshed_on"] = dt.date.today().isoformat()
             self._save_meta()
             return pd.concat(parts, ignore_index=True)
 
@@ -809,24 +902,30 @@ class DataCache:
 
     def get_balance_sheet(self, code_list: Iterable[str],
                           begin_date: int | None = None,
-                          end_date: int | None = None) -> pd.DataFrame:
+                          end_date: int | None = None,
+                          *, max_age_days: int | None = None) -> pd.DataFrame:
         codes = list(code_list)
         return self._get_financial(
-            "balance_sheet.parquet", "balance_sheet", codes, self._ds.get_balance_sheet
+            "balance_sheet.parquet", "balance_sheet", codes, self._ds.get_balance_sheet,
+            max_age_days=max_age_days,
         )
 
     def get_cash_flow(self, code_list: Iterable[str],
-                      begin_date: int | None = None, end_date: int | None = None) -> pd.DataFrame:
+                      begin_date: int | None = None, end_date: int | None = None,
+                      *, max_age_days: int | None = None) -> pd.DataFrame:
         codes = list(code_list)
         return self._get_financial(
-            "cash_flow.parquet", "cash_flow", codes, self._ds.get_cash_flow
+            "cash_flow.parquet", "cash_flow", codes, self._ds.get_cash_flow,
+            max_age_days=max_age_days,
         )
 
     def get_income(self, code_list: Iterable[str],
-                   begin_date: int | None = None, end_date: int | None = None) -> pd.DataFrame:
+                   begin_date: int | None = None, end_date: int | None = None,
+                   *, max_age_days: int | None = None) -> pd.DataFrame:
         codes = list(code_list)
         return self._get_financial(
-            "income.parquet", "income", codes, self._ds.get_income
+            "income.parquet", "income", codes, self._ds.get_income,
+            max_age_days=max_age_days,
         )
 
     # ---- 代码表 ----

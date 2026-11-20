@@ -11,14 +11,15 @@
   - 单次连续回测 ``20200101 → 末日``，**事后**按月首切 2 月窗口（80 个，相邻重叠 1 月）
     —— 不要逐窗独立回测，否则 dedup/HRP 会冷启动失效（见 ``run_variant`` docstring）；
   - T+1 open 的 ``execution_split`` 由**该变体自身**的 ``rebalance_dates``（信号日 T）构造，
-    与 §零 的 30.63% 同源。若改用「全索引周分组的第一个交易日」，contest3 曾得 26.17%
+    与 §零 的 30.63% 同源。若改用「全索引周分组的第一个交易日」，core 曾得 26.17%
     （差 0.06pp，来自首/末各一个调仓日），两者不可混用。
 
 用法::
 
-    python -m scripts.portfolio.etf_contest5_eval                 # 默认四档
-    python -m scripts.portfolio.etf_contest5_eval --only contest3
-    python -m scripts.portfolio.etf_contest5_eval --csv out.csv   # 落盘
+    python -m scripts.portfolio.etf_contest5_eval                 # 默认七档，50 只全池
+    python -m scripts.portfolio.etf_contest5_eval --only core
+    python -m scripts.portfolio.etf_contest5_eval --contest-pool   # 复现比赛期 45 只口径
+    python -m scripts.portfolio.etf_contest5_eval --csv out.csv    # 落盘
 
 结论指向 ``reports/etf_contest5/README.md``；本脚本只产数，不做判断。
 """
@@ -34,7 +35,7 @@ from backtest.engine import build_execution_split
 from data.cache import DataCache
 from data.datasource import create_datasource
 from scripts.portfolio.etf_champ_signals import PROFILES
-from scripts.portfolio.etf_contest_spec import EXCLUDED_5
+from scripts.portfolio.etf_contest_spec import EXCLUDED_5, RETIRED_CORE
 from scripts.portfolio.etf_rotation_panels import (
     build_defense,
     build_extra_panels,
@@ -52,23 +53,24 @@ BEGIN = 20200101
 ROOT = Path(__file__).resolve().parents[2]
 RNG = np.random.default_rng(20261029)
 
-_BASE = dict(PROFILES["contest3"])
-#: 待评档位。基线 ``contest3`` = 定版「三锋」（``etf_contest_spec.FINAL``）。
+_BASE = dict(RETIRED_CORE)
+#: 待评档位。``core`` = 集中轮动（``etf_contest_spec.RETIRED_CORE``，2026-11-19 已退役，
+#: 仅保留为历史复现与 buffer 变体的基准，生产信号板不再提供）。
 #: 🚨 buffer 的 enter/exit **必须写全**：45 只池里 15/40、10/30、5/20 的窄档位
 #: 会退化成「还在清单就不卖」，三者结果逐位相同（README §七 #12 注）。
 VARIANTS: dict[str, dict] = {
-    "contest3": _BASE,
-    "contest5h": dict(PROFILES["contest5h"]),
-    "c3_buffer10": {**_BASE, "enter_rank": 5, "exit_rank": 10},
-    "c3_buffer15_40": {**_BASE, "enter_rank": 15, "exit_rank": 40},
-    "c3_buffer5_20": {**_BASE, "enter_rank": 5, "exit_rank": 20},
-    "c3_buffer30": {**_BASE, "enter_rank": 5, "exit_rank": 30},
-    "champ": dict(PROFILES["champ"]),
+    "core": _BASE,
+    "balanced": dict(PROFILES["balanced"]),
+    "core_buffer10": {**_BASE, "enter_rank": 5, "exit_rank": 10},
+    "core_buffer15_40": {**_BASE, "enter_rank": 15, "exit_rank": 40},
+    "core_buffer5_20": {**_BASE, "enter_rank": 5, "exit_rank": 20},
+    "core_buffer30": {**_BASE, "enter_rank": 5, "exit_rank": 30},
+    "monthly": dict(PROFILES["monthly"]),
 }
-#: 带合成腿的档位：`champ`（磐石）有 DEF 防御腿。🚨 它的 open 口径必须把 DEF 补进
+#: 带合成腿的档位：`monthly` 有 DEF 防御腿。🚨 它的 open 口径必须把 DEF 补进
 #: **执行价面板**，否则 `build_execution_split` 拿到的 fill 面板缺 DEF 列 ⇒ 该腿拿不到
 #: 执行价、权重被吞，年化会从 13.2% 掉到 9.5%（2026-10-29 查明的复现失败根因）。
-DEF_VARIANTS = {"champ"}
+DEF_VARIANTS = {"monthly"}
 
 
 def two_month_windows(eq: pd.Series, mfs: pd.DatetimeIndex) -> pd.Series:
@@ -218,9 +220,9 @@ def main(argv: list[str] | None = None) -> int:
                     help="只跑 §9.1 成交价位（① T收盘 / ② T+1开盘 / ③ T+1收盘 / ④ T+1 VWAP）")
     ap.add_argument("--legacy-no-pit", action="store_true",
                     help="关掉权重层 PIT 修正，复现 2026-10-29 之前的历史数字（不外引用）")
-    ap.add_argument("--keep-excluded", action="store_true",
-                    help="不屏蔽 EXCLUDED_5（= 50 只「自有策略」口径）。"
-                         "🚨 比赛对外口径必须关闭本开关；两口径不可混用")
+    ap.add_argument("--contest-pool", action="store_true",
+                    help="复现比赛期 45 只口径（屏蔽 EXCLUDED_5）。"
+                         "默认 50 只全池 = 当前正常策略口径；两口径不可混引")
     ap.add_argument("--pool", default=None,
                     help="自定义可投池清单（每行一个代码，或首列为代码的 CSV）；"
                          "池外代码全部 mask=False。🚨 仅用于池结构实验，非对外口径")
@@ -240,12 +242,11 @@ def main(argv: list[str] | None = None) -> int:
     open_adj = (ro * (close / rc)).astype(np.float32)
 
     panels = build_extra_panels(close, build_panels(close, amount), rc)
-    if not args.keep_excluded:
+    if args.contest_pool:
         for x in EXCLUDED_5:
             panels["mask"].loc[:, x] = False
-    else:
-        print(f"⚠️ --keep-excluded：{len(EXCLUDED_5)} 只非指定池标的已放回"
-              f"（自有策略口径，**不是**比赛对外口径）", flush=True)
+        print(f"⚠️ --contest-pool：屏蔽 {len(EXCLUDED_5)} 只非指定池标的"
+              f"（比赛期 45 只历史口径，**不是**当前正常口径）", flush=True)
     if args.pool:
         keep = _read_pool_file(args.pool)
         unknown = sorted(keep - set(close.columns))
@@ -259,7 +260,7 @@ def main(argv: list[str] | None = None) -> int:
     mfs = pd.DatetimeIndex(
         pd.Series(close.index, index=close.index)
         .groupby(close.index.to_period("M")).first().to_numpy())
-    # 合成防御腿（仅 champ 用）。DEF 是净值水平线，其「执行价」就是当日净值。
+    # 合成防御腿（仅 monthly 用）。DEF 是净值水平线，其「执行价」就是当日净值。
     extra_def = (pd.DataFrame({"DEF": level_from_returns(build_defense(close)["mix"])})
                  if any(n in DEF_VARIANTS for n in names) else None)
     close_def = close.join(extra_def) if extra_def is not None else close
@@ -304,7 +305,7 @@ def main(argv: list[str] | None = None) -> int:
                      "sharpe": r1["sharpe"], "mdd": r1["max_drawdown"],
                      "turnover": r1["avg_turnover"], "maxw": maxw,
                      # ⚠️ 引擎的 cost_drag = 成本金额 / **初始**资金 / 年数。因为资本在
-                     # 复利增长、成本按当期 capital 计提，这个比率会被放大（contest3
+                     # 复利增长、成本按当期 capital 计提，这个比率会被放大（core
                      # 实测 7.2%，而按 `换手 × 双边 7bp` 只有 3.2%）⇒ **不能当"扣掉的
                      # 年化收益"读**，只在同口径横向比较时用。
                      "cost_init": r1["cost_drag"], "n_rb": r1["n_rebalance"],
@@ -331,7 +332,7 @@ def main(argv: list[str] | None = None) -> int:
               f"{r.ann_open - r.ann_close:>+9.2%}"
               f"{r.sharpe_close:>9.2f}{r.sharpe:>9.2f}")
 
-    base = "contest3"
+    base = "core"
     if base in wins:
         print(f"\n== 对齐「{base}」的同窗口配对差（open 口径）==")
         print(f"{'档位':<16}{'Δ均值':>9}{'t':>7}{'非重叠t':>9}{'95%CI':>22}{'胜率':>8}")

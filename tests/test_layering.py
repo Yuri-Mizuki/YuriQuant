@@ -17,9 +17,7 @@ optimize/strategy 边界）
 10. 实验入口脚本不得被其他 scripts 反向 import（2026-09-11 下沉）
 11. 跨模块引用的私有函数必须公开化：scripts 不得 import 带下划线前缀的名字
     （2026-09-11 P1#3 倒挂收口）
-12. 入库代码不得 import gitignored 目录（scripts/oneoff 等）——否则干净 clone /
-    生产环境必 ImportError（2026-09-11 P0+P1：全A 构建管线迁入 scripts/builders/）
-13. model/monitoring/optimize 不得在**模块级** import research（2026-09-11 P2：
+12. model/monitoring/optimize 不得在**模块级** import research（2026-09-11 P2：
     research 是实验层且 __init__/html_report 拖 matplotlib/openpyxl，向上依赖
     一律降为函数级按需引用；AST 区分模块级与函数级）
 """
@@ -235,8 +233,6 @@ def test_model_params_live_in_model_layer():
 
     offenders = []
     for f in (ROOT / "scripts").rglob("*.py"):
-        if {"oneoff", "archive"} & set(f.parts):
-            continue
         src = f.read_text(encoding="utf-8")
         if re.search(r"^DEFAULT_MODEL_PARAMS\s*[:=]", src, re.M):
             offenders.append(str(f.relative_to(ROOT)))
@@ -257,7 +253,7 @@ def test_experiment_entry_scripts_are_not_imported_by_other_scripts():
     entry_files = {m.rsplit(".", 1)[-1] + ".py" for m in entry_mods}
     offenders = []
     for f in (ROOT / "scripts").rglob("*.py"):
-        if {"oneoff", "archive"} & set(f.parts) or f.name in entry_files:
+        if f.name in entry_files:
             continue
         src = f.read_text(encoding="utf-8")
         for mod in entry_mods:
@@ -365,9 +361,6 @@ _TESTS_ONLY_PRIVATE: set[tuple[str, str]] = {
     # 2026-10-13 清欠（守卫在 master 上的存量红灯，逐条登记而非放行整文件）：
     # 以下均为 **tests 白盒**用例（测试直连内部实现做逐位对拍），非生产跨模块消费。
     ("scripts.pipelines.alla_daily_rank", "_P5_KEYS"),
-    # 2026-10-14 timing 探针白盒：成本算子逐位对拍（锚点 Δ=0 / 成本单调），
-    # 内部实现细节、无生产消费者。
-    ("scripts.evaluation.timing_probe", "_apply_position_cost"),
     ("data.altdata.source_akshare", "_XQ_INNER_TRADE_MAP"),
     ("data.altdata.source_akshare", "_fetch_inner_trade_xq_direct"),
     ("scripts.common.task_scheduler", "_hhmm"),
@@ -396,7 +389,6 @@ _TESTS_ONLY_PRIVATE: set[tuple[str, str]] = {
     ("research.factor_library", "_collapse_duplicate_names"),
     ("research.factor_library", "_count_changed"),
     ("research.factor_library", "_family_key"),
-    ("research.factor_library", "_window_stats"),
     ("scripts.builders.build_alla_alpha_panels", "_upsert_registry"),
     ("scripts.factors.panel_leak_audit", "_staleness"),
     ("scripts.factors.backfill_metadata", "_alpha_formula"),
@@ -418,9 +410,8 @@ _TESTS_ONLY_PRIVATE: set[tuple[str, str]] = {
 }
 
 #: 暂豁免的**被引用方**前缀：
-#: - ``scripts.textmining`` —— 另一会话正在改（同目录 8 个文件未提交），待其落地后并入；
-#: - ``scripts.oneoff`` —— 整目录 gitignored，属本地脚本、不是入库契约。
-_PRIVATE_IMPORT_EXEMPT_PREFIXES = ("scripts.textmining", "scripts.oneoff")
+#: - ``scripts.textmining`` —— 另一会话正在改（同目录 8 个文件未提交），待其落地后并入。
+_PRIVATE_IMPORT_EXEMPT_PREFIXES = ("scripts.textmining",)
 
 
 def _private_names_from_imports(path: Path) -> set[tuple[str, str]]:
@@ -466,7 +457,7 @@ def test_no_private_names_cross_module():
         if set(f.parts) & {".git", "__pycache__", ".venv", "venv", "node_modules",
                            "_tmp"}:
             continue
-        if rel.startswith(("reports/", "scripts/oneoff/")) or f.name.startswith("_"):
+        if rel.startswith("reports/") or f.name.startswith("_"):
             continue
         file_mod = rel[:-3].replace("/", ".")
         if file_mod.endswith(".__init__"):
@@ -484,53 +475,6 @@ def test_no_private_names_cross_module():
             offenders.append(f"{rel}: from {mod} import {name}")
     assert not offenders, (
         "跨模块 import 了私有名（请公开化后再引用）:\n" + "\n".join(offenders))
-
-
-def test_no_tracked_code_imports_gitignored_dirs():
-    """入库代码不得 import **gitignored 目录**（否则干净 clone / 生产环境必 ImportError）。
-
-    2026-09-11 修复：``scripts/pipelines/alla_daily_rank.py``（生产每日推理，注册为 Windows
-    计划任务 ``YuriQuant AllaDailyRank``）原有 6 处 ``from scripts.oneoff.* import``，
-    而 ``.gitignore`` 第 41 行忽略整个 ``scripts/oneoff/``——生产入口在干净 clone 上
-    必然 ImportError。已把全A 数据集构建/回补管线 22 个模块迁入**受跟踪**的
-    ``scripts/builders/``（该目录的 ``__init__`` 写明了搬迁理由）。
-
-    本测试此后充当回归守卫：只要入库代码再出现 ``scripts.oneoff.*`` 的 import 即失败。
-    用 AST 取**真实 import**（而非 grep 文本），避免 docstring 里的路径提及误伤。
-    """
-    offenders: list[str] = []
-    for f in sorted(ROOT.rglob("*.py")):
-        rel = str(f.relative_to(ROOT)).replace("\\", "/")
-        if set(f.parts) & {".git", "__pycache__", ".venv", "venv", "node_modules",
-                           "_tmp"}:
-            continue
-        if rel.startswith(("reports/", "scripts/oneoff/")):
-            continue
-        for mod, _name in _all_imported_modules(f):
-            if mod.startswith("scripts.oneoff"):
-                offenders.append(f"{rel}: import {mod}")
-    assert not offenders, (
-        "入库代码依赖了 gitignored 的 scripts/oneoff/（请迁入 scripts/builders/）:\n"
-        + "\n".join(offenders))
-
-
-def _all_imported_modules(path: Path) -> set[tuple[str, str]]:
-    """模块的全部 import（含非私有名），返回 (module, name) 集合。"""
-    import ast
-
-    try:
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-    except SyntaxError:  # pragma: no cover
-        return set()
-    out: set[tuple[str, str]] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module:
-            for a in node.names:
-                out.add((node.module, a.name))
-        elif isinstance(node, ast.Import):
-            for a in node.names:
-                out.add((a.name, a.name.rsplit(".", 1)[-1]))
-    return out
 
 
 def test_frozen_recipe_stays_consistent_across_layers():

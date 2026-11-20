@@ -208,7 +208,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"环境就绪 {time.time() - t0:.0f}s；{len(rules)} 档 × {len(phases)} 相位 "
           f"= {len(rules) * len(phases)} 次回测（每次含 close/open 两遍）", flush=True)
 
-    base = dict(PROFILES["champ"])
+    base = dict(PROFILES["monthly"])
     rows: list[dict] = []
     for wt in rules:
         spec = dict(base)

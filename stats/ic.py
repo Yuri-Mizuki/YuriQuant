@@ -25,9 +25,10 @@ import pandas as pd
 from scipy import stats  # noqa: F401  （保留原模块 import 面，无直接使用）
 
 from stats import PERIODS_PER_YEAR
+from stats.robust_stats import nw_tstat
 
 __all__ = [
-    "calc_ic_series", "calc_ir", "calc_ic_decay",
+    "calc_ic_series", "calc_ir", "calc_ic_decay", "ic_stats",
     "quantile_backtest", "factor_autocorr",
     "monotonicity_ratio", "perturbation_fidelity",
 ]
@@ -112,6 +113,25 @@ def calc_ir(ic_series: pd.Series, periods_per_year: int = PERIODS_PER_YEAR) -> f
     if len(ic) < 2 or ic.std() == 0:
         return 0.0
     return ic.mean() / ic.std() * np.sqrt(periods_per_year)
+
+
+def ic_stats(ic: pd.Series) -> dict:
+    """IC 序列 → 均值 / IR / 胜率 / Newey-West t / 有效天数。
+
+    全库唯一实现（2026-11-19 自 ``research.factor_criteria`` 下沉）。t 用
+    Newey-West HAC —— IC 序列自相关强，朴素 ``mean/std*sqrt(n)`` 会虚高。
+
+    键：``ic`` / ``ic_std`` / ``ir`` / ``win`` / ``nw_t`` / ``n``；样本不足时值为 NaN。
+    """
+    s = ic.dropna()
+    if len(s) < 2:
+        return dict(ic=float("nan"), ic_std=float("nan"), ir=float("nan"),
+                    win=float("nan"), nw_t=float("nan"), n=0)
+    sd = float(s.std())
+    t_nw, _se, _lag = nw_tstat(s.to_numpy(dtype=float))
+    return dict(ic=float(s.mean()), ic_std=sd,
+                ir=float(s.mean() / sd) if sd else float("nan"),
+                win=float((s > 0).mean()), nw_t=float(t_nw), n=int(len(s)))
 
 
 def calc_ic_decay(

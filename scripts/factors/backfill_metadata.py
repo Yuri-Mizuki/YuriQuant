@@ -149,14 +149,20 @@ def _txt(v) -> str:
 
 
 def propose(row: pd.Series) -> dict:
-    """给一行 registry 算 (set, family, formula)；算不出的留空。"""
-    from research.factor_library import family_for_set
+    """给一行 registry 算 (set, set_group, family, formula)；算不出的留空。"""
+    from research.factor_library import SET_TO_FAMILY, family_for_set, group_for_set
 
     name = _txt(row.get("name"))
     set_name = _txt(row.get("set"))
     if not set_name:
         head = name.split("_")[0]
         set_name = PREFIX_TO_SET.get(head, "")
+    # source 前缀就是规范集名（``<集名>:<产出脚本>:<数据集>``），能兜住只有
+    # builder 写过 source 的批量因子（实测 5 个 paper 因子 set 空、source 有值）
+    src = _txt(row.get("source")).split(":")[0]
+    if not set_name:
+        set_name = src if src in SET_TO_FAMILY else ""
+    grp = group_for_set(src) or group_for_set(set_name)
 
     fam = family_for_set(set_name)
     formula = ""
@@ -170,7 +176,8 @@ def propose(row: pd.Series) -> dict:
         formula = lab if "(" in lab else ""
     else:
         formula = _definition_from_label(_txt(row.get("label")))
-    return {"name": name, "set": set_name, "family": fam, "formula": formula}
+    return {"name": name, "set": set_name, "group": grp,
+            "family": fam, "formula": formula}
 
 
 def _blank(s: pd.Series) -> pd.Series:
@@ -217,6 +224,7 @@ def build_plan(reg: pd.DataFrame, borrow: dict[str, str] | None = None) -> pd.Da
     prop = pd.DataFrame([propose(r) for _, r in reg.iterrows()])
     fam_old = reg.get("family", pd.Series("", index=reg.index)).reset_index(drop=True)
     fml_old = reg.get("formula", pd.Series("", index=reg.index)).reset_index(drop=True)
+    grp_old = reg.get("set_group", pd.Series("", index=reg.index)).reset_index(drop=True)
 
     fam_blank = _blank(fam_old)
     known = prop.loc[~fam_blank].assign(fam=fam_old[~fam_blank].astype(str).str.strip())
@@ -239,11 +247,14 @@ def build_plan(reg: pd.DataFrame, borrow: dict[str, str] | None = None) -> pd.Da
     plan = pd.DataFrame({
         "name": prop["name"], "set": prop["set"],
         "family_old": fam_old, "family_new": prop["family"],
+        "group_old": grp_old, "group_new": prop["group"],
         "formula_old": fml_old, "formula_new": prop["formula"],
     })
     plan["set_refined"] = plan["set"].isin(refined)
     plan["borrowed"] = borrowed.to_numpy()
+    plan["fill_set"] = _blank(reg["set"].reset_index(drop=True)) & (prop["set"] != "")
     plan["fill_family"] = fam_blank & (prop["family"] != "")
+    plan["fill_group"] = _blank(grp_old) & (prop["group"] != "")
     plan["fill_formula"] = _blank(fml_old) & (prop["formula"] != "")
     # 冲突：已有非空值与提案不一致 —— 不回写，只报（静默覆盖会掩盖口径漂移）
     plan["conflict_family"] = (~fam_blank) & (prop["family"] != "") & \
@@ -258,6 +269,7 @@ def summarize(plan: pd.DataFrame) -> pd.DataFrame:
     out = pd.DataFrame({
         "n": g.size(),
         "family_fill": g["fill_family"].sum(),
+        "group_fill": g["fill_group"].sum(),
         "formula_fill": g["fill_formula"].sum(),
         "borrowed": g["borrowed"].sum(),
         "refined": g["set_refined"].first(),
@@ -272,7 +284,8 @@ def apply_plan(lib, plan: pd.DataFrame, *, dataset: str) -> dict:
     """按集分组写回（``fill_missing_only=True`` ⇒ 非空值永远不会被清空）。"""
     from research.factor_library import source_for
 
-    todo = plan[plan["fill_family"] | plan["fill_formula"]].copy()
+    todo = plan[plan["fill_family"] | plan["fill_formula"]
+                | plan["fill_set"] | plan["fill_group"]].copy()
     stats = {"before": 0, "after": 0, "added": 0, "updated": 0}
     for set_name, sub in todo.groupby("set", sort=True):
         if not set_name:
@@ -285,12 +298,14 @@ def apply_plan(lib, plan: pd.DataFrame, *, dataset: str) -> dict:
                 rec["family"] = r["family_new"]
             if r["fill_formula"]:
                 rec["formula"] = r["formula_new"]
+            if r["fill_group"]:
+                rec["set_group"] = r["group_new"]
             recs.append(rec)
         st = lib.upsert_rows(
             recs, source=source_for(str(set_name), producer="backfill_metadata",
                                     scope=dataset),
             kind="", maturity="", frequency="", set_name=str(set_name),
-            fill_missing_only=True)
+            set_group="", fill_missing_only=True)
         for k in stats:
             stats[k] += st[k]
         log.info("[%s] 回填 %d 行 → registry %d 行", set_name, len(recs), st["after"])
@@ -324,9 +339,12 @@ def main(argv: list[str] | None = None) -> None:
 
     n_fam = int(plan["fill_family"].sum())
     n_fml = int(plan["fill_formula"].sum())
+    n_set = int(plan["fill_set"].sum())
+    n_grp = int(plan["fill_group"].sum())
     n_fam_c = int(plan["conflict_family"].sum())
     n_fml_c = int(plan["conflict_formula"].sum())
-    print(f"\n待补 family {n_fam} 行（剩 {int(_blank(reg['family']).sum()) - n_fam} 行无依据）")
+    print(f"\n待补 set {n_set} 行 · set_group {n_grp} 行")
+    print(f"待补 family {n_fam} 行（剩 {int(_blank(reg['family']).sum()) - n_fam} 行无依据）")
     print(f"待补 formula {n_fml} 行（剩 {int(_blank(reg['formula']).sum()) - n_fml} 行无依据）")
     if n_fam_c or n_fml_c:
         print(f"⚠️ 与现有值冲突 {n_fam_c} + {n_fml_c} 行（不回写，仅报告）")
@@ -357,7 +375,9 @@ def main(argv: list[str] | None = None) -> None:
         raise SystemExit(f"❌ 意外新增 {st['added']} 行——回填不应造行")
 
     post = lib.list_all()
-    print(f"\n写盘完成：family {int(_blank(post['family']).sum())} 空 / "
+    print(f"\n写盘完成：set {int(_blank(post['set']).sum())} 空 / "
+          f"set_group {int(_blank(post['set_group']).sum())} 空 / "
+          f"family {int(_blank(post['family']).sum())} 空 / "
           f"formula {int(_blank(post['formula']).sum())} 空"
           f"（{len(post)} 行）")
     print("统计列漂移：" + ("无 ✅" if not drift else f"❌ {drift}"))

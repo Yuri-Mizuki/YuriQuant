@@ -243,8 +243,8 @@ class Config:
 
         2026-09-11 收敛：此前指数代码散落在 scripts 里（`rolling_grid_alla.BENCH_INDEX`
         = 000001.SH、`jq_style_report.BENCH_INDEX` = 399317.SZ、
-        `run_etf_rotation.BENCH` = 000300.SH），加上 `backtest.benchmark` 与
-        `model_portfolio.benchmark`，共 5 处字面量、改一个要满仓找。
+        `run_etf_rotation.BENCH` = 000300.SH（该脚本 2026-11-19 已删）），
+        加上 `backtest.benchmark` 与 `model_portfolio.benchmark`，共 5 处字面量、改一个要满仓找。
         ⚠️ **三者取值本就不同**（用途不同，非同一概念的重复），故这里按**用途**分键，
         不强行合并成一个值——合并会静默改变某条链路的对照基准。
 

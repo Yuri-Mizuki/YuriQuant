@@ -54,7 +54,7 @@ from research.factor_library import FactorLibrary  # noqa: E402
 from scripts.builders.common import load_close_adj  # noqa: E402
 from scripts.common.cli_common import (  # noqa: E402
     add_build_args, make_data_context, print_no_save, record_experiment_safe,
-    returns_from_daily, setup_logging,
+    setup_logging,
 )
 from scripts.common.fundamental_common import add_single_quarter  # noqa: E402
 
@@ -304,7 +304,6 @@ def main():
         return
 
     lib = FactorLibrary(dataset=args.lib_dataset)
-    returns_panel = returns_from_daily(daily)
     log.info("入库到独立数据集: %s（root=%s）", args.lib_dataset, lib.root)
     source = f"builders:top10_sharpe:all_a_{begin}-{end}"
     for name, formula in FACTOR_DEFS.items():
@@ -319,7 +318,7 @@ def main():
             continue
         try:
             row = lib.register(
-                name=name, panel=std, returns_panel=returns_panel,
+                name=name, panel=std,
                 kind="raw", formula=formula, source=source,
                 family=FAMILY.get(name, ""),
                 frequency=FREQ.get(name, "日频"),

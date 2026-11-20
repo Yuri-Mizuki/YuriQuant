@@ -19,6 +19,10 @@
       多池并存互不干扰（2026-08-26 池隔离扩展）。
     - 分钟K线默认按 config.minute.periods 拉取（默认 [5]），可用 --minute/--no-minute 覆盖。
     - 无 SDK 凭证时自动回退到 CSV 数据源（离线开发模式）。
+    - ``--prune-sdk-cache``：跑完删掉 SDK 的 ``infodata`` 分片缓存。该缓存是 SDK
+      按「表/股票」写的 pickle（实测 31k 文件 / 36 GB），与我们 ``parquet`` 合并层
+      内容重复 18 倍；我们所有计算读的都是合并层。删掉换的是**每次更新重新下载**，
+      默认不删。
 """
 
 from __future__ import annotations
@@ -42,6 +46,25 @@ from data.universe import Universe  # noqa: E402
 from scripts.common.cli_common import setup_logging  # noqa: E402
 
 log = setup_logging("update_data")
+
+
+def _prune_sdk_cache() -> None:
+    """删掉 SDK 的 ``infodata`` 分片缓存（``--prune-sdk-cache`` 触发）。
+
+    SDK 按「表/股票」把每次 ``InfoData`` 查询结果写成独立 pickle（实测
+    31,292 文件 / 36.3 GB），而我们 ``E:/data/parquet`` 的合并层已完整镜像同一批
+    内容（5,830 只、回溯到 1990，共 2 GB）。本仓库所有计算读合并层，分片缓存
+    只用于「重拉同一段历史时省流量」。删掉后每次更新会重新下载。
+    """
+    import shutil as _shutil
+    root = Path(str(Config.paths().get("sdk_local_path") or "")) / "infodata"
+    if not root.is_dir():
+        log.info("SDK 分片缓存不存在，跳过清理: %s", root)
+        return
+    freed = sum(p.stat().st_size for p in root.rglob("*") if p.is_file())
+    _shutil.rmtree(root, ignore_errors=True)
+    log.info("已清理 SDK 分片缓存 %s（%.2f GB）", root, freed / 1e9)
+
 
 def _parse_minute_arg(raw: str | None) -> list[int] | None:
     """解析 --minute "1,5,15" → [1, 5, 15]；None 表示未指定（走配置）。
@@ -205,6 +228,12 @@ def main():
                              "（默认取 config.universe.default）")
     parser.add_argument("--allow-intraday", action="store_true",
                         help="允许把拉取终点设为今天（盘中数据不完整，默认回退上一交易日）")
+    parser.add_argument("--prune-sdk-cache", action="store_true",
+                        help="跑完清理 SDK infodata 分片缓存（财报已改区间增量不再写；"
+                             "剩余约 15GB 来自两融/质押/受限等表）")
+    parser.add_argument("--financial-refresh-days", type=int, default=None,
+                        help="财报表本地新鲜天数：N 天内不重复回源（默认取 "
+                             "config.fetch.financial_refresh_days，0=强制重拉）")
     args = parser.parse_args()
 
     # 1. 加载配置
@@ -212,6 +241,8 @@ def main():
     fetch_cfg = cfg["fetch"]
     begin = args.begin or fetch_cfg["begin_date"]
     end = args.end or fetch_cfg.get("end_date")
+    fin_days = (args.financial_refresh_days if args.financial_refresh_days is not None
+                else int(fetch_cfg.get("financial_refresh_days", 1)))
 
     # 2. 创建数据源 + 缓存
     ds = create_datasource()
@@ -312,15 +343,15 @@ def main():
 
     # 9. 财务三表（基本面因子 / 因子挖掘用）
     log.info("拉取利润表 ...")
-    income = cache.get_income(codes)
+    income = cache.get_income(codes, max_age_days=fin_days)
     log.info("利润表行数: %d", len(income))
 
     log.info("拉取资产负债表 ...")
-    balance = cache.get_balance_sheet(codes)
+    balance = cache.get_balance_sheet(codes, max_age_days=fin_days)
     log.info("资产负债表行数: %d", len(balance))
 
     log.info("拉取现金流量表 ...")
-    cashflow = cache.get_cash_flow(codes)
+    cashflow = cache.get_cash_flow(codes, max_age_days=fin_days)
     log.info("现金流量表行数: %d", len(cashflow))
 
     # 9b. 分红 / 十大股东 / 股东户数（股息率/股东类因子用，2026-08-04）
@@ -371,6 +402,9 @@ def main():
     # 必须放在**最后**：该步分离启动的子进程会自行 login，把本进程顶下线后
     # 本进程 SDK exit(0)（详见 fetch_status_table 文档）。排在这里，
     # 即使真被顶下线也无后续步骤可丢；子进程在后台独立跑完。
+    if args.prune_sdk_cache:
+        # 放在状态表之前：状态表由后台子进程写，main 返回后再清会与它抢同一目录
+        _prune_sdk_cache()
     fetch_status_table(begin, target_date, cfg, ds=ds)
 
     log.info("数据更新完成。缓存目录: %s", cache.root)

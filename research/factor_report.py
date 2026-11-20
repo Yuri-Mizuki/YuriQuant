@@ -15,6 +15,13 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from backtest.metrics import (
+    annual_return,
+    annual_volatility,
+    drawdown_series,
+    sharpe_ratio,
+)
+
 log = logging.getLogger("factor_report")
 
 
@@ -136,10 +143,10 @@ def layer_stats_from_nav(nav: pd.DataFrame) -> dict:
         rets = s.pct_change().dropna()
         total = float(s.iloc[-1] - 1)
         n_years = len(s) / 12
-        annual = float((1 + total) ** (1 / max(n_years, 1e-9)) - 1) if n_years > 0.3 else total
-        vol = float(rets.std() * np.sqrt(12)) if len(rets) > 1 else 0.0
-        sharpe = float(annual / vol) if vol > 0 else None
-        dd = float((s / s.cummax() - 1).min())
+        annual = float(annual_return(rets, 12)) if n_years > 0.3 else total
+        vol = float(annual_volatility(rets, 12)) if len(rets) > 1 else 0.0
+        sharpe = float(sharpe_ratio(rets, periods_per_year=12)) if vol > 0 else None
+        dd = float(drawdown_series(s).min())
         out.append({
             "annual": round(annual, 4), "vol": round(vol, 4),
             "sharpe": round(sharpe, 3) if sharpe is not None else None,

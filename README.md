@@ -31,16 +31,31 @@
 
 ### 1.2 ETF 轮动
 
-跨资产 ETF 池（宽基 / 行业 / 主题 / 债券 / 商品 / 跨境），三套方案覆盖不同风险偏好：
+跨资产 ETF 池 50 只（宽基 / 行业 / 主题 / 债券 / 商品 / 跨境），两套方案按风险偏好分开运行：
+口径为「调仓日收盘后出信号、次日开盘成交」（T+1 open），正常资金无白名单：
 
 | 方案 | 形态 | 年化 | Sharpe | 最大回撤 |
 |---|---|---|---|---|
-| **三锋**（定版） | Top3 · 周频 | **30.63%** | 1.16 | 24.97% |
-| **五衡**（对照档） | Top5 · 周频 | 20.65% | 0.89 | — |
-| **磐石**（长线） | 月频 + 防御腿 | 12.97% | 1.02 | — |
+| **monthly**（默认） | 月频 Top5 + 逆波动（σ 下限 10%）+ 12% 波动目标 + 债金防御腿 | 10.65% | 0.94 | 15.97% |
+| **balanced** | Top5 · 周频 · ERC 等风险贡献 | 13.33% | 0.64 | 29.89% |
+
+上表为**调仓相位均值**（monthly 月内五相位 13.08 / 11.68 / 10.17 / 9.11 / 9.23，
+极差 3.97pp；balanced 周内五相位 13.27 / 11.01 / 13.98 / 16.07 / 12.32，极差 5.06pp）。
+单相位最好值分别可达 13.08%（monthly）与 16.07%（balanced），但都含相位红利，
+不能按最好相位做预期。两档调仓节奏不同（月频 / 周频），**按两个独立账户分别运行**；
+「60% monthly + 40% balanced」的合并方案经测试后判否（两腿调仓日不同步，合并等价于
+两个账户，报告 §14.10）。
+
+> **2026-11-19 两次口径修正**：① 池子由比赛期 45 只恢复为 50 只全量，方案改英文
+> 功能名，删除「不少于 5 只」合规补位档；② **原 `core`（Top3 集中档）退役** ——
+> 其 k=1 单相位 24.24%/0.89 看似最高，但五相位均值仅 14.27%/0.52/MDD 39.2%
+> （最差相位 46.7%、Calmar 0.36），被 `monthly`（Calmar 0.67）支配，且相位极差
+> 14.06pp 远大于 balanced 的 5.14pp。比赛期 45 只数字（core 30.63%/1.16）只作历史
+> 复现，不可与本表混引。
 
 收益来源已做分解：选标与集中放大是两件事，前者贡献主要超额，后者的效果取决于池内
-右尾厚度而非普遍规律。
+右尾厚度而非普遍规律；而集中度带来的**执行相位依赖**在正常资金口径下是负资产
+（core 的教训），故默认档选月频。
 
 ### 1.3 因子看板
 
@@ -48,6 +63,19 @@
 输出单文件 HTML（零后端、可离线打开）。
 
 看板定位是**横向比较工具**，用于观察因子在全市场上的相对强弱，与上述策略业绩不可并列。
+
+### 1.4 策略总览页
+
+`reports/strategies/index.html` 是统一前端入口：按 `横截面策略 / 事件驱动策略 / ETF 策略`
+分组列出 6 张卡片（股票线 K8 / K15 / 广度、事件驱动、ETF 两档），卡片指标统一为
+**年化 / Sharpe / MDD**，点击进入该策略的**历史回测**详情页（净值 / 回撤 / 分年度）。
+**模拟持仓是独立入口**：`reports/strategies/live.html`
+只列已开立纸面账户的策略（当前仅 K8），点开看持仓与持仓期表现。ETF 详情页曲线为
+单相位 k=1，与 §1.2 的五相位均值不可混引；事件驱动详情页（`inc_pure.html`）的数字
+由策略层 `strategy/event_driven.py` 现算，与 `scripts/live/inc_pure_live.py` 共用同一套
+事件定义。卡片由 `strategy/catalog.py` 的 `CATALOG` 生成（策略登记表：key / 入口 /
+报告目录，只登记不搬实现）；策略参数真源仍是 `etf_contest_spec.PROFILES`、
+`strategy/registry.TIERS` 与 `strategy/event_driven.py`。
 
 ---
 
@@ -119,7 +147,9 @@ model/       模型层 —— 特征漏斗、标签、预测器、训练评价�
 strategy/    策略层 —— 因子值 → 组合权重
 optimize/    优化层 —— QP / HRP / BL、成本建模、风险归因、多期执行
 backtest/    回测层 —— 向量化引擎、成本模型、绩效指标
-research/    研究层 —— IC 与分层、归因、DPP 选样、因子库、报告渲染
+research/    研究层 —— IC 与分层、归因、DPP 选样、因子库、报告渲染；
+             **判据真源**（`factor_criteria` 准入 / `factor_library.MATURITY_GATES`
+             晋升 / `dup_criteria` 重复性），脚本只准调用、不准另写一份
 stats/       统计层 —— 稳健统计、PBO / DSR、显著性检验
 monitoring/  监控层 —— IC 台账、告警、账本、拥挤度
 scripts/     入口层 —— 284 个可执行入口（ingest / builders / pipelines / factors /
@@ -157,6 +187,7 @@ python -m scripts.pipelines.rolling_grid_alla                 # 全 A 多年度 
 python -m scripts.live.yqcore rank --preset dingban           # 每日出榜
 python -m scripts.reporting.yqcore_dashboard --open           # 定版看板
 python -m scripts.reporting.factor_board                      # 因子看板
+python -m scripts.reporting.strategy_home                     # 策略首页（回测详情）+ 模拟持仓页
 python -m scripts.evaluation.caliber --signal <key>           # 单策略回测
 ```
 

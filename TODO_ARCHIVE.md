@@ -80,7 +80,7 @@
 > 格子内的边际已收口（直接证据：K≥36 平台、K≥200 逐位相同、非量价 K0 仅 26%；
 > 见 `reports/pv_marginal/`、`reports/four_paths/`）。本轮**只开三个未证伪方向**：
 > ① h60/h120 长 horizon + 基本面/质量（§六 A1）；② 残差目标挖掘（§六 A2，
-> 探针已落 `scripts/evaluation/residual_ic_probe.py`）；③ beta hedge / 指数增强 /
+> 探针已落 `脚本已删，2026-11-19`）；③ beta hedge / 指数增强 /
 > Barra Σ（§六 B1）。执行纪律不变：`caliber.py` + PBO/DSR + 多窗口 + 安慰剂；
 > **不再开**量价因子 / 超参 / QP / 择时（含模型自诊断仓位，10-23 收口）/ regime /
 > alt 计数六类已封底线。
@@ -243,7 +243,7 @@
   **权重扫描 w_gru=0.1~0.5 每一档都下降**（0.1 档就 −0.064pp）⇒ 不是等权稀释。
   ⇒ **「新归纳偏置」这一路在生产口径 + 可交易检验下无落地价值**；P1 报告已回改
   （§〇 修正块 / §3.7 / caveat#2 标注死因）。证据 `reports/p1b_prod_baseline/`，
-  脚本 `scripts/evaluation/prod_baseline_compare.py`。
+  脚本 `脚本已删，2026-11-19`。
   **方法论沉淀**：「隔离归纳偏置」的对照设计会让**基线失去代表性** —— 凡给「A 比 B 强」的结论，
   B 必须是生产真在用的那个东西；等价性验证只证明口径对齐，不证明基线有代表性。
 - [x] **时序预测器对照（P1）+ 目标函数扫描（P2）收口（10-10）**：补掉 10-10 盘点出的模型层
@@ -349,7 +349,7 @@
 - [x] **大盘择时（市场状态 → 仓位乘数）可行性与收口（10-14 立，**10-15 修正重写**）**：
   项目此前只有截面选股一条腿，「加择时」= 组合层乘总仓位 ω_t（选股排序不动）。
   工程零成本（`Strategy.get_weights_at(date,...)` 天然拿到日期），**判定不立项**。
-  探针 `scripts/evaluation/timing_probe.py`（秒级）→ `reports/timing_probe/README.md`。
+  探针 `脚本已删，2026-11-19`（秒级）→ `reports/timing_probe/README.md`。
   🚨 **初版核心结论「上界 9.03% < 满仓」是错的（foresight 方向写反：拿明天的答案判
   今天的仓），10-15 由莉酱追问时发现并修正；修正后收口结论不变，但理由更硬**：
   - **信息层（决定性）**：「昨日方向·次日执行」——**把「昨日方向」这一个 bit 用到
@@ -387,7 +387,7 @@
 - [x] **模型自诊断仓位（信号自身状态 → 仓位乘数）探针与收口（10-23 立并完成）**：
   市场侧择时（10-15）与 regime（10-15）收口后，剩下唯一未被证伪的仓位信息集是
   **模型自身状态**——「这一期我的信号有多可信」而非「大盘会涨会跌」。探针
-  `scripts/evaluation/model_state_probe.py` → `reports/model_state_probe/README.md`。
+  `脚本已删，2026-11-19` → `reports/model_state_probe/README.md`。
   5 个状态量（滚动 IC60 / ICIR60 / 集成两臂秩相关分歧 / 预测强度=头部均值−全均值 /
   预测离散度），基线 = **登记 `v1w-ortho882`（production/open 现跑，16.39%/0.681 锚点逐位复现）**。
   - **预测力 0/5**：五状态 → **下月组合收益** 的月度 rank IC |t| ≤ 1.06（102–105 个月），
@@ -418,7 +418,7 @@
   - ⚠️ 882 口径；920 定版（`dingban_fundind`）本机缺 `defv_sig__h1.parquet`，未复验。
 - [x] **大盘方向准入检验（新信息集，10-26 立并完成）**：
   `timing_probe`（价格/资金面/日历）、`regime_probe`、`model_state_probe` 三条线收口后，
-  换**不重叠的信息集**再测一次：`scripts/evaluation/market_direction_probe.py` →
+  换**不重叠的信息集**再测一次：`脚本已删，2026-11-19` →
   `reports/market_direction_probe/README.md`。目标 = 下月沪深300（**次月首日收盘起算**，
   不用月末收盘成交），状态全 PIT，判据先验固定（|t|≥2.5 + 五分位单调 + `oos_t>0`）。
   - **本机可取的 3 个状态 0/3 过门**：`realvol60`（60 日已实现波动）IC −0.070 / t −0.71；
@@ -466,7 +466,7 @@
     前必须补指数缓存更新，否则预测日整行 NaN（代码已告警留痕）。
   - 幅度折扣：Sharpe 仅 +0.032（年化 +1.44pp 含波动 22.1%→23.1%）、2023+ 窗 ΔSharpe
     −0.026、5 窗互相嵌套≈1 个样本、无存档权益序列算不出配对 t；v1w2 有 5/5→3/5 先例。
-- [x] **实验产物接 PBO 出报告**（09-23 固化 `scripts/evaluation/pbo_report.py`）：
+- [x] **实验产物接 PBO 出报告**（09-23 固化 `脚本已删，2026-11-19`）：
   rolling_grid 三网格已出（`reports/pbo_rolling_ortho/`：M_raw 0.174 / M_neut 0.227 /
   W_raw 0.000，均远低于 0.5 红线）；后续各线已全部接齐——AI97 0.704（负结果主证）、
   GFlowNet 114 因子族 0.114（稳健）、LLM-MCTS 14 因子族 0.039（稳健）。
@@ -493,7 +493,7 @@
   （risk_parity SCS 段错误走 --skip-rp，等权列不受影响）。剩余 = 全 A 扩容吞吐探针
   （押后）与逐段新原料（须先过 0.3 可交易 IR）。
 - [ ] **分钟频扩容（资源墙）**：all_a 池物化（~5500 码 × 48 bar，MemMap 分块性能待验）、
-  1 分钟档位（存储 ×5）；先跑吞吐探针（`scripts/oneoff/_probe_minute_throughput.py`）估成本。
+  1 分钟档位（存储 ×5）；先跑吞吐探针（`脚本已删，2026-11-19`）估成本。
 - [x] **量自相关族 + 量价方向拆分（10-23，文章《高频数据低频化：为什么量比价更重要》P0）**：
   `factor/intraday_features.py` 新增 5 个（`pv_volshare_autocorr_l1` / `_acf_disp` /
   `_ar1_resid_acf` + `pv_ret_vol_corr_up` / `_dn`，非时段 42→47），测试 15 passed，
@@ -507,7 +507,7 @@
   再决定 P1（极值邻域状态/分域显著性/事件幅度族）。证据 `reports/intraday_stat_checkup.csv`
   + `logs/intraday_stat_checkup_20261023.log`；完整判读 `reports/docs/research_notes/
   短板匹配与微信文章研读_2026-09-22.md` §2b。
-- [x] **im_* 半衰期标定（10-23，同文 P2，已完成）**：`scripts/oneoff/_probe_intraday_half_life.py`
+- [x] **im_* 半衰期标定（10-23，同文 P2，已完成）**：`脚本已删，2026-11-19`
   → `reports/intraday_half_life_probe/half_life.csv`（83 个 im_* × h1/5/10/20 秩 IC）。
   **结论**：67/83 可算倍数、中位 1.02、同号 82%；**分族寿命 = mom 0.10 / candle 0.49 /
   pv 1.02 / ret 1.10 / shape 1.37 / vol 1.41**。① **h1 最强的五个（last_bar/seg12/close30/
@@ -606,7 +606,7 @@
   `llm_semantic_check`（LLM-judged，opt-in 依赖注入设计，解析失败=未通过不静默放行）。
   `tests/test_ai97_llm_pool.py` 73→118 用例全绿；机制④归 MCTS Phase 0、机制⑤备选未做。
 - [x] **批次 8 表格基础模型对照 runner（09-24 完成；全量已收官见 §五批次 8 条）**：
-  `scripts/evaluation/tabpfn_rolling_compare.py`：逐月重训 × 月内逐日预测
+  `脚本已删，2026-11-19`：逐月重训 × 月内逐日预测
   （test_step=1，v1 抽样高估项直接修掉）× W∈{2m,3m} 窗口扫描；四臂
   （gbdt / tabpfn-3.5 / tabicl-2.2 / 秩平均，走 PREDICTORS 注册零分叉）；
   评估 = 可交易 IC（T+1 掩码）+ NW t + Top10% 月频 **open 正名口径**组合 +
@@ -628,7 +628,7 @@
   **不采纳**——「席位突破、组合无增量」归档（量价族信息在 DPP 下与既有 alpha
   高度重叠），证据 `reports/batch_920_consolidated/batch2385_结果速览.md` P-A 节 + 终审节。
 - [x] **多模型×多标签预测合成对照（09-23 完成）**：12 成员（gbdt/ranker/ridge ×
-  h1/h5/h10/h20）等权逐级 + walk-forward 学权（`scripts/evaluation/member_blend12.py`，
+  h1/h5/h10/h20）等权逐级 + walk-forward 学权（`脚本已删，2026-11-19`，
   与 stack_blend 同参）。结论：**增量在 horizon（标签）维度不在模型族维度**
   （eq_h20_3 16.00% vs eq_h1_3 12.27%；同 horizon 混族反而稀释）；全 12 等权
   15.12% < h1020 16.89%（−1.77pp）；学权 stack_all12 15.53% ≈ 生产 ens_h1h5
@@ -666,11 +666,11 @@
   PPO 滚动集成 + 银河口径 QP + 消融钩子；冒烟全链路通过；**全档终判已出（10-05）：
   负结果归档，RL 线整体不成立**，见 §五同期交付归档与 RESEARCH_TODO §二）
 - [x] **银河 0608 L1（风险标签可测成立）**：`factor/classic.compute_galaxy_features`
-  （36 特征）+ `build_galaxy_labels`（三标签）+ `scripts/evaluation/galaxy_l1.py`
+  （36 特征）+ `build_galaxy_labels`（三标签）+ `脚本已删，2026-11-19`
   （mdd test 0.25/0.40 超研报量级；sharpe/alpha 年度翻符号 → 质量门槛+回退为必要设计）
 - [x] **策略级过拟合检验**：`stats/pbo.py`（14 用例，统计锚点测试）
 - [x] **多因子10 两主力合成方法 + T 扫描脚本**：`synthesize_ic_ir_max`/`synthesize_ic_max`/
-  `half_life_weights`/等权分支（26 用例）+ `scripts/evaluation/mf10_t_scan.py`
+  `half_life_weights`/等权分支（26 用例）+ `脚本已删，2026-11-19`
 - [x] **QP 求解器三件套（AI39 对齐）**：`industry_target_from_benchmark` /
   `max_weight_change` / `solve_lambda_grid`；顺手修 industry_target Series 歧义 bug
   与 risk_aversion 反向 docstring
@@ -848,7 +848,7 @@
 ### A2. 残差目标挖掘（P1，已开工）
 
 - **假设**：现有 920 因子里还有「主模型漏掉」的正交信息；把残差当目标能把它找出来。
-- **已落地（2026-10-19）**：`scripts/evaluation/residual_ic_probe.py` —— 四口径
+- **已落地（2026-10-19）**：`脚本已删，2026-11-19` —— 四口径
   `raw / resfac / restgt / both` + Newey-West t + 逐年方向；测试
   `tests/test_residual_ic_probe.py` 3 用例锁口径（残差化与 `residual_panel` 逐位
   一致、raw IC 与 `calc_ic_series` 逐位一致、主信号成分残差化后基本消失）。
@@ -892,7 +892,7 @@
   若只是「降波动也降收益」则按风险偏好归档，不算 alpha。
 - **状态**：`[~]` **纯多头探针已跑（10-26），结论：不立项为 α 线、归档为风险偏好型替代**。
   证据 `reports/index_enhance_probe/README.md`（脚本
-  `scripts/evaluation/index_enhance_probe.py`）：α 在中证500 成分内**有效**
+  `脚本已删，2026-11-19`）：α 在中证500 成分内**有效**
   （月度 rank IC 0.069、t=4.3、安慰剂 0/20），但 3–5% TE 档净超额仅
   **+1.5%/+1.9%（t≈0.8，未达 t≥2）**，TE 曲线已贴该 IC 的理论上限（IR≈IC×√12），
   且 **2025 单年 −7.7%（λ0.5）/ −10.3%（λ0.8）**——与主线近期 α 衰减同源。
@@ -916,7 +916,7 @@
   再决定是否立项。
 - **状态**：`[~]` **字段级审计本机实测完成（10-26）**，框架 10-20 立：
   `reports/frontier_audit_2026-10-19/sdk_field_audit.md` §七（脚本
-  `scripts/evaluation/sdk_table_audit.py`，产物 `sdk_field_audit/` 每表字段 CSV）。
+  `脚本已删，2026-11-19`，产物 `sdk_field_audit/` 每表字段 CSV）。
   结论：**高优先级两张表都过线** —— ① ETF 份额 `get_fund_share`（510300/510500/
   159915：3522/3319/3610 行、2011~2012 起、`ANN_DATE≥CHANGE_DATE` 占比 1.000
   ⇒ PIT 安全）→ **ETF 轮动线可立项**；② 指数日权重 `get_index_weight` → **B1 解锁**。
@@ -937,7 +937,7 @@
   （earnings_yield / earnyild / predicted_EP / predicted_growth，本机无表）。
   950 特征库的真实缺口 = **成交金额族**（alpha158 的 VMA/VSTD 是成交量口径），
   以及**换手率**（alpha360_VOLUME* 是原始成交量，不是换手率）。
-- **探针**：`scripts/evaluation/jq_factor_probe.py`
+- **探针**：`脚本已删，2026-11-19`
   （测试 `tests/test_jq_factor_probe.py` 4 例）。口径：全 A、T+1 可交易掩码、
   h1/h20 Rank IC + NW t、行业内去均值 + lncap 秩残差、与 `panels_neu` 950 面板
   去重（抽样近似 + top1 精确复核）、月度十分位多空（双边千三、5 窗）。
@@ -1012,7 +1012,7 @@
 - **P1 遗留**：① ✅ 用退市 ETF 清单量化幸存者偏差（10-26 完成，见下条）；
   ② PCF 每日快照存档（SDK 仅当日快照）→ 为 S2 映射校准铺路（S2 已判负，降级为可选）。
 - **P2 前置三项 `[x]`（10-26）**：结论真源 `reports/etf_rotation_p2/README.md`，
-  脚本 `scripts/portfolio/etf_rotation_p2.py`。
+  脚本 `脚本已删，2026-11-19`。
   - ✅ **防御腿**（风险关闭从 0 收益现金改为债/金）：国债腿 Sharpe 0.76 / MDD 16.83%；
     债+金 0.77。黄金单独用年化 11.61% 但 MDD 29.91%（是收益来源不是降波工具）。
   - ✅ **份额拥挤度**（PIT 面板按 `ANN_DATE` 生效，250 日分位 > 0.80 剔除）：
@@ -1035,10 +1035,10 @@
   **mean IC = −0.055 / ICIR −0.148 / t = −1.32**；动量前 50% 子集 IC −0.031（t −0.65）；
   与 12-1 动量相关 −0.07。个股 α 方向已核验为正（次日/5 日 IC +0.067/+0.089）⇒
   不是符号错，是线性聚合把信号稀释/反转。**不进入组合回测**；真源
-  `reports/etf_alpha_probe/README.md`，脚本 `scripts/portfolio/etf_alpha_probe.py`。
+  `reports/etf_alpha_probe/README.md`，脚本 `脚本已删，2026-11-19`。
   若再试，只允许一次非线性聚合（ETF 内 α 前 10% 成分权重占比），判据须先固定。
 - **幸存者偏差 / 池选择偏差 `[量化完成]`（10-26）**：结论真源
-  `reports/etf_survivorship_probe/README.md`，脚本 `scripts/portfolio/etf_survivorship_probe.py`
+  `reports/etf_survivorship_probe/README.md`，脚本 `脚本已删，2026-11-19`
   （全 ETF 清单 3031 只；A = 现 41 只固定池，B = 机械 PIT 动态池 489 只曾入池）。
   - **退市偏差 = 结构性零**：126 只退市 ETF 中 52 只有满 3 年窗口，**0 只**曾过 3000 万成交额门槛
     （3 年后最高 60 日均额 p50 103 万 / p90 569 万 / max 2521 万 = 门槛 84%；B 池中位 2.38 亿）。
@@ -1048,7 +1048,7 @@
     B 5.89% / 0.46 / 22.86%，三段 +17.4/−5.1/+7.0% 全部弱于 A。
     ⇒ 报 41 池结果时须注明其为**上界**；机械可复现版本约 5.89% / 0.46。
 - **S1 残余 Δshare `[结论：通过（反转）]`（10-26）**：结论真源 `reports/etf_rotation_p2/README.md` §七，
-  入口 `scripts/portfolio/etf_rotation_p2.py --variants share`。
+  入口 `脚本已删，2026-11-19`（原 `--variants share`）。
   - **方向 = 反转**：−Δshare20 月频 rank IC **+0.086 / t +3.97**、−Δshare5 +0.080 / t +4.30，
     均通过「|IC|≥0.03、t≥2、安慰剂 0/20」；正向 Δshare 反向显著（资金流动量说被否）。
     Δshare60 只有 0.038 / t 1.44，不通过。n=81 个月。
@@ -1067,7 +1067,7 @@
   折溢价只保留为**执行时点**辅助（不在溢价 >1% 时追高），不做月度截面过滤。
   真源 `reports/etf_rotation_p2/README.md` §八。
 - **P3 容量表 `[x]`（10-27）**：结论真源 `reports/etf_capacity/README.md`，脚本
-  `scripts/portfolio/etf_capacity_probe.py`。口径：单只单边下单 ≤ 60 日均额 5%。
+  `脚本已删，2026-11-19`。口径：单只单边下单 ≤ 60 日均额 5%。
   - **100–500 万无压力**（0% 调仓日超限）；**1000 万基本可执行**（def_mix 6.1% /
     champ 2.4% 的调仓日略超，拆 2 笔即可）；**3000 万约 1/3 超限**（需拆 2–3 天或放宽到 10%）；
     **1 亿以上按 5% 不适用**。
@@ -1083,7 +1083,7 @@
     MDD −3.96pp、Calmar 0.74→1.01），代价月换手 +6.3pp、成本 +0.19pp/年；Sharpe 仅 +0.04，
     **不达 ΔSharpe>0.1 判据，不作主升级**。权重上限（25%/20%）一律降收益，不采纳。
 - **P4 样本外 `[champ / champ_hrp / champ_erc / champ_dsh_f67 全部 PASS]`（10-27）**：
-  真源 `reports/etf_p4/README.md`，脚本 `scripts/portfolio/etf_p4_probe.py`。
+  真源 `reports/etf_p4/README.md`，脚本 `脚本已删，2026-11-19`。
   IS = 2020-01→2024-12，OOS = 2025-01→2026-10，多起点 2020/21/22/23。
   - `p1_base` **样本外失效**：OOS Sharpe 0.45、2022 起点 0.31 ⇒ 基线本身不够。
   - `champ` OOS 1.02 / MDD 16.14%（年化 17.06%），起点 0.91/0.64/0.66/0.86；
@@ -1100,7 +1100,7 @@
   真源 `reports/etf_champ/README.md`。S1 未做项（Δshare/成交额、连续净申购天数）暂不推进。
 - **后续可选**：周更自动任务（schedule 每日/每周跑信号板并推送）、HRP 版信号板开关
   （P4 OOS 1.27，但全样本仅 +0.04，需再攒一段样本外再定）。
-- **两个月比赛方案 `[x]`（10-27）**：新增 `scripts/portfolio/etf_contest_probe.py` 与比赛信号板，
+- **两个月比赛方案 `[x]`（10-27）**：新增 `脚本已删，2026-11-19` 与比赛信号板，
   真源 `reports/etf_contest/README.md`。80 个滚动 2 月窗口：
   - A（推荐）：12-1 动量 + 拥挤度过滤、Top3、周频、等权满仓 —— 中位 **+2.44%**、
     p10 −8.1%、最差 −29.7%、>10% 概率 20%、>20% 7.5%；
@@ -1108,12 +1108,12 @@
   - C（防守）：长线 champ —— 胜率 62.5%、最差 −10.4%，但 >10% 仅 7.5%。
   - 短周期动量（20/60 日）在周频上全负；Top1 最差窗口 −50%，不采用。
   - 当前信号（2026-10-19）：煤炭/有色期货/能源化工各 1/3（三只全资源品，风险集中）。
-- **池合理性审计 `[x]`（10-27）**：`scripts/portfolio/etf_pool_audit.py`，结论回写
+- **池合理性审计 `[x]`（10-27）**：`脚本已删，2026-11-19`，结论回写
   `reports/etf_pool_expand/README.md` §五。合规全过（50/50 满 3 年、60 日均额最低 0.9 亿）；
   **冗余是真问题**：相关 >0.95 有 13 对、有效独立资产仅 4.1/50、27.9% 持仓日持有同质双胞胎；
   静态去重 50→45 的指示性测试：年化 −0.3pp、**MDD −9pp、最差 2 月窗口 −11pp**。
   待开：**选标层动态去重**（120 日相关聚类、同簇留动量最高），预计是比继续扩池更高性价比的改进。
-- **动态去重 `[x]`（10-27）**：`EtfRotationAdvanced._dedup` + `scripts/portfolio/etf_dedup_probe.py`，
+- **动态去重 `[x]`（10-27）**：`EtfRotationAdvanced._dedup` + `脚本已删，2026-11-19`，
   真源 `reports/etf_dedup/README.md`。规则：按动量贪心，与已选标的 120 日相关 ≥0.90 则跳过（无前视）。
   - champ：年化 12.37→**13.75%**、Sharpe 0.94→**1.08**、MDD 16.1→**14.0%**；OOS 1.04→**1.20**；
   - 比赛 A：13.85→**17.26%**、0.49→**0.66**、MDD 38.8→**26.3%**、2 月最差 −29.7→**−15.1%**；
@@ -1222,8 +1222,7 @@
     唯一真源（`FINAL` + `EXCLUDED_5`），回测探针与实盘信号板共同引用，`tests/
     test_etf_contest_spec.py` 断言两侧一致（4 项全过）；比赛版 `--exclude` 改为自动排除 5 只
     非池品种；作废的初赛 profile（20 日动量/Top3）已从代码与文档删除，
-    `reports/etf_contest/` 旧目录已按治理流程回收（快照 md5 + 引用同步，见
-    `reports/README.md` §四 2026-10-27 记录），需要时可 `--specs base` 复跑重建。定版一页纸见
+    `reports/etf_contest/` 旧目录已删，需要时可 `--specs base` 复跑重建。定版一页纸见
     `reports/etf_contest5/README.md` §十三（参数表 / 代码组织 / 每周 SOP / 冻结声明）。
     真源 `reports/etf_contest5/README.md` §十二–§十三。
     **定版升级 v2 `[x]`（10-27 夜）**：冻结后用户追问"有没有反转因子"⇒ 个股级短期反转在
@@ -1386,7 +1385,7 @@ astype(float32) 溢出成 inf；状态表缺预测日数据使因子全 NaN；`o
 |---|---|---|
 | 国金22 GFlowNet 低相关量子 | `[x]` | `factor/gflownet/`（9 模块）+ `run_gflownet_phase1` + 118 因子入库 |
 | 国泰君安 GP 解构 | `[x]` | `factor/gtja.py` + `mine_factors --gp-gtja` + `gtja_repro_eval`（研报对标：多空 22.90%/夏普 2.33） |
-| 申万 ML 合成非线性因子 | `[x]` | `scripts/archive/compare_ml_synthesis.py` 2×2 四象限 |
+| 申万 ML 合成非线性因子 | `[x]` | `脚本已删，2026-11-19` 2×2 四象限 |
 | 华泰 AI51/57/63/37/41 文本线 | `[x]` | `scripts/textmining/` 全链（FADT/SUE/BERT/情感）；⚠️ **另一会话维护，不要重复投入** |
 | 华泰 AI14/16 CPCV / AI11 stacking / AI6 Boosting | `[x]` | `cpcv_eval` + `cpcv_h1_eval`；`model/stacking.py`；GBDT 已成主基线 |
 | 国金24 GFlowNet+AlphaEval 分钟频 | `[x]` 主体 + 残余③④⑤闭环（10-05/06） | AlphaEval 漏斗 / RRE / DPP / 42 `im_*` 接 GP / e2e 三臂 / GFlowNet 接 im；正式三臂 ×3 seed：raw+im 0.117 > im 0.109 > raw 0.099（臂间差>种子噪声）=**该线定版形态（600 iters 无门槛）**；114 gf_* 入库 PBO=0.114；**残余② 全A 分钟扩容（资源墙）仍开放** |
@@ -1425,7 +1424,7 @@ astype(float32) 溢出成 inf；状态表缺预测日数据使因子全 NaN；`o
 ### 🥇 国金24 残余（③④⑤ 已闭环，仅剩② 资源墙）
 
 - **② 全A 分钟数据**：唯一分钟缓存是 `min5_hs300.parquet`；扩到全A 才是真正的资源墙，
-  `scripts/oneoff/_probe_minute_throughput.py` 为外推成本而写（需真实 SDK 跑一次）。
+  `脚本已删，2026-11-19` 为外推成本而写（需真实 SDK 跑一次）。
   （知乎华泰篇转译的矿池工程化四件套 = 此项的实现路径指针，见头部 10-06 增量。）
 - [x] **③ RRE 门槛开启（10-05 闭环）**：raw+im 臂 + `--min-autocorr 0.3` × 3 seed，
   OOS |IC| 均值 0.113 vs 无门槛 0.117（种子间方差反而增大）——|IC| 口径中性略负；
@@ -1582,7 +1581,7 @@ ic_max 0.0215→0.0147）；但 NW t ≤1.4 不显著、绝对量级弱——该
   oneoff 中性化面板口径差见 docstring）。**验证**：L1 探针 max|Δ|=1.1e-16
   （2103 日）；L2 逐年趋势与 882 红牌 Spearman=1.000；端到端 2111 行落盘，
   **近 60 日漂移 −0.353、实时段 z_size≈−1.0（小市值暴露持续），红牌属实**。
-  一次性诊断脚本 `scripts/oneoff/_signal_mktcap_drift.py` 保留作 882 口径存档。
+  一次性诊断脚本 `脚本已删，2026-11-19` 保留作 882 口径存档。
 - [x] **指数点位市场状态特征进 GBDT 面板**（09-23，国金19 转译；`model/market_features.py`
   9 特征×指数（多周期动量/均线位置/20日波动/52周位置），expanding z、防前视因果锁测试）：
   `rolling_grid_alla --market-features`（须配 --out-tag）旁路注入 stage_predict——不过 select
@@ -1596,7 +1595,7 @@ ic_max 0.0215→0.0147）；但 NW t ≤1.4 不显著、绝对量级弱——该
   ③ `llm_semantic_check` opt-in 语义一致性（依赖注入，不触网可测）。118 用例全绿。
   机制④（假设元数据）归东吴 MCTS Phase 0；机制⑤（池容量 50% 上限）与 AlphaPool
   corr_threshold/capacity 语义重叠，备选不做。
-- [x] **多模型×多标签预测合成对照**（09-23 完成，`scripts/evaluation/member_blend12.py`）：
+- [x] **多模型×多标签预测合成对照**（09-23 完成，`脚本已删，2026-11-19`）：
   12 成员 = 3 模型 × 4 horizon（horizon 即不同训练标签，AI29 多标签维度的现有 pred
   等价物）。**增量全在 horizon 维**：eq_h20_3 16.00% > eq_h10_3 14.19% > eq_h5_3
   13.58% > eq_h1_3 12.27%；同 horizon 混模型族是稀释（eq_h1_3 12.27% <
@@ -1853,7 +1852,7 @@ MASTER/HIST/Transformer 系与轻量滚动架构不匹配，暂缓。
 - [ ] **P3 E5**：基本面只对行业中性化臂（panels 变体+重跑，好机器）
 - [ ] **P4 E4**：交互特征（基本面分桶×量价组内 zscore 显式入池，重训）
 - [x] **E6 stacking + max-ICIR 对照（09-22 本机完成，open 口径）**：
-  **E6**（`scripts/evaluation/stack_blend.py`，7 成员 OOS 预测滚动元学习，
+  **E6**（`脚本已删，2026-11-19`，7 成员 OOS 预测滚动元学习，
   秩空间凸约束、逐月 walk-forward）：stack_fast4（4 horizon 学权）年化 15.86%
   vs h1020 等权 15.75%——**学权未胜等权**（+0.11pp 在噪声内、回撤 40.2% 更深）；
   stack_all7 12.82% 更差（元学习器在 fwd20 目标上把 slow_icir 学到 0.35、
@@ -1966,7 +1965,7 @@ python -m scripts.portfolio.etf_contest_probe --specs exit       # B+C 组
 
 **终判（2026-10-27，预注册后当日跑完；全表 = `reports/etf_contest5/README.md` §13.10）**
 
-- **盲区：结构真实、经济不成立**。诊断脚本 `scripts/oneoff/probe_etf_blindspot_diag.py`
+- **盲区：结构真实、经济不成立**。诊断脚本 `脚本已删，2026-11-19`
   （证据 `reports/etf_contest5_opt/blindspot/`）：建仓后 21 日实际收益与信号
   （`mom12_1_crowdsoft`）同期变化量相关仅 **+0.12**（n=281），首月跌 >10% 的 37 笔
   均值 −14.7% 而信号只掉 7.8pp ⇒ 钝化是机械事实。但按入场时 mom20 分桶，深跌
@@ -2098,7 +2097,7 @@ python -m scripts.factors.run_portfolio_phase2 --pool zz1000 \
 
 > **2026-10-19 增量线指针**：横截面选股在「当前数据 × h1–h20 × long-only」格子
 > 已收口；新立项 = `TODO.md` §六（A1 长 horizon / A2 残差目标 / B1 beta hedge /
-> 指数增强 / B2 SDK 未用表）。A2 探针脚本 `scripts/evaluation/residual_ic_probe.py`
+> 指数增强 / B2 SDK 未用表）。A2 探针脚本 `脚本已删，2026-11-19`
 > 已落地并开跑，结果落 `reports/frontier_audit_2026-10-19/`。本表旧的 1–4 项
 > 保留作历史，不再覆盖新线。
 >
@@ -2132,7 +2131,7 @@ diff +0.0004；负端全是低波动因子负 IC 减弱，非可用 alpha）⇒ 
 ⇒ 门控无优势。集成 diff(+0.0173) ≫ 单因子 mean(+0.0009)，差异源于集成层结构效应
 （疑似跌期 IC 相关性上升=分散红利衰减），不可变现。**预算 3.5 天实际用 0.5 天，
 未进引擎。** 沉淀：横截面信号在本市场基本全天候；探针脚本
-`scripts/evaluation/regime_probe.py`（--self-check 固化）。择时族三条线
+`脚本已删，2026-11-19`（--self-check 固化）。择时族三条线
 （overlay/波动率管理/regime）至此全部收口，证据链三方同向（AQR + JFE + 本项目）。
 
 ---
@@ -2290,7 +2289,7 @@ python -m scripts.evaluation.member_blend12 \
 ### 1.4 buffer(20/30) 臂
 
 对 1.3 胜出信号加 `BufferedTopFracLongOnly(entry 0.20/exit 0.30)` 臂
-（复用 `scripts/evaluation/buffer_tune.py` 思路；对照 naive top20：882 口径实测
+（复用 `脚本已删，2026-11-19` 思路；对照 naive top20：882 口径实测
 buffer 年化 25.32%/换手 53.9% 优于 naive 24.50%/66.1%）。
 
 ### 1.5 附带复核（零额外训练）
@@ -2409,9 +2408,9 @@ hs300 全臂冒烟通过（`reports/portfolio_phase2_mask_smoke`）。跑完接
 ## 批次 7 —— ✅ 10-17 收官（本工作机）
 
 - e2e 族报告对齐年化口径（`perf_stats` 年化 244→252 后 ~3% 系统性偏移）。
-  归档链重出：`scripts/archive/e2e_backtest.py --real --top 50` +
-  `scripts/archive/investment_report.py --real`（本机 scs 3.3.0 DLL 损坏曾令
-  cvxpy 原生崩溃，换 3.3.1 修复后 rp 臂含入、个别调仓日空解降级等权留痕）。产物 `reports/e2e_backtest/` +
+  归档链重出脚本已删，2026-11-19（原 `--real --top 50` + `--real` 两段；
+  本机 scs 3.3.0 DLL 损坏曾令 cvxpy 原生崩溃，换 3.3.1 修复后 rp 臂含入、
+  个别调仓日空解降级等权留痕）。产物 `reports/e2e_backtest/` +
   `reports/investment_report/`（含 README 换算注记）。**如实记录**：重出数
   与记录历史数的差距远超口径换算（环境漂移主导——09-07 幸存者偏差修复
   −2pp + 数据端点 08-25→09-15 + 特征池演进），旧产物已删无法单放口径变更；

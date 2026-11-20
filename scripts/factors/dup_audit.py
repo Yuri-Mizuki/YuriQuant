@@ -122,10 +122,8 @@ def _code_pool(dates: pd.DatetimeIndex, max_codes: int) -> tuple[list[str], pd.D
 
 
 # ---------------------------------------------------------------- 签名构建
-#: 秩变换的**唯一实现**在 ``research.factor_library.row_rank_zscore``。
-#: 曾在这里抄过一份，后果是「入库门禁查到的相关」与「审计入表的相关」分家，
-#: 而且探针拿两份实现对拍等于没对拍。私有别名仅为兼容旧引用。
-_row_rank_zscore = row_rank_zscore
+#: 秩变换的**唯一实现**在 ``research.factor_library.row_rank_zscore``：
+#: 曾在这里抄过一份，后果是「入库门禁查到的相关」与「审计入表的相关」分家。
 
 
 def build_signatures(lib: FactorLibrary, names: list[str], dates: pd.DatetimeIndex,
@@ -160,7 +158,7 @@ def build_signatures(lib: FactorLibrary, names: list[str], dates: pd.DatetimeInd
         df = pd.read_parquet(p, columns=cols).reindex(index=dates, columns=codes)
         a = df.to_numpy(dtype=np.float64)
         cover[fi] = float(np.isfinite(a).sum()) / max(1, a.size)
-        Z[:, fi, :] = _row_rank_zscore(a)
+        Z[:, fi, :] = row_rank_zscore(a)
         if (fi + 1) % 50 == 0 or fi + 1 == F:
             el = time.time() - t0
             log.info("签名 %d/%d（%.0fs，预计剩余 %.0fs）", fi + 1, F, el,
@@ -668,7 +666,9 @@ def save_artifacts(lib: FactorLibrary, corr: np.ndarray, names: list[str],
     np.savez_compressed(base / "dup_matrix.npz", corr=corr,
                         names=np.array(names, dtype="U64"),
                         dates=dates.values.astype("datetime64[D]").astype(str))
-    np.save(base / "dup_signatures.npy", Z)
+    # 签名只用于粗筛（ρ 阈值 0.85/0.90），float16 的 3 位有效数字足够，
+    # 磁盘从 2.48GB 减半；读侧统一 astype(float32) 再参与运算。
+    np.save(base / "dup_signatures.npy", Z.astype(np.float16))
     zcov = (Z != 0).mean(axis=(0, 2))
     vital = refine_vitality(lib, vitality_table(names, cover, zcov))
     vital.to_csv(base / "dup_vitality.csv", index=False, encoding="utf-8-sig")

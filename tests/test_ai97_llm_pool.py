@@ -655,7 +655,7 @@ def test_attach_vwap_idempotent_and_zero_volume_safe():
 # 于是「常数出现在算子实参位」这类子树**量纲上永远合法**，dimension_mismatch
 # 一条都拦不住 —— 直到运行时才抛 AttributeError / ValueError。
 #
-# 实测（scripts/oneoff/_probe_uniform_true_yield.py，200 条均匀采样）：
+# 实测（200 条均匀采样）：
 #   修复前 → 73% 公式抛异常且校验器全部放行，真正可用仅 23.5%；
 #   修复后 → 0% 抛异常，可用 87.5%。
 # ---------------------------------------------------------------------------

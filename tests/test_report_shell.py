@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 #: 允许自拼 HTML 外壳的唯一模块（外壳真源）
 SHELL_SOURCE = ROOT / "research" / "html_report.py"
-_SKIP_DIRS = {".venv", "venv", ".git", "oneoff", "archive", "node_modules",
+_SKIP_DIRS = {".venv", "venv", ".git", "archive", "node_modules",
               "tests", "__pycache__", "reports"}
 _SHELL_RE = re.compile(r"<!DOCTYPE|<html\b", re.I)
 
@@ -76,8 +76,32 @@ def test_shell_source_still_exports_the_shared_primitives():
 
     for name in ("page", "BASE_CSS", "render_table", "base_js", "SORT_JS",
                  "svg_sparkline", "svg_sparkline_monthly", "embed_image_b64",
-                 "render_sortable_table", "generate_html_report"):
+                 "render_sortable_table", "generate_html_report",
+                 "CHROME_CSS", "SITE_TABS", "site_nav"):
         assert hasattr(hr, name), f"research.html_report 缺少公共原语 {name}"
+
+
+def test_frontends_share_one_site_nav_and_theme():
+    """三份前端生成器（策略首页 / 因子看板 / 股票线）共用一份顶栏与主题。
+
+    2026-11-19 收敛：此前各写一份 ``_topbar`` + ``.topbar`` CSS + 各自一份
+    echarts 路径，加一个入口要改三处且容易漏。现在只允许两种用法：
+    直接调 ``site_nav``，或写一个委托 ``site_nav`` 的薄包装。
+    """
+    from research.html_report import CHROME_CSS, site_nav
+
+    nav = site_nav("home", generated="2026-11-19", root="..",
+                   local={"home": "index.html"})
+    assert 'class="on"' in nav and "策略首页" in nav
+    assert 'href="index.html"' in nav, "local 覆盖未生效"
+    assert 'href="../factor_board/index.html"' in nav
+    assert ".topbar{" in CHROME_CSS
+
+    for name in ("strategy_home.py", "factor_board.py", "yqcore_dashboard.py"):
+        src = (ROOT / "scripts" / "reporting" / name).read_text(encoding="utf-8")
+        assert "site_nav" in src, f"{name} 未使用共享顶栏 site_nav"
+        assert "CHROME_CSS" in src, f"{name} 未继承共享主题 CHROME_CSS"
+        assert ".topbar{" not in src, f"{name} 仍自带 .topbar 样式（应删，改用 CHROME_CSS）"
 
 
 def test_page_extra_css_composes_after_base():

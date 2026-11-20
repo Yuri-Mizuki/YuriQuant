@@ -241,16 +241,12 @@ def test_load_significant_features_correction_switch(tmp_path):
 # ===========================================================================
 _INLINE_T = re.compile(r"/\s*\(.*?/\s*np\.sqrt\(")
 
-#: 内联 ``X / (Y / np.sqrt(n))`` 的两类**合法例外**，键为 (文件相对路径, 行内唯一子串)。
+#: 内联 ``X / (Y / np.sqrt(n))`` 的**合法例外**，键为 (文件相对路径, 行内唯一子串)。
 #: 用「文件 + 子串」而不是行号：改上下文不会让豁免静默失效，而子串还在就说明
 #: 那行没被换掉。**条目必须仍然命中**，否则守卫失败 —— 豁免表不许腐烂。
 _INLINE_T_EXEMPT: tuple[tuple[str, str, str], ...] = (
     ("strategy/etf_rotation.py", "(1.0 / np.sqrt(var)).sum()",
      "ERC 的逆波动率权重初始化，不是 t 统计量（正则假阳性）"),
-    ("scripts/evaluation/residual_overlay_probe.py", "sub[hist].std(axis=1)",
-     "面板逐行 t（每只股票跨年份 IC 的排序分数），向量化不可逐行 apply"),
-    ("scripts/model_train/diag_daily_rebal.py", 'r["std"] / np.sqrt(r["count"])',
-     "groupby 分组 t（按星期几分组），同上：向量化而非单序列"),
 )
 
 
@@ -276,7 +272,7 @@ def test_no_inline_ols_t_left_in_repo():
     for pkg in ("factor", "research", "scripts", "model", "monitoring", "stats",
                 "backtest", "optimize", "data", "strategy"):
         for p in sorted((root / pkg).rglob("*.py")):
-            if "oneoff" in p.parts or p.name.startswith("_old_"):
+            if p.name.startswith("_old_"):
                 continue
             if p == source_of_truth:
                 continue

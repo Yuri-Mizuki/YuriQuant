@@ -38,6 +38,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from stats import PERIODS_PER_YEAR  # noqa: E402
 from strategy.etf_rotation import hrp_weights
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -69,7 +70,7 @@ def mode_hrp(n_draw: int = 200, seed: int = 7) -> pd.DataFrame:
         sub = ret[pick].iloc[end - 60:end].dropna()
         if len(sub) < 40:
             continue
-        cov = sub.cov().to_numpy() * 252
+        cov = sub.cov().to_numpy() * PERIODS_PER_YEAR
         w = hrp_weights(cov)
         sd = np.sqrt(np.diag(cov))
         corr = cov / np.outer(sd, sd)

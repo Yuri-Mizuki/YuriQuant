@@ -29,6 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from scripts.model_train.replica_deep import build_arrays, forward_avg_ret  # noqa: E402
 from scripts.builders.industry_context import agg_industry as _agg  # noqa: E402
 from scripts.portfolio.report_replica import OUT_DIR, build_ctx  # noqa: E402
+from stats.robust_stats import nw_t  # noqa: E402
 
 DL_DIR = OUT_DIR / "dl"
 
@@ -65,7 +66,7 @@ def _eta2(v: np.ndarray, lbl: np.ndarray) -> float:
 
 def _t(s: pd.Series) -> float:
     s = s.dropna()
-    return float(s.mean() / s.std() * np.sqrt(len(s))) if len(s) > 5 and s.std() > 0 else float("nan")
+    return nw_t(s.to_numpy(dtype=float)) if len(s) > 5 and s.std() > 0 else float("nan")
 
 
 def collect(pred: pd.DataFrame, ctx: dict, lab: np.ndarray, idx: pd.DatetimeIndex,

@@ -27,6 +27,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from config import Config  # noqa: E402
+from scripts.common.atomic_io import write_json_atomic  # noqa: E402
 
 TABLES = {
     "equity_pledge_freeze": {
@@ -171,7 +172,7 @@ def main() -> None:
                     if p.exists() else df
                 new.to_parquet(p)
             prog.add(bi)
-            prog_path.write_text(json.dumps(sorted(prog)), encoding="utf-8")
+            write_json_atomic(sorted(prog), prog_path, indent=None)
             print(f"[{t}] 批{bi}/{len(batches)} 完成 "
                   f"{len(df) if not df.empty else 0} 行 "
                   f"({time.time()-t0:.0f}s)", flush=True)

@@ -42,7 +42,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from config import Config  # noqa: E402
-from scripts.common.atomic_io import write_parquet_atomic  # noqa: E402
+from scripts.common.atomic_io import write_json_atomic, write_parquet_atomic  # noqa: E402
 from scripts.common.cli_common import setup_logging  # noqa: E402
 
 log = setup_logging("fetch_minute_gap")
@@ -130,9 +130,7 @@ def update_meta(path: Path, n_rows: int) -> None:
     entry.update({"pool": "hs300", "size": int(n_rows), "pit": True,
                   "universe_note": "PIT 动态池：窗口内曾属 HS300 的全部成分"})
     meta[key] = entry
-    tmp = mp.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
-    tmp.replace(mp)
+    write_json_atomic(meta, mp, indent=None)
     log.info("元数据已更新: %s size=%d", key, n_rows)
 
 

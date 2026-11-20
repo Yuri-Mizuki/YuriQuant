@@ -44,6 +44,7 @@ import numpy as np
 import pandas as pd
 from deap import algorithms, base, creator, gp, tools
 
+from backtest.metrics import drawdown_series
 from factor.operators import (
     abs_, add, adx, aroonosc, boll_pctb, cs_demean,
     cs_rank, cs_rank_normalize, cs_zscore, cs_normalize, cs_scale_abs, div, exp_,
@@ -331,7 +332,7 @@ def ls_net_stats(fp: pd.DataFrame, rets: pd.DataFrame, top_frac: float = 0.1,
     sharpe = float(net.mean() / s * np.sqrt(PERIODS_PER_YEAR)) if s > 1e-12 else float("nan")
     ann_ret = float(net.mean() * PERIODS_PER_YEAR)
     cum = (1.0 + net).cumprod()
-    max_dd = float(abs((cum / cum.cummax() - 1.0).min()))
+    max_dd = float(abs(drawdown_series(cum).min()))
     return {"sharpe": sharpe, "ann_ret": ann_ret, "max_dd": max_dd, "n": len(net),
             "coverage": float(n_col[ok_days].mean() / max(fp.shape[1], 1))}
 

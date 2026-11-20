@@ -44,6 +44,7 @@ import pandas as pd
 from scripts.portfolio.etf_contest5_eval import two_month_windows
 from scripts.portfolio.etf_contest_spec import FINAL
 from scripts.portfolio.etf_weight_probe import load_env, run
+from stats.robust_stats import nw_t
 
 ROOT = Path(__file__).resolve().parents[2]
 OUT_CSV = ROOT / "reports/etf_contest5/phase_power.csv"
@@ -115,12 +116,12 @@ def corr_block(eq, rules, phases) -> tuple[pd.DataFrame, float, float]:
 
 
 def paired_t(a: pd.Series, b: pd.Series) -> tuple[float, float, float, int]:
-    """同窗口配对差 a−b 的 (均值, t, 胜率, n)。重叠窗口 ⇒ t 偏乐观，只作同口径对照。"""
+    """同窗口配对差 a−b 的 (均值, t, 胜率, n)。重叠窗口用 Newey-West HAC t。"""
     idx = a.index.intersection(b.index)
     d = (a[idx] - b[idx]).dropna()
     if len(d) < 3:
         return float("nan"), float("nan"), float("nan"), len(d)
-    t = float(d.mean() / d.std(ddof=1) * np.sqrt(len(d)))
+    t = nw_t(d.to_numpy(dtype=float))
     return float(d.mean()), t, float((d > 0).mean()), len(d)
 
 
@@ -138,7 +139,7 @@ def t_block(win, rules, phases) -> pd.DataFrame:
             i = win[(base, k)].index.intersection(win[(wt, k)].index)
             dfs.append((win[(base, k)][i] - win[(wt, k)][i]).rename(k))
         avg = pd.concat(dfs, axis=1).mean(axis=1).dropna()
-        t_avg = float(avg.mean() / avg.std(ddof=1) * np.sqrt(len(avg)))
+        t_avg = nw_t(avg.to_numpy(dtype=float))
         print(f"  {wt:<11}{'相位平均':<10}{avg.mean():>+9.3%}{t_avg:>7.2f}"
               f"{(avg > 0).mean():>8.1%}{len(avg):>5}"
               f"{avg.mean() * 6 * 100:>+10.2f}")

@@ -48,7 +48,7 @@ from factor.technical_indicators import TechnicalIndicators as _TI  # noqa: E402
 from research.factor_library import FactorLibrary  # noqa: E402
 from scripts.common.cli_common import (  # noqa: E402
     add_build_args, make_data_context, print_no_save, record_experiment_safe,
-    register_panels, returns_from_daily,
+    register_panels,
     setup_logging,
 )
 
@@ -190,7 +190,6 @@ def main():
         return
 
     lib = FactorLibrary(dataset=dataset)
-    returns_panel = returns_from_daily(daily)
 
     log.info("入库到数据集: %s", dataset)
     register_names = list(EXTRA_TECH) if args.only_extra else list(all_defs)
@@ -201,7 +200,7 @@ def main():
     def _on_fail(name, e):
         failed.append((name, str(e)[:120]))
     register_panels(
-        lib, panels, all_defs, returns_panel,
+        lib, panels, all_defs,
         source=f"technical:build_technical_factors:{begin}-{end}",
         names=register_names, on_fail=_on_fail,
     )

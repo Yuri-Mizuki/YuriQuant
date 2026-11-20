@@ -163,21 +163,6 @@ def test_cost_profile_kinds():
 
 
 # ---------------------------------------------------------------------------
-# 与旧探针原语的一致性（防重构口径漂移）
-# ---------------------------------------------------------------------------
-def test_probe_reexports_match_caliber():
-    from scripts.evaluation import caliber
-    from scripts.evaluation import cost_penalty_probe as probe
-
-    assert probe._sharpe_pair is caliber.sharpe_pair
-    assert probe._rebalance_dates is caliber.rebalance_dates
-    rng = np.random.default_rng(3)
-    dr = pd.Series(rng.normal(0.0005, 0.01, 600),
-                   index=pd.bdate_range("2021-01-04", periods=600))
-    assert probe._sharpe_pair(dr) == caliber.sharpe_pair(dr)
-
-
-# ---------------------------------------------------------------------------
 # 协方差暖机（集成；无本地基础面板时跳过）
 # ---------------------------------------------------------------------------
 def _has_data() -> bool:

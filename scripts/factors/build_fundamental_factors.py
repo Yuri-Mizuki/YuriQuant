@@ -77,7 +77,7 @@ from scripts.common.fundamental_common import (  # noqa: E402
 )
 from scripts.common.cli_common import (  # noqa: E402
     add_build_args, make_data_context, print_no_save, record_experiment_safe,
-    register_panels, returns_from_daily,
+    register_panels,
     setup_logging,
 )
 
@@ -585,11 +585,10 @@ def main():
         return
 
     lib = FactorLibrary(dataset=dataset)
-    returns_panel = returns_from_daily(daily)
 
     log.info("入库到数据集: %s", dataset)
     register_panels(
-        lib, panels, FACTOR_DEFS, returns_panel,
+        lib, panels, FACTOR_DEFS,
         source=f"fundamental:build_fundamental_factors:{begin}-{end}",
     )
 

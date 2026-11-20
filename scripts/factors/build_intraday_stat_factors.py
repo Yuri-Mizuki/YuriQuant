@@ -44,7 +44,6 @@ from scripts.factors.build_intraday_factors import ex_div_keys  # noqa: E402
 from scripts.common.cli_common import (  # noqa: E402
     record_experiment_safe,
     register_panels,
-    returns_from_daily,
     setup_logging,
 )
 
@@ -218,7 +217,6 @@ def main():
             raise SystemExit(f"未知特征 {bad}，可选 {sorted(FEATURE_DOCS)}")
         feats = {k: v for k, v in feats.items() if k in want}
     feats = mask_ex_div(feats, status)
-    returns_panel = returns_from_daily(daily)
 
     prefixed = {f"{PREFIX}{k}": v for k, v in feats.items()}
     defs = {f"{PREFIX}{k}": f"[min{args.period}统计特征] {d}"
@@ -239,15 +237,17 @@ def main():
         prefixed = {n: lib.get_panel(n) for n in prefixed}
     else:
         log.info("入库 %d 个统计特征 → 数据集 %s ...", len(prefixed), args.dataset)
+        families = {n: next((v for k, v in FAMILY_MAP.items()
+                             if n[len(PREFIX):].startswith(k)), "其他")
+                    for n in prefixed}
         reg_rows = register_panels(
-            lib, prefixed, defs, returns_panel,
+            lib, prefixed, defs,
             source=f"intraday:stat_features:min{args.period}",
+            families=families,
         )
-        # 六维标签（register_panels 不带 family 入参，入库后补 tag）
+        # 频率标签 register_panels 不覆盖，入库后补
         for row in reg_rows:
-            base = row["name"][len(PREFIX):]
-            family = next((v for k, v in FAMILY_MAP.items() if base.startswith(k)), "其他")
-            lib.set_tag(row["name"], family=family, frequency="日内")
+            lib.set_tag(row["name"], frequency="日内")
 
     # ---- 体检报告 ----
     reg = lib.list_all()
@@ -258,7 +258,7 @@ def main():
                                     ("dup_checked", "dup_corr_max", "dup_top",
                                      "resid_ic", "resid_t_nw") if c in new_reg.columns])
     if not args.no_dup:
-        dup = batch_dup_report(lib, prefixed, returns_panel)
+        dup = batch_dup_report(lib, prefixed, lib.default_returns_panel())
         new_reg = new_reg.merge(dup, on="name", how="left")
     else:
         for col in ("dup_top1", "dup_corr1", "dup_top2", "dup_corr2",

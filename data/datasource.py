@@ -924,24 +924,42 @@ class AmazingDataSource(DataSource):
         out = out.drop_duplicates(subset=["code", "ann_date"], keep="last")
         return out[keep + numeric].reset_index(drop=True)
 
+    def _financial_kwargs(self, begin_date: int | None,
+                          end_date: int | None) -> dict:
+        """财务接口的两套互斥参数组（开发手册 4.4）。
+
+        - 不传日期 → ``local_path``+``is_local``：本地存全量历史，SDK 每次增量
+          更新本地文件。缓存体积大（全 A 三表约 36GB），只有 bootstrap 才用。
+        - 传日期 → ``begin_date``+``end_date``（**报告期**，非公告日）：只走服务端，
+          **不写本地缓存**。返回落在该报告期区间内的行，用于日常增量回补。
+        """
+        if begin_date or end_date:
+            kw: dict = {}
+            if begin_date:
+                kw["begin_date"] = int(begin_date)
+            if end_date:
+                kw["end_date"] = int(end_date)
+            return kw
+        return {"local_path": self._local_path, "is_local": False}
+
     def get_balance_sheet(self, code_list: Iterable[str],
                           begin_date: int | None = None, end_date: int | None = None) -> pd.DataFrame:
         raw = self._info.get_balance_sheet(
-            list(code_list), local_path=self._local_path, is_local=False
+            list(code_list), **self._financial_kwargs(begin_date, end_date)
         )
         return self._normalize_financial(raw)
 
     def get_cash_flow(self, code_list: Iterable[str],
                       begin_date: int | None = None, end_date: int | None = None) -> pd.DataFrame:
         raw = self._info.get_cash_flow(
-            list(code_list), local_path=self._local_path, is_local=False
+            list(code_list), **self._financial_kwargs(begin_date, end_date)
         )
         return self._normalize_financial(raw)
 
     def get_income(self, code_list: Iterable[str],
                    begin_date: int | None = None, end_date: int | None = None) -> pd.DataFrame:
         raw = self._info.get_income(
-            list(code_list), local_path=self._local_path, is_local=False
+            list(code_list), **self._financial_kwargs(begin_date, end_date)
         )
         return self._normalize_financial(raw)
 

@@ -33,14 +33,23 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from backtest.metrics import annual_return, max_drawdown, sharpe_arithmetic, sharpe_ratio
+from backtest.costs import default_one_way_bp, turnover_cost
+from backtest.metrics import (
+    annual_return,
+    annual_volatility,
+    information_ratio,
+    max_drawdown,
+    sharpe_arithmetic,
+    sharpe_ratio,
+)
 from config import Config
+from stats.robust_stats import nw_t
 
 ROOT = Path(__file__).resolve().parents[2]
 OUT_DIR = ROOT / "reports" / "industry_rotation"
 PQ = Path(Config.paths()["cache_root"])
 
-COST_BP = 36.0          # 单边，bp（项目统一口径）
+COST_BP = default_one_way_bp()   # 单边，bp（配置口径）
 COST_BP_ALT = 13.0      # ETF 实际（佣金 3 + 滑点 10，无印花税）
 
 
@@ -170,7 +179,7 @@ def backtest(
 
         gross = float((w * hold.fillna(0)).sum())
         turn = float((w - w_old).abs().sum() / 2)
-        nav.append(gross - turn * 2 * cost_bp / 1e4)
+        nav.append(gross - turnover_cost(turn, cost_bp))
         turns.append(turn)
         idx.append(tdays[e1])
         w_old = w
@@ -182,19 +191,18 @@ def backtest(
          else pd.Series(1.0, index=r.index))
     per = 12
     ex = r - b
-    sd = ex.std(ddof=1)
     return {
         "ret": r, "bench_ret": b,
         "nav": (1 + r).cumprod(), "bench": (1 + b).cumprod(),
         "ann": annual_return(r, per), "ann_bench": annual_return(b, per),
-        "vol": float(r.std(ddof=1) * np.sqrt(per)),
+        "vol": float(annual_volatility(r, per)),
         "sharpe_geo": sharpe_ratio(r, periods_per_year=per),
         "sharpe_arith": sharpe_arithmetic(r, periods_per_year=per),
         "mdd": max_drawdown(r),
         "win": float((r > 0).mean()),
         "turnover": float(np.mean(turns) * per),
-        "ir": float(ex.mean() / sd * np.sqrt(per)) if sd > 0 else np.nan,
-        "t_ir": float(ex.mean() / sd * np.sqrt(len(ex))) if sd > 0 else np.nan,
+        "ir": information_ratio(r, b, per),
+        "t_ir": nw_t(ex),
         "n": len(r),
     }
 
@@ -387,7 +395,7 @@ def main() -> None:
         q = quintiles(sigs[name], px, dates)
         if q.empty:
             continue
-        anns = [(1 + q[c]).prod() ** (12 / len(q)) - 1 for c in q.columns]
+        anns = [annual_return(q[c], 12) for c in q.columns]
         mono = "✅" if (anns[4] > anns[2] > anns[0]) else "否"
         L.append(f"| `{name}` | " + " | ".join(f"{a:+.1%}" for a in anns) + f" | {mono} |")
 

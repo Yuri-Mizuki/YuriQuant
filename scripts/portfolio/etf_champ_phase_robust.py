@@ -39,6 +39,7 @@ from scripts.portfolio.etf_champ_phase_matrix import (
     run_champ,
 )
 from scripts.portfolio.etf_champ_signals import PROFILES
+from stats.robust_stats import nw_t
 
 #: 池内国债/货币 ETF —— 用来识别「首位持仓是不是防御性资产」
 TREASURY = {"511010.SH", "511260.SH", "511880.SH", "511990.SH"}
@@ -80,7 +81,7 @@ def mode_pair(eq: dict, rules: list[str], base: str) -> None:
             a, b = monthly_returns(eq[(wt, k)]), monthly_returns(eq[(base, k)])
             j = a.index.intersection(b.index)
             d = (a[j] - b[j]).dropna()
-            t = d.mean() / d.std(ddof=1) * np.sqrt(len(d))
+            t = nw_t(d.to_numpy(dtype=float))
             print(f"  {wt:<13}{k:>3}{d.mean() * 100:>+8.2f}%{t:>7.2f}"
                   f"{(d > 0).mean():>8.1%}{len(d):>5}")
 
@@ -157,7 +158,7 @@ def main(argv: list[str] | None = None) -> int:
     rb = month_phase_rebalance_days(env["close"].index)
     eq, hs, sets = {}, {}, {}
     for wt in rules:
-        spec = dict(PROFILES["champ"])
+        spec = dict(PROFILES["monthly"])
         spec["weighting"] = wt
         for k in PHASES:
             _r0, r1 = run_champ(env, spec, rb[k])

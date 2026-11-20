@@ -290,7 +290,7 @@ def _is_panel_valued(node: RNode) -> bool:
     而 :func:`_dim` 把常数视作 ``None``（"与任何量纲兼容"），于是这类子树**量纲上
     永远是合法的**，``dimension_mismatch`` 一条都拦不住。
 
-    实测（``scripts/oneoff/_probe_uniform_true_yield.py``，200 条均匀采样）：
+    实测（200 条均匀采样）：
     **73% 的公式因常量子树在算子实参位而求值失败，校验器全部放行** ——
     与 2026-09-16 小数常数字面量事故同型：**这不是报错，是静默降级**
     （在 RL 里表现为该动作恒得 0 奖励，把动作空间的一个大子集变成死区）。
@@ -1206,7 +1206,7 @@ class OpenAICompatibleProposer:
     """OpenAI 兼容接口的提案器（研报用 deepseek）。
 
     **联网验证状态（2026-09-16）**：已用 DeepSeek 真实接口验证通过
-    （`scripts/oneoff/_probe_deepseek_conn.py`）。
+    （探针已删，2026-11-19）。
 
     ⚠️ **`max_tokens` 必须覆盖思维链（这是本类最容易踩的坑）**：
     ``deepseek-flash`` / ``deepseek-v4-pro`` 都是**推理模型**，响应体除 ``content``

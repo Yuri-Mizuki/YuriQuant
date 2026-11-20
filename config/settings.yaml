@@ -71,6 +71,11 @@ fetch:
   begin_date: 20220101
   # end_date 留空表示"至今"，由代码动态取 calendar[-1]
   end_date: null
+  # 财报表（利润/资产负债/现金流）本地新鲜天数：``refreshed_on`` 未超过该天数、
+  # 且本地已覆盖请求的代码时，``update_data`` 直接读 parquet 不回源。
+  # 回源已走「报告期区间增量」（只拉最近一年窗口，不再整段全历史、也不写 SDK
+  # 分片缓存），所以这个阈值只用于避免同一天内重复拉；1 = 同日重跑跳过。
+  financial_refresh_days: 1
   # --- 非关键数据源步骤的硬超时（2026-09-16）---
   # 背景：SDK 部分接口会 hang（挂死而非抛异常），主进程内的 for-attempt 重试对 hang
   # 完全无效（只会无限等）→ 挂 40+ 分钟不产出。对策是隔离到子进程、超时直接 kill，
@@ -193,8 +198,8 @@ backtest:
 # --- 对照基准指数（各报告/策略"与谁比"的唯一真源，2026-09-11 收敛）---
 # 此前指数字面量散落在 5 处：本段 backtest.benchmark、model_portfolio.benchmark、
 # scripts/rolling_grid_alla.BENCH_INDEX、scripts/jq_style_report.BENCH_INDEX、
-# scripts/run_etf_rotation.BENCH（另有 scripts/textmining/* 4 处待随其链路一并处理）。
-# ⚠️ 四者**取值本就不同**（用途不同，不是同一概念的重复），故按用途分键，
+# scripts/run_etf_rotation.BENCH（该脚本 2026-11-19 已删；另有 scripts/textmining/* 4 处待随其链路一并处理）。
+# ⚠️ 各者**取值本就不同**（用途不同，不是同一概念的重复），故按用途分键，
 #    不合并成一个值——合并会静默改掉某条链路的对照基准。
 # 消费方走 Config.benchmarks()。
 benchmarks:

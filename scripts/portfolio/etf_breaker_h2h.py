@@ -30,10 +30,11 @@ import numpy as np
 import pandas as pd
 
 from backtest.engine import build_execution_split
+from backtest.metrics import drawdown_series
 from data.cache import DataCache
 from data.datasource import create_datasource
 from scripts.portfolio.etf_champ_signals import PROFILES
-from scripts.portfolio.etf_contest_spec import EXCLUDED_5
+from scripts.portfolio.etf_contest_spec import EXCLUDED_5, RETIRED_CORE
 from scripts.portfolio.etf_rotation_panels import build_extra_panels
 from scripts.portfolio.etf_rotation_probe import (
     WARMUP_BEGIN,
@@ -44,8 +45,8 @@ from scripts.portfolio.etf_rotation_probe import (
 
 BEGIN = 20200101
 ROOT = Path(__file__).resolve().parents[2]
-BASE = dict(PROFILES["contest3"])
-ALT = dict(PROFILES["contest5h"])
+BASE = dict(RETIRED_CORE)
+ALT = dict(PROFILES["balanced"])
 
 
 def load_env() -> tuple:
@@ -78,10 +79,6 @@ def fwd_returns(eq: pd.Series, h: int) -> pd.Series:
     if len(v) > h:
         out[:-h] = v[h:] / v[:-h] - 1.0
     return pd.Series(out, index=eq.index)
-
-
-def drawdown(eq: pd.Series) -> pd.Series:
-    return eq / eq.cummax() - 1.0
 
 
 def bucket_of(dd: float, thr: float) -> str:
@@ -133,7 +130,7 @@ def main(argv: list[str] | None = None) -> int:
 
     e3 = r3["equity"].astype(float)
     e5 = r5["equity"].astype(float).reindex(e3.index)
-    dd = drawdown(e3)
+    dd = drawdown_series(e3)
     print(f"末日 {e3.index[-1]:%Y-%m-%d} 三锋账户回撤 {dd.iloc[-1]:+.2%}"
           f"（触发线 {args.thr:.0%}）")
 

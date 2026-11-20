@@ -44,14 +44,21 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from backtest.metrics import annual_return, max_drawdown, sharpe_ratio  # noqa: E402
+from backtest.costs import default_one_way_bp, turnover_cost  # noqa: E402
+from backtest.metrics import (  # noqa: E402
+    annual_return,
+    information_ratio,
+    max_drawdown,
+    sharpe_ratio,
+)
 from config import Config  # noqa: E402
+from stats.robust_stats import nw_t  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 OUT_DIR = ROOT / "reports" / "report_replica"
 PQ = Path(Config.paths()["cache_root"])
 
-COST_BP = 36.0
+COST_BP = default_one_way_bp()
 MIN_IND = 20          # 截面最少行业数（28~31 个池，留余量）
 
 
@@ -177,19 +184,6 @@ def _is_weekly(dates: list[pd.Timestamp]) -> bool:
     return gap < 15
 
 
-def nw_t(x: np.ndarray, lag: int = 12) -> float:
-    a = x[np.isfinite(x)]
-    n = a.size
-    if n < 20:
-        return float("nan")
-    e = a - a.mean()
-    var = float(e @ e) / n
-    for j in range(1, min(lag, n - 2) + 1):
-        w = 1 - j / (lag + 1)
-        var += 2 * w * float(e[j:] @ e[:-j]) / n
-    return float(a.mean() / np.sqrt(max(var, 1e-12) / n))
-
-
 def stats(ics: np.ndarray) -> dict:
     a = ics[np.isfinite(ics)]
     n = a.size
@@ -269,7 +263,7 @@ def port_backtest(sig: pd.DataFrame, px: pd.DataFrame, dates: list[pd.Timestamp]
         w[long] = 1.0 / len(long)
         gross = float((w * hold.fillna(0)).sum())
         turn = float((w - w_old).abs().sum() / 2)
-        rets.append(gross - turn * 2 * cost_bp / 1e4)
+        rets.append(gross - turnover_cost(turn, cost_bp))
         turns.append(turn)
         idx.append(tdays[e1])
         # 基准必须与本期同成交价、同调仓日（等权全行业）
@@ -280,15 +274,14 @@ def port_backtest(sig: pd.DataFrame, px: pd.DataFrame, dates: list[pd.Timestamp]
     r = pd.Series(rets, index=pd.DatetimeIndex(idx))
     b = pd.Series(bens, index=r.index)
     ex = r - b
-    sd = ex.std(ddof=1)
     return {
         "ret": r, "bench": b, "n": len(r),
         "ann": annual_return(r, 52), "ann_bench": annual_return(b, 52),
         "excess": annual_return(r, 52) - annual_return(b, 52),
         "sharpe": sharpe_ratio(r, periods_per_year=52),
         "mdd": max_drawdown(r),
-        "t_ir": float(ex.mean() / sd * np.sqrt(len(ex))) if sd > 0 else np.nan,
-        "ir": float(ex.mean() / sd * np.sqrt(52)) if sd > 0 else np.nan,
+        "t_ir": nw_t(ex),
+        "ir": information_ratio(r, b, 52),
         # 研报「周度双边换手率」口径：单期买+卖 = 2 × 单边换手
         "turn_week": float(np.mean(turns) * 2),
         "turnover": float(np.mean(turns) * 2 * 52),

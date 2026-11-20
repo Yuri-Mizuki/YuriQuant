@@ -27,7 +27,7 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
 from backtest.engine import BacktestResult
-from backtest.metrics import METRIC_LABELS
+from backtest.metrics import METRIC_LABELS, drawdown_series
 from research.metrics_format import is_pos_neg, monthly_returns
 
 # 中文字体
@@ -91,8 +91,7 @@ def _save_equity_png(result: BacktestResult, path: Path):
 
 
 def _save_drawdown_png(result: BacktestResult, path: Path):
-    cum = (1 + result.daily_returns).cumprod()
-    dd = (cum - cum.cummax()) / cum.cummax()
+    dd = drawdown_series((1 + result.daily_returns).cumprod())
     fig, ax = plt.subplots(figsize=(10, 2.8))
     ax.fill_between(dd.index, dd.values, 0, color="#CC0000", alpha=0.35)
     ax.set_title("回撤 Drawdown", fontsize=12)

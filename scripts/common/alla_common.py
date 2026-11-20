@@ -16,6 +16,13 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from backtest.metrics import (
+    annual_return,
+    drawdown_series,
+    information_ratio,
+    sharpe_arithmetic,
+)
+
 ROOT = Path(__file__).resolve().parents[2]
 DATASET = "all_a_2018_2026"
 #: 主实验产物根（``_base`` / ``pred`` / ``selection`` 所在）；与 --preproc 输出
@@ -214,14 +221,10 @@ def existence_mask(feats: dict, close: pd.DataFrame,
 def ann(dr: pd.Series) -> float:
     """几何年化（<20 个有效日返回 0，与实验脚本历史行为一致）。"""
     dr = dr.dropna()
-    if len(dr) < 20:
-        return 0.0
-    from backtest.metrics import PERIODS_PER_YEAR
-    return float((1 + dr).prod() ** (PERIODS_PER_YEAR / len(dr)) - 1)
+    return 0.0 if len(dr) < 20 else annual_return(dr)
 
 
 def yearly_metrics(dr: pd.Series, bench: pd.Series) -> dict[int, dict]:
-    from backtest.metrics import PERIODS_PER_YEAR
     out = {}
     for year, sub in dr.groupby(dr.index.year):
         sub = sub.dropna()
@@ -230,13 +233,11 @@ def yearly_metrics(dr: pd.Series, bench: pd.Series) -> dict[int, dict]:
         b = bench.reindex(sub.index).fillna(0.0)
         ann_ret = ann(sub)
         b_ann = ann(b)
-        sd = sub.std()
         eq = (1 + sub).cumprod()
         out[int(year)] = {
             "annual": ann_ret, "excess": ann_ret - b_ann, "bench_annual": b_ann,
-            "sharpe": float(sub.mean() / sd * np.sqrt(PERIODS_PER_YEAR))
-            if sd > 0 else 0.0,
-            "max_dd": float(abs((eq / eq.cummax() - 1).min())),
+            "sharpe": sharpe_arithmetic(sub),
+            "max_dd": float(abs(drawdown_series(eq).min())),
         }
     return out
 
@@ -244,7 +245,6 @@ def yearly_metrics(dr: pd.Series, bench: pd.Series) -> dict[int, dict]:
 def yearly_rows(base_row: dict, dr: pd.Series, bench: pd.Series,
                 turnover: pd.Series | None) -> list[dict]:
     """逐年指标行：所有度量列**重算**，绝不从整体行继承（2026-09-14 修 bug）。"""
-    from backtest.metrics import PERIODS_PER_YEAR
     keep = ("run_id", "model", "ensemble", "horizon", "freq", "neut",
             "frac", "weight", "arm", "scheme")
     out = []
@@ -257,7 +257,8 @@ def yearly_rows(base_row: dict, dr: pd.Series, bench: pd.Series,
             **{k: base_row[k] for k in keep if k in base_row},
             "year": year, **ym,
             "excess_idx": ym["excess"],
-            "ir": (float(ex.mean() / ex.std() * np.sqrt(PERIODS_PER_YEAR))
+            "ir": (information_ratio(dr.reindex(idx_y),
+                                     bench.reindex(idx_y).fillna(0.0))
                    if len(ex) > 20 and ex.std() > 0 else np.nan),
             "turnover": float(to_y.mean()) if len(to_y) else np.nan,
         })

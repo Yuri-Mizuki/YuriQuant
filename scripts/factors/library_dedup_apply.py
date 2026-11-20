@@ -34,7 +34,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 import time
 from pathlib import Path
@@ -45,14 +44,12 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from research.factor_library import FactorLibrary  # noqa: E402
+from scripts.common.atomic_io import write_csv_atomic  # noqa: E402
 from scripts.factors.dup_criteria import (  # noqa: E402
     CORR_TRIGGER,
     MIN_SPAN,
     REL_STD_DEGENERATE,
-    REL_STD_TINY,
-    RESID_IC_NEGLIGIBLE,
     classify,
-    explain,
 )
 
 PLAN_DEFAULT = Path("reports/library_governance/dedup_decision.csv")
@@ -62,20 +59,6 @@ PLAN_DEFAULT = Path("reports/library_governance/dedup_decision.csv")
 #: 执行层也会以「覆盖 ρ < 0.95」拒批。这是「判据只在 ρ≥0.95 区域生效」的第四道闸。
 #: 现收敛到唯一真源，改口径只需改 ``dup_criteria``。
 COVER_RHO_MIN = CORR_TRIGGER
-
-
-def _write_csv_atomic(df: pd.DataFrame, path: Path) -> None:
-    """临时文件 + os.replace：Windows 上直接 to_csv 覆盖会偶发 PermissionError。"""
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    df.to_csv(tmp, index=False, encoding="utf-8")
-    for attempt in range(6):
-        try:
-            os.replace(tmp, path)
-            return
-        except PermissionError:
-            if attempt == 5:
-                raise
-            time.sleep(0.3 * (2 ** attempt))
 
 
 def _load_plan(path: Path) -> pd.DataFrame:
@@ -197,8 +180,8 @@ def _restore(lib, base: Path, reg_path: Path, retired_path: Path,
     led.to_csv(led_bak, index=False, encoding="utf-8")
     print(f"\n备份: {reg_bak.name} / {led_bak.name}")
 
-    _write_csv_atomic(merged, reg_path)
-    _write_csv_atomic(led[~led["name"].isin(todo)].reset_index(drop=True), retired_path)
+    write_csv_atomic(merged, reg_path)
+    write_csv_atomic(led[~led["name"].isin(todo)].reset_index(drop=True), retired_path)
 
     chk = pd.read_csv(reg_path)
     led_chk = pd.read_csv(retired_path)
@@ -263,7 +246,7 @@ def main() -> None:
         if args.apply:
             bak = reg_path.with_name(f"registry.csv.bak-{time.strftime('%Y%m%d-%H%M%S')}")
             reg.to_csv(bak, index=False, encoding="utf-8")
-            _write_csv_atomic(merged, reg_path)
+            write_csv_atomic(merged, reg_path)
         print(f"回滚 {len(rows)} 行 → registry {len(reg)} → {len(merged)}"
               + ("" if args.apply else "（dry-run）"))
         return
@@ -324,10 +307,10 @@ def main() -> None:
         old = pd.read_csv(retired_path)
         ledger = pd.concat([old, ledger], ignore_index=True).drop_duplicates(
             subset=["name", "batch_id"], keep="last")
-    _write_csv_atomic(ledger, retired_path)
+    write_csv_atomic(ledger, retired_path)
     print(f"台账: {retired_path.name}（累计 {len(ledger)} 行，batch={batch}）")
 
-    _write_csv_atomic(after, reg_path)
+    write_csv_atomic(after, reg_path)
 
     # 复核（写完再读一遍，不信内存）
     chk = pd.read_csv(reg_path)

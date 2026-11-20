@@ -121,8 +121,6 @@ def test_default_costs_source_is_the_backtest_layer():
     root = Path(__file__).resolve().parents[1]
     offenders = []
     for f in (root / "scripts").rglob("*.py"):
-        if {"oneoff", "archive"} & set(f.parts):
-            continue
         if re.search(r"^def default_costs\s*\(", f.read_text(encoding="utf-8"), re.M):
             offenders.append(str(f.relative_to(root)))
     assert not offenders, (

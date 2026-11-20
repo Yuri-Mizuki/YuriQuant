@@ -237,15 +237,15 @@ def compare_to_benchmark(
     periods_per_year: int = PERIODS_PER_YEAR,
 ) -> dict:
     """策略 vs 基准的对照指标（日频序列已对齐）。"""
-    from backtest.metrics import annual_return
+    from backtest.metrics import annual_return, annual_volatility, information_ratio
 
     a, b = daily_returns.align(benchmark_returns, join="inner")
     if len(a) < 2:
         return {"excess_annual": np.nan, "information_ratio": np.nan,
                 "tracking_error": np.nan, "correlation": np.nan, "beta": np.nan}
     excess = a - b
-    te = float(excess.std() * np.sqrt(periods_per_year))
-    ir = float(excess.mean() * periods_per_year / te) if te > 0 else 0.0
+    te = float(annual_volatility(excess, periods_per_year))
+    ir = float(information_ratio(a, b, periods_per_year))
     corr = float(a.corr(b)) if a.std() > 0 and b.std() > 0 else np.nan
     beta = float(a.cov(b) / b.var()) if b.var() > 0 else np.nan
     return {

@@ -36,6 +36,7 @@ import numpy as np
 import pandas as pd
 
 from backtest.engine import build_execution_split
+from backtest.metrics import annual_return, annual_volatility, drawdown_series
 from scripts.portfolio.etf_contest_spec import FINAL
 from scripts.portfolio.etf_rotation_panels import build_extra_panels
 from scripts.portfolio.etf_rotation_probe import build_panels, run_variant
@@ -132,9 +133,9 @@ def _eq_metrics(eq: pd.Series, start) -> dict:
         return {"ann": np.nan, "sharpe": np.nan, "mdd": np.nan, "n": 0}
     ret = eq.pct_change().dropna()
     n = len(ret)
-    ann = float((eq.iloc[-1] / eq.iloc[0]) ** (252.0 / n) - 1.0)
-    vol = float(ret.std() * np.sqrt(252.0))
-    mdd = float((eq / eq.cummax() - 1.0).min())
+    ann = float(annual_return(ret))
+    vol = float(annual_volatility(ret))
+    mdd = float(drawdown_series(eq).min())
     return {"ann": ann, "sharpe": ann / vol if vol > 1e-9 else np.nan,
             "mdd": mdd, "n": n}
 

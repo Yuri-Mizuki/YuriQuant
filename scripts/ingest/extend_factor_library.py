@@ -101,11 +101,11 @@ def main():
 
         cfg = Config.get()
         if args.mock:
-            gp_panel, gp_returns = build_panel(cfg, begin, end, cache=cache)
+            gp_panel, _ = build_panel(cfg, begin, end, cache=cache)
         else:
-            gp_panel, gp_returns = build_panel(cfg, begin, end, offline=True)
+            gp_panel, _ = build_panel(cfg, begin, end, offline=True)
         ok, skipped, failed = extend_gp_factors(
-            lib, gp_rows, gp_panel, gp_returns, begin, end,
+            lib, gp_rows, gp_panel, None, begin, end,
             verify_only=verify_only, force=args.force)
         log.info("GP 完成: 校验/入库 %d，口径不一致跳过 %d，重算失败 %d",
                  len(ok), len(skipped), len(failed))

@@ -45,6 +45,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from backtest.metrics import annual_volatility
 from data.cache import DataCache
 from data.datasource import create_datasource
 from data.etf_universe import ETF_CANDIDATES
@@ -101,7 +102,7 @@ def pool_stats(close: pd.DataFrame, lookback: int = 60) -> dict:
     c = ret.corr()
     n = c.shape[0]
     avg_corr = float((c.to_numpy().sum() - n) / (n * (n - 1)))
-    vol = ret.std() * np.sqrt(252.0)
+    vol = annual_volatility(ret)
     # 12-1 动量截面离散度（与策略信号同定义：21 日前/252 日前 - 1）
     px = close[ret.columns]
     mom = (px.shift(21) / px.shift(252) - 1.0).iloc[-1].dropna()
@@ -114,11 +115,11 @@ def pool_stats(close: pd.DataFrame, lookback: int = 60) -> dict:
     }
 
 
-def read_live_max_weight(profile: str = "contest3") -> tuple[float, str]:
+def read_live_max_weight(profile: str = "monthly") -> tuple[float, str]:
     """从最近一次信号产物读单只最大权重；档案不符或缺失返回 (nan, 原因)。
 
-    🚨 必须校验 `meta.json` 的 profile：`reports/etf_champ/` 是多档案共用目录，
-    最后一次跑的是 `champ`（5 只 inverse_vol，最大权重 22%）时，直接读会给出
+    🚨 必须校验 `meta.json` 的 profile：信号产物目录由多个档案共用，
+    最后一次跑的是 `monthly`（5 只 inverse_vol，最大权重 22%）时，直接读会给出
     「单押消失」的**假告警**——实测踩过一次。只认 profile 匹配的那份。
     🚨 只读 `signals.csv` 的 weight 列，不重算（重算会与生产信号板不一致）。
     """
@@ -163,7 +164,7 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="池内环境监测（机制条件是否还成立）")
     ap.add_argument("--asof", default=None, help="截止日 YYYY-MM-DD（复盘用）；默认数据末日")
     ap.add_argument("--lookback", type=int, default=60, help="滚动窗口交易日数")
-    ap.add_argument("--profile", default="contest3",
+    ap.add_argument("--profile", default="monthly",
                     help="读哪份信号产物的权重（须与 meta.json 的 profile 一致）")
     ap.add_argument("--overwrite", action="store_true",
                     help="清空 pool_monitor.csv 重建（默认保留历史、只更新当日行）")

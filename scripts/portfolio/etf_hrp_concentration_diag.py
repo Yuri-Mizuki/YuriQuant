@@ -51,6 +51,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from scripts.portfolio.etf_contest_spec import FINAL, POOL  # noqa: E402
 from scripts.portfolio.etf_weight_probe import load_env  # noqa: E402
+from stats import PERIODS_PER_YEAR  # noqa: E402
 from strategy.etf_rotation import (  # noqa: E402
     EtfRotationAdvanced,
     erc_weights,
@@ -140,7 +141,7 @@ class _RecordHrp(EtfRotationAdvanced):
             sub = self.ret_panel.loc[:date].tail(self.cov_window).reindex(columns=sel)
             sub = sub.dropna(how="all").dropna(axis=1, how="all")
             if len(sub) >= 20 and sub.shape[1] == len(sel):
-                cov = sub.cov().to_numpy() * 252.0
+                cov = sub.cov().to_numpy() * PERIODS_PER_YEAR
                 type(self).records.append({
                     "date": pd.Timestamp(date), "codes": list(sel), "cov": cov,
                     "w": out.to_numpy(float).copy(),
