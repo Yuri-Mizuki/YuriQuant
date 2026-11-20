@@ -8,6 +8,8 @@
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -183,6 +185,11 @@ def test_load_context_warmup_extends_before_window():
     """
     from scripts.evaluation.caliber import load_context
 
+    # 双机数据分布：ens_h1h5 的信号面板不在本机时跳过（本测试读真实面板，
+    # 其余 caliber 用例均走 mock；面板缺失 ≠ 代码缺陷）。2026-11-20 加守卫。
+    panel = Path(__file__).resolve().parents[1] / "reports/alla_rolling_ortho/pred/ens_h1h5__h1.parquet"
+    if not panel.exists():
+        pytest.skip(f"信号面板不在本机：{panel}")
     ctx = load_context(signal="ens_h1h5", window="prod", begin=20240101, end=20241231)
     assert ctx.ret_hist.index.min() < ctx.pred.index.min()
     assert len(ctx.ret_hist) > len(ctx.pred)

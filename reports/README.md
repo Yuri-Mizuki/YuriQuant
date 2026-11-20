@@ -412,7 +412,8 @@
    grep -rn "<文件名>" --include=*.py --include=*.md --include=*.yaml .
    ```
    有命中 → 要么保持原位（推荐，符合 §1.4），要么**同步改代码并跑相关测试**。
-   `reports/` 整体 gitignored，移动/删除**不可经 git 恢复**——动之前先 `cp` 快照到仓库外。
+   `reports/` 整体 gitignored，删除**不可经 git 恢复**；按 `AGENTS.md` §1 **直接删**
+   （2026-11-19 定），不再做快照清单、不走回收站。
 
 #### 定期体检（建议每月一次）
 
@@ -566,6 +567,24 @@ model层 / ML合成，其余已删、可重跑复现——结论见 §三.13~17�
     解析到 `panels_neu`，md5 与删除前 **6/6 一致**；`fundind_names()` 仍 962 个。
   - **未删任何实验产物**：`alla_rolling_ortho920*` 与 `portfolio_phase2_full_parts`（5.5GB）
     全部保留并登记，`reports/` 仍占 ~27GB。要回收空间需另议（`_base/` 可重生成，是主要体积）。
+
+- **2026-11-20（本机残留同步清理：一次性脚本 2 个 + 冗余 `_base` 备份 448MB）**：
+  代码侧清理已随远端同步（`5b0120f` 删 137 个探针、`214b270` fundind 覆盖层），
+  本机核对后只剩未跟踪的本地残留。
+  - **回收 `scripts/oneoff/yelaoshi_first_board_{backtest,selection}.py`**：未被 git 跟踪
+    （§1.2.1 已记「脚本已删，2026-11-19」，本机遗漏）。
+  - **回收 `alla_rolling_ortho920fundind/_base.bak_20260923`**（447.9MB / 14 文件）：
+    `_base` 是 prep 的确定性产物，备份零引用；该活动臂的 `_base/` 本体未动。
+  - **回收 `__pycache__` ×3 + `.pytest_cache`**（可再生缓存）。
+  - **清 3 个归档臂大件 3.81GB**（直接删，见 `AGENTS.md` §1）：`ortho920tl` / `ortho920v2` /
+    `ortho920fundind4` 的 `pred/` `selection/` `_base/` `equity*/`；`metrics_*.csv` 与
+    `ic_stats.csv` 结论文件保留。⚠️ `buffer_arm_920.py` 默认 `--pred-dir` 指向 `ortho920tl`，
+    复跑需显式传新产物目录。
+  - **`scripts/oneoff/` 改为 gitignored**：`git rm --cached` 后不再跟踪，用完即删、定期清理；
+    生产代码 import oneoff 已有 `test_layering` 守卫（见 `AGENTS.md` §1）。
+  - **未动**：`ortho920fundind`（生产每日出榜在读）、`report_replica` / `frontier_audit_920_reval`
+    （有引用）、`logs/`（运行证据）、`D:/data`（fundind 瘦身已于 11-19 完成，冗余 0 / 覆盖层 114）。
+    `reports/` 7.54 → 3.29GB。本次不存快照（按 `AGENTS.md` §1 直接删）。
 
 - **2026-11-12（成本口径补标 + 择时族整合 + 过时复现命令）**：起因是由莉酱问
   「还有什么冗余重复、过时的脚本、readme、报告」。清点结论：**目录层已干净**

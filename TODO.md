@@ -516,7 +516,7 @@
   - [ ] **P0-H pred 延到最新（2026-11-08 19:25 暂停，可续跑）**：
     进度 **737/970 面板已到 2026-11-06**（alpha 剩 120、非 alpha 剩 113）。清单在
     `logs/stale_all.txt`（每次重算前刷新）。已做：`_base` 已延到 11-06（close/mask，
-    备份 `_base.bak_20260923`）；alpha 518 → 678 个完成。
+    备份 `_base.bak_20260923` 已于 2026-11-20 回收，`_base` 可由 prep 重建）；alpha 518 → 678 个完成。
     🚨 **链条依赖**：pred 延不了是因为**面板**停在 09-23（46/938 个 neu 落后于 raw），
     `_predict_fp` **不含数据末端日期** ⇒ 单纯重跑 `--stage predict` 会静默跳过。
     剩余步骤（按序）：
@@ -2028,6 +2028,41 @@ Q1−Q5 年化 +12.9%（t 2.24），但多头端 15% 超额仅 **+0.196%/月（t
 
 ## 三、生产化 / 长期（可选）
 
+- [x] **✅ 死代码第二批清理 + 依赖倒置修正 + 本机数据面对齐存储规范（2026-11-20）**：
+  ① **删 41 个死脚本**（接 11-19 的 `5b0120f` 137 个探针；判据 = 调度表 / 测试 /
+  活跃 TODO / lib 引用**全零**，仅 ✅ 历史记录引用的不算活）：一次性数据回补 4
+  （`backfill_{financial,holder,pledge_profit}_alla` + `run_evt_margin_build`，数据已在
+  本地 parquet、增量走 `update_data`）、**ETF 已收口探针 15**（breaker / 相位矩阵 /
+  权重七模 / 时延 / 日内时钟 / PBO / 指数代理等，结论都在 `etf_contest5` README §14
+  与本文件 ✅ 行）、**textmining AI51/57 复现件 13**（fadt / sue_txt 的 train/eval/
+  samples，产物目录已不存在；senti 现役管线与 FinBERT 模型保留）、散件 5
+  （`fix_meta` / `audit_panel_window` / `sync_factor_artifacts` / `update_etf_flow`
+  （fund_share/nav/iopv 三表零读取方）/ `generate_signals`）+ oneoff 残件 4。
+  ⚠️ **另一台机器**的 `etf_contest5` 运行手册 / 报告里若有指向已删脚本的复现命令
+  （`etf_pbo_audit`·`etf_contest5_buffer_oos`·`etf_signal_latency`·`etf_weight_probe`·
+  `etf_intraday_clock_probe`·`etf_champ_phase_matrix`·`etf_phase_rule_matrix`·
+  `generate_signals`），pull 后同步划掉。
+  ② **修 4 处 lib ← scripts 依赖倒置**（被 import 的只能是统一口径/核心代码）：
+  `atomic_io` 下沉 `data/atomic_io.py`（data/cache 不再 import scripts）；
+  `STYLE_VARS` 唯一真源 → `research.barra`（builder 只消费）；
+  `rank_resid_stats(_from_sig)` 下沉 `research.dup_criteria`（判据计算核心归位，
+  `factor_library` / `dup_audit` / `library_dedup_plan` / 测试全改走真源）；
+  `build_senti_factors` 内联公开 `load_daily`（原跨脚本 import 私有函数，违反守卫 11）。
+  ④ **顺带修一条存量守卫违规**：`strategy/event_driven.py` 的本地 `nw_t`（`016a29b`
+  引入，`test_criteria_have_single_definition_site` 在 HEAD 即红）改 import
+  `stats.robust_stats.nw_t`（`lag=5` 显式传参）。⚠️ 口径差异留痕：旧本地版自协
+  分母 `/n`、真源 `/(n-j)`，同序列 t 偏差 ~1–2% ⇒ 事件线此前引用的 t（H=20 毛超额
+  3.23 等）为旧口径，**旧值不再引用**（同 11-19 指标收口对 pit_intraday_probe 的处理）。
+  另 `test_caliber::warmup` 本机失败 = 缺 `alla_rolling_ortho/pred` 信号面板（数据在
+  另一台机器，非代码问题）；TabICL ×3 = huggingface 网络不通。
+  ③ **本机 D:/data 对齐最新存储规范**：`alt_cls` 1,485 个日分片 → 5 个年分区
+  （630,000 行 / news_id 幂等 / 单日读回逐行核验，`_alt_meta.json` 补
+  `cls_days_by_year`）；`dup_signatures.npy` float32 → **float16**（2.7→1.35GB，
+  25 对秩相关 \|Δρ\|max = 4.5e-4 < 2e-3 门槛）；删 14 个孤儿 `_fetch_progress_*`
+  （回补脚本已删，唯一在用 `_fetch_progress_alla_2015.json` 保留）、无引用
+  `registry.csv.bak_{basis,dupaudit}`、`hs300_2022_2025` 下线残留副本 **1.4GB**
+  （11-18 已下线，守卫预期其不存在）。入口索引重建（129 活跃入口），
+  `docs_lint` / `memory_lint` / `gen_scripts_index --check` 全绿。
 - [x] **✅ 指标口径全仓收口四步（2026-11-19）** —— 审计「同一指标多份实现 / 多套口径」后一次清完：
   ① `pit_intraday_probe` 的朴素 `t = IC/std·√n` 改 `stats.robust_stats.nw_tstat`（NW HAC，
      滞后用 Andrews 自动）——该探针历史 `t` 全部虚高，**旧 t 值不再引用**；
