@@ -123,6 +123,7 @@
 |---|---|
 | `ingest/check_data_quality.py` | 数据质量检查 CLI |
 | `ingest/extend_factor_library.py` | 因子库数据延长 —— 面板刷新到数据源最新交易日 |
+| `ingest/fetch_minute_all.py` | 任意池分钟数据拉取（分片+断点续传，`--plan` 只出计划不联网） |
 | `ingest/fetch_minute_gap.py` | 补齐 HS300 动态池（PIT 成分）缺失的分钟数据 |
 | `ingest/fetch_status_batched.py` | 分段拉取全A历史状态表（涨跌停/停牌/ST/除权标记）——增量断点续拉版。 |
 | `ingest/update_data.py` | 每日数据更新脚本 |
