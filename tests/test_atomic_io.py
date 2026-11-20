@@ -1,4 +1,4 @@
-"""`scripts.common.atomic_io` 回归：原子写盘 + 降级路径 + 残渣清扫。
+"""`data.atomic_io` 回归：原子写盘 + 降级路径 + 残渣清扫。
 
 为什么值得锁死
 --------------
@@ -22,7 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.common.atomic_io import sweep_stale_tmp, write_parquet_atomic  # noqa: E402
+from data.atomic_io import sweep_stale_tmp, write_parquet_atomic  # noqa: E402
 
 
 def _df() -> pd.DataFrame:
@@ -59,7 +59,7 @@ def test_falls_back_to_direct_write_when_replace_always_denied(
 
     monkeypatch.setattr(os, "replace", _deny)
     # 退避基数调小，避免测试里真等 ~12s
-    monkeypatch.setattr("scripts.common.atomic_io.BACKOFF", 0.001)
+    monkeypatch.setattr("data.atomic_io.BACKOFF", 0.001)
     write_parquet_atomic(new, dst)                 # 不抛异常
     pd.testing.assert_frame_equal(pd.read_parquet(dst), new)   # 内容已更新
     assert list(tmp_path.glob("*.tmp")) == []      # 降级路径也清掉自己的 tmp
@@ -80,9 +80,9 @@ def test_fallback_write_retries_transient_lock(
 
     monkeypatch.setattr(os, "replace", lambda *a, **k: (_ for _ in ()).throw(
         PermissionError(5, "拒绝访问。")))
-    monkeypatch.setattr("scripts.common.atomic_io.BACKOFF", 0.001)
-    monkeypatch.setattr("scripts.common.atomic_io.FALLBACK_BUDGET", 0.05)
-    monkeypatch.setattr("scripts.common.atomic_io.FALLBACK_MAX_SLEEP", 0.01)
+    monkeypatch.setattr("data.atomic_io.BACKOFF", 0.001)
+    monkeypatch.setattr("data.atomic_io.FALLBACK_BUDGET", 0.05)
+    monkeypatch.setattr("data.atomic_io.FALLBACK_MAX_SLEEP", 0.01)
 
     import pandas as pd_mod
     real_to_parquet = pd_mod.DataFrame.to_parquet
@@ -111,9 +111,9 @@ def test_fallback_write_raises_after_retries_exhausted(
 
     monkeypatch.setattr(os, "replace", lambda *a, **k: (_ for _ in ()).throw(
         PermissionError(5, "拒绝访问。")))
-    monkeypatch.setattr("scripts.common.atomic_io.BACKOFF", 0.001)
-    monkeypatch.setattr("scripts.common.atomic_io.FALLBACK_BUDGET", 0.05)
-    monkeypatch.setattr("scripts.common.atomic_io.FALLBACK_MAX_SLEEP", 0.01)
+    monkeypatch.setattr("data.atomic_io.BACKOFF", 0.001)
+    monkeypatch.setattr("data.atomic_io.FALLBACK_BUDGET", 0.05)
+    monkeypatch.setattr("data.atomic_io.FALLBACK_MAX_SLEEP", 0.01)
 
     import pandas as pd_mod
     real_to_parquet = pd_mod.DataFrame.to_parquet

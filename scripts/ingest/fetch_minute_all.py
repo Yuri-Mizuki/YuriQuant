@@ -46,7 +46,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.common.atomic_io import (  # noqa: E402
+from data.atomic_io import (  # noqa: E402
     write_json_atomic,
     write_parquet_atomic,
 )

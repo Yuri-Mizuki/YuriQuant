@@ -52,7 +52,7 @@ import pandas as pd
 
 from config import Config
 from data.datasource import DataSource
-from scripts.common.atomic_io import write_parquet_atomic
+from data.atomic_io import write_parquet_atomic
 
 log = logging.getLogger("data.cache")
 

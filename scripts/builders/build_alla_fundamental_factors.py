@@ -2,7 +2,7 @@
 
 背景（2026-09-03）：A族（股东结构行为）已就位并入 all_a_2018_2026，但完整
 "基本面族"还缺财务报表维度（价值/质量/成长/规模/杠杆/周转，以及分红类）。
-本脚本在全A尺度（含退市，财务四表已由 backfill_financial_alla 补到 5810 主清单）
+本脚本在全A尺度（含退市，财务四表已回补到 5810 主清单本地 parquet）
 构建 B族因子，并 append 进 registry.csv 与 ic_h{1,5,10,20}.parquet，使滚动实验
 select 阶段能把它们纳入特征候选池（量价之外的价值/质量/成长信息维度）。
 
@@ -66,7 +66,7 @@ LEVEL_FACTORS = frozenset({"float_mktcap"})
 
 DATASET = "all_a_2018_2026"
 
-# ---- 财务长表字段（all_a 全表已含，见 backfill_financial_alla）----
+# ---- 财务长表字段（all_a 全表已回补，一次性拉取脚本已删 2026-11-20）----
 _INCOME_FIELDS = {
     "OPERA_REV": "营业收入",
     "LESS_OPERA_COST": "营业成本",

@@ -43,7 +43,6 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 from scripts.common.cli_common import setup_logging  # noqa: E402
 from scripts.textmining._paths import Out  # noqa: E402
-from scripts.textmining.build_sue_txt_samples import _load_daily  # noqa: E402
 
 OUT_DIR = Out("senti")
 log = setup_logging("senti_factors")
@@ -54,7 +53,20 @@ RATING_MAP = {"买入": 7, "增持": 5, "中性": 3, "持有": 3, "减持": 2, "
 
 
 def pool_daily(pool: str) -> pd.DataFrame:
-    return _load_daily(None, [], 20190101, 20261231, pool=pool)
+    """直接读 ``daily_{pool}.parquet`` 缓存（不走 DataCache，避免触发 calendar 增量写）。
+
+    zz1000 的日线缓存归档在 ``archive_zz1000/daily_zz1000_only.parquet``，特判回退。
+    2026-11-20 自 ``build_sue_txt_samples._load_daily`` 内联公开（原属私有函数跨脚本
+    import，违反分层守卫；该脚本已随 AI51 复现线收口删除）。
+    """
+    from config import Config
+    root = Path(str(Config.cache()["root"]).replace("//", "/"))
+    p = root / f"daily_{pool}.parquet"
+    if not p.exists() and pool == "zz1000":
+        alt = root / "archive_zz1000" / "daily_zz1000_only.parquet"
+        if alt.exists():
+            p = alt
+    return pd.read_parquet(p)
 
 
 def month_end_days(daily: pd.DataFrame, begin: str) -> list[pd.Timestamp]:

@@ -5,6 +5,5 @@
 - 它们产出受跟踪数据集 `all_a_2018_2026` 的 panels 与其上游 parquet。
 放在仓库外会导致**干净 clone 上生产入口 ImportError**。
 
-布局：`build_alla_*` = 因子面板构建器；`backfill_*`/`fetch_*`/`refetch_*` = 数据回补；
-`run_evt_margin_build` = 回补+构建编排器。
+布局：`build_alla_*` = 因子面板构建器；`fetch_*` = 数据回补（一次性 backfill 探针已删，数据落本地 parquet）。
 """

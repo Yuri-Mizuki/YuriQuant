@@ -49,8 +49,13 @@ STYLE_LEVEL1: dict[str, tuple[str, ...]] = {
     "value": ("btop",),
     "growth": ("growth",),
     "leverage": ("mlev", "dtoa", "blev"),
-    "dividend_yld": ("dtop",),
+    "dividend_yld": ("dtop",)
 }
+
+#: 描述变量清单（**唯一真源**，2026-11-20 自 builder 下沉：文件名 = ``panels_barra/{v}.parquet``；
+#: builder ``build_alla_barra_styles`` 与本模块共用，禁止各自另抄一份）
+STYLE_VARS: tuple[str, ...] = tuple(
+    v for vars_ in STYLE_LEVEL1.values() for v in vars_)
 
 #: 自身即市值函数的描述变量（标准化时不做市值加权，防自反）
 _CAP_NATIVE = {"lncap", "nl_size"}
@@ -265,7 +270,6 @@ def load_barra_inputs() -> dict[str, Any]:
     barra_dir = ds_dir / "panels_barra"
     base = ROOT / "reports" / "alla_rolling" / "_base"
 
-    from scripts.builders.build_alla_barra_styles import STYLE_VARS
     expos: dict[str, pd.DataFrame] = {}
     for v in STYLE_VARS:
         p = barra_dir / f"{v}.parquet"

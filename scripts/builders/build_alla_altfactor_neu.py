@@ -64,7 +64,7 @@ from scripts.common.alla_common import (
     FUNDIND_BASE_SUBDIR,
     FUNDIND_SUBDIR,
 )
-from scripts.common.atomic_io import write_parquet_atomic
+from data.atomic_io import write_parquet_atomic
 
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
@@ -186,7 +186,7 @@ def main() -> None:
                 arr = x if not fin else _transform(panel, mode, mc, ind,
                                                    name=n, fundind=True)
                 # 原子替换 + 抗瞬时占用：进程被杀不会留截断 parquet；WinError 5 会重试
-                # （杀软/索引器扫描刚写完的面板，见 scripts/common/atomic_io.py）
+                # （杀软/索引器扫描刚写完的面板，见 data/atomic_io.py）
                 write_parquet_atomic(arr, out / f"{n}.parquet")
         tag = "已写盘" if not args.diagnose else "(dry)"
         print(f"{n:34s} {mode:14s} {diag['row_nuniq_med']:7.1f} "

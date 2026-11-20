@@ -64,12 +64,9 @@ log = setup_logging("build_alla_barra_styles")
 DATASET = "all_a_2018_2026"
 BASE_DIR = ROOT / "reports" / "alla_rolling" / "_base"
 
-#: 描述变量清单（唯一真源；一级归属见 _LEVEL1）
-STYLE_VARS = (
-    "lncap", "beta", "resid_vol", "momentum", "nl_size",
-    "liquidity", "ep_ttm", "btop", "growth",
-    "mlev", "dtoa", "blev", "dtop",
-)
+#: 描述变量清单真源在 :data:`research.barra.STYLE_VARS`（2026-11-20 下沉，本脚本只消费）
+from research.barra import STYLE_VARS  # noqa: E402
+
 _LEVEL1 = {
     "lncap": "size", "beta": "volatility", "resid_vol": "volatility",
     "momentum": "momentum", "nl_size": "nl_size", "liquidity": "liquidity",
@@ -287,7 +284,7 @@ def _status(ds_dir: Path) -> dict[str, str]:
 
 
 def _write_panel(panel: pd.DataFrame, path: Path) -> None:
-    from scripts.common.atomic_io import write_parquet_atomic  # 容错写盘（§六坑⑥）
+    from data.atomic_io import write_parquet_atomic  # 容错写盘（§六坑⑥）
     write_parquet_atomic(panel, path)
 
 

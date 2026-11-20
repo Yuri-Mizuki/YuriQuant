@@ -44,7 +44,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from research.factor_library import FactorLibrary  # noqa: E402
-from scripts.common.atomic_io import write_csv_atomic  # noqa: E402
+from data.atomic_io import write_csv_atomic  # noqa: E402
 from scripts.factors.dup_criteria import (  # noqa: E402
     CORR_TRIGGER,
     MIN_SPAN,

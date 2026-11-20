@@ -9,7 +9,7 @@ AI 41《基于BERT的分析师研报情感因子》(20210118) 流程：
 
 我们的近似（2026-09-09，如实声明与研报的差异）：
 - 模型：yiyanghkust/finbert-tone-chinese（已在金融文本上微调的三分类
-  Neutral/Positive/Negative），跳过自微调（与 encode_fadt_bert 同一近似）
+  Neutral/Positive/Negative），跳过自微调
 - 粒度：**报告级**而非逐句——研报摘要均长 ~1000 字符，逐句编码在本机
   CPU（22 线程，无 GPU）需 ~11 小时；报告级截断 256 token 约 3-4 小时。
   报告情感得分 = P(pos) - P(neg)（三分类边际差，中性 ≈ 0，与研报

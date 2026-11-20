@@ -1,6 +1,6 @@
 """B+ 基本面族因子面板 → 并入 all_a_2018_2026 数据集。
 
-三件套（data 由 backfill_pledge_profit_alla 拉取到本地 parquet）：
+三件套（data 已回补到本地 parquet；原一次性拉取脚本已删，2026-11-20）：
 - 商誉     : goodwill_ratio = GOODWILL / 股东权益（balance_sheet 本地已有）
 - 股权质押 : pledge_ratio / pledge_holder_ratio / frozen_ratio
              （equity_pledge_freeze，PIT 按公告日）

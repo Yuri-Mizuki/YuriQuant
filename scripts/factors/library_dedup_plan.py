@@ -194,7 +194,7 @@ def _rank_increment(name: str, cover: str, lib=None, stride: int = 1) -> dict:
     （2511 天全算要 25 分钟）。非退化情形也只用于 `rel_std`/`ic` 的均值，
     抽样不改变结论方向；判定「有独立增量」时一律保守放行。
     """
-    from scripts.factors.dup_audit import rank_resid_stats
+    from research.dup_criteria import rank_resid_stats
     from scripts.factors.dup_criteria import classify, explain
 
     if lib is None or not name or not cover:
@@ -280,7 +280,7 @@ def _try_cover_swap(df: pd.DataFrame, i: int, cover_name: str,
     Returns:
         可交换则返回覆盖者的行号 ``j``；否则 None。
     """
-    from scripts.factors.dup_audit import rank_resid_stats
+    from research.dup_criteria import rank_resid_stats
     from scripts.factors.dup_criteria import classify
 
     j = pos.get(cover_name)

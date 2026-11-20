@@ -2604,7 +2604,7 @@ class FactorLibrary:
         if should_check(top_corr):
             opp = self.get_panel(top_name)
             if opp is not None:
-                from scripts.factors.dup_audit import rank_resid_stats
+                from research.dup_criteria import rank_resid_stats
 
                 st = rank_resid_stats(panel, {top_name: opp},
                                       self.default_returns_panel())
@@ -2612,7 +2612,7 @@ class FactorLibrary:
             else:
                 # 没有独立面板（批量入库的 builder 行）⇒ 用索引里已有的签名兜底。
                 # 不兜底就等于「库内最主要的那部分最近邻一律放行」——等价检查静默失效。
-                from scripts.factors.dup_audit import rank_resid_stats_from_sig
+                from research.dup_criteria import rank_resid_stats_from_sig
 
                 j = [str(n) for n in idx["names"]].index(top_name)
                 st = rank_resid_stats_from_sig(
@@ -2753,7 +2753,7 @@ class FactorLibrary:
         # ---- 判据与快路径统一走 dup_criteria（2026-11-12）----
         # 这里原来用 raw 值的 resid_t（|t|≥2 算有增量），已被证伪：
         # 纯单调变换（rank 版本）在 raw 空间留下曲线残差，能给出 t=−7.4 的伪增量。
-        from scripts.factors.dup_audit import rank_resid_stats
+        from research.dup_criteria import rank_resid_stats
         from research.dup_criteria import (
             classify, classify_independent, explain, should_check)
 

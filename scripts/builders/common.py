@@ -203,7 +203,7 @@ def fuse_horizon_ic(ds_dir: Path, h: int, family: str, *,
             continue
         ic[n] = calc_ic_series(p[codes], fwd).reindex(ic.index)
     ic = ic.astype(np.float32)
-    from scripts.common.atomic_io import write_parquet_atomic
+    from data.atomic_io import write_parquet_atomic
     write_parquet_atomic(ic, ds_dir / f"ic_h{h}.parquet")
     log.info("ic_h%d merged: %d 因子", h, ic.shape[1])
 
@@ -518,7 +518,7 @@ def neutralize_one(task: tuple[str, str, str, bool]) -> tuple[str, float]:
     x = x.replace([np.inf, -np.inf], np.nan).astype(np.float32).clip(-10.0, 10.0)
     cov = float(x.notna().mean().mean())
     # 原子写 + 抗瞬时占用（Windows os.replace 撞杀软/索引器；见 atomic_io）
-    from scripts.common.atomic_io import write_parquet_atomic
+    from data.atomic_io import write_parquet_atomic
     write_parquet_atomic(x, ds / out_subdir / f"{name}.parquet")
     return name, cov
 
@@ -552,7 +552,7 @@ def run_neutralization(ds: Path, out_subdir: str, *,
                        stats_file: str | None = None,
                        industry_only: frozenset[str] = frozenset()) -> int:
     """按 registry 批量构建中性化面板（两脚本共用；返回处理因子数）。"""
-    from scripts.common.atomic_io import sweep_stale_tmp
+    from data.atomic_io import sweep_stale_tmp
 
     reg = pd.read_csv(ds / "registry.csv")
     names = (only if only else

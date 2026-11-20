@@ -34,7 +34,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.common.atomic_io import write_json_atomic  # noqa: E402
+from data.atomic_io import write_json_atomic  # noqa: E402
 from scripts.common.cli_common import setup_logging  # noqa: E402
 
 log = setup_logging("fetch_alla_hist")

@@ -18,7 +18,7 @@ HS300 在 2022-01 ~ 2026-06 窗口内**曾属**的成分共 **421 只**。缺的
 2. 与现有 parquet 的 code 集合求差 → 待补清单（82 只，减去备份可回补的）。
 3. 按**年**分批向数据源请求（73 只 × 1 年 ≈ 85 万行/批，内存可控），
    每批落盘前与全量本地数据 concat + 去重。
-4. 用 ``atomic_io.write_parquet_atomic`` 写回，更新 ``_meta.json``。
+4. 用 ``data.atomic_io.write_parquet_atomic`` 写回，更新 ``_meta.json``。
 5. 提示重建 ``MinutePanelStore``（codes 从 339 → 421，必须重建）。
 
 用法（须用系统 Python，需联网）::
@@ -42,7 +42,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from config import Config  # noqa: E402
-from scripts.common.atomic_io import write_json_atomic, write_parquet_atomic  # noqa: E402
+from data.atomic_io import write_json_atomic, write_parquet_atomic  # noqa: E402
 from scripts.common.cli_common import setup_logging  # noqa: E402
 
 log = setup_logging("fetch_minute_gap")

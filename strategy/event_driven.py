@@ -281,19 +281,13 @@ def bench_for_holdings(pos: pd.DataFrame, env: dict, grp: pd.DataFrame,
 # ---------------------------------------------------------------------------
 # 统计
 # ---------------------------------------------------------------------------
-def nw_t(x: np.ndarray, lag: int = 5) -> float:
-    """Newey-West HAC t 值（日频，lag 5）。"""
-    x = np.asarray(x, dtype=float)
-    x = x[np.isfinite(x)]
-    n = len(x)
-    if n < 10:
-        return float("nan")
-    e = x - x.mean()
-    s = (e * e).sum() / n
-    for l in range(1, lag + 1):
-        s += 2 * (1 - l / (lag + 1)) * (e[l:] * e[:-l]).sum() / n
-    se = np.sqrt(s / n)
-    return float(x.mean() / se) if se > 0 else float("nan")
+#: NW t 唯一真源在 :func:`stats.robust_stats.nw_t`（2026-11-20 删本地副本——第二份
+#: 实现触发 ``test_criteria_have_single_definition_site``）。⚠️ **口径差异留痕**：
+#: 旧本地版自协分母为 ``/n``，真源为 ``/(n-j)``，同序列 t 值偏差 ~1–2% ⇒ 事件线
+#: 2026-11-20 前引用的 t（如 H=20 毛超额 3.23）为旧口径，**跨口径不可比、旧值
+#: 不再引用**（同 2026-11-19 指标收口对 pit_intraday_probe 的处理）；
+#: ``lag=5`` 显式传参保持「日频固定 5 滞后」的原设定。
+from stats.robust_stats import nw_t  # noqa: E402
 
 
 def summarize(ret: pd.Series, bench: pd.Series, pos: pd.DataFrame, cal: pd.DatetimeIndex,
@@ -326,7 +320,7 @@ def summarize(ret: pd.Series, bench: pd.Series, pos: pd.DataFrame, cal: pd.Datet
         "ann_ret": float(r.mean() * ANNUAL),
         "ann_ex": ann_ex,
         "ann_ex_net": ann_ex - cost,
-        "t": nw_t(ex.values),
+        "t": nw_t(ex.values, lag=5),
         "sharpe": float(r.mean() / r.std() * np.sqrt(ANNUAL)) if r.std() > 0 else float("nan"),
         "maxdd": float(dd.min()),
         "turnover": ann_turn,

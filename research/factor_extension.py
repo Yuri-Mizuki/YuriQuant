@@ -56,7 +56,7 @@ def _rank_rel_std(za: np.ndarray, ma: np.ndarray, zb: np.ndarray, mb: np.ndarray
                   *, min_obs: int = 20) -> float:
     """秩空间残差标准差 / 被解释变量标准差（逐日截面 OLS）。
 
-    与 ``scripts.factors.dup_audit.rank_resid_stats`` 的 ``rel_std`` 同义：
+    与 ``research.dup_criteria.rank_resid_stats`` 的 ``rel_std`` 同义：
     < ``REL_STD_DEGENERATE`` 即「精确等价（单调变换/镜像）」。这里不算 IC，
     因为「是否等价」只取决于两个因子之间的秩空间关系，与收益面板无关。
     """

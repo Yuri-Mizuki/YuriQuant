@@ -344,7 +344,7 @@ def test_rank_resid_stats_kills_monotone_transform():
     截面 rank（实测 2511 天逐日秩相关恒 = 1.000000），raw OLS 给出的却是
     t = −7.40 ⇒ 用 ``|t|≥2`` 当删除门槛会把它判成「有独立增量」而留下。
     """
-    from scripts.factors.dup_audit import rank_resid_stats
+    from research.dup_criteria import rank_resid_stats
 
     a = _panel(seed=7)
     rp = _rets(seed=8)
@@ -361,7 +361,7 @@ def test_rank_resid_stats_kills_monotone_transform():
 
 def test_rank_resid_stats_detects_real_increment():
     """控制掉 base 后仍有残差的因子，不能被判成退化。"""
-    from scripts.factors.dup_audit import rank_resid_stats
+    from research.dup_criteria import rank_resid_stats
 
     rng = np.random.default_rng(11)
     a = _panel(seed=12)
@@ -379,7 +379,7 @@ def test_rank_resid_stats_reports_insufficient_days_separately():
     2026-11-12 的 8/8 假通过事故就是这条：退登记后 ``get_panel`` 返回 None，
     ``_resid_for`` 给 ``(nan, 0.0)``，0.0 被下游当成「无增量」。
     """
-    from scripts.factors.dup_audit import rank_resid_stats
+    from research.dup_criteria import rank_resid_stats
 
     a = _panel(n_dates=5, seed=14)
     rp = _rets(n_dates=5, seed=15)
@@ -397,7 +397,7 @@ def test_rank_resid_stats_missing_panel_returns_nan_not_zero():
     调用方把 ``0.0`` 读成「无增量」，于是什么都没测却全部判「可删」。
     这里直接测公开入口 ``rank_resid_stats``（空 DataFrame = 取不到面板）。
     """
-    from scripts.factors.dup_audit import rank_resid_stats
+    from research.dup_criteria import rank_resid_stats
 
     empty = pd.DataFrame()
     st = rank_resid_stats(empty, {"cover": empty}, empty)
@@ -415,7 +415,7 @@ def test_degenerate_reports_zero_ic_days_but_positive_span():
     若把两者混成一个字段，下游「n_days<20 ⇒ 无法检验」会把**精确等价**判成
     「有独立增量 ⇒ 必须留」，方向完全反了（实测 34 个）。
     """
-    from scripts.factors.dup_audit import rank_resid_stats
+    from research.dup_criteria import rank_resid_stats
 
     a = _panel(seed=21)
     st = rank_resid_stats(a, {"base": a}, _rets(seed=22))
@@ -429,7 +429,7 @@ def test_monotone_transform_with_full_span_still_degenerate_under_stride():
 
     抽稀提速的前提就是「退化是严格等式、与抽哪几天无关」；这条测试锁住这个前提。
     """
-    from scripts.factors.dup_audit import rank_resid_stats
+    from research.dup_criteria import rank_resid_stats
 
     a = _panel(n_dates=600, seed=23)
     rp = _rets(n_dates=600, seed=24)

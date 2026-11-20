@@ -255,7 +255,7 @@ def main():
     # 再让 register 跳过 slug 副本 —— 否则库里同面板存两份，且 builder 侧工具
     # 找不到它（2026-11-12：12 个 pap 因此既无中性化面板也无 ic 列）。
     from factor.preprocessing import standardize_zscore
-    from scripts.common.atomic_io import write_parquet_atomic
+    from data.atomic_io import write_parquet_atomic
 
     for n in todo:
         write_parquet_atomic(standardize_zscore(panels[n]),

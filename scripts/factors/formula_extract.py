@@ -50,7 +50,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.common.atomic_io import write_csv_atomic  # noqa: E402
+from data.atomic_io import write_csv_atomic  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # AST → 表达式字符串
