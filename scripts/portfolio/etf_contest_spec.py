@@ -134,19 +134,23 @@ DEFAULT_EXEC_CALIBER = "open"
 EXEC_CALIBER = {
     # 现状流程：18:30 批量出信号 → 次日开盘下单。**对外口径**。
     # core = 50 只口径（2026-11-19 复评），🚨 已退役，仅存档；
-    # balanced = 50 只相位均值口径（12.53%/0.59，k=1 为 14.75%/0.70）；
+    # balanced = 50 只口径、ERC 权重（2026-11-19，k=1 为 13.23%/0.64；
+    #            对外用 5 相位均值 13.33%/0.64/MDD 29.89%，§14.11）；
     # monthly = 50 只口径（2026-10-30）；比赛期 45 只数字见 §一–§十三。
     "open": {
         "core": {"annual_return": 0.2424, "sharpe": 0.89, "max_drawdown": 0.2772,
                  "win_2m_mean": 0.0419, "win_2m_median": 0.0280, "win_2m_p10": -0.0554,
                  "win_2m_worst": -0.1041, "win_rate": 0.667},
-        "balanced": {"annual_return": 0.1475, "sharpe": 0.70, "max_drawdown": 0.2636,
-                     "win_2m_mean": 0.0273, "win_2m_median": 0.0181, "win_2m_p10": -0.0646,
-                     "win_2m_worst": -0.1515, "win_rate": 0.654},
-        # monthly（长线档）：月频 12 次/年 + 单只 17.6% ⇒ 执行税只有集中档的 1/20。
-        "monthly": {"annual_return": 0.1318, "sharpe": 1.04, "max_drawdown": 0.1342,
-                    "win_2m_mean": 0.0236, "win_2m_median": 0.0114, "win_2m_p10": -0.0243,
-                    "win_2m_worst": -0.0795, "win_rate": 0.675},
+        "balanced": {"annual_return": 0.1323, "sharpe": 0.64, "max_drawdown": 0.2554,
+                     "win_2m_mean": 0.0255, "win_2m_median": 0.0159, "win_2m_p10": -0.0662,
+                     "win_2m_worst": -0.1882, "win_rate": 0.654},
+        # monthly（生产默认档）：``target_vol`` 2026-11-19 由 0.15 降至 0.12，
+        # 同日逆波动加 ``weight_vol_floor=0.10``（§14.12）。下表为 k=1（月内第 1 个
+        # 交易日）读数；
+        # 🚨 对外引用用月内五相位均值 10.65% / SR 0.94 / MDD 15.97%（§14.12，极差 3.97pp）。
+        "monthly": {"annual_return": 0.1308, "sharpe": 1.13, "max_drawdown": 0.1397,
+                    "win_2m_mean": 0.0222, "win_2m_median": 0.0159, "win_2m_p10": -0.0264,
+                    "win_2m_worst": -0.0798, "win_rate": 0.667},
     },
     # 盘中 14:50 出信号 + 收盘集合竞价成交。**备选路径（模式 B），不对外引用。**
     # 技术可行性已实测通过（数据/耗时/信号误差/成交通道四项，§九 9.2.1–9.2.5），
@@ -156,13 +160,16 @@ EXEC_CALIBER = {
         "core": {"annual_return": 0.3358, "sharpe": 1.28, "max_drawdown": 0.2535,
                  "win_2m_mean": 0.0559, "win_2m_median": 0.0376, "win_2m_p10": -0.0364,
                  "win_2m_worst": -0.1234, "win_rate": 0.725},
-        "balanced": {"annual_return": 0.2040, "sharpe": 0.89, "max_drawdown": 0.3068,
+        # ⚠️ balanced 栏已按 ERC 重跑年化/Sharpe，但 MDD 与 2 月窗口仍是 HRP 时期的值；
+        #    core 栏是 45 只比赛池历史值，未按 50 只重算。
+        "balanced": {"annual_return": 0.1401, "sharpe": 0.68, "max_drawdown": 0.3068,
                      "win_2m_mean": 0.0385, "win_2m_median": 0.0241, "win_2m_p10": -0.0589,
                      "win_2m_worst": -0.1380, "win_rate": 0.650},
         # 长线档：这一栏是「调仓日收盘成交」实测值，同时也当 `close_intraday` 的代理 ——
         # 它的信号（12-1 动量 + 份额拥挤度）不依赖 T 日收盘价，故盘中出信号与收盘出
         # 信号等价；不像 core 有个 `pre10` 筛子依赖当天价（见 §九 9.2）。
-        "monthly": {"annual_return": 0.1352, "sharpe": 1.07, "max_drawdown": 0.1377,
+        # ⚠️ monthly 的 MDD 与 2 月窗口仍是 tvol=0.15 时期的值，仅年化/Sharpe 按 0.12 更新。
+        "monthly": {"annual_return": 0.1233, "sharpe": 1.11, "max_drawdown": 0.1377,
                     "win_2m_mean": 0.0242, "win_2m_median": 0.0118, "win_2m_p10": -0.0217,
                     "win_2m_worst": -0.0845, "win_rate": 0.662},
     },

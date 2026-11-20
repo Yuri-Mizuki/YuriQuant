@@ -2,15 +2,17 @@
 ETF 轮动生产信号板（monthly / balanced）
 ========================================
 
-两个 profile 共用同一套面板与回测引擎，参数全部来自 `etf_contest_spec`
+各 profile 共用同一套面板与回测引擎，参数全部来自 `etf_contest_spec`
 （方案唯一真源：`reports/etf_contest5/README.md`）。2026-11-19 去比赛化：方案改英文
 功能名，池子恢复 50 只，删除原 `contest5`（合规补位档）。
 
-  - `monthly`「月频稳健」：**默认档**（月频 Top5 + 12-1 动量 + 拥挤度剔除 + 逆波动 +
-    15% 波动目标 + 债金防御腿 + 去重 0.90 + buffer 15/40）。50 只池 T+1 open：
-    13.18% / Sharpe 1.04 / MDD 13.42%，Calmar 0.98；
-  - `balanced`「均衡轮动」：同选标、Top5 + HRP，中间档。5 相位均值 12.53% / 0.59 /
-    MDD 31.3%，相位极差 5.14pp；
+  - `monthly`「月频稳健」：**默认档**（月频 Top5 + 12-1 动量 + 拥挤度剔除 + 逆波动
+    （σ 下限 10%）+ 12% 波动目标 + 债金防御腿 + 去重 0.90 + buffer 15/40）。50 只池 T+1 open：
+    月内五相位均值 10.65% / Sharpe 0.94 / MDD 15.97%，Calmar 0.67
+    （k=1 单相位 13.08%/1.13/MDD 13.97%）；
+  - `balanced`「均衡轮动」：同选标、Top5 + **ERC 等风险贡献**，中间档。5 相位均值
+    13.33% / 0.64 / MDD 29.89%、相位极差 5.06pp（由 HRP 改为 ERC，理由见 §14.11）；
+  - （`combo` 两档合并已于 2026-11-19 判否：两腿调仓日不同步，见 §14.10）
   - 🚨 原 `core`「集中轮动」已于 2026-11-19 **退役**：5 相位均值 14.27%/0.52/MDD 39.2%、
     最差相位 MDD 46.7%、Calmar 0.36；参数保留在 `etf_contest_spec.RETIRED_CORE`，
     仅供历史复现与探针基准。
@@ -81,8 +83,11 @@ MONTHLY = {**CHAMP_BASE, "name": "monthly", "signal": "mom_crowd_f20", "defense"
 # 退役依据：50 只池 5 相位均值 14.27%/SR 0.52/MDD 39.2%、最差相位 MDD 46.7%、Calmar 0.36；
 # 24.20% 的 k=1 是五个相位里唯一的正偏（其余 10.14%~13.31%）。参数见
 # ``etf_contest_spec.RETIRED_CORE``（历史复现与探针基准仍用，不得删改）。
-# 均衡轮动（原 contest5h「五衡」）：同选标、Top5 + HRP 风险平价（60 日协方差）。
-# 50 只池 5 相位：12.53%/SR 0.59/MDD 31.3%（最差相位 36.2%），相位极差 5.14pp，
+# 均衡轮动（原 contest5h「五衡」）：同选标、Top5 + **ERC 等风险贡献**（60 日协方差）。
+#   🚨 2026-11-19 由 ``hrp`` 改 ``erc``：HRP 在 5 只波动 12%~57% 的标的上给出
+#   69.5% / 0.18% 这类极端权重（碎仓 + 单只过度集中）；ERC 把最大单只压到 34.7%、
+#   碎仓归零、换手 −28%，相位平均年化 +0.80pp、MDD −1.4pp。见 README §14.11。
+# 50 只池 5 相位（ERC）：13.33%/SR 0.64/MDD 29.89%（最差相位 34.25%）、相位极差 5.06pp，
 # 比 core 的 14.06pp 稳得多 ⇒ 现在的中间档。
 # 🚨 2026-10-29 PIT 修复后：五衡 20.65% / SR 0.89 / MDD 33.27%，
 # 三锋的收益、p10、最差窗口、MDD **四项全优**，配对差 −1.36%/窗（t=−1.97）
@@ -98,10 +103,13 @@ MONTHLY = {**CHAMP_BASE, "name": "monthly", "signal": "mom_crowd_f20", "defense"
 # ③ **样本外验证失败**：前 20 期 buffer +52.4% vs 三锋 +131.2%，优势只在 2024 之后，
 #    逐年滚动选档 6 年出手 1 次亏 40pp ⇒ 事前不可识别，是付费的降波选项。
 # ⇒ 保留为**对照档**。见 reports/etf_contest5/README.md §4.1、§8.1、§8.2。
-BALANCED = {**RETIRED_CORE, "name": "balanced", "top_k": 5, "weighting": "hrp"}
+BALANCED = {**RETIRED_CORE, "name": "balanced", "top_k": 5, "weighting": "erc"}
 #: 生产方案（2026-11-19 起两档）：``monthly`` 默认，``balanced`` 中间档。
 #: 原 ``core`` 已退役，参数保留在 ``etf_contest_spec.RETIRED_CORE``。
 PROFILES = {"balanced": BALANCED, "monthly": MONTHLY}
+#: 两档合并（60% monthly + 40% balanced）**未采纳**（2026-11-19）：两腿调仓日不同步
+#: （M / W），合并只等价于两个独立账户；而 §14.9.3 的 0.79 Calmar 是**日频再平衡**口径，
+#: 实现不出来。判否记录见 `reports/etf_contest5/README.md` §14.10。
 DEF_PARTS = {"511010.SH": 0.5, "518880.SH": 0.5}
 PARTICIPATION = 0.05      # 单只单边下单 / 60 日均成交额
 PREMIUM_WARN = 0.01       # 20 日折溢价告警线
@@ -127,7 +135,7 @@ _CSS = """
 """
 
 
-def _expand_defense(tw: pd.Series) -> pd.Series:
+def expand_defense(tw: pd.Series) -> pd.Series:
     """把合成防御腿 DEF 拆成两只真实 ETF，并去掉现金/零权重。"""
     out = tw.astype(float).copy()
     if "DEF" in out.index:
@@ -139,7 +147,23 @@ def _expand_defense(tw: pd.Series) -> pd.Series:
     return out[out > 1e-9].sort_values(ascending=False)
 
 
-def _next_rebalance(idx: pd.DatetimeIndex, asof: pd.Timestamp,
+def sleeve_target(bundle, panels, close: pd.DataFrame, spec: dict,
+                   sig_date: pd.Timestamp) -> tuple[pd.Series, pd.Timestamp]:
+    """跑单腿策略，返回（展开防御腿后的目标权重, 调仓日）。"""
+    extra = (pd.DataFrame({"DEF": level_from_returns(build_defense(close)["mix"])})
+             if spec.get("defense") else None)
+    res = run_variant(bundle, panels, spec, None, None, extra_close=extra)
+    asof = res["rebalance_dates"][-1]
+    if asof != sig_date and _is_rebalance_day(close.index, spec.get("freq", "M")):
+        # 最新交易日本身就是调仓日（周频=周一）时，引擎因「最后一根 bar 不能建仓」
+        # 还停留在上一周。这里直接用当日因子/掩码取权重，否则实盘指令会落后一周。
+        fac = panels[spec["signal"]].where(panels["mask"]).loc[sig_date].dropna()
+        tw = res["strategy"].get_weights_at(sig_date, fac)
+        return expand_defense(tw), sig_date
+    return expand_defense(res["weights"].loc[asof]), asof
+
+
+def next_rebalance(idx: pd.DatetimeIndex, asof: pd.Timestamp,
                     freq: str = "M") -> pd.Timestamp | None:
     """freq="M"：asof 之后第一个「月份变化」的交易日；"W"：第一个「ISO 周变化」的交易日。"""
     later = idx[idx > asof]
@@ -179,12 +203,11 @@ def _table(rows: list[dict], cols: list[tuple[str, str]]) -> str:
 
 
 def main(argv: list[str] | None = None) -> None:
-    ap = argparse.ArgumentParser(description="ETF 轮动生产信号板（balanced / monthly）")
+    ap = argparse.ArgumentParser(description="ETF 轮动生产信号板（monthly / balanced）")
     ap.add_argument("--capital", type=float, default=1e7, help="总资金（元）")
     ap.add_argument("--positions", default=None, help="当前持仓 CSV（code,weight）")
     ap.add_argument("--profile", choices=tuple(PROFILES), default="monthly",
-                    help="monthly=月频稳健（默认）；balanced=均衡轮动（Top5/HRP，中间档）。"
-                         "原 core（Top3 集中档）已于 2026-11-19 退役")
+                    help="monthly（默认）/ balanced；原 core 已于 2026-11-19 退役")
     ap.add_argument("--out", default=None,
                     help="输出目录（默认按 profile 落到 reports/etf_*）")
     ap.add_argument("--exclude", default=None,
@@ -206,8 +229,8 @@ def main(argv: list[str] | None = None) -> None:
             spec.pop("max_weight", None)
         else:
             spec["max_weight"] = args.max_weight
-    label = {"balanced": "均衡轮动（Top5/HRP，中间档）",
-             "monthly": "月频稳健（月度/波动目标/债金防御，默认档）"}[args.profile]
+    label = {"balanced": "均衡轮动（Top5/ERC，中间档）",
+             "monthly": "月频稳健（月度/波动目标 12%/债金防御，默认档）"}[args.profile]
 
     cache = DataCache(create_datasource())
     bundle = load_bundle(cache, WARMUP_BEGIN, None)
@@ -231,23 +254,8 @@ def main(argv: list[str] | None = None) -> None:
         ok = (prem20.abs() <= args.max_premium) | prem20.isna()
         panels["mask"] = panels["mask"] & ok
         print(f"[{args.profile}] 折溢价闸门 |prem20| <= {args.max_premium:.2%}", flush=True)
-    extra = (pd.DataFrame({"DEF": level_from_returns(build_defense(close)["mix"])})
-             if spec.get("defense") else None)
-
-    res = run_variant(bundle, panels, spec, None, None, extra_close=extra)
-    rb = res["rebalance_dates"]
-    asof = rb[-1]
     sig_date = close.index[-1]
-    if asof != sig_date and _is_rebalance_day(close.index, spec.get("freq", "M")):
-        # 最新交易日本身就是调仓日（周频=周一）时，引擎因「最后一根 bar 不能建仓」
-        # 还停留在上一周。这里直接用当日因子/掩码取权重，否则实盘指令会落后一周。
-        fac = panels[spec["signal"]].where(panels["mask"]).loc[sig_date].dropna()
-        target = _expand_defense(res["strategy"].get_weights_at(sig_date, fac))
-        print(f"[{args.profile}] 信号日 {sig_date.date()} 即调仓日，按当日权重出单"
-              f"（次日开盘成交）", flush=True)
-        asof = sig_date
-    else:
-        target = _expand_defense(res["weights"].loc[asof])
+    target, asof = sleeve_target(bundle, panels, close, spec, sig_date)
     amt60 = amount.rolling(60, min_periods=40).mean().loc[sig_date]
     crowd = panels["crowd"].loc[sig_date]
     prem = panels["prem20"].loc[sig_date] if "prem20" in panels else pd.Series(dtype=float)
@@ -316,7 +324,7 @@ def main(argv: list[str] | None = None) -> None:
                                     encoding="utf-8-sig")
     # 下一次调仓：从**信号日**（最新交易日）往后找，避免周频时把已过去的调仓日
     # 当成"下次"。数据止于信号日时返回 None，由文案给出规则口径。
-    nxt = _next_rebalance(close.index, sig_date, spec.get("freq", "M"))
+    nxt = next_rebalance(close.index, sig_date, spec.get("freq", "M"))
     nxt_txt = str(nxt.date()) if nxt is not None else (
         "下周首个交易日" if spec.get("freq") == "W" else "下月首个交易日")
     meta = {
@@ -326,10 +334,13 @@ def main(argv: list[str] | None = None) -> None:
         "capital": args.capital, "pool_size": len(close.columns),
         "min_amount": MIN_AMOUNT, "participation_limit": PARTICIPATION,
         "premium_warn": PREMIUM_WARN, "warnings": warn_n,
-        "strategy": spec, "bench": BENCH,
+        "strategy": spec,
+        "bench": BENCH,
         # 执行口径（2026-10-29 切换）：信号按信号日收盘数据算出，**次日开盘**成交。
         # 对外成绩一律按 open 口径引用（etf_contest_spec.EXEC_CALIBER[DEFAULT_EXEC_CALIBER]）。
-        "exec_caliber": DEFAULT_EXEC_CALIBER, "exec_note": EXEC_NOTE,
+        "exec_caliber": DEFAULT_EXEC_CALIBER,
+        "exec_note": ("每月第一个交易日收盘后出信号，次日开盘下单成交（T+1 open）"
+                      if spec.get("freq") == "M" else EXEC_NOTE),
     }
     (out / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2),
                                    encoding="utf-8")
@@ -343,19 +354,19 @@ def main(argv: list[str] | None = None) -> None:
                 "（T+1 open；对外成绩口径）")
     rule_txt = {
         "balanced": ("TopK=5；12-1 动量 + 绝对动量过滤；"
-                     "120 日相关 ≥0.90 去重；HRP 风险平价（60 日协方差）；无波动目标"),
-        "monthly": "TopK=5；逆波动加权；15% 年化波动目标；防御腿 = 0.5·511010.SH + 0.5·518880.SH",
+                     "120 日相关 ≥0.90 去重；ERC 等风险贡献（60 日协方差）；无波动目标"),
+        "monthly": "TopK=5；逆波动加权（σ 下限 10%）；12% 年化波动目标；防御腿 = 0.5·511010.SH + 0.5·518880.SH",
     }[args.profile]
     evidence_txt = {
-        "balanced": ("中间档依据 <code>reports/etf_contest5/README.md</code> §四、§14.7。"
-                     "50 只正常口径、T+1 开盘成交：<b>5 相位均值年化 12.53%、Sharpe 0.59、"
-                     "MDD 31.3%（最差相位 36.2%）</b>，相位极差 5.14pp；"
-                     "k=1 单相位为 14.79%/0.70/MDD 26.36%。"
-                     "⚠️ 原「−15% 降档」用途已于 2026-10-30 取消（§8.2）。"),
-        "monthly": ("<b>T+1 开盘口径 13.18% / Sharpe 1.04 / MDD 13.42%</b>"
-                    "（2020-01 起，80 个 2 月窗口）；收盘成交口径 13.52%/1.07"
-                    " ⇒ <b>执行税 −0.34pp/年</b>（月频 12 次/年 + 单只 17.6%，远低于集中档）。"
-                    "月内调仓日摆动见 §五，勿线性外推。"),
+        "balanced": ("中间档依据 <code>reports/etf_contest5/README.md</code> §四、§14.11。"
+                     "50 只正常口径、T+1 开盘成交：<b>5 相位均值年化 13.33%、Sharpe 0.64、"
+                     "MDD 29.89%（最差相位 34.25%）</b>，相位极差 5.06pp；"
+                     "k=1 单相位为 13.23%/0.64/MDD 25.54%。"
+                     "权重规则 2026-11-19 由 HRP 改 ERC（最大单只 51.3%→34.7%、碎仓 5.9%→0）。"),
+        "monthly": ("<b>月内五相位均值 10.65% / Sharpe 0.94 / MDD 15.97%（Calmar 0.67）</b>；"
+                    "k=1（每月的第一个交易日）单相位为 13.08%/1.13/MDD 13.97%，"
+                    "k=1..5 极差 3.97pp。`target_vol` 2026-11-19 由 15% 降至 12%（§14.9.1），"
+                    "同日逆波动加 σ 下限 10%（§14.12：最大单只 42.7%→31.1%）；勿线性外推。"),
     }[args.profile]
     body = f"""<div class="page">
 <header>

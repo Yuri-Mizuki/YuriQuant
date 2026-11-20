@@ -49,7 +49,22 @@ def test_profile_keys_are_functional_names():
     assert PROFILES["balanced"]["top_k"] == 5
     assert PROFILES["monthly"]["name"] == "monthly"
     assert PROFILES["monthly"]["freq"] == "M"
+    # 2026-11-19：weighting 由 hrp 改 erc（§14.11）
+    assert PROFILES["balanced"]["weighting"] == "erc"
+    # 2026-11-19：tvol 由 0.15 降至 0.12（§14.9.1）
+    assert PROFILES["monthly"]["target_vol"] == 0.12
+    # 2026-11-19：逆波动加 σ 下限 10%，解决国债 ETF 占权益腿 80%+（§14.12）
+    assert PROFILES["monthly"]["weight_vol_floor"] == 0.10
     assert "core" not in PROFILES
+
+
+def test_combo_mix_not_adopted():
+    """两档合并（60/40）已于 2026-11-19 判否：两腿调仓日 M/W 不同步，
+    合并只等价于两个独立账户，§14.9.3 的 0.79 Calmar 是日频再平衡口径。"""
+    import scripts.portfolio.etf_champ_signals as sig
+
+    assert not hasattr(sig, "SLEEVE_MIX")
+    assert "combo" not in sig.PROFILES
 
 
 def test_excluded_five_are_distinct():

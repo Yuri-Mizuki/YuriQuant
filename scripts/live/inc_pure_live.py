@@ -1,7 +1,7 @@
 """`inc_pure` 实盘出单器：董监高主动增持 → T+1 开盘集合竞价买入，持 20 个交易日
 
-它与回测（`scripts/evaluation/event_driven_probe.py`）的关系
------------------------------------------------------------
+它与回测（`strategy/event_driven.py`）的关系
+--------------------------------------------
 **同一个口径，两种用途**：
 
 - 回测回答「这个策略赚不赚钱」，用全历史一次性算完，允许无限资金、无并发上限；
@@ -12,12 +12,15 @@
 
 | 环节 | 口径 | 来源 |
 |---|---|---|
-| 事件 | `direction=增持` + `reason∈{竞价交易,二级市场买卖,大宗交易}` + `relation=本人` + 合计 ≥0.1% | `fam_inc_pure` |
-| 聚合 | 同 (code, 公告日) 多条记录合并成一条，比例求和 | `_inc_refined` |
-| 可见日 | 公告日当天或其后第一个交易日（周末公告顺延） | `_avail` |
-| 建仓 | 可见日的**次一交易日开盘**（T+1 集合竞价） | `build_positions` |
-| 卖出 | 建仓日 + 20 个交易日的**开盘** | 同上 |
-| 重叠 | 同股在持有窗内再出事件 ⇒ **延长持有**，不加仓 | 同上 |
+| 事件 | `direction=增持` + `reason ∈ ACTIVE_REASONS` + `relation=本人` + 合计 ≥0.1% | `strategy.event_driven` |
+| 聚合 | 同 (code, 可见日) 多条记录合并成一条，比例求和 | 本文件 `load_events` |
+| 可见日 | 公告日当天或其后第一个交易日（周末公告顺延） | `event_driven.avail_day` 同规则 |
+| 建仓 | 可见日的**次一交易日开盘**（T+1 集合竞价） | 同下 |
+| 卖出 | 建仓日 + 20 个交易日的**开盘** | 同下 |
+| 重叠 | 同股在持有窗内再出事件 ⇒ **延长持有**，不加仓 | 同下 |
+
+⚠️ 事件定义常量（`ACTIVE_REASONS` / `MIN_RATIO` / `HOLD` / 成本）**从策略层导入**，
+不在本文件重写；本文件只保留实盘特有的闸门。
 
 **实盘新增、回测没有的四条闸门**（都写进 `--help`，可关）：
 
@@ -60,17 +63,22 @@ import pandas as pd
 import pyarrow.parquet as pq
 
 from config import Config
+from strategy.event_driven import (
+    ACTIVE_REASONS as ACTIVE,
+    COST_ONE_WAY,
+    HOLD,
+    MIN_RATIO,
+    normalize_code as _sym,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 PQ = Path(Config.paths()["cache_root"])
 DEFAULT_OUT = ROOT / "reports" / "inc_pure_live"
 
-HOLD = 20                      # 持有交易日数（与回测 H=20 一致）
-ACTIVE = ("竞价交易", "二级市场买卖", "大宗交易")
-MIN_RATIO = 0.1                # 合计增持占总股本 ≥0.1%
+#: 事件定义（成交方式 / 比例下限 / 代码归一化）的唯一真源 = ``strategy.event_driven``；
+#: 本文件只保留**实盘特有**的闸门参数。改口径去改策略层，不要在这里另写一份。
 MIN_LISTED_DAYS = 60           # 上市不足 60 个交易日不建仓
 LOT = 100
-COST_ONE_WAY = 0.00135
 
 
 # ============================================================ 数据
@@ -145,16 +153,6 @@ def load_events(lo: pd.Timestamp, hi: pd.Timestamp) -> pd.DataFrame:
            .agg(name=("sec_name", "first"), strength=("r", "sum"), n=("r", "size"))
            .reset_index())
     return g[g["strength"] >= MIN_RATIO].reset_index(drop=True)
-
-
-def _sym(code: pd.Series) -> pd.Series:
-    c = code.astype(str).str.strip()
-    has = c.str.contains(r"\.", regex=True)
-    six = c.str.zfill(6)
-    p = six.str[0]
-    suf = np.select([p.eq("6"), p.isin(["0", "3"]), p.isin(["4", "8", "9"])],
-                    [".SH", ".SZ", ".BJ"], default="")
-    return pd.Series(np.where(has, c, six + suf), index=c.index)
 
 
 # ============================================================ 状态

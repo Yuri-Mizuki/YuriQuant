@@ -300,6 +300,9 @@ class EtfRotationAdvanced(Strategy):
     - ``absolute_filter``：只保留自身动量 > 0 的标的（Dual Momentum 的绝对腿，
       相对排序之外再要求绝对收益为正）；
     - ``weighting="inverse_vol"``：入选标的按 1/波动率加权；
+    - ``weight_vol_floor``：逆波动加权时给 σ 设下限（如 0.10）。只影响**权重分配**，
+      不影响 ``target_vol`` 的缩放基准（仍用真实波动）。用于「债券与权益混排」的池子：
+      1.5% 波动的国债 ETF 与 25% 的行业 ETF 同池时，1/σ 会把它顶到 80%+ 单只权重；
     - ``target_vol``：按入选标的的平均年化波动缩放总仓位
       （``min(1, target/vol)``，不足 1 的部分留现金；用**事前**波动，不做
       策略自身收益的递归估计）；
@@ -319,6 +322,7 @@ class EtfRotationAdvanced(Strategy):
         weighting: str = "equal",
         vol_panel: pd.DataFrame | None = None,
         target_vol: float | None = None,
+        weight_vol_floor: float | None = None,
         enter_rank: int | None = None,
         exit_rank: int | None = None,
         cash_code: str | None = None,
@@ -338,6 +342,8 @@ class EtfRotationAdvanced(Strategy):
         self.weighting = str(weighting)
         self.vol_panel = vol_panel
         self.target_vol = float(target_vol) if target_vol is not None else None
+        self.weight_vol_floor = (float(weight_vol_floor)
+                                 if weight_vol_floor is not None else None)
         self.enter_rank = int(enter_rank) if enter_rank is not None else None
         self.exit_rank = int(exit_rank) if exit_rank is not None else None
         self.cash_code = cash_code
@@ -357,6 +363,7 @@ class EtfRotationAdvanced(Strategy):
             f"{'_rd' if self.weighting == 'rank_decay' else ''}"
             f"_{self.weighting}" if self.weighting in COV_WEIGHTINGS else ""
             f"{'_vt' if self.target_vol else ''}"
+            f"{'_vf' + str(int(self.weight_vol_floor * 100)) if self.weight_vol_floor else ''}"
             f"{'_buf' if self.enter_rank else ''}"
             f"{'_mw' if self.max_weight else ''}"
             f"{'_dd' + str(int(self.dedup_corr * 100)) if self.dedup_corr else ''}"
@@ -517,7 +524,8 @@ class EtfRotationAdvanced(Strategy):
             except KeyError:
                 vol = None
         if vol is not None and self.weighting == "inverse_vol":
-            inv = (1.0 / vol.replace(0.0, float("nan"))).dropna()
+            wv = vol.clip(lower=self.weight_vol_floor) if self.weight_vol_floor else vol
+            inv = (1.0 / wv.replace(0.0, float("nan"))).dropna()
             if len(inv) == n:
                 w = inv / inv.sum()
         if self.weighting == "rank_decay" and n > 1:

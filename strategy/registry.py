@@ -325,6 +325,11 @@ TIERS: dict[str, TierSpec] = {
     ),
 }
 
+#: 前端/产品线的**档位展示顺序**（三档，由窄到宽）。
+#: ``TIERS`` 的 dict 顺序是登记顺序，与展示顺序无关；新增档位必须同步这里，
+#: 否则前端（``scripts/reporting/yqcore_dashboard.py``）会漏页。
+DISPLAY_ORDER = ("yqcore-focus-k8", "yqcore-focus-k15", "yqcore-breadth")
+
 
 def assert_no_orphan_registration(registry: dict | None = None) -> None:
     """反向校验：登记表里不能有代码不认识的 ``family: yqcore`` 条目。
@@ -452,6 +457,6 @@ def describe(name: str) -> str:
             f"  {t.notes}")
 
 
-__all__ = ["FAMILY", "FAMILY_LABEL", "TierSpec", "TIERS",
+__all__ = ["FAMILY", "FAMILY_LABEL", "TierSpec", "TIERS", "DISPLAY_ORDER",
            "assert_no_orphan_registration", "tier_wiring",
            "get_tier", "build", "list_tiers", "describe"]
