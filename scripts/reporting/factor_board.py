@@ -28,20 +28,19 @@ import argparse
 import html
 import json
 import re
-import shutil
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
 from config import Config
-from research.html_report import page
+from research.factor_library import GROUP_ORDER, SET_TO_GROUP
+from research.html_report import CHROME_CSS, page, site_nav
 from stats.robust_stats import nw_tstat
 
 ROOT = Path(__file__).resolve().parents[2]
 CACHE = ROOT / "reports" / "factor_board" / "cache"
 OUT = ROOT / "reports" / "factor_board"
-ECHARTS = ROOT / "reports" / "docs" / "design" / "_shared" / "js" / "echarts.min.js"
 
 # 数据盘 / 库根走 config 单一真源（原先硬编码 D:/data 与 E:/data，换机或
 # 数据根切换后会静默退化：`D:/data/parquet` 2026-11-18 已删除，硬编码会让
@@ -105,20 +104,10 @@ A158_FAMILY = {
     **dict.fromkeys(["ROC", "STD", "VSTD", "WVMA"], "动量波动"),
 }
 
-# 因子集归并：19 个 source → 7 组（组只是快捷全选，筛选仍按子集判定）
-SRC_GROUP = {
-    "alpha101": "公开 Alpha 库", "alpha158": "公开 Alpha 库", "alpha191": "公开 Alpha 库",
-    "alpha360": "原始序列",
-    "fundamental": "基本面", "constructed": "基本面", "p5": "基本面", "style": "基本面",
-    # sue_pledge 4/7 是 SUE 盈余惊喜（其余 3 个质押冻结），按主体归「基本面」；
-    # 组是「一个 source 只能属于一个组」的粗维度，逻辑族仍按 label 逐条拆
-    "sue_pledge": "基本面",
-    "holder": "股东治理", "holder_dyn": "股东治理", "disc_holder_dyn": "股东治理",
-    "pledge": "股东治理",
-    "event": "事件与宏观", "status": "事件与宏观", "altf": "事件与宏观",
-    "moneyflow": "资金与两融", "margin": "资金与两融",
-    "paper": "论文策略",
-}
+# 因子集归并：19 个 source → 7 组（组只是快捷全选，筛选仍按子集判定）。
+# 映射的唯一真源在库里（``research.factor_library.SET_TO_GROUP`` / ``GROUP_ORDER``），
+# 看板不再自维护一份；registry 的 ``set_group`` 列由回填写入同一张表的结果。
+SRC_GROUP = SET_TO_GROUP
 SRC_SUB = {
     "alpha101": "Alpha101", "alpha158": "Alpha158", "alpha191": "Alpha191",
     "alpha360": "Alpha360",
@@ -129,8 +118,16 @@ SRC_SUB = {
     "event": "财报事件", "status": "交易状态", "altf": "宏观另类",
     "moneyflow": "大宗资金", "margin": "两融", "paper": "21 式",
 }
-GROUP_ORDER = ["公开 Alpha 库", "原始序列", "基本面", "股东治理",
-               "事件与宏观", "资金与两融", "论文策略"]
+
+
+def _txt(v) -> str:
+    """CSV 读进来的空值可能是 ``NaN``/``None``/``''``；``NaN`` 是真值，不能靠 ``or``。"""
+    if v is None:
+        return ""
+    if isinstance(v, float) and np.isnan(v):
+        return ""
+    s = str(v).strip()
+    return "" if s.lower() in ("nan", "none") else s
 
 
 def _logic_family(src: str, label: str) -> str:
@@ -166,14 +163,7 @@ CSS = """
 body{margin:0;background:var(--bg);color:var(--ink);
      font:13px/1.6 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif}
 a{color:var(--blue);text-decoration:none}
-.topbar{background:var(--navy);color:#fff;height:50px;display:flex;align-items:center;
-        padding:0 24px;gap:18px;position:sticky;top:0;z-index:30}
-.topbar b{font-size:16px;letter-spacing:.5px}
-.topbar .sp{flex:1}
-.topbar .meta{font-size:12px;color:#a9bdd6}
-.topbar a{color:#cfe0f5;font-size:12.5px;padding:4px 10px;border-radius:4px}
-.topbar a:hover{background:rgba(255,255,255,.12)}
-.topbar a.on{background:rgba(255,255,255,.18);color:#fff}
+/* 顶栏样式见 ``research.html_report.CHROME_CSS``（三份前端共用） */
 .wrap{max-width:1240px;margin:0 auto;padding:18px 24px 60px}
 /* 列表页 8 列：1240 会挤到横向溢出，单独放宽 */
 .wrap.wide{max-width:1480px}
@@ -196,12 +186,13 @@ label.chk{display:inline-flex;align-items:center;gap:5px;cursor:pointer;
           color:#3d4557;user-select:none}
 label.chk input{accent-color:var(--blue);margin:0}
 label.chk.dis{color:#b6bcc9;cursor:not-allowed}
-/* 因子集两级：组 → 子集（默认收起，避免 19 个复选框平铺） */
-.gsrc{display:inline-flex;align-items:center;gap:8px}
+/* 因子集两级：组 → 子集（默认收起，避免 19 个复选框平铺）。每个组独占一行，
+   展开的子集在组名下方整行铺开——inline-flex 会把子集挤成 0 宽（看不见） */
+.gsrc{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;flex:1 1 100%}
 .gsrc .exp{color:var(--blue);font-size:11.5px;cursor:pointer;border-bottom:1px dotted #b8cdf0}
 .gsrc .exp:hover{color:#1b52b8}
-.gsrc .subs{display:none;gap:6px 14px;flex-wrap:wrap;
-            width:100%;padding:2px 0 2px 18px;border-left:2px solid #e8eef8;margin-left:2px}
+.gsrc .subs{display:none;gap:6px 14px;flex-wrap:wrap;flex:1 1 100%;
+            padding:2px 0 2px 18px;border-left:2px solid #e8eef8;margin-left:2px}
 .gsrc .subs.on{display:flex}
 .gsrc .subs .sub{font-size:12px;color:#5d6474}
 .gsrc .subs .sub input{width:12px;height:12px}
@@ -284,46 +275,50 @@ def _cls(v):
 def _shell(title: str, body: str, scripts: str, root: str = ".") -> str:
     """页面外壳：交给 ``research.html_report.page``（全仓唯一外壳实现）。
 
-    echarts 走同目录 assets 外链，不内联——888 份 1MB 内联会让页面开到卡死。
-    本函数只负责「本看板的主题 CSS + 无页首」这两处差异。
+    echarts 走共享外链（``reports/docs/design/_shared/js/echarts.min.js``），不内联——
+    888 份 1MB 内联会让页面开到卡死。本函数只负责「本看板的主题 CSS + 无页首」。
     """
-    return page(title, body=body, css=CSS, header="",
-                head_extra=f'<script src="{root}/assets/echarts.min.js"></script>',
+    return page(title, body=body, css=CHROME_CSS + CSS, header="",
+                head_extra=f'<script src="{root}/../docs/design/_shared/js/'
+                           f'echarts.min.js"></script>',
                 scripts=scripts)
 
 
-def _topbar(n_factor: int, generated: str, active: str, root: str = ".",
-            up: str = "..") -> str:
-    def tab(href, label, key):
-        on = " class='on'" if key == active else ""
-        return f"<a href='{href}'{on}>{label}</a>"
-    return (
-        "<div class='topbar'><b>YuriQuant · 因子库</b>"
-        + tab(f"{root}/index.html", "因子看板", "board")
-        + tab(f"{up}/yq_core/backtest.html", "策略回测", "bt")
-        + tab(f"{up}/yq_core/live.html", "模拟交易", "live")
-        + "<span class='sp'></span>"
-        + f"<span class='meta'>{n_factor} 个因子 · 生成 {generated}</span></div>"
-    )
+def _topbar(active: str, root: str = ".", up: str = "..") -> str:
+    """站点顶栏（共享实现：``research.html_report.site_nav``）。
+
+    右侧文案用默认值（与策略首页 / 出榜页一致）——因子总数在列表卡的计数里显示。
+    """
+    from datetime import datetime
+
+    local = {"board": f"{root}/index.html"}
+    return site_nav(active, root=up, local=local,
+                    generated=datetime.now().strftime("%Y-%m-%d %H:%M"))
 
 
 # ===========================================================================
 # 列表页
 # ===========================================================================
 def _row_payload(reg: pd.DataFrame, summ: pd.DataFrame) -> list[dict]:
+    # 分组优先取 registry 的 ``set_group``（回填写入，源头在库）；没有该列或为空时
+    # 按 source 前缀现场查 ``SET_TO_GROUP``——两条路是同一张表，不会分叉。
+    grp_by_name = {}
+    if "set_group" in reg.columns:
+        grp_by_name = {str(n): str(g) for n, g in zip(reg["name"], reg["set_group"])
+                       if isinstance(g, str) and g.strip()}
     rows = []
     for _, s in summ.iterrows():
         name = s["name"]
-        src = str(s.get("source") or "")
-        label = str(s.get("label") or name)
+        src = _txt(s.get("source"))
+        label = _txt(s.get("label")) or name
         if "#" in label:                     # Alpha101/158/191 的 label 带长前缀
             head = label.split("(")[0].strip()
             label = f"{head} #{label.split('#')[-1]}"
         if len(label) > 30:
             label = label[:29] + "…"
-        fam = _logic_family(src, s.get("label") or name)
+        fam = _logic_family(src, _txt(s.get("label")) or name)
         rec = {"n": name, "cn": label, "fam": fam,
-               "grp": SRC_GROUP.get(src, "其他"),
+               "grp": grp_by_name.get(name) or SRC_GROUP.get(src, "其他"),
                "deg": bool(s.get("degenerate")) if isinstance(s.get("degenerate"), (bool, np.bool_)) else None,
                "uq": _num(s.get("unique_levels")),
                "srcn": SRC_SUB.get(src, src or "其他"),
@@ -352,7 +347,7 @@ def _num(v):
     return round(f, 5) if np.isfinite(f) else None
 
 
-def build_index(reg: pd.DataFrame, summ: pd.DataFrame, generated: str) -> Path:
+def build_index(reg: pd.DataFrame, summ: pd.DataFrame) -> Path:
     rows = _row_payload(reg, summ)
     fam_counts = pd.Series([r["fam"] for r in rows]).value_counts()
 
@@ -387,7 +382,7 @@ def build_index(reg: pd.DataFrame, summ: pd.DataFrame, generated: str) -> Path:
                  "无成本</label>")
 
     body = f"""
-{_topbar(len(rows), generated, "board")}
+{_topbar("board")}
 <div class='wrap wide'>
   <div class='card'>
     <div class='card-h'>因子看板<span class='sp'></span>
@@ -518,8 +513,19 @@ function render() {
     </tr>`;
   }).join('');
   document.getElementById('cnt').textContent = `共 ${rows.length} 个因子`;
+  // 行点击进详情，但**选中文字时不跳**（双击/拖选是为了复制因子名）。
+  // 单击延迟 220ms：双击的 dblclick 会取消定时器，避免复制名字时误开页面。
+  let navTimer = 0;
   tb.querySelectorAll('tr').forEach(tr => {
-    tr.onclick = () => { location.href = './f/' + encodeURIComponent(tr.dataset.n) + '.html'; };
+    tr.onclick = ev => {
+      if (ev.target.closest('a,button,input,select')) return;
+      clearTimeout(navTimer);
+      navTimer = setTimeout(() => {
+        if (String(window.getSelection()).length) return;
+        location.href = './f/' + encodeURIComponent(tr.dataset.n) + '.html';
+      }, 220);
+    };
+    tr.ondblclick = () => clearTimeout(navTimer);
   });
 }
 
@@ -640,22 +646,20 @@ def build_detail(name: str, reg_row: pd.Series, meta: dict, nav: pd.DataFrame,
                 "source": str(reg_row.get("source", "")),
                 "created": str(reg_row.get("created_at", ""))[:19],
                 "coverage": _num(reg_row.get("coverage")),
-                "label": reg_row.get("label"), "name": name,
+                "label": _txt(reg_row.get("label")) or name, "name": name,
                 "note": reg_row.get("note")},
     }
 
-    _src = str(reg_row.get("source", "")).split(":")[0]
-    fam = _logic_family(_src, reg_row.get("label") or name)
+    _src = _txt(reg_row.get("source")).split(":")[0]
+    fam = _logic_family(_src, _txt(reg_row.get("label")) or name)
     # 详情页 tag 只挂子集名（组=粗维度，且 sue_pledge 这类会跨逻辑族，挂组会自相矛盾）
     src_tag = SRC_SUB.get(_src, _src or "自定义")
-    formula = str(reg_row.get("formula") or "—")
-    note = str(reg_row.get("note") or "")
+    formula = _txt(reg_row.get("formula")) or "—"
+    note = _txt(reg_row.get("note"))
     cov = payload["reg"]["coverage"]
     created = payload["reg"]["created"] or "—"
     if created in ("nan", "NaT", "None"):
         created = "—"
-    if note in ("nan", "NaT", "None"):
-        note = ""
 
     deg_note = _deg_note(meta)
     win_html = "".join(
@@ -663,9 +667,9 @@ def build_detail(name: str, reg_row: pd.Series, meta: dict, nav: pd.DataFrame,
         for k, lab in WINDOWS)
 
     body = f"""
-{_topbar(0, "", "board", root="..", up="../..").replace("0 个因子", "").replace(" · 生成 ", "")}
+{_topbar("board", root="..", up="../..")}
 <div class='wrap'>
-  <h1 class='fname'>{html.escape(str(reg_row.get('label') or name))}
+  <h1 class='fname'>{html.escape(_txt(reg_row.get('label')) or name)}
     <code>{html.escape(name)}</code>
     <a class='btn ghost' style='float:right;font-size:12.5px;padding:6px 16px'
        href='../index.html'>← 返回因子列表</a></h1>
@@ -951,7 +955,7 @@ window.addEventListener('resize', () => charts.forEach(c => c.resize()));
     js = js.replace("__PAY__", json.dumps(payload, ensure_ascii=False))
 
     path = OUT / "f" / f"{name}.html"
-    path.write_text(_shell(f"{reg_row.get('label') or name} · 因子详情", body,
+    path.write_text(_shell(f"{_txt(reg_row.get('label')) or name} · 因子详情", body,
                            f"<script>{js}</script>", root=".."), encoding="utf-8")
     return path
 
@@ -966,12 +970,14 @@ _BENCH: pd.Series | None = None
 
 
 def _bench_nav() -> pd.Series | None:
+    """全A等权基准净值——与数据层同一价格源（FactorLibrary），不读 _base 快照。"""
     global _BENCH
     if _BENCH is None:
-        p = ROOT / "reports" / "alla_rolling" / "_base" / "bench_eqw.parquet"
-        if not p.exists():
-            return None
-        r = pd.read_parquet(p)["ret"].replace([np.inf, -np.inf], np.nan).dropna()
+        from research.factor_library import FactorLibrary
+
+        lib = FactorLibrary(dataset=DATASET)
+        r = lib.benchmark_eqw_returns(forward=False)
+        r = r.replace([np.inf, -np.inf], np.nan).dropna()
         r = r.loc[r.index >= pd.Timestamp("2019-01-01")]
         _BENCH = (1 + r).cumprod()
     return _BENCH
@@ -1028,10 +1034,6 @@ def main() -> None:
     cache = Path(args.cache)
     out = Path(args.out)
     (out / "f").mkdir(parents=True, exist_ok=True)
-    (out / "assets").mkdir(parents=True, exist_ok=True)
-    if ECHARTS.exists():
-        shutil.copy2(ECHARTS, out / "assets" / "echarts.min.js")
-
     reg = pd.read_csv(REGISTRY).set_index("name", drop=False)
     n_json = len(list(cache.glob("*.json")))
     summ = (pd.read_csv(cache / "_summary.csv") if (cache / "_summary.csv").exists()
@@ -1043,8 +1045,7 @@ def main() -> None:
         print(f"  汇总由缓存重建：{len(summ)} 行（json {n_json} 个）")
     ind_names = _industry_names()
 
-    generated = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M")
-    idx = build_index(reg, summ, generated)
+    idx = build_index(reg, summ)
     print(f"[列表] {idx}  {idx.stat().st_size / 1e6:.2f} MB · {len(summ)} 个因子")
     if args.index_only:
         return
