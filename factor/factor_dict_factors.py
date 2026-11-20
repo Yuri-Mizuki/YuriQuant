@@ -35,6 +35,13 @@
 ``fd_smart_vwap``      聪明钱：成交量 Top10 时刻的后一根 vwap ÷ 全日 vwap。
 ``fd_net_support``     净支撑成交量：``(支撑量 − 阻力量) / 总股本``，
                       支撑 = 分钟收盘价低于当日分钟均价。
+``fd_utr``             优加换手率：量小 ``mean_20(换手)`` 与量稳 ``std_20(换手)``
+                      各自去极值/zscore/市值中性化后，按 STR 中位数分两组，
+                      稳定组量小降序、不稳定组升序，两段名次相加再归一。
+``fd_ind_mom``         行业联合动量 CMC：个股过去 20 日收益排序，取最大 5 日与
+                      最小 15 日对应的**行业收益**分别加权求和后相减。
+``fd_price_delay``     价格时滞：个股收益对 ``[当期 + 滞后 3 期]`` 市场收益回归，
+                      ``1 − R²_受限 / R²_全``（受限 = 滞后项系数置 0）。
 ====================  ==========================================================
 
 口径与边界
@@ -563,9 +570,167 @@ def net_support_panel(fields: dict[str, np.ndarray], days: Sequence[int],
     return _minute_frame(val, days, codes)
 
 
+def _xs_neutralize(x: pd.Series, cap: pd.Series,
+                   q: float = 0.01) -> pd.Series:
+    """截面 去极值(q/q) → zscore → 对 log(市值) 回归取残差。
+
+    原文（东吴 2021，优加换手率）对量小/量稳换手率各自做「横截面去极值、
+    标准化、市值中性化」，且强调**顺序不能颠倒**（先分别中性化再合成）。
+    """
+    good = x.notna() & cap.notna()
+    if good.sum() < 10:
+        return pd.Series(np.nan, index=x.index)
+    v = x[good]
+    lo, hi = v.quantile(q), v.quantile(1 - q)
+    v = v.clip(lo, hi)
+    sd = v.std(ddof=0)
+    if not np.isfinite(sd) or sd == 0:
+        return pd.Series(np.nan, index=x.index)
+    z = (v - v.mean()) / sd
+    lc = np.log(cap[good].clip(lower=1e-6))
+    X = np.c_[np.ones(len(lc)), lc.to_numpy(dtype=float)]
+    beta = np.linalg.lstsq(X, z.to_numpy(dtype=float), rcond=None)[0]
+    return pd.Series(X @ beta, index=v.index).reindex(x.index)
+
+
+def utr_panel(turnover: pd.DataFrame, market_cap: pd.DataFrame,
+              window: int = 20) -> pd.DataFrame:
+    """优加换手率 UTR（东吴 2021《解决 1+1＜2 的难题》）。
+
+    量小 ``Turn20 = mean_20(换手)``、量稳 ``STR = std_20(换手)``，两者分别做
+    去极值 / 标准化 / 市值中性化；当日按 STR 升序给分 ``Score1``，再按 STR
+    中位数切两半——**稳定组**（前半）Turn20 降序给分、**不稳定组**（后半）
+    升序给分，``UTR = (Score1 + Score2) / N``。原文方向：**UTR 越小越好**。
+
+    换手率口径为 成交量 / PIT 总股本（缓存无自由流通股）。
+    """
+    turn = turnover.rolling(window, min_periods=window).mean()
+    stab = turnover.rolling(window, min_periods=window).std()
+    out = pd.DataFrame(np.nan, index=turn.index, columns=turn.columns)
+    for dt in turn.index:
+        t = _xs_neutralize(turn.loc[dt], market_cap.loc[dt])
+        s = _xs_neutralize(stab.loc[dt], market_cap.loc[dt])
+        pair = pd.concat([t.rename("t"), s.rename("s")], axis=1).dropna()
+        if len(pair) < 20:
+            continue
+        pair = pair.sort_values("s", kind="mergesort")
+        n = len(pair)
+        score1 = pd.Series(np.arange(1, n + 1), index=pair.index)
+        mid = n // 2
+        score2 = pd.Series(np.nan, index=pair.index)
+        score2.iloc[:mid] = pair["t"].iloc[:mid].rank(ascending=False)
+        score2.iloc[mid:] = pair["t"].iloc[mid:].rank(ascending=True)
+        out.loc[dt, pair.index] = (score1 + score2) / n
+    return out
+
+
+def ind_joint_momentum_panel(ret: pd.DataFrame, market_cap: pd.DataFrame,
+                             industry: pd.DataFrame, window: int = 20,
+                             top: int = 5, bottom: int = 15) -> pd.DataFrame:
+    """行业联合动量 CMC（国信 2024《个股与行业的共振》）。
+
+    行业内按市值加权得到行业收益 ``sector_ret``；对个股过去 ``window`` 日
+    收益升序排列，取**最大 5 日**对应的行业收益按 ``w5 = [0.5,0.59,0.7,0.84,1]``
+    加权得 ``ICM``，取**最小 15 日**按 ``2^(-i/14)`` 加权得 ``ICR``，
+    ``CMC = ICM − ICR``。原文权重不归一化；行业收益用申万一级内市值加权
+    （原文用中信一级指数，作者实测等权效果更差）。
+    """
+    w5 = np.array([0.5, 0.59, 0.7, 0.84, 1.0])[:top]
+    w15 = np.array([2.0 ** (-(i) / 14.0) for i in range(bottom)])
+    # 行业收益：逐日行业内市值加权
+    sec = pd.DataFrame(np.nan, index=ret.index, columns=ret.columns)
+    for dt in ret.index:
+        r = ret.loc[dt]
+        ind = industry.loc[dt] if dt in industry.index else None
+        cap = market_cap.loc[dt]
+        if ind is None:
+            continue
+        g = pd.DataFrame({"r": r, "c": cap, "i": ind}).dropna()
+        if g.empty:
+            continue
+        w = g["c"] / g.groupby("i")["c"].transform("sum")
+        sec.loc[dt, g.index] = (g["r"] * w).groupby(g["i"]).transform("sum")
+    r_arr, s_arr = ret.to_numpy(dtype=float), sec.to_numpy(dtype=float)
+    n_day, n_col = r_arr.shape
+    out = np.full((n_day, n_col), np.nan)
+    for k in range(window - 1, n_day):
+        R = r_arr[k - window + 1:k + 1]
+        S = s_arr[k - window + 1:k + 1]
+        valid = np.isfinite(R) & np.isfinite(S)
+        cnt = valid.sum(axis=0)
+        key = np.where(valid, R, np.inf)
+        order = np.argsort(key, axis=0, kind="stable")
+        cols = np.arange(n_col)[None, :]
+        bot = S[order[:bottom], cols] * valid[order[:bottom], cols] * w15[:, None]
+        topv = S[order[-top:], cols] * valid[order[-top:], cols] * w5[:, None]
+        icr, icm = bot.sum(axis=0), topv.sum(axis=0)
+        ok = cnt >= max(top + bottom - 2, 10)
+        out[k, ok] = (icm - icr)[ok]
+    return pd.DataFrame(out, index=ret.index, columns=ret.columns)
+
+
+def price_delay_panel(ret: pd.DataFrame, market_ret: pd.Series | None = None,
+                      window: int = 21, lags: int = 3,
+                      min_valid: int = 15) -> pd.DataFrame:
+    """价格时滞（Hou-Moskowitz 2005 / 东方证券 2015）。
+
+    以个股日收益为 y、``[1, 当期市场收益, 滞后 1..lags 期市场收益]`` 为 x 做
+    时序回归：全模型 R² 与「滞后项系数全置 0」的受限 R² 之比，
+    因子 ``= 1 − R²_受限 / R²_全``。时滞越大、对市场信息的反应越慢，因子越大。
+
+    逐列用带掩码的矩矩阵批量求解（不用逐股循环）；有效样本 < ``min_valid``
+    或 R² 全 ≤0 时不出值。``market_ret`` 缺省取全 A 等权。
+    """
+    rm = (ret.mean(axis=1) if market_ret is None else market_ret).reindex(ret.index)
+    x = np.column_stack([np.ones(len(ret))] + [
+        rm.shift(j).to_numpy(dtype=float) for j in range(lags + 1)])
+    ok_x = np.isfinite(x).all(axis=1)
+    Y = ret.to_numpy(dtype=float)
+    n_day, n_col = Y.shape
+    out = np.full((n_day, n_col), np.nan)
+    for k in range(window - 1, n_day):
+        rows = np.arange(k - window + 1, k + 1)
+        X, Yw = x[rows], Y[rows]
+        if not ok_x[rows].all():
+            continue
+        M = np.isfinite(Yw).astype(float)
+        Yf = np.nan_to_num(Yw)
+        XtX = np.einsum("rn,rp,rq->npq", M, X, X)
+        XtY = np.einsum("rn,rp,rn->np", M, X, Yf)
+        cnt = M.sum(axis=0)
+        good = cnt >= min_valid
+        if not good.any():
+            continue
+        XtX, XtY, Yw2, M2 = XtX[good], XtY[good], Yw[:, good], M[:, good]
+        try:
+            beta = np.linalg.solve(XtX + 1e-10 * np.eye(X.shape[1]),
+                                   XtY[..., None])[..., 0]
+            beta_r = np.linalg.solve(
+                XtX[:, :2, :2] + 1e-10 * np.eye(2),
+                XtY[:, :2, None])[..., 0]
+        except np.linalg.LinAlgError:
+            continue
+        fit = np.einsum("rp,np->rn", X, beta)
+        fit_r = np.einsum("rp,np->rn", X[:, :2], beta_r)
+        cnt_g = cnt[good]
+        sse = (M2 * (Yw2 - fit) ** 2).sum(axis=0)
+        sse_r = (M2 * (Yw2 - fit_r) ** 2).sum(axis=0)
+        mean_y = (M2 * Yw2).sum(axis=0) / cnt_g
+        sst = (M2 * (Yw2 - mean_y) ** 2).sum(axis=0)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            r2 = 1.0 - sse / sst
+            r2_r = 1.0 - sse_r / sst
+            val = 1.0 - r2_r / r2
+        val = np.where((r2 > 1e-8) & np.isfinite(val), val, np.nan)
+        idx = np.flatnonzero(good)
+        out[k, idx] = val
+    return pd.DataFrame(out, index=ret.index, columns=ret.columns)
+
+
 __all__ = [
     "cs_spread_panel", "csad_std21_panel", "entropy_amount_share", "fear_panel",
-    "group_abnormal_panel", "illiq_panel", "mmd_asym_panel", "net_support_panel",
-    "rnbr_panel", "smart_vwap_panel", "tcc_panel", "turnover_resid_vol_panel",
-    "umr_panel",
+    "group_abnormal_panel", "illiq_panel", "ind_joint_momentum_panel",
+    "mmd_asym_panel", "net_support_panel", "price_delay_panel", "rnbr_panel",
+    "smart_vwap_panel", "tcc_panel", "turnover_resid_vol_panel", "umr_panel",
+    "utr_panel",
 ]

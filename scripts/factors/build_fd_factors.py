@@ -1,7 +1,7 @@
 """飞书《因子字典》候选因子 → 因子库体检入库
 =============================================
 
-对 ``factor/factor_dict_factors.py`` 里的 15 个候选跑与 ``build_intraday_stat_factors``
+对 ``factor/factor_dict_factors.py`` 里的 18 个候选跑与 ``build_intraday_stat_factors``
 同一套体检：截面 zscore 入库 ``FactorLibrary``（IC / NW-t / IC 衰减 / canonical
 回测 / 冗余查重全套自动算），再补一份**安慰剂对照**（``research.caliber`` 的
 循环平移）。
@@ -44,13 +44,16 @@ from factor.factor_dict_factors import (  # noqa: E402
     fear_panel,
     group_abnormal_panel,
     illiq_panel,
+    ind_joint_momentum_panel,
     mmd_asym_panel,
     net_support_panel,
+    price_delay_panel,
     rnbr_panel,
     smart_vwap_panel,
     tcc_panel,
     turnover_resid_vol_panel,
     umr_panel,
+    utr_panel,
 )
 from research.factor_criteria import (  # noqa: E402
     ADMISSION_GATES,
@@ -83,6 +86,9 @@ FACTOR_DEFS: dict[str, str] = {
     "fd_hf_cs": "CS价差(分钟) = std_21( 日内 Corwin-Schultz 价差估计的均值 )",
     "fd_smart_vwap": "聪明钱(跟随vwap) = 跟随时刻vwap / 全日vwap（成交量Top10时刻的后一根）",
     "fd_net_support": "净支撑成交量 = (支撑量 − 阻力量) / 总股本，支撑=分钟收盘价低于日均价",
+    "fd_utr": "优加换手率 = (Score1 + Score2)/N，量小/量稳分别市值中性化后按 STR 分两组反向排名",
+    "fd_ind_mom": "行业联合动量CMC = ICM − ICR（过去20日最大5日/最小15日对应的市值加权行业收益）",
+    "fd_price_delay": "价格时滞 = 1 − R²受限/R²全（个股收益对当期+滞后3期市场收益回归）",
 }
 
 FAMILY = {"fd_tcc": "波动率", "fd_tcc_g": "波动率", "fd_grp_abn": "波动率",
@@ -90,7 +96,8 @@ FAMILY = {"fd_tcc": "波动率", "fd_tcc_g": "波动率", "fd_grp_abn": "波动�
           "fd_csad21": "波动率", "fd_mmd21": "波动率", "fd_tr_resid": "流动性",
           "fd_illiq_ds": "流动性", "fd_umr_tr": "量价", "fd_umr_trv": "量价",
           "fd_fear_std": "波动率",
-          "fd_hf_cs": "流动性", "fd_smart_vwap": "资金流", "fd_net_support": "量价"}
+          "fd_hf_cs": "流动性", "fd_smart_vwap": "资金流", "fd_net_support": "量价",
+          "fd_utr": "流动性", "fd_ind_mom": "动量", "fd_price_delay": "动量"}
 
 #: 从 5 分钟面板出发的因子（hs300 池、2022 起；其余走日线全 A）
 MINUTE_FACTORS = frozenset({"fd_ent30", "fd_hf_cs", "fd_smart_vwap",
@@ -292,6 +299,15 @@ def main():
     if need("fd_tr_resid"):
         panels["fd_tr_resid"] = turnover_resid_vol_panel(
             extra["turnover"], extra["pb"], cap, ret)
+    if need("fd_utr"):
+        panels["fd_utr"] = utr_panel(extra["turnover"], cap)
+    if need("fd_ind_mom"):
+        if ind is None:
+            log.warning("无行业面板：fd_ind_mom 跳过")
+        else:
+            panels["fd_ind_mom"] = ind_joint_momentum_panel(ret, cap, ind)
+    if need("fd_price_delay"):
+        panels["fd_price_delay"] = price_delay_panel(ret)
 
     # 非流动性 / UMR / 惊恐：价格类，复权后再算（比值在乘性复权下不变）
     if need("fd_illiq_ds", "fd_umr_tr", "fd_umr_trv", "fd_fear_std"):
