@@ -666,7 +666,9 @@ def save_artifacts(lib: FactorLibrary, corr: np.ndarray, names: list[str],
     np.savez_compressed(base / "dup_matrix.npz", corr=corr,
                         names=np.array(names, dtype="U64"),
                         dates=dates.values.astype("datetime64[D]").astype(str))
-    np.save(base / "dup_signatures.npy", Z)
+    # 签名只用于粗筛（ρ 阈值 0.85/0.90），float16 的 3 位有效数字足够，
+    # 磁盘从 2.48GB 减半；读侧统一 astype(float32) 再参与运算。
+    np.save(base / "dup_signatures.npy", Z.astype(np.float16))
     zcov = (Z != 0).mean(axis=(0, 2))
     vital = refine_vitality(lib, vitality_table(names, cover, zcov))
     vital.to_csv(base / "dup_vitality.csv", index=False, encoding="utf-8-sig")

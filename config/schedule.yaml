@@ -140,7 +140,8 @@ tasks:
       病根 = `_alt_meta.json` 由 `_save_meta()` **逐表增量**写（前三张快照表成功即
       刷新 mtime）⇒ 10-28 任务在 `cninfo_holder` 处被网卡掉线打断、缺 4 张表，
       doctor 仍报「OK」。新判据逐表核对 7 张表，分三类：数据日期水位
-      （cninfo_holder/macro_calendar）、按日分片存在性（cls/news，链尾 ⇒ 缺片即未跑到底）、
+      （cninfo_holder/macro_calendar）、链尾表数据水位（news 按日分片、cls 按年分区
+      取文件内 max(pub_time)；链尾 ⇒ 缺片即未跑到底）、
       快照表 mtime（holder_control/inner_trade/mgmt_hold，每天全量重拉，ann_date 会
       长期不更新故不能用日期判）。⚠️ news 是不可回补的快照源（20 条/次，丢了拿不回来），
       缺口只能等下一次完整运行补上；cls 可按发布日回补（`--tables cls`）。

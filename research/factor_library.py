@@ -2582,7 +2582,7 @@ class FactorLibrary:
         for k in range(len(dates)):
             zk = zq[k]
             if zk.any():
-                num += sig[k] @ zk
+                num += sig[k].astype(np.float32) @ zk
         snew = float((zq.astype(np.float64) ** 2).sum())
         if snew <= 0:
             return {"available": False, "reason": "样本全同值，无截面变异"}
@@ -2615,7 +2615,8 @@ class FactorLibrary:
                 from scripts.factors.dup_audit import rank_resid_stats_from_sig
 
                 j = [str(n) for n in idx["names"]].index(top_name)
-                st = rank_resid_stats_from_sig(zq, np.asarray(idx["sig"][:, j, :]))
+                st = rank_resid_stats_from_sig(
+                    zq, np.asarray(idx["sig"][:, j, :], dtype=np.float32))
                 v = classify(st)
                 if not v.tested:
                     # 兜底也没测成 ⇒ 「无法检验」，**不能**当「不相似」

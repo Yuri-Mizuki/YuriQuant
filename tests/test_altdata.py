@@ -393,7 +393,8 @@ def test_cls_normalize_stock_id(raw, expected):
     assert normalize_stock_id(raw) == expected
 
 
-def test_cls_append_is_idempotent_and_splits_by_day(tmp_path):
+def test_cls_append_is_idempotent_and_splits_by_year(tmp_path):
+    """2026-11-20 起按**年**分区（原按日分片 4,337 个小文件）。"""
     from data.altdata import source_cls
 
     df = source_cls.parse_cls_items(_fake_roll([
@@ -405,12 +406,17 @@ def test_cls_append_is_idempotent_and_splits_by_day(tmp_path):
     assert c.append_cls(df)["added"] == 3
     assert c.append_cls(df)["added"] == 0           # 幂等：news_id 去重
     assert sorted(p.name for p in c.cls_dir.glob("*.parquet")) == \
-        ["cls_20260915.parquet", "cls_20260916.parquet"]
+        ["cls_2026.parquet"]
 
     loaded = c.load_cls()
     assert len(loaded) == 3
     assert loaded["news_id"].is_unique
     assert list(loaded["news_id"]) == [1, 2, 3]     # 按 ctime 升序
+
+    # 日数按**内容**统计（文件数已不等于天数）；按日裁剪靠行级过滤
+    assert c.cls_coverage()["days"] == 2
+    assert list(c.load_cls(begin=20260916)["news_id"]) == [3]
+    assert list(c.load_cls(end=20260915)["news_id"]) == [1, 2]
 
 
 def test_cls_backfill_terminates_and_resumes(tmp_path, monkeypatch):
