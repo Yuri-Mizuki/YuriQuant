@@ -1,6 +1,6 @@
 # scripts 入口索引
 
-> 自动生成（129 个活跃入口）。改脚本 docstring 后运行 `python -m scripts.data_tools.gen_scripts_index` 更新；`--check` 校验是否过期。
+> 自动生成（127 个活跃入口）。改脚本 docstring 后运行 `python -m scripts.data_tools.gen_scripts_index` 更新；`--check` 校验是否过期。
 
 约定：`python -m scripts.<目录>.<文件名>` 运行；`scripts/archive/` 已于 2026-11-18 整体下线（活代码已上移，其余删除）；实验结论查 `reports/README.md` §一「结论速查」，产物落盘规则见其 §1.6。
 
@@ -88,7 +88,6 @@
 | `factors/build_technical_factors.py` | 技术面迭代/累积类指标 → 日频因子构建与入库 |
 | `factors/build_top10_factors.py` | 「中国因子十强」复现与统一评估（JKP 口径榜单，2026-11-02） |
 | `factors/dup_audit.py` | 全库冗余审计：一次性算清 965 个因子的两两截面相关，并把结论写回 registry。 |
-| `factors/dup_criteria.py` | 兼容转出口 —— 判据真源已下沉到 :mod:`research.dup_criteria`（2026-11-19）。 |
 | `factors/dup_precheck.py` | **登记前**冗余预检：这批因子该不该进库，先看一眼它最像谁。 |
 | `factors/factor_board_data.py` | 因子看板数据层：为因子库里每个因子算「分位组合净值 + IC 序列 + 行业 IC」。 |
 | `factors/factor_library.py` | 因子库 CLI |
@@ -177,7 +176,6 @@
 | `reporting/factor_library_full_report.py` | 全因子库检验报告：821 个因子的标准检验汇总（自包含 HTML）。 |
 | `reporting/jq_style_report.py` | 最佳策略收益曲线页（聚宽模拟交易风格）——策略 vs 中证全指口径基准。 |
 | `reporting/md_to_email_html.py` | 日报 markdown → 邮件 HTML（内联样式，适配 163 / QQ / Gmail 等客户端）。 |
-| `reporting/model_performance.py` | 主模型回测表现页（净值 / 回撤 / 分年 / 月度热图，单文件 HTML）。 |
 | `reporting/monitor_factor_health.py` | 定版因子库健康度巡检（因子 + 模型预测）。 |
 | `reporting/monitor_production_ic.py` | 生产口径每日 IC / 风格暴露监控 CLI（全A · 定版 dingban · 2026-10-17 起）。 |
 | `reporting/picks_board.py` | 本期出榜解释页（为什么买这些）—— 接在模拟交易页之后。 |

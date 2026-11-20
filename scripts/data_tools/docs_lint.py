@@ -100,14 +100,14 @@ RETAINED_SECTION = "### 1.2 "
 #: 规则 5 的存量豁免清单（只减不增）。每行一个目录名（`- `xxx` ` 或 `- xxx`）。
 VERDICT_TODO = DOCS / "待补判定清单.md"
 
-#: 规则 6：reports/ 根部允许的散件 = §1.4 的 4 个接口文件 + README。
-#: 这 4 个位置被代码硬编码（见 §1.4「硬引用点」列），移动即静默断链。
+#: 规则 6：reports/ 根部允许的散件 = §1.4 的 2 个接口文件 + README。
+#: 这 2 个位置被代码硬编码（见 §1.4「硬引用点」列），移动即静默断链。
+#: 2026-11-20 移出 `all_a_pit_union_2019.json` / `mine_im_combos.csv`
+#: （读取方已删，见 reports/README.md §1.4 复核注）。
 ROOT_ALLOWED = frozenset({
     "README.md",
     "experiments.csv",
-    "all_a_pit_union_2019.json",
     "intraday_stat_checkup.csv",
-    "mine_im_combos.csv",
 })
 
 #: 必须自建 README 的目录判定：非纯数据/纯产物目录的前缀白名单。

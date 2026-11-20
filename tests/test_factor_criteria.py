@@ -100,16 +100,15 @@ def _find_definers(watched: dict[str, set[str]]) -> dict[str, set[str]]:
 # ---------------------------------------------------------------------------
 # 1. 同一对象（转出口不许变成第二实现）
 # ---------------------------------------------------------------------------
-def test_dup_criteria_shim_is_same_object():
-    """``scripts.factors.dup_criteria`` 必须逐符号转发 ``research.dup_criteria``。"""
-    import research.dup_criteria as real
-    import scripts.factors.dup_criteria as shim
+def test_dup_criteria_shim_stays_dead():
+    """``scripts.factors.dup_criteria`` 兼容转出口已于 2026-11-20 删除。
 
-    for name in ("classify", "classify_independent", "should_check", "tier_of",
-                 "explain", "Verdict"):
-        assert getattr(shim, name) is getattr(real, name), f"{name} 不是同一对象"
-    for name in ("CORR_TRIGGER", "REL_STD_DEGENERATE", "RESID_IC_NEGLIGIBLE"):
-        assert getattr(shim, name) == getattr(real, name)
+    消费方（library_dedup_apply / library_dedup_plan / 本目录判据锁）已全部改走
+    :mod:`research.dup_criteria` 真源；本守卫防止 shim 复活成第二入口。
+    """
+    assert not (ROOT / "scripts/factors/dup_criteria.py").exists(), (
+        "scripts/factors/dup_criteria.py 兼容转出口已删除，勿恢复 —— "
+        "请直接 import research.dup_criteria")
 
 
 # ---------------------------------------------------------------------------

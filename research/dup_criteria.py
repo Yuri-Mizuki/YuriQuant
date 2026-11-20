@@ -3,8 +3,9 @@
 > 2026-11-19 从 ``scripts/factors/dup_criteria.py`` **下沉到 research 层**。
 > 原因：判据库 :mod:`research.factor_criteria` 需要引用它，而 research 反向
 > import scripts 是分层倒挂（此前 ``factor_library`` 已在函数级这么做了两处）。
-> 原路径保留兼容转出口，两者**必须是同一对象**（``tests/test_factor_criteria.py``
-> 有断言）。**改口径只改本文件**，不要在调用点另抄阈值。
+> 原路径的兼容转出口（``scripts/factors/dup_criteria.py``）已于 2026-11-20 删除
+> （消费方全部改走本模块）；``tests/test_factor_criteria.py`` 有守卫防其复活。
+> **改口径只改本文件**，不要在调用点另抄阈值。
 
 为什么要有这个模块
 ------------------

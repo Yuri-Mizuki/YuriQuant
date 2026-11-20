@@ -1,4 +1,4 @@
-"""`scripts/factors/dup_criteria.py` 的判据锁。
+"""`research/dup_criteria.py` 的判据锁。
 
 这些测试的作用不是"提高覆盖率"，而是**锁住几句曾经判反过的规则**：
 每一条都对应 2026-11-12 实测踩到的坑，改口径时若把方向弄反，这里会红。
@@ -9,7 +9,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from scripts.factors.dup_criteria import (
+from research.dup_criteria import (
     CORR_TRIGGER,
     REL_STD_DEGENERATE,
     REL_STD_TINY,
@@ -117,7 +117,7 @@ def test_independent_is_a_conclusion_not_an_untested():
     两者都不可删，但语义必须分开：把「不相似」写成「无法检验」会让日志出现
     「新因子 ρ=0.004 无法检验」这种自相矛盾的提示，也会掩盖真正的测不成。
     """
-    from scripts.factors.dup_criteria import V_INDEPENDENT, classify_independent
+    from research.dup_criteria import V_INDEPENDENT, classify_independent
 
     v = classify_independent(0.42)
     assert v.level == V_INDEPENDENT
@@ -129,7 +129,7 @@ def test_independent_is_a_conclusion_not_an_untested():
 
 def test_high_corr_with_noise_is_not_removable():
     """加噪后 ρ 掉到 0.84 不到触发线 ⇒ 结论是「独立」，绝不判可删。"""
-    from scripts.factors.dup_criteria import classify_independent
+    from research.dup_criteria import classify_independent
 
     v = classify_independent(0.843)
     assert v.removable is False
@@ -178,7 +178,7 @@ def test_dedup_apply_trigger_equals_criteria_trigger():
     那是「判据只在 ρ≥0.95 生效」的第四道闸。
     """
     from scripts.factors import library_dedup_apply as app
-    from scripts.factors.dup_criteria import CORR_TRIGGER
+    from research.dup_criteria import CORR_TRIGGER
 
     assert app.COVER_RHO_MIN == CORR_TRIGGER
 
@@ -193,7 +193,7 @@ def test_t3_band_is_below_trigger_line_by_cost_benefit():
 
     ⚠️ 若将来想重新压到 0.85，必须先证明该档的真等价率显著高于 1/156。
     """
-    from scripts.factors.dup_criteria import (
+    from research.dup_criteria import (
         CORR_TRIGGER, TIER_T2, TIER_T3, should_check)
 
     assert CORR_TRIGGER == TIER_T2, "触发线应等于 T2 下界：T3 整档不检验"
@@ -210,7 +210,7 @@ def test_t3_verdict_is_not_independent_and_not_tested():
     ``V_INDEPENDENT`` 会让日志输出「ρ=0.897 与库内不相似」这种自相矛盾的话；
     写成 ``tested=True`` 会让人以为有残差证据。
     """
-    from scripts.factors.dup_criteria import (
+    from research.dup_criteria import (
         V_BELOW_TRIGGER, V_INDEPENDENT, classify_independent)
 
     t3 = classify_independent(0.8975)

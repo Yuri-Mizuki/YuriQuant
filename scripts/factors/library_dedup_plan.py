@@ -56,7 +56,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.common.cli_common import setup_logging  # noqa: E402
-from scripts.factors.dup_criteria import (  # noqa: E402
+from research.dup_criteria import (  # noqa: E402
     CORR_TRIGGER,
     REL_STD_DEGENERATE,
     REL_STD_TINY,
@@ -182,7 +182,7 @@ def _read_panel(base: Path, name: str) -> pd.DataFrame | None:
 def _rank_increment(name: str, cover: str, lib=None, stride: int = 1) -> dict:
     """对**覆盖者**算秩空间增量；返回 ``has_inc`` / ``rel_std`` / ``ic`` / ``t``。
 
-    ⚠️ **判定逻辑不在这里** —— 阈值与分级全部在 ``scripts.factors.dup_criteria``
+    ⚠️ **判定逻辑不在这里** —— 阈值与分级全部在 ``research.dup_criteria``
     （唯一真源）。本函数只负责读面板、调 ``rank_resid_stats``、把结果搬成扁平 dict。
     改口径请改 ``dup_criteria``，不要在调用点另抄一份阈值。
 
@@ -195,7 +195,7 @@ def _rank_increment(name: str, cover: str, lib=None, stride: int = 1) -> dict:
     抽样不改变结论方向；判定「有独立增量」时一律保守放行。
     """
     from research.dup_criteria import rank_resid_stats
-    from scripts.factors.dup_criteria import classify, explain
+    from research.dup_criteria import classify, explain
 
     if lib is None or not name or not cover:
         return {"has_inc": True, "rel_std": float("nan"), "ic": float("nan"),
@@ -281,7 +281,7 @@ def _try_cover_swap(df: pd.DataFrame, i: int, cover_name: str,
         可交换则返回覆盖者的行号 ``j``；否则 None。
     """
     from research.dup_criteria import rank_resid_stats
-    from scripts.factors.dup_criteria import classify
+    from research.dup_criteria import classify
 
     j = pos.get(cover_name)
     if j is None:
@@ -386,7 +386,7 @@ def build_decision(dataset: str, thresh: float, hard: float,
     df["n_periods"] = prod_meta["n_periods"]
     # 分档阈值与命名统一由 dup_criteria 提供（CLI 的 --hard/--thresh 只能收紧，
     # 不能另起一套命名）。tier **只是标注**，不参与删除判定。
-    from scripts.factors.dup_criteria import tier_of
+    from research.dup_criteria import tier_of
 
     df["tier"] = [tier_of(float(c)) for c in df["max_corr"].to_numpy()]
     # 秩空间增量的四列（只有进到覆盖判定的行才填；其余留 NaN）
