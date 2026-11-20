@@ -2063,6 +2063,13 @@ Q1−Q5 年化 +12.9%（t 2.24），但多头端 15% 超额仅 **+0.196%/月（t
   `registry.csv.bak_{basis,dupaudit}`、`hs300_2022_2025` 下线残留副本 **1.4GB**
   （11-18 已下线，守卫预期其不存在）。入口索引重建（129 活跃入口），
   `docs_lint` / `memory_lint` / `gen_scripts_index --check` 全绿。
+  ⑤ **结构二轮（同日晚）**：`scripts/factors/dup_criteria` 兼容转出口删除
+  （消费方 `library_dedup_apply/plan` 与判据锁测试全改走 `research.dup_criteria` 真源，
+  `test_factor_criteria` 守卫反转为「防 shim 复活」）；`model_performance.py` 删
+  （零代码引用，reports 行改「工具保留（产物）」）；§1.4 接口文件收敛为 2 个
+  （`all_a_pit_union_2019.json` / `mine_im_combos.csv` 移出——读取方已删、文件不在本机，
+  `docs_lint` `ROOT_ALLOWED` 白名单同步）；`.workbuddy/memory` 顶层 12 份历史日报
+  归档进 `archive/`（对齐「日报不驻顶层」约定，lint 28 项提示清零）；入口索引 127。
 - [x] **✅ 指标口径全仓收口四步（2026-11-19）** —— 审计「同一指标多份实现 / 多套口径」后一次清完：
   ① `pit_intraday_probe` 的朴素 `t = IC/std·√n` 改 `stats.robust_stats.nw_tstat`（NW HAC，
      滞后用 Andrews 自动）——该探针历史 `t` 全部虚高，**旧 t 值不再引用**；
