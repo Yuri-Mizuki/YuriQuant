@@ -2206,7 +2206,8 @@ Q1−Q5 年化 +12.9%（t 2.24），但多头端 15% 超额仅 **+0.196%/月（t
   **① 判据改造**：`altdata_daily` 的 `product_glob` → `product_check: altdata_tables`。
   `task_scheduler` 新增 `_PRODUCT_CHECKS` 注册表（单个 glob 表达不了「一次写 7 张表」），
   逐表核对分三类：**数据日期水位**（`cninfo_holder.ann_date` / `macro_calendar.date`
-  ≥ 最近交易日）、**按日分片存在性**（`cls`/`news` 是链尾表 ⇒ 缺片即没跑到底）、
+  ≥ 最近交易日）、**链尾表数据水位**（`cls`/`news` 是链尾表 ⇒ 缺片即没跑到底；
+  `cls` 2026-11-20 起按年分区，改看文件内 `max(pub_time)`）、
   **快照表 mtime**（`holder_control`/`inner_trade`/`mgmt_hold` 每天全量重拉；
   `ann_date` 会长期不更新，用日期判必误报 —— 与 `rebuild_panels` 刻意留空 glob 同源）。
   配套把 `_rc_hint` 加进体检表（`-1073741510` → `0xC000013A 进程被强制结束`）。
