@@ -99,43 +99,31 @@ class MinutePanelStore:
 
     # ------------------------------------------------------------------ 构建入口
     @classmethod
-    def build(
+    def _densify(
         cls,
-        minute_df: pd.DataFrame,
+        root: Path,
         period: int,
         pool: str,
-        cache_root: Path | str | None = None,
-        float_dtype=np.float32,
+        float_dtype,
+        codes: list[str],
+        bar_keys: list,
+        year_frames,
     ) -> "MinutePanelStore":
-        """把分钟长表 (kline_time, code) 稠密化为按年分区的面板并落盘。
+        """稠密化落盘内核（``build`` 与 ``build_from_year_parts`` 共用）。
 
-        幂等：重复构建同一 (pool, period) 会整体重写（以传入长表为准），
-        不做增量合并——增量水位由 parquet 缓存层负责，本层只是"物化视图"。
+        ``year_frames`` 是 ``(year, sub)`` 可迭代对象，``sub`` 为已校验的
+        (kline_time, code) MultiIndex 长表（单年）；``codes`` / ``bar_keys``
+        必须是**全局**并集（跨年统一编号），调用方负责先扫出来。
         """
-        root = _panel_root(cache_root) / f"min{period}_{pool}"
-        root.mkdir(parents=True, exist_ok=True)
-        df = _validate_long(minute_df)
-
-        codes = sorted(df.index.get_level_values("code").unique())
         code_ix = {c: i for i, c in enumerate(codes)}
-        # bar 时刻表从数据推导（全局并集，跨年统一）
-        tod = df.index.get_level_values("kline_time").time
-        bar_keys = sorted({t.replace(second=0, microsecond=0) for t in tod})
         bar_ix = {t: i for i, t in enumerate(bar_keys)}
         n_bars = len(bar_keys)
         n_codes = len(codes)
         bar_times = [f"{t.hour:02d}{t.minute:02d}" for t in bar_keys]
-
-        df = df.assign(
-            _day=df.index.get_level_values("kline_time").normalize(),
-            _tod=tod,
-        )
-        years = sorted(df["_day"].dt.year.unique())
         meta = {"period": period, "pool": pool, "codes": codes,
                 "bar_times": bar_times, "fields": list(FIELDS), "years": []}
-
-        for year in years:
-            sub = df[df["_day"].dt.year == year]
+        n_years = 0
+        for year, sub in year_frames:
             days = sorted(int(d.strftime("%Y%m%d")) for d in sub["_day"].unique())
             day_ix = {pd.Timestamp(str(d)).normalize(): i for i, d in enumerate(days)}
 
@@ -156,12 +144,97 @@ class MinutePanelStore:
                 np.save(ydir / f"{field}.npy", arr)
             meta["years"].append(int(year))
             _log_coverage(year, days, arr, rows_code)
+            n_years += 1
 
         with open(root / _META, "w", encoding="utf-8") as f:
             json.dump(meta, f, ensure_ascii=False)
         log.info("分钟面板构建完成: %s（%d 年 / %d 码 / %d bar/日）",
-                 root, len(years), n_codes, n_bars)
+                 root, n_years, n_codes, n_bars)
         return cls(root, period, pool)
+
+    @classmethod
+    def build(
+        cls,
+        minute_df: pd.DataFrame,
+        period: int,
+        pool: str,
+        cache_root: Path | str | None = None,
+        float_dtype=np.float32,
+    ) -> "MinutePanelStore":
+        """把分钟长表 (kline_time, code) 稠密化为按年分区的面板并落盘。
+
+        幂等：重复构建同一 (pool, period) 会整体重写（以传入长表为准），
+        不做增量合并——增量水位由 parquet 缓存层负责，本层只是"物化视图"。
+
+        ⚠️ 整表进内存。全 A 5 分钟一年 ~6,600 万行（~7 GB），八年全量
+        ~5.3 亿行（~60 GB）远超常规内存 —— 那个量级用
+        :meth:`build_from_year_parts` 流式路径（按年分区逐个进内存）。
+        """
+        df = _validate_long(minute_df)
+        codes = sorted(df.index.get_level_values("code").unique())
+        # bar 时刻表从数据推导（全局并集，跨年统一）
+        tod = df.index.get_level_values("kline_time").time
+        bar_keys = sorted({t.replace(second=0, microsecond=0) for t in tod})
+        df = df.assign(
+            _day=df.index.get_level_values("kline_time").normalize(),
+            _tod=tod,
+        )
+        years = sorted(df["_day"].dt.year.unique())
+        root = _panel_root(cache_root) / f"min{period}_{pool}"
+        root.mkdir(parents=True, exist_ok=True)
+        return cls._densify(
+            root, period, pool, float_dtype, codes, bar_keys,
+            ((y, df[df["_day"].dt.year == y]) for y in years))
+
+    @classmethod
+    def build_from_year_parts(
+        cls,
+        part_paths: list[Path] | list[str],
+        period: int,
+        pool: str,
+        cache_root: Path | str | None = None,
+        float_dtype=np.float32,
+    ) -> "MinutePanelStore":
+        """流式稠密化：逐年读 ``part_<year>.parquet``，单年进内存。
+
+        与 :meth:`build` 的产物**同构**（codes / bar_keys 取全局并集、
+        meta 字段一致、按年 ``y{year}/`` 落盘），区别只在内存形态——
+        ``build`` 整表进内存（hs300 级 ~1 GB 无所谓），本方法单年 ~7 GB，
+        全 A 八年长表才能在常规内存里物化。每个 part 必须恰好单年。
+        """
+        root = _panel_root(cache_root) / f"min{period}_{pool}"
+        root.mkdir(parents=True, exist_ok=True)
+        parts = [Path(p) for p in part_paths]
+        if not parts:
+            raise ValueError("part_paths 为空")
+
+        # 第一遍轻扫（只读 kline_time + code 两列，~1 GB/年）拿全局并集：
+        # codes / bar_keys 必须跨年统一，才能在第二遍直接落数组
+        codes: set[str] = set()
+        bar_keys: set = set()
+        for p in parts:
+            lite = pd.read_parquet(p, columns=["kline_time", "code"])
+            if "kline_time" not in lite.columns:  # 读回成了 MultiIndex
+                lite = lite.reset_index()
+            kt = pd.to_datetime(lite["kline_time"])
+            codes.update(lite["code"].astype(str).unique())
+            bar_keys.update(t.replace(second=0, microsecond=0)
+                            for t in kt.dt.time.unique())
+            del lite, kt
+        log.info("流式构建 %s：轻扫完成，%d 码 / %d bar 时刻 / %d 年分区",
+                 root, len(codes), len(bar_keys), len(parts))
+
+        def year_frames():
+            for p in parts:
+                sub = _validate_long(pd.read_parquet(p))
+                kt = sub.index.get_level_values("kline_time")
+                years = sorted({t.year for t in kt.normalize().unique()})
+                if len(years) != 1:
+                    raise ValueError(f"{p} 跨年 {years}，单年分区要求破坏")
+                yield years[0], sub.assign(_day=kt.normalize(), _tod=kt.time)
+
+        return cls._densify(root, period, pool, float_dtype,
+                            sorted(codes), sorted(bar_keys), year_frames())
 
     @classmethod
     def open(cls, period: int, pool: str,

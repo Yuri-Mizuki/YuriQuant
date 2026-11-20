@@ -67,7 +67,9 @@ def load_context(period: int, pool: str):
     cache = DataCache(OfflineDataSource())
     uni = Universe(cache)
     from data.cache_helpers import load_daily
-    codes, _cal, daily = load_daily(cache, uni, "000300.SH", begin, end)
+    # pool 透传：all_a 时 codes 取全 A 并集、读 daily_all_a.parquet
+    # （不传会默认 config.universe.default，把面板截成 hs300 成分）。
+    codes, _cal, daily = load_daily(cache, uni, "000300.SH", begin, end, pool=pool)
     status = cache.get_history_stock_status(codes, begin, end)
     log.info("面板 %d 日（%d→%d）/ 日线 %d 行 / 状态 %d 行",
              len(days), begin, end, len(daily), len(status))

@@ -28,7 +28,7 @@ if str(ROOT) not in sys.path:
 
 from config import Config  # noqa: E402
 from data.cache import DataCache  # noqa: E402
-from data.intraday import MinutePanelStore  # noqa: E402
+from data.intraday import MinutePanelStore, _panel_root  # noqa: E402
 from factor.intraday_features import FEATURE_DOCS, extract_all  # noqa: E402
 from scripts.common.cli_common import setup_logging  # noqa: E402
 from stats.significance import mean_inference  # noqa: E402
@@ -98,6 +98,9 @@ def main():
     ap.add_argument("--real", action="store_true", help="先经增量缓存拉数再物化（默认只读缓存）")
     ap.add_argument("--period", type=int, default=5, choices=[1, 3, 5, 10, 15, 30, 60, 120])
     ap.add_argument("--universe", default=None, help="池名（默认 config.universe.default）")
+    ap.add_argument("--from-parts", action="store_true",
+                    help="流式读 min{period}_{pool}_parts/part_<year>.parquet 逐年稠密化"
+                         "（全 A 级必需：整表进内存 ~60GB 会 OOM；此时单表可不存在）")
     ap.add_argument("--begin", type=int, default=None, help="特征提取起始日（面板构建始终全年份）")
     ap.add_argument("--end", type=int, default=None, help="特征提取截止日")
     ap.add_argument("--features", action="store_true", help="提取统计特征并落盘长表 parquet")
@@ -112,6 +115,22 @@ def main():
         cache_root = Path(tempfile.mkdtemp(prefix="mock_intraday_"))
         minute = gen_mock_minute(period=args.period)
         log.info("mock 分钟长表 %d 行（临时根 %s）", len(minute), cache_root)
+    elif args.from_parts:
+        parts_dir = _panel_root(cache_root) / f"min{args.period}_{pool}_parts"
+        parts = sorted(parts_dir.glob("part_*.parquet"))
+        if not parts:
+            raise SystemExit(
+                f"{parts_dir} 无年分区——先运行 "
+                f"`python -m scripts.ingest.fetch_minute_all --compact` 合并分片。")
+        log.info("流式构建：%d 个年分区（单年进内存）", len(parts))
+        store = MinutePanelStore.build_from_year_parts(
+            parts, args.period, pool, cache_root=cache_root)
+        print(store.coverage_stats().to_string(index=False))
+        if not (args.features or args.demo_ic):
+            log.info("完成（面板根: %s）。统计特征可用 --features 提取。", store.root)
+            return
+        _features_tail(store, args)
+        return
     else:
         if args.real:
             cache = _real_cache()
@@ -132,6 +151,14 @@ def main():
         log.info("完成（面板根: %s）。统计特征可用 --features 提取。", store.root)
         return
 
+    _features_tail(store, args, cache=None if args.mock else cache)
+
+
+def _features_tail(store: "MinutePanelStore", args, cache: "DataCache | None" = None) -> None:
+    """面板就绪后的公共段：统计特征提取 + 落盘 + 可选 IC 快照。
+
+    ``cache`` 仅供 ``--demo-ic``；未传入且需要时现场建离线缓存。
+    """
     log.info("提取统计特征（%d 个）...", len(FEATURE_DOCS))
     feats = extract_all(store, begin_date=args.begin, end_date=args.end)
     log.info("特征面板: %d 个 × %s", len(feats),
@@ -156,6 +183,9 @@ def main():
         if args.mock:
             log.info("--mock 下跳过 IC（无日线缓存）")
         else:
+            if cache is None:
+                from data.offline import OfflineDataSource
+                cache = DataCache(OfflineDataSource())
             ic = demo_ic(feats, cache, pool)
             with pd.option_context("display.width", 120, "display.float_format", "{:.4f}".format):
                 print(ic.head(20).to_string(index=False))

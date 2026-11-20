@@ -127,6 +127,47 @@ class TestMinutePanelStore:
         with pytest.raises(FileNotFoundError):
             MinutePanelStore.open(30, "nope", cache_root=tmp_path)
 
+    def test_build_from_year_parts_equivalent(self, tmp_path):
+        """流式构建（按年分区逐年进内存）与整表 build() 产物**同构**。
+
+        2026-11-20 为全 A 八年长表（~5.3 亿行，整表进内存 ~60GB 会 OOM）
+        而加的路径；跨年 fixture（2025+2026）天然覆盖「全局 codes/bar_keys
+        并集」与「meta years 顺序」两个易错点。
+        """
+        long_df = make_long(drop=[("20251224", "600001.SH")])
+        s_whole = MinutePanelStore.build(long_df, 30, "whole", cache_root=tmp_path)
+
+        parts_dir = tmp_path / "parts"
+        parts_dir.mkdir()
+        day = long_df.index.get_level_values("kline_time").normalize()
+        for y in sorted(day.year.unique()):
+            sub = long_df[day.year == y]
+            sub.to_parquet(parts_dir / f"part_{y}.parquet")
+        parts = sorted(parts_dir.glob("part_*.parquet"))
+        s_stream = MinutePanelStore.build_from_year_parts(
+            parts, 30, "stream", cache_root=tmp_path)
+
+        assert s_stream._meta["codes"] == s_whole._meta["codes"]
+        assert s_stream._meta["bar_times"] == s_whole._meta["bar_times"]
+        assert s_stream._meta["years"] == s_whole._meta["years"]
+        assert s_stream.all_days() == s_whole.all_days()
+        for y in s_whole._meta["years"]:
+            for field in ("open", "high", "low", "close", "volume", "amount"):
+                a = np.load(s_whole.root / f"y{y}" / f"{field}.npy")
+                b = np.load(s_stream.root / f"y{y}" / f"{field}.npy")
+                np.testing.assert_array_equal(a, b)
+
+    def test_build_from_year_parts_rejects_cross_year(self, tmp_path):
+        """单年分区约定：part 跨年应显式报错而不是静默错分。"""
+        long_df = make_long(n_days=8)  # 跨 2025/2026
+        parts_dir = tmp_path / "parts_bad"
+        parts_dir.mkdir()
+        long_df.to_parquet(parts_dir / "part_mixed.parquet")
+        with pytest.raises(ValueError, match="跨年"):
+            MinutePanelStore.build_from_year_parts(
+                sorted(parts_dir.glob("part_*.parquet")), 30, "bad",
+                cache_root=tmp_path)
+
 
 # ----------------------------------------------------------------------
 # 特征层：向量化 vs 独立慢参照

@@ -193,9 +193,21 @@ def build_entropy(begin: int, end: int) -> pd.DataFrame:
 
 
 def build_minute_factors(begin: int, end: int, want: set[str] | None,
-                         tot_share: pd.DataFrame) -> dict[str, pd.DataFrame]:
-    """5 分钟面板 → CS 价差 / 聪明钱 vwap / 净支撑成交量（hs300 池）。"""
-    store = MinutePanelStore.open(5, "hs300")
+                         tot_share: pd.DataFrame,
+                         pool: str = "all_a") -> dict[str, pd.DataFrame]:
+    """5 分钟面板 → CS 价差 / 聪明钱 vwap / 净支撑成交量（``--minute-pool`` 选池）。
+
+    第四轮（2026-11-20）在 hs300 分钟面板上首建；全 A 分钟数据落库后默认
+    ``pool="all_a"`` 重建全 A 口径面板并覆盖同名重注册。``tot_share`` 来自
+    资产负债表 PIT 总股本（全 A 日频上下文），与分钟池无关。
+    """
+    try:
+        store = MinutePanelStore.open(5, pool)
+    except FileNotFoundError as e:
+        log.warning("分钟面板 min5_%s 不存在（先 fetch_minute_all --compact + "
+                    "build_minute_panel --universe %s），分钟频 3 因子跳过：%s",
+                    pool, pool, e)
+        return {}
     days = [d for d in store.all_days() if begin <= d <= end]
     if not days:
         raise RuntimeError(f"分钟面板在 {begin}-{end} 无交易日")
@@ -263,6 +275,8 @@ def main():
     ap.add_argument("--begin", type=int, default=20190101)
     ap.add_argument("--end", type=int, default=20251231)
     ap.add_argument("--dataset", default="all_a_2018_2026")
+    ap.add_argument("--minute-pool", default="all_a",
+                    help="分钟频 3 因子用的分钟面板池（hs300 为第四轮历史口径）")
     ap.add_argument("--features", default=None)
     ap.add_argument("--no-save", action="store_true", help="只算不入库")
     ap.add_argument("--report-only", action="store_true",
@@ -335,7 +349,8 @@ def main():
         panels["fd_ent30"] = build_entropy(args.begin, args.end)
     if need("fd_hf_cs", "fd_smart_vwap", "fd_net_support"):
         panels.update(build_minute_factors(args.begin, args.end, want,
-                                           extra["tot_share"]))
+                                           extra["tot_share"],
+                                           pool=args.minute_pool))
 
     if args.no_save:
         for n, p in panels.items():
