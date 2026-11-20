@@ -181,7 +181,7 @@ tasks:
     system: schtasks
     status: planned
     time: '17:30'
-    schedule: '工作日（周一至周五）'
+    schedule: daily
     command: '${YQ_PYTHON:D:\python\Python312\python.exe}'
     arguments: '-m scripts.reporting.monitor_factor_health --dataset all_a_2018_2026'
     working_dir: '${YQ_REPO:E:\YuriQuant}'
@@ -193,6 +193,28 @@ tasks:
       耗时：全库 877 因子约 13 秒（`--panel-mode none`）；默认 `alerted` 对告警
       因子补面板与中性化，约 3 分钟。前置依赖 `reports/factor_board/cache/`
       有该期缓存（IC 序列来源），缓存过期会整片跳过并在日志点名。
+
+  - key: factor_pipeline
+    name: 'YuriQuant FactorPipeline'
+    system: schtasks
+    status: planned
+    time: '12:00'
+    schedule: daily
+    command: '${YQ_PYTHON:D:\python\Python312\python.exe}'
+    arguments: >-
+      -m scripts.factors.run_factor_pipeline --skip-build
+      --log-file logs\factor_pipeline_{date}.log
+    working_dir: '${YQ_REPO:E:\YuriQuant}'
+    execution_limit: PT3H
+    description: '因子流水线编排：评估补齐（ingested→evaluated）→ 看板数据增量 → 看板页面'
+    notes: >-
+      2026-11-19 新增，**当前 planned、未注册**。只编排不含计算：每步都是
+      `python -m <既有入口>`。与 `rebuild_panels` 的顺序约束：重建日（06:00 起、
+      数小时）未跑完时启动会读到半新面板 —— 激活前需确认重建已完成，或把本任务
+      挪到重建日志出现完成标记之后。`--skip-build` 是有意的：builder 需要
+      `--real/--offline/--begin` 等上下文，交给人显式触发（`--builders/--builder-args`）。
+      前置：`reports/factor_board/cache/` 已存在（`--resume` 只补缺）。
+      产物：`reports/factor_board/index.html` + `f/*.html`。
 
   - key: altdata_cls_backfill
     name: 'YuriQuant AltDataClsBackfill'

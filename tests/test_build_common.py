@@ -96,6 +96,24 @@ def test_register_panels_skips_empty_and_registers():
     assert len(rows) == 1
 
 
+def test_register_panels_defaults_to_library_returns():
+    """不传 returns_panel ⇒ register 收到 None（走库标准收益，2026-11-19）。"""
+    idx = pd.date_range("2023-01-02", periods=10, freq="B")
+    codes = ["A", "B", "C"]
+    a = pd.DataFrame(np.random.default_rng(1).normal(size=(10, 3)),
+                     index=idx, columns=codes)
+    seen = []
+
+    class FakeLib:
+        def register(self, **kw):
+            seen.append(kw.get("returns_panel"))
+            return {"ic_mean": 0.1, "t_stat_nw": 1.0, "best_sharpe": 0.5,
+                    "best_config": "x"}
+
+    register_panels(FakeLib(), {"a": a}, {"a": "fa"})
+    assert seen == [None]
+
+
 def test_register_panels_names_subset():
     idx = pd.date_range("2023-01-02", periods=5, freq="B")
     codes = ["A", "B"]  # 单列截面 std 恒为 0，会被"恒定值因子"守卫跳过
@@ -127,6 +145,38 @@ def test_register_panels_on_fail_callback():
                            on_fail=lambda n, e: calls.append((n, str(e))))
     assert len(rows) == 0
     assert calls == [("a", "boom")]
+
+
+def test_register_panels_batch_dup_skips_equivalent_and_unifies_family():
+    """同批两两查重：镜像等价跳过，高相关归入同一族（2026-11-19 补）。"""
+    rng = np.random.default_rng(0)
+    idx = pd.date_range("2023-01-02", periods=30, freq="B")
+    codes = [f"{i:02d}" for i in range(60)]
+    a = pd.DataFrame(rng.normal(size=(30, 60)), index=idx, columns=codes)
+    mirror = a * -3.0          # 镜像 ⇒ 秩空间等价
+    noisy = a + pd.DataFrame(rng.normal(size=(30, 60)) * 0.3,
+                             index=idx, columns=codes)   # ρ≈0.96、有增量
+    registered, tags = [], []
+
+    class FakeLib:
+        def list_all(self):
+            return pd.DataFrame({"name": [], "family": []})
+
+        def register(self, **kw):
+            registered.append(kw["name"])
+            return {"ic_mean": 0.1, "t_stat_nw": 1.0, "best_sharpe": 0.5,
+                    "best_config": "x", "family": kw.get("family", "")}
+
+        def set_tag(self, name, **kw):
+            tags.append((name, kw))
+
+    returns = pd.DataFrame(0.01, index=idx, columns=codes)
+    rows = register_panels(
+        FakeLib(), {"a": a, "mirror": mirror, "noisy": noisy},
+        {"a": "fa", "mirror": "fm", "noisy": "fn"}, returns, "t",
+        families={"a": "波动率"})
+    assert registered == ["a", "noisy"]          # mirror 与 a 等价，跳过
+    assert [r["family"] for r in rows] == ["波动率", "波动率"]
 
 
 def test_print_no_save(caplog):

@@ -97,6 +97,25 @@ def test_set_can_be_recovered_from_the_name_prefix():
     assert propose(row)["set"] == "alpha191"
 
 
+def test_set_and_group_can_be_recovered_from_the_source_prefix():
+    """名字前缀认不出时（``fd_*`` 论文因子）用 source 前缀兜底，组同步推出来。"""
+    row = pd.Series({"name": "fd_tcc", "set": None, "label": "某论文因子",
+                     "source": "paper:build_alla_paper:all_a_2018_2026"})
+    got = propose(row)
+    assert got["set"] == "paper" and got["group"] == "论文策略"
+    assert got["family"] == "论文"
+
+
+def test_group_table_is_the_single_source_for_the_board():
+    """看板 ``SRC_GROUP`` 直接引用库里这张表，组名集合必须与展示顺序一致。"""
+    from research.factor_library import GROUP_ORDER, SET_TO_GROUP, group_for_set
+
+    assert set(SET_TO_GROUP.values()) == set(GROUP_ORDER)
+    assert group_for_set("pledge") == "股东治理"
+    assert group_for_set("style") == "基本面"
+    assert group_for_set("不存在的集") == ""
+
+
 # ---------------------------------------------------------------------------
 # 计划：只补空缺 + 集级护栏
 # ---------------------------------------------------------------------------

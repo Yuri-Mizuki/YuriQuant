@@ -92,7 +92,7 @@ def main():
     log.info("模式=%s 区间=%d-%d warmup起=%d 数据集=%s 因子集=%s",
              mode, begin, end, warmup, dataset, sets)
 
-    panels_px, industry, close_adj = load_alpha_panels(cache, uni, args.index, warmup, end)
+    panels_px, industry, _ = load_alpha_panels(cache, uni, args.index, warmup, end)
     d = AlphaData(panels_px, industry=industry)
 
     # warmup 区间上算因子，裁剪回 [begin, end] 入库（首日即充分预热）
@@ -115,9 +115,6 @@ def main():
         print_no_save(all_defs, all_panels)
         return
 
-    # 收益面板：与库内口径一致（后复权 close，pct_change().shift(-1)）
-    returns_panel = close_adj.loc[:e0].pct_change().shift(-1).loc[b0:e0]
-
     lib = FactorLibrary(dataset=dataset)
     log.info("入库到数据集: %s", dataset)
     for s in sets:
@@ -129,7 +126,7 @@ def main():
             log.warning("注册失败 %s: %s（继续其余因子）", name, str(e)[:120])
 
         rows = register_panels(
-            lib, all_panels, all_defs, returns_panel,
+            lib, all_panels, all_defs,
             source=source, names=names, on_fail=_on_fail,
         )
         ok = sum(1 for r in rows if abs(r["ic_mean"]) >= 0.01)

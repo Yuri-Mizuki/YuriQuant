@@ -49,7 +49,6 @@ from scripts.common.cli_common import (  # noqa: E402
     print_no_save,
     record_experiment_safe,
     register_panels,
-    returns_from_daily,
     setup_logging,
 )
 
@@ -247,7 +246,6 @@ def main():
         return
 
     lib = FactorLibrary(dataset=dataset)
-    returns_panel = returns_from_daily(daily)
 
     names = sorted(_only) if _only else None
     todo = [n for n in (names or FACTOR_DEFS) if n in panels]
@@ -264,7 +262,7 @@ def main():
                              lib.panels_dir / f"{n}.parquet")
 
     register_panels(
-        lib, panels, FACTOR_DEFS, returns_panel,
+        lib, panels, FACTOR_DEFS,
         source=f"paper:awesome-systematic-trading:{begin}-{end}",
         names=todo, write_panel=False,
     )

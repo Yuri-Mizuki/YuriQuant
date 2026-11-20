@@ -4,24 +4,19 @@
 批量通道经 ``upsert_rows`` 入库，只写了 name/set/label/coverage/ic_mean_h*；
 ``register()`` 正常入库会算的 canonical 回测（ls_M/lo_M/ls_W）、IC 显著性
 （NW-t / |t_nw|>2）、panel_path/eval_path/formula 全部缺位（0% 填充）。
-本脚本对**整库**补齐这些列，口径逐项对齐 ``register()``，不自造：
+本脚本对**整库**补齐这些列。2026-11-19 起回测不再自造实现，直接调用
+``FactorLibrary.evaluate(..., persist=False)``——与单因子入库通道共用同一份
+代码（可交易掩码、三套 canonical 回测、eval 文件、eval_status/口径标记），
+本脚本只负责批量调度与落盘节奏，两条通道的评估口径从此不会分家：
 
-- 分层回测：``VectorBacktest(cfg.strategy(k=cfg.k), rebalance_freq=cfg.freq)``，
-  cfg ∈ CANONICAL_CONFIGS（k=30，月/周），成本走引擎默认（``Config.costs()`` + 借券费），
-  与 hs300 库既有登记口径同源；
-- 收益面板：后复权 close（与 build_alla_alpha_panels.load_alla_panels 的 close 分支
-  逐行同构）→ ``pct_change(1, fill_method=None).shift(-1)``（库内 shift(-1) 口径）；
-- IC 显著性：**不重算 IC**——直接消费既有 ic_h1.parquet（批量链的 canonical IC，
-  stride-3 抽稀截面口径，与 registry 已填 99% 的 ic_mean_h* 同源），
-  逐因子过 ``stats.significance.mean_inference``（NW），significant = |t_nw| > 2
-  （register 同判据）；ic_ir 用 ``research.factor_analysis.calc_ir``（register 同源）；
-- 超额年化（看板对齐聚宽「超额收益」列）：仅对 lo_M（TopK 纯多）配置传
-  ``metrics(benchmark_returns=全A等权日收益)``（returns_panel 截面均值，含当日
-  有交易个股），经 ``calc_all_metrics`` 现成口径产出 excess_return_lo_M /
-  information_ratio_lo_M / excess_t_stat_lo_M（新增列，无历史口径冲突）；
-  LS 多空为自融资组合，对基准求超额无经济含义，不算。基准序列落
-  ``bench_returns.parquet``（数据集级一份）；
-- ic_decay5 / autocorr：全截面面板现算（register 同函数，新增列无历史口径冲突）；
+- 收益面板：``lib.default_returns_panel()``（复权收盘 1 日远期），与
+  register/ingest 同源；
+- IC 显著性：**不重算 IC**——直接把既有 ``ic_h1.parquet`` 注入
+  ``evaluate(ic_series=...)``，省 3 s/因子（register 同判据：NW-t、|t|>2）；
+- 超额年化 / 换手序列：由 ``evaluate`` 的 ``_canonical_eval`` 统一产出
+  （仅 lo_* 算超额，基准 = 全A等权；换手序列照旧落 evals 供看板切片）；
+- ic_decay5 / autocorr：证据列、不参与任何门槛，默认关（``--with-evidence``
+  开，每因子约 30 s）；
 - formula := label（hs300 库先例：alpha 系 formula 即引用式标签，label 已 100% 填充）；
 - family 旧码迁移：rnd/lev/liq/pro/qual/cfq 共 17 行 → family=基本面，
   细分进 subfamily（受控词表无这些风格细分，不新造值；builder 源码
@@ -58,7 +53,6 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, ROOT)
 
-from scripts.builders.common import load_close_adj  # noqa: E402
 from scripts.common.cli_common import setup_logging  # noqa: E402
 
 log = setup_logging("backfill_library_metrics")
@@ -96,16 +90,17 @@ def main() -> None:
     ap.add_argument("--resume", action="store_true", help="跳过已填行（默认行为）")
     ap.add_argument("--skip-backtest", action="store_true",
                     help="只回填 IC 显著性/panel_path/formula/family，不跑回测")
+    ap.add_argument("--with-evidence", action="store_true",
+                    help="同时补 ic_decay5 / autocorr（每因子约 30 s，批量回填默认关）")
     ap.add_argument("--flush-every", type=int, default=50)
     args = ap.parse_args()
 
     from research.factor_analysis import calc_ir, ic_stats
     from research.factor_library import FactorLibrary
-    from research.factor_library import METRIC_COLS, CANONICAL_CONFIGS
     from stats.significance import mean_inference
 
     lib = FactorLibrary(dataset=args.dataset)
-    ds_dir = Path(lib.root) / args.dataset
+    ds_dir = Path(lib.root)          # 已含 <dataset>/ 段（2026-11-19 修双重拼接）
     reg = pd.read_csv(ds_dir / "registry.csv")
     reg = reg.drop_duplicates(subset="name", keep="last").reset_index(drop=True)
 
@@ -114,13 +109,11 @@ def main() -> None:
     shutil.copy2(ds_dir / "registry.csv", bak)
     log.info("registry 快照: %s", bak.name)
 
-    # 收益面板（全量一次进内存，串行用）
+    # 收益面板：统一用库内默认口径（复权收盘 1 日远期），与 register/ingest 同源
     returns_panel = None
     if not args.skip_backtest:
         t0 = time.time()
-        close_adj = load_close_adj()   # 已按 KEEP_FROM 截断（builders.common 同源）
-        returns_panel = close_adj.pct_change(1, fill_method=None).shift(-1)
-        del close_adj
+        returns_panel = lib.default_returns_panel()
         log.info("收益面板: %d 日 × %d 股（%.0fs）", *returns_panel.shape, time.time() - t0)
 
     ic1 = pd.read_parquet(ds_dir / "ic_h1.parquet") if (ds_dir / "ic_h1.parquet").exists() else None
@@ -198,47 +191,27 @@ def main() -> None:
                 continue
             try:
                 panel = pd.read_parquet(ppath)
-                reg.at[i, "n_dates"] = panel.shape[0]
-                reg.at[i, "n_codes"] = panel.shape[1]
-                eval_cols: dict = {}
-                if ic1 is not None and name in ic1.columns:
-                    eval_cols["ic"] = ic1[name]
-                best_sharpe, best_config = -np.inf, CANONICAL_CONFIGS[0].key
-                for cfg in CANONICAL_CONFIGS:
-                    from backtest.engine import VectorBacktest
-                    bt = VectorBacktest(cfg.strategy(k=cfg.k), rebalance_freq=cfg.freq)
-                    res = bt.run(panel, returns_panel, check_convention=False)
-                    eval_cols[f"dret_{cfg.key}"] = res.daily_returns
-                    eval_cols[f"equity_{cfg.key}"] = res.equity_curve
-                    # 换手序列（调仓日有值）：看板按时间区间重算区间换手要用
-                    eval_cols[f"turnover_{cfg.key}"] = res.turnover_series
-                    # 超额只对纯多配置算（LS 对基准求超额无经济含义，见 docstring）
-                    is_lo = cfg.key.startswith("lo")
-                    m = res.metrics(benchmark_returns=bench if is_lo else None)
-                    for mc in METRIC_COLS:
-                        if mc in m:
-                            reg.at[i, f"{mc}_{cfg.key}"] = m[mc]
-                    if is_lo:
-                        for ek in ("excess_return", "information_ratio", "excess_t_stat"):
-                            if ek in m:
-                                reg.at[i, f"{ek}_{cfg.key}"] = m[ek]
-                    if m["sharpe"] > best_sharpe:
-                        best_sharpe, best_config = m["sharpe"], cfg.key
-                reg.at[i, "best_sharpe"] = best_sharpe
-                reg.at[i, "best_config"] = best_config
-                ep = ds_dir / "evals" / f"{slug(str(name))}.parquet"
-                ep.parent.mkdir(parents=True, exist_ok=True)
-                pd.DataFrame(eval_cols).sort_index().astype(np.float32).to_parquet(ep)
-                reg.at[i, "eval_path"] = str(ep)
-                # ic_decay5 / autocorr（register 同函数，全截面口径）
-                try:
+                # 统一走库的 evaluate：可交易掩码、三套 canonical 回测、eval
+                # 文件（ic + dret/equity/turnover）、eval_status / 口径标记
+                # 全由同一实现产出——本脚本只负责批量调度与落盘节奏。
+                # ic 直接用库内预计算的 ic_h1（与 builder IC 同一份），省 3 s/因子。
+                ic_s = (ic1[name] if (ic1 is not None and name in ic1.columns)
+                        else None)
+                metrics = lib.evaluate(
+                    name, returns_panel, panel=panel, persist=False,
+                    use_mask=True, ic_series=ic_s)
+                for key, val in metrics.items():
+                    if key not in reg.columns:
+                        reg[key] = np.nan
+                    reg.at[i, key] = val
+                # 证据列不参与任何门槛，且每因子约 30 s，批量默认关
+                # （2026-11-19 起；原先无条件计算，876 个因子要 8 小时）。
+                if args.with_evidence:
                     from research.factor_analysis import calc_ic_decay, factor_autocorr
                     with np.errstate(all="ignore"):
                         reg.at[i, "ic_decay5"] = float(
                             calc_ic_decay(panel, returns_panel, max_lag=10).get(5, np.nan))
                         reg.at[i, "autocorr"] = float(factor_autocorr(panel))
-                except Exception as exc:  # noqa: BLE001
-                    log.debug("decay/autocorr 失败 %s: %s", name, exc)
                 n_ok += 1
             except Exception as exc:  # noqa: BLE001
                 log.warning("[%d/%d] %s: 回测失败 %s", k, len(todo_idx), name, str(exc)[:150])
@@ -253,7 +226,8 @@ def main() -> None:
              n_ok, n_missing, time.time() - t0, ds_dir / "registry.csv")
 
     # 汇总报告（实验目录）
-    out = ROOT / "reports" / "factor_library_backfill" / "backfill_summary.json"
+    out = ROOT / "reports" / "library_governance" / "backfill_summary.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
     filled = reg["annual_return_ls_M"].notna().mean() * 100 if "annual_return_ls_M" in reg else 0
     sig = reg["significant"].fillna(False).astype(bool).sum() if "significant" in reg else 0
     out.write_text(json.dumps({

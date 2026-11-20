@@ -108,6 +108,7 @@
 | `factors/promote_maturity.py` | 成熟度晋升：把 :data:`research.factor_library.MATURITY_GATES` 落到全库。 |
 | `factors/prune_registry_backups.py` | registry 备份轮转：只保留「有用的快照」，其余走回收站。 |
 | `factors/run_alphapool_ppo.py` | 华泰 AI97《大模型+强化学习因子挖掘》—— AlphaPool + MaskablePPO 训练入口 |
+| `factors/run_factor_pipeline.py` | **因子流水线编排**（2026-11-19）：builder → 评估补齐 → 看板数据 → 看板页面，只拼命令不含计算。 |
 | `factors/run_gflownet_phase1.py` | GFlowNet Phase 1：真实 HS300 对齐研报 |
 | `factors/run_llm_mcts.py` | 东吴 LLM-MCTS 因子迭代 Phase 0 —— 同题四引擎对照 runner |
 | `factors/run_portfolio_phase2.py` | stage2 Phase 2：zz1000 主实验（信号管线 + PPO 滚动集成 / 银河口径 QP / 基准）。 |
@@ -133,7 +134,7 @@
 
 | 脚本 | 说明 |
 |---|---|
-| `live/inc_pure_live.py` | `inc_pure` 实盘出单器：董监高主动增持 → T+1 开盘集合竞价买入，持 20 个交易日 |
+| `live/inc_pure_live.py` | `inc_pure` 实盘出单器：董监高主动增持 → T+1 开盘集合竞价买入，持 20 个交易日（事件口径来自 `strategy/event_driven.py`）。 |
 | `live/show_holdings.py` | yqcore-focus-k8 持仓查询（只读，随时可跑） |
 | `live/yqcore.py` | yqcore-focus-k8 生产入口：出榜 / 看持仓，两个独立子命令 |
 
@@ -162,9 +163,9 @@
 | `portfolio/compare_portfolio_methods.py` | 组合优化方法对比脚本（P2，2026-08-14） |
 | `portfolio/corr_sector.py` | 相关性行业归属面板（"长得像谁"）—— 构建 + 与申万标签的重叠率诊断 |
 | `portfolio/etf_breaker_h2h.py` | ETF 轮动 · 熔断触发后「降档五衡」能不能救：条件前瞻头对头 |
-| `portfolio/etf_champ_phase_matrix.py` | ETF 磐石（``champ``）· 「月内调仓相位 × 权重规则」交叉矩阵（相位平均口径）。 |
-| `portfolio/etf_champ_phase_robust.py` | 磐石（``champ``）· 相位交叉矩阵的**稳健性诊断**（配套 ``etf_champ_phase_matrix``）。 |
-| `portfolio/etf_champ_signals.py` | ETF 轮动生产信号板（monthly / balanced） |
+| `portfolio/etf_champ_phase_matrix.py` | ETF 月频档（``monthly``）· 「月内调仓相位 × 权重规则」交叉矩阵（相位平均口径）。 |
+| `portfolio/etf_champ_phase_robust.py` | 月频档（``monthly``）· 相位交叉矩阵的**稳健性诊断**（配套 ``etf_champ_phase_matrix``）。 |
+| `portfolio/etf_champ_signals.py` | ETF 轮动生产信号板（monthly 默认 / balanced；两档按独立账户分别运行，合并方案已判否） |
 | `portfolio/etf_contest5_buffer_oos.py` | buffer 档位选择验证（网格 + 样本外 + 权重稳健性） |
 | `portfolio/etf_contest5_eval.py` | ETF 轮动 · 档位评测（80 个滚动 2 月窗口，口径统一 T+1 open） |
 | `portfolio/etf_contest_spec.py` | ETF 轮动定版参数（单一真源，2026-10-27 锁定 / 2026-11-19 去比赛化） |
@@ -205,7 +206,8 @@
 | `reporting/monitor_production_ic.py` | 生产口径每日 IC / 风格暴露监控 CLI（全A · 定版 dingban · 2026-10-17 起）。 |
 | `reporting/picks_board.py` | 本期出榜解释页（为什么买这些）—— 接在模拟交易页之后。 |
 | `reporting/rolling_grid_report.py` | 全A滚动训练实验报告生成器：收益曲线 + 分年绩效 + 维度对比（自包含 HTML）。 |
-| `reporting/yqcore_dashboard.py` | `yqcore` 定版策略前端页面（自包含 HTML，零后端）——**历史回测**与**模拟交易**分两页。 |
+| `reporting/strategy_home.py` | 策略首页（各策略回测详情）+ 独立模拟持仓页，`reports/strategies/`。 |
+| `reporting/yqcore_dashboard.py` | `yqcore` 定版策略页面内核（自包含 HTML，零后端）——回测/持仓正文与脚本块，供策略详情页复用；也单独出三档回测页与模拟交易页。 |
 
 ## textmining
 

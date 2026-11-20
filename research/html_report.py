@@ -166,6 +166,65 @@ code{font-family:Consolas,monospace;font-size:12px;color:#555}
 # 兼容别名（旧版内部以 _CSS 引用）
 _CSS = BASE_CSS
 
+# ===========================================================================
+# 站点级顶栏（策略首页 / 因子看板 / 股票线回测 / 模拟交易 / 本期出榜）
+# 三份前端生成器（strategy_home / factor_board / yqcore_dashboard）共用，
+# 页面只传 ``active`` 与相对 ``reports/`` 的前缀 ``root``，不再各写一份 _topbar。
+# ===========================================================================
+CHROME_CSS = """
+.topbar{background:var(--navy,#16304f);color:#fff;height:50px;display:flex;align-items:center;
+        padding:0 20px;gap:12px;position:sticky;top:0;z-index:30}
+.topbar .brand{display:flex;align-items:center;gap:8px;font-size:15px;font-weight:600}
+.topbar .brand i{width:17px;height:17px;border-radius:3px;background:#3f7ad6;display:inline-block;
+                 box-shadow:inset 0 0 0 4px rgba(255,255,255,.85)}
+.topbar .sep{width:1px;height:17px;background:rgba(255,255,255,.28)}
+.topbar .nav{display:flex;gap:20px;font-size:13px;color:rgba(255,255,255,.8)}
+.topbar .nav a{color:rgba(255,255,255,.72);text-decoration:none;padding:3px 0}
+.topbar .nav a:hover{color:#fff}
+.topbar .nav a.on{color:#fff;font-weight:600;box-shadow:inset 0 -2px 0 #5b9bf5}
+.topbar .right{margin-left:auto;display:flex;gap:16px;font-size:12px;color:rgba(255,255,255,.7)}
+@media(max-width:900px){.topbar{height:auto;flex-wrap:wrap;padding:6px 12px}
+  .topbar .right{width:100%;margin-left:0;padding-bottom:4px}}
+"""
+
+#: 站点 tab 真源：(key, 文案, 相对 ``reports/`` 的路径)。新增页面只改这一处。
+SITE_TABS = (
+    ("home", "策略首页", "strategies/index.html"),
+    ("live", "模拟持仓", "strategies/live.html"),
+    ("board", "因子看板", "factor_board/index.html"),
+    ("picks", "本期出榜", "yq_core/picks.html"),
+)
+
+
+def site_nav(active: str, generated: str = "", root: str = "..",
+             local: dict[str, str] | None = None, right: str = "") -> str:
+    """站点顶栏（全仓唯一实现）。
+
+    - ``active``：当前页的 tab key（见 ``SITE_TABS``）。
+    - ``root``：当前页到 ``reports/`` 的相对前缀（上一层 ``..``，``f/`` 下 ``../..``）。
+    - ``local``：当前目录下已有的页面，``{key: href}`` 覆盖默认路径
+      （如 ``{"home": "index.html", "live": "live.html"}``）。
+    - ``right``：右侧说明；缺省为「只读 · 零后端 · 可离线打开」+ 生成时间。
+    """
+    local = local or {}
+    tabs = "".join(
+        '<a href="%s"%s>%s</a>' % (
+            local.get(key) or f"{root}/{path}",
+            ' class="on"' if key == active else "",
+            label)
+        for key, label, path in SITE_TABS)
+    if not right:
+        right = "<span>只读 · 零后端 · 可离线打开</span>"
+        if generated:
+            right += f"<span>生成 {generated}</span>"
+    return (
+        '<div class="topbar"><div class="brand"><i></i>YuriQuant</div>'
+        '<div class="sep"></div>'
+        f'<div class="nav">{tabs}</div>'
+        f'<div class="right">{right}</div></div>'
+    )
+
+
 # 模板中的 __DATA__ 由 Python 注入；__EQ__/__DD__/__IC__/__LAYERS__ 为
 # 每因子动态 datasets 表达式（f = DATA.factors[idx]，由 renderFactor 传入）。
 _JS = r"""

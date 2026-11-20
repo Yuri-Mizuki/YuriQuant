@@ -191,7 +191,13 @@ def complete_day_target(cal: list[int], target: int | None,
 
 
 def returns_from_daily(daily: pd.DataFrame) -> pd.DataFrame:
-    """``(date, code)`` 长表 → 次日收益面板（与因子库 IC 口径一致）。"""
+    """``(date, code)`` 长表 → 次日收益面板（**未复权**收盘，非库内默认口径）。
+
+    ⚠️ 这是分析/自检用的便捷函数，**不要**再把它传给 ``lib.register`` /
+    ``register_panels``：库标准口径是 ``FactorLibrary.default_returns_panel()``
+    （复权收盘 1 日远期），传自算面板会被记成 ``ret_basis=caller_supplied``
+    并卡住晋升第 2 关 ``stale_caliber``（2026-11-19 起调用方一律传 ``None``）。
+    """
     d = daily.reset_index()
     close_w = d.pivot(index="date", columns="code", values="close").sort_index()
     return close_w.pct_change().shift(-1)

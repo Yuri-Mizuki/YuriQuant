@@ -146,11 +146,25 @@ def write_report(lib: FactorLibrary, df: pd.DataFrame, pf: list[tuple[str, int, 
     n_act = int(vc.get("active", 0))
     n_ok = n_act + int(vc.get("oos_verified", 0))
     if n_act == 0:
-        n_low = gate_hits(df).get("low_sharpe", 0)
-        L.append(f"**没有因子进 `active` 白名单**。个体证据齐全的 {n_ok} 个也没有；"
-                 f"{n_low}/{n} 个在净多空夏普这一条上就不过线。"
-                 "这个库当前不该被用来选因子——不是缺审计（`dup_unknown` 会把没查过"
-                 "冗余的都挡掉），而是**扣成本后的业绩本身不够**。")
+        gh = gate_hits(df)
+        first_k, first_hit, _ = next(((k, h, a) for k, h, a in pf if h > 0),
+                                     ("", 0, n))
+        n_ev = sum(h for k, h, _ in pf
+                   if k in ("no_eval", "stale_caliber", "dup_unknown"))
+        L.append(f"**没有因子进 `active` 白名单**（个体证据齐全的 {n_ok} 个也没有）。")
+        # 归因必须按"漏斗第一道挡在哪"说：把「没评估 / 口径没对齐 / 没查冗余」
+        # 说成「业绩不够」是两回事——那是账没记全，不是因子不行。
+        if first_k in ("no_eval", "stale_caliber", "dup_unknown"):
+            L.append("漏斗第一道 `%s` 就挡住 %d 个，前三道**证据缺口**合计挡掉 "
+                     "%d/%d ——问题在「账没记全」（无 eval / 收益口径非复权加掩码 / "
+                     "未查冗余），不是业绩不够。`low_sharpe` 单独命中 %d 个，"
+                     "但其中绝大多数从未算过夏普（NaN 也被计入「不达标」），"
+                     "拿它下业绩结论会方向性错误。"
+                     % (first_k, first_hit, n_ev, n, gh.get("low_sharpe", 0)))
+        else:
+            L.append("漏斗第一道 `%s` 挡掉 %d 个；`low_sharpe` 单独命中 %d/%d。"
+                     "这个库当前不该被用来选因子——扣成本后的业绩本身不够。"
+                     % (first_k, first_hit, gh.get("low_sharpe", 0), n))
     else:
         L.append(f"**只有 {n_act} 个进 `active` 白名单**"
                  f"（{n_act / n:.1%}）。这个数字小不是标准苛刻："

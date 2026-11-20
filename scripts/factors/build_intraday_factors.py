@@ -50,7 +50,7 @@ from data.cache_helpers import load_daily  # noqa: E402
 from research.factor_library import FactorLibrary  # noqa: E402
 from scripts.common.cli_common import (  # noqa: E402
     add_build_args, make_data_context, print_no_save, record_experiment_safe,
-    register_panels, returns_from_daily,
+    register_panels,
     setup_logging,
 )
 
@@ -220,10 +220,6 @@ def build_features(mf: pd.DataFrame, daily: pd.DataFrame,
         aligned[name] = p
     return aligned
 
-def build_returns(daily: pd.DataFrame) -> pd.DataFrame:
-    """未来一期收益面板：次日收益（与挖掘/库 IC 口径一致）。"""
-    return returns_from_daily(daily)
-
 def main():
     parser = argparse.ArgumentParser(description="日内特征 → 日频因子构建与入库")
     add_build_args(parser)
@@ -249,7 +245,6 @@ def main():
     log.info("构建日内特征（%d 个）...", len(names))
     mf = minute_frame(mk, status)
     features = build_features(mf, daily, status)
-    returns_panel = build_returns(daily)
 
     if args.no_save:
         print_no_save(names, features)
@@ -258,7 +253,7 @@ def main():
     lib = FactorLibrary(dataset=dataset)
     log.info("入库到数据集: %s", dataset)
     reg_rows = register_panels(
-        lib, features, FACTOR_DEFS, returns_panel,
+        lib, features, FACTOR_DEFS,
         source=f"intraday:build_intraday_factors:{PERIOD}min", names=names,
     )
 
