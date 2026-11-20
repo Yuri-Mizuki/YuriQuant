@@ -77,7 +77,7 @@ SIGNAL_DIR = Path("reports/etf_champ")
 
 
 def load_pool_close(cache: DataCache, upto: str | None) -> pd.DataFrame:
-    """生产池后复权收盘价（与 `etf_long_sample`/回测同源：close × backward_factor）。
+    """生产池后复权收盘价（与回测同源：close × backward_factor）。
 
     剔除 `EXCLUDED_5`（比赛屏蔽）⇒ 45 只，与 `FINAL` 的宇宙一致。
     """

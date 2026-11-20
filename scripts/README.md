@@ -1,6 +1,6 @@
 # scripts 入口索引
 
-> 自动生成（164 个活跃入口）。改脚本 docstring 后运行 `python -m scripts.data_tools.gen_scripts_index` 更新；`--check` 校验是否过期。
+> 自动生成（129 个活跃入口）。改脚本 docstring 后运行 `python -m scripts.data_tools.gen_scripts_index` 更新；`--check` 校验是否过期。
 
 约定：`python -m scripts.<目录>.<文件名>` 运行；`scripts/archive/` 已于 2026-11-18 整体下线（活代码已上移，其余删除）；实验结论查 `reports/README.md` §一「结论速查」，产物落盘规则见其 §1.6。
 
@@ -8,9 +8,6 @@
 
 | 脚本 | 说明 |
 |---|---|
-| `builders/backfill_financial_alla.py` | 回补全A财务报表四表（income/balance_sheet/cash_flow/dividend）到含退市。 |
-| `builders/backfill_holder_alla.py` | 回补股东结构数据（holder_num / share_holder）到全 A 口径（含退市）。 |
-| `builders/backfill_pledge_profit_alla.py` | 回补全A（含退市）股权质押 / 业绩预告 / 业绩快报三张新表到本地 parquet。 |
 | `builders/build_alla_alpha_panels.py` | 全A公开因子面板重建（alpha101/158/191/360）→ all_a_2018_2026 数据集。 |
 | `builders/build_alla_altfactor_neu.py` | alt 族（altf 20 因子）的 panels_neu / panels_neu_fundind 回填（family-aware）。 |
 | `builders/build_alla_altfactors.py` | 全A 另类数据三族因子（altf 族）→ 并入 all_a_2018_2026。 |
@@ -36,14 +33,12 @@
 | `builders/common.py` | 全A builder 共用件（2026-09-11 自 11 个 build_alla_* builder 收敛）。 |
 | `builders/fetch_alla_history.py` | 全A历史数据回填（2015~now）——分批断点续拉版。 |
 | `builders/industry_context.py` | 申万一级行业上下文：PIT 行业归属 + 自由流通市值权重 + 调仓日 |
-| `builders/run_evt_margin_build.py` | 事件/两融/资金流数据回补 + 因子构建编排器（串行，防止 SDK 单连接竞争）。 |
 
 ## common
 
 | 脚本 | 说明 |
 |---|---|
 | `common/alla_common.py` | 全A滚动实验的**共享底座**（2026-10-19 架构清理）。 |
-| `common/atomic_io.py` | 原子写面板 + 抗瞬时文件占用（Windows 原生锁）。 |
 | `common/cli_common.py` | 脚本层公共 CLI 骨架 |
 | `common/feature_funnel.py` | 特征选择漏斗（覆盖率 → 去冗余 → 质量分截断）—— 口径中性的单一实现。 |
 | `common/fundamental_common.py` | 财报长表的 TTM / 单季拆解公共函数（2026-09-11 收敛）。 |
@@ -56,10 +51,9 @@
 
 | 脚本 | 说明 |
 |---|---|
-| `data_tools/audit_fundind_split.py` | E5 覆盖层体检：``panels_neu_fundind`` vs 基准层 ``panels_neu``。三分类（冗余/有效覆盖/仅覆盖层）+ ``--prune`` 走回收站；基本面/股东族 **永不判冗余**（``pinned``，2026-11-19 加）。 |
+| `data_tools/audit_fundind_split.py` | E5 覆盖层体检：``panels_neu_fundind`` vs 基准层 ``panels_neu``。 |
 | `data_tools/docs_lint.py` | 文档规范校验（docs 治理 P0，2026-10-28）。 |
 | `data_tools/dump_pdf_text.py` | 把研报 PDF 抽成带页码标记的纯文本，便于按关键词定位口径参数。 |
-| `data_tools/fix_meta.py` | 修复 e:/data/parquet/_meta.json：对齐实际日期 + 补文本表 + 加 pool 口径。 |
 | `data_tools/gen_scripts_index.py` | 生成 ``scripts/README.md`` 入口索引（2026-10-19 审计 ③）。 |
 | `data_tools/memory_lint.py` | 记忆层治理校验（memory_lint，2026-11-03）。 |
 | `data_tools/new_experiment.py` | 新建实验目录：一条命令完成「建目录 + 复制模板 + 登记判定」。 |
@@ -81,7 +75,6 @@
 
 | 脚本 | 说明 |
 |---|---|
-| `factors/audit_panel_window.py` | 按**定版回测窗口**核对因子库每个成员的面板覆盖（只读）。 |
 | `factors/backfill_library.py` | 因子库回填：体检（dry-run）+ 并行补 canonical 评估。 |
 | `factors/backfill_library_metrics.py` | 因子库指标批量回填：canonical 分层回测 + 显著性 + 路径/公式/族标签（维护工具）。 |
 | `factors/backfill_metadata.py` | registry 元数据回填：``formula`` 与 ``family``（只补空缺，不动任何统计列）。 |
@@ -108,12 +101,11 @@
 | `factors/promote_maturity.py` | 成熟度晋升：把 :data:`research.factor_library.MATURITY_GATES` 落到全库。 |
 | `factors/prune_registry_backups.py` | registry 备份轮转：只保留「有用的快照」，其余走回收站。 |
 | `factors/run_alphapool_ppo.py` | 华泰 AI97《大模型+强化学习因子挖掘》—— AlphaPool + MaskablePPO 训练入口 |
-| `factors/run_factor_pipeline.py` | **因子流水线编排**（2026-11-19）：builder → 评估补齐 → 看板数据 → 看板页面，只拼命令不含计算。 |
+| `factors/run_factor_pipeline.py` | 因子流水线编排：实现 → 评估 → 看板数据 → 看板页面（2026-11-19）。 |
 | `factors/run_gflownet_phase1.py` | GFlowNet Phase 1：真实 HS300 对齐研报 |
 | `factors/run_llm_mcts.py` | 东吴 LLM-MCTS 因子迭代 Phase 0 —— 同题四引擎对照 runner |
 | `factors/run_portfolio_phase2.py` | stage2 Phase 2：zz1000 主实验（信号管线 + PPO 滚动集成 / 银河口径 QP / 基准）。 |
 | `factors/run_portfolio_ppo.py` | stage2 Phase 1：hs300 平价验证（PPO vs QP vs 等权基准 vs TopN）。 |
-| `factors/sync_factor_artifacts.py` | 入库后补齐「三件套」：中性化面板 + ic_h 列 + registry 统计。 |
 | `factors/synthesize_factors.py` | 多因子合成 CLI |
 | `factors/synthesize_library.py` | 从因子库加载 raw 因子 → 四种合成 → 评估对比 + 入库（带血缘） |
 
@@ -123,19 +115,18 @@
 |---|---|
 | `ingest/check_data_quality.py` | 数据质量检查 CLI |
 | `ingest/extend_factor_library.py` | 因子库数据延长 —— 面板刷新到数据源最新交易日 |
-| `ingest/fetch_minute_all.py` | 任意池分钟数据拉取（分片+断点续传，`--plan` 只出计划不联网） |
+| `ingest/fetch_minute_all.py` | 全 A 分钟数据拉取（5 分钟 / 1 分钟） |
 | `ingest/fetch_minute_gap.py` | 补齐 HS300 动态池（PIT 成分）缺失的分钟数据 |
 | `ingest/fetch_status_batched.py` | 分段拉取全A历史状态表（涨跌停/停牌/ST/除权标记）——增量断点续拉版。 |
 | `ingest/update_data.py` | 每日数据更新脚本 |
 | `ingest/update_etf.py` | ETF 数据更新脚本 |
-| `ingest/update_etf_flow.py` | ETF 资金流 / 净值数据更新脚本 |
 | `ingest/update_sw_industry.py` | 更新申万一级行业指数日线（31 条，1999-12 起） |
 
 ## live
 
 | 脚本 | 说明 |
 |---|---|
-| `live/inc_pure_live.py` | `inc_pure` 实盘出单器：董监高主动增持 → T+1 开盘集合竞价买入，持 20 个交易日（事件口径来自 `strategy/event_driven.py`）。 |
+| `live/inc_pure_live.py` | `inc_pure` 实盘出单器：董监高主动增持 → T+1 开盘集合竞价买入，持 20 个交易日 |
 | `live/show_holdings.py` | yqcore-focus-k8 持仓查询（只读，随时可跑） |
 | `live/yqcore.py` | yqcore-focus-k8 生产入口：出榜 / 看持仓，两个独立子命令 |
 
@@ -163,28 +154,12 @@
 |---|---|
 | `portfolio/compare_portfolio_methods.py` | 组合优化方法对比脚本（P2，2026-08-14） |
 | `portfolio/corr_sector.py` | 相关性行业归属面板（"长得像谁"）—— 构建 + 与申万标签的重叠率诊断 |
-| `portfolio/etf_breaker_h2h.py` | ETF 轮动 · 熔断触发后「降档五衡」能不能救：条件前瞻头对头 |
-| `portfolio/etf_champ_phase_matrix.py` | ETF 月频档（``monthly``）· 「月内调仓相位 × 权重规则」交叉矩阵（相位平均口径）。 |
-| `portfolio/etf_champ_phase_robust.py` | 月频档（``monthly``）· 相位交叉矩阵的**稳健性诊断**（配套 ``etf_champ_phase_matrix``）。 |
-| `portfolio/etf_champ_signals.py` | ETF 轮动生产信号板（monthly 默认 / balanced；两档按独立账户分别运行，合并方案已判否） |
-| `portfolio/etf_contest5_buffer_oos.py` | buffer 档位选择验证（网格 + 样本外 + 权重稳健性） |
+| `portfolio/etf_champ_signals.py` | ETF 轮动生产信号板（monthly / balanced） |
 | `portfolio/etf_contest5_eval.py` | ETF 轮动 · 档位评测（80 个滚动 2 月窗口，口径统一 T+1 open） |
 | `portfolio/etf_contest_spec.py` | ETF 轮动定版参数（单一真源，2026-10-27 锁定 / 2026-11-19 去比赛化） |
-| `portfolio/etf_entry_diag.py` | ETF 轮动 · 两个「入场前提」诊断：HRP 集中度是否异常、回测起点是否合理。 |
-| `portfolio/etf_hrp_concentration_diag.py` | 三锋 HRP「单押 80%」溯源诊断（2026-10-31） |
-| `portfolio/etf_index_proxy.py` | ETF → 跟踪指数代理：为长样本（2013–2019）提供价格序列（README §4.6 前置）。 |
-| `portfolio/etf_intraday_clock_probe.py` | ETF 盘中决策时点探针（14:50 / 14:55 / 收盘） |
-| `portfolio/etf_long_sample.py` | 指数代际长样本（2013–2019）：HRP「集中放大器」的区制存活检验（README §4.6）。 |
-| `portfolio/etf_pbo_audit.py` | ETF 轮动 · 策略级过拟合审计（CSCV/PBO + DSR，2026-10-30） |
-| `portfolio/etf_phase_power.py` | ETF 轮动 · 三锋「相位检验力」分析：多相位重测到底值多少样本（2026-10-31）。 |
-| `portfolio/etf_phase_rule_matrix.py` | ETF 轮动 · 「权重规则 × 调仓相位」交叉矩阵（**相位平均口径**）。 |
 | `portfolio/etf_pool_monitor.py` | 池内环境监测：策略「机制条件」是否还成立的唯一事前指标（2026-10-30）。 |
 | `portfolio/etf_rotation_panels.py` | ETF 轮动扩展面板（生产组件） |
 | `portfolio/etf_rotation_probe.py` | ETF 轮动回测引擎（数据装载 / 面板 / 回测 / 出场调度） |
-| `portfolio/etf_signal_latency.py` | ETF 轮动信号链端到端耗时探针 |
-| `portfolio/etf_weight_probe.py` | 权重层质疑核查（2026-10-29） |
-| `portfolio/etf_weight_source.py` | 收益来源分解：选标、集中、池子各自贡献多少（README §4.5）。 |
-| `portfolio/generate_signals.py` | 每日交易信号生成脚本（P3，2026-08-20） |
 | `portfolio/industry_neff_probe.py` | 31 个申万一级的「有效独立方向数」诊断（P0-1） |
 | `portfolio/industry_rotation.py` | 行业池轮动线（独立实验线，不与 ETF 三锋混跑）。 |
 | `portfolio/multi_period_backtest.py` | 多期组合执行回测脚本（P3，2026-08-20） |
@@ -207,26 +182,13 @@
 | `reporting/monitor_production_ic.py` | 生产口径每日 IC / 风格暴露监控 CLI（全A · 定版 dingban · 2026-10-17 起）。 |
 | `reporting/picks_board.py` | 本期出榜解释页（为什么买这些）—— 接在模拟交易页之后。 |
 | `reporting/rolling_grid_report.py` | 全A滚动训练实验报告生成器：收益曲线 + 分年绩效 + 维度对比（自包含 HTML）。 |
-| `reporting/strategy_home.py` | 策略首页（各策略回测详情）+ 独立模拟持仓页，`reports/strategies/`。 |
-| `reporting/yqcore_dashboard.py` | `yqcore` 定版策略页面内核（自包含 HTML，零后端）——回测/持仓正文与脚本块，供策略详情页复用；也单独出三档回测页与模拟交易页。 |
+| `reporting/strategy_home.py` | 策略首页（历史回测详情）+ 模拟持仓页 |
+| `reporting/yqcore_dashboard.py` | `yqcore` 定版策略前端页面（自包含 HTML，零后端）——**历史回测**与**模拟交易**分两页。 |
 
 ## textmining
 
 | 脚本 | 说明 |
 |---|---|
 | `textmining/_paths.py` | textmining 输出路径约定。 |
-| `textmining/analyze_word_importance.py` | 词重要性分析（对齐华泰 AI 51/AI 57 模型可解释性） |
-| `textmining/build_daily_factor.py` | 日频因子面板构建 |
-| `textmining/build_fadt_samples.py` | FADT 事件样本构建（对齐华泰 AI 57 文本FADT选股） |
 | `textmining/build_senti_factors.py` | AI 41 研报情感四因子构建（senti / senti_adj / report_num / report_score） |
 | `textmining/build_senti_scores.py` | 研报摘要 FinBERT 情感打分（对齐华泰 AI 41 研报情感因子） |
-| `textmining/build_sue_txt_samples.py` | SUE.txt 事件样本构建（对齐华泰 AI 51 文本PEAD） |
-| `textmining/derive_pooler_encoding.py` | Pooler（全连接层）编码推导（AI 63 消融：CLS vs 全连接层） |
-| `textmining/encode_fadt_bert.py` | FinBERT CLS 编码（对齐华泰 AI 63 文本表示升级） |
-| `textmining/evaluate_fadt.py` | FADT 因子评估（对齐华泰 AI 57） |
-| `textmining/evaluate_senti.py` | AI 41 研报情感因子族评估 |
-| `textmining/evaluate_short_window.py` | 短窗口日频超额评估（T+1~T+5） |
-| `textmining/evaluate_sue_txt.py` | SUE.txt 因子评估（对齐华泰 AI 51） |
-| `textmining/train_fadt.py` | FADT 训练与因子构建（对齐华泰 AI 57 文本FADT选股） |
-| `textmining/train_fadt_bert.py` | BERT 版 FADT 训练（对齐华泰 AI 63 文本表示升级） |
-| `textmining/train_sue_txt.py` | SUE.txt 训练与因子构建（对齐华泰 AI 51 文本PEAD） |
