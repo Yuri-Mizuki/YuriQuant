@@ -1972,6 +1972,21 @@
 
 ## 二、资源墙后置（依赖分钟数据扩容，同一堵墙）
 
+- [ ] **⏳ 全 A 5 分钟数据落地 + 字典分钟频因子全 A 重建（2026-11-20 晚启动，链式后台）**：
+  `fetch_minute_all --begin 20180101 --end 20251231` 已在跑（5,692 只 / 5.31 亿行 /
+  9.4 GB / ~31s×1,144 块 ≈ 10h，断点续传；**夜间待机可能杀进程，断了重跑同一命令续传**）。
+  完成后自动链：`--compact`（**不带 --single**——全表 concat ~50GB 会 OOM）→
+  `build_minute_panel --from-parts --period 5 --universe all_a`（流式构建，
+  `MinutePanelStore.build_from_year_parts` 为此新增，整表进内存 ~60GB 不可行）。
+  然后四步：① `build_fd_factors --features fd_hf_cs,fd_smart_vwap,fd_net_support
+  --minute-pool all_a --begin 20180101 --end 20251231`（第四轮 3 个字典分钟频因子
+  从 hs300 池口径重建全 A 面板并覆盖重注册进 all_a——原 hs300 注册随 hs300_2022_2025
+  下线已不在库）；② `build_intraday_stat_factors --universe all_a --dataset
+  all_a_2018_2026`（59 个 im_* 统计特征全 A 重建入库；顺带修了 load_context 不透传
+  pool、股票池被截成 hs300 成分的缺陷）；③ `run_factor_pipeline --skip-build`
+  （evaluate 补 ingested→evaluated + board_data --resume + board，全库增量）；
+  ④ 体检报告对第四轮 hs300 口径结论（fd_smart_vwap / fd_net_support 真正交但弱、
+  fd_hf_cs 低波第 7 张脸）做全 A 口径复核。代码侧已提交 `042bc96`。
 - [ ] **分钟频扩容**：all_a 池物化（~5500 码 × 48 bar，MemMap 分块性能待验）、
   1 分钟档位（存储 ×5）；先跑吞吐探针（脚本已删，2026-11-19）
   估成本再决定投入。解锁依赖项：国金24 残余②（全 A 分钟特征增强）、华泰3128 全频段
