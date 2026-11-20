@@ -16,7 +16,7 @@ read-modify-write 单表，137 个代码块要重写 137 次（≈164 GB IO/年�
 ----
     <cache>/intraday/_staging/min{period}_all_a/<year>/chunk_*.parquet   中间分片
     <cache>/intraday/min{period}_all_a_parts/part_<year>.parquet          按年合并
-    <cache>/min{period}_all_a.parquet                                     单表（--compact 后）
+    <cache>/min{period}_all_a.parquet                                     单表（--compact --single；⚠️ 全 A 规模 concat ~50GB 会 OOM，面板构建走年分区 --from-parts）
     <cache>/intraday/min{period}_all_a/                                   稠密面板（另跑 build_minute_panel）
 
 用法
@@ -247,8 +247,8 @@ def compact(period: int, pool: str, *, single: bool) -> None:
     write_json_atomic(meta, mp, indent=None)
     log.info("单表已写入 %s：%d 行 / %d 只", p["single"], len(df),
              df.index.get_level_values("code").nunique())
-    print("\n下一步（重建稠密面板）:")
-    print("  python -m scripts.factors.build_minute_panel --offline "
+    print("\n下一步（重建稠密面板，全 A 规模用 --from-parts 流式逐年构建）：")
+    print("  python -m scripts.factors.build_minute_panel --from-parts "
           f"--period {period} --universe {pool}")
 
 
@@ -283,7 +283,7 @@ def main() -> None:
     for lo, hi in year_spans(args.begin, args.end):
         total += fetch_year(args.period, args.pool, codes, lo // 10000,
                             lo, hi, args.batch)
-    log.info("本次新增 %d 个分片；下一步 --compact --single", total)
+    log.info("本次新增 %d 个分片；下一步 --compact（全 A 勿加 --single，面板走 --from-parts）", total)
 
 
 if __name__ == "__main__":
