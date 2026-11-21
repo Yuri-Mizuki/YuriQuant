@@ -2269,6 +2269,20 @@ class FactorLibrary:
             idx = {"sig": sig, "names": names, "norms": norms, "corr": z["corr"],
                    "dates": pd.DatetimeIndex(meta["dates"]), "codes": codes,
                    "built_at": meta.get("built_at", "?")}
+            # 名单新鲜度断言（2026-11-22）：索引是**当时**库的快照，入库/退登记
+            # 后就失真——近邻集合不完整时 precheck 仍"能跑"，但查重结论偏松。
+            # 覆盖不足九成即大声告警（不硬失败：宁可有旧索引也不静默裸跑）。
+            try:
+                reg_n = len(pd.read_csv(self._registry_path, usecols=["name"]))
+            except Exception:  # noqa: BLE001
+                reg_n = None
+            if reg_n is not None and len(names) < 0.9 * reg_n:
+                log.warning(
+                    "冗余索引过期：快照 %d 因子 vs 当前 registry %d 行"
+                    "（覆盖 %.0f%%，构建于 %s）⇒ 近邻集合不完整，请重跑 "
+                    "`python -m scripts.factors.dup_audit --dataset %s`",
+                    len(names), reg_n, 100 * len(names) / reg_n,
+                    idx["built_at"], self.dataset)
             _DUP_INDEX_CACHE[key] = idx
             log.info("冗余索引已加载：%d 因子 × %d 采样日 × %d 股票（构建于 %s）",
                      len(names), sig.shape[0], len(codes), idx["built_at"])
