@@ -120,22 +120,22 @@ def test_upsert_rows_does_not_downgrade_evaluated(tmp_path):
 # ---------------------------------------------------------------------------
 # 2. 正式因子必须有数
 # ---------------------------------------------------------------------------
-def test_formal_maturity_without_eval_is_violation(tmp_path):
+def test_maturity_is_inert_metadata(tmp_path):
+    """晋升系统 2026-11-22 退役：maturity 只是无读者元数据。
+
+    契约不再因 maturity 标签要求任何东西；残留标签不产生违规。
+    （``check_dup=False`` 也不会再触发 ``formal_without_dup_check``——
+    该规则原本只为「正式因子必须有冗余检查」服务，随系统一并退役；
+    入库门禁的查重由 builder 通道的 ``precheck_dup`` 独立承担。）
+    """
     lib = FactorLibrary(root=tmp_path, dataset="t")
     panel, rets = _panel_and_returns()
-    # 先正常登记一个"正式"因子（合规）
     lib.register("f_ok", panel, rets, maturity="active", check_dup=True,
                  reject_dup=False)
     assert lib.contract_violations() == []
-
-    # 再造一个只有登记、却标成 active 的因子（违规）
-    # ``check_dup=False`` 才触发 ``formal_without_dup_check`` —— 这里要的是"没查过冗余"
-    # 的违规现场，不是让新判据去拒绝它（等价面板会被 reject_dup 拦下）。
     lib.ingest("f_bad", panel + 0.01, rets, maturity="active", evidence=False,
                check_dup=False, reject_dup=False)
-    rules = {v["rule"] for v in lib.contract_violations() if v["name"] == "f_bad"}
-    assert "formal_without_eval" in rules
-    assert "formal_without_dup_check" in rules
+    assert lib.contract_violations() == []
 
 
 def test_ingested_row_with_stale_metrics_is_violation(tmp_path):

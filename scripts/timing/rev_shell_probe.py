@@ -59,22 +59,9 @@ def metrics_row(ret: pd.Series) -> dict:
     }
 
 
-def nw_t(diff: pd.Series, lag: int = 5) -> float:
-    """Newey-West t（HAC，Bartlett 核）。"""
-    x = diff.dropna().to_numpy()
-    n = len(x)
-    if n < 30 or np.allclose(x, 0):
-        return float("nan")
-    mu = x.mean()
-    e = x - mu
-    g0 = float((e * e).sum()) / n
-    s = g0
-    for l in range(1, lag + 1):
-        w = 1.0 - l / (lag + 1.0)
-        gl = float((e[l:] * e[:-l]).sum()) / n
-        s += 2.0 * w * gl
-    se = float(np.sqrt(s / n))
-    return float(mu / se) if se > 0 else float("nan")
+# NW t 唯一真源在 stats.robust_stats（2026-11-22 收口，删本地第二实现；
+# 旧 /n 分母口径与真源 /(n-j) 有 ~1-2% 差异，本探针未出过结论、无历史包袱）。
+from stats.robust_stats import nw_t  # noqa: E402
 
 
 def run_arm(close: pd.Series, cost_bps: float, step_pct: float) -> dict:

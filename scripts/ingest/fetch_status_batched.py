@@ -16,6 +16,7 @@ from __future__ import annotations
 import sys
 import argparse
 import time
+import json
 from pathlib import Path
 import pandas as pd
 
@@ -23,6 +24,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from data.atomic_io import write_json_atomic  # noqa: E402
 from scripts.common.cli_common import setup_logging  # noqa: E402
 
 
@@ -74,7 +76,27 @@ def _consume_parts(base: pd.DataFrame) -> pd.DataFrame:
     merged.to_parquet(CACHE_PATH)
     for f in files:
         f.unlink()
+    _sync_meta_watermark(merged)
     return merged
+
+
+def _sync_meta_watermark(merged: pd.DataFrame) -> None:
+    """把缓存水位（``_meta.json`` 的 ``last_date``）同步到实际数据末日。
+
+    2026-11-21 补的洞：本工具直写 parquet 但从不更新水位，下游
+    ``DataCache.get_history_stock_status`` 按 meta 判覆盖 ⇒ 数据在盘、
+    offline 构建器仍然拒绝（当天 ``build_intraday_stat_factors`` 实测卡死）。
+    """
+    dates = pd.to_datetime(merged.index.get_level_values("date"))
+    last = int(dates.max().strftime("%Y%m%d"))
+    meta_path = CACHE_PATH.parent / "_meta.json"
+    meta: dict = {}
+    if meta_path.exists():
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    meta.setdefault("history_stock_status", {})
+    meta["history_stock_status"]["last_date"] = last
+    write_json_atomic(meta, meta_path)
+    log.info("缓存水位同步: history_stock_status.last_date=%s", last)
 
 
 def main():
@@ -101,6 +123,7 @@ def main():
              len(all_codes), len(covered), len(todo), args.batch)
     if not todo:
         log.info("全部已覆盖，无需拉取")
+        _sync_meta_watermark(old)
         return
 
     parts = _parts_dir()
@@ -138,6 +161,11 @@ def main():
     if done:
         old = _consume_parts(old)
         log.info("已合并全部增量，主表总行数 %d", len(old))
+
+    # 水位同步无条件执行（含"全部已覆盖、零拉取"的幂等运行）——
+    # 直写 parquet 不更新 _meta 的洞已在 2026-11-21 堵过一次。
+    if not old.empty:
+        _sync_meta_watermark(old)
 
     log.info("完成：本次新增 %d 只，失败 %d 只%s", done, len(failed),
              ("：" + ",".join(failed[:20]) + ("..." if len(failed) > 20 else "")) if failed else "")

@@ -92,7 +92,6 @@
 | `factors/mine_factors.py` | 因子挖掘 CLI |
 | `factors/panel_leak_audit.py` | 全库面板前视体检（只读）：把「哪几块面板还在用未来数据」从猜测变成清单。 |
 | `factors/panel_leak_audit_diff.py` | 把两次体检的 CSV 放到**同一套判据**下重判，输出可比的前后对照。 |
-| `factors/promote_maturity.py` | 成熟度晋升：把 :data:`research.factor_library.MATURITY_GATES` 落到全库。 |
 | `factors/prune_registry_backups.py` | registry 备份轮转：只保留「有用的快照」，其余走回收站。 |
 | `factors/run_alphapool_ppo.py` | 华泰 AI97《大模型+强化学习因子挖掘》—— AlphaPool + MaskablePPO 训练入口 |
 | `factors/run_factor_pipeline.py` | 因子流水线编排：实现 → 评估 → 看板数据 → 看板页面（2026-11-19）。 |

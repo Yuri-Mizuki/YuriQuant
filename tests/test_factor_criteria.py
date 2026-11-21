@@ -8,7 +8,9 @@
 2. **定义唯一**：判据函数在全仓只能有白名单里那几个定义处。新增一处就报错，
    并直接点名文件 —— 这是防"又写一遍 IC 统计"的唯一机械手段。
 3. **阈值唯一**：准入阈值只出自 ``factor_criteria``、晋升阈值只出自
-   ``factor_library.MATURITY_GATES``、重复性阈值只出自 ``research.dup_criteria``。
+   IS/OOS 分段常量只出自 ``research.factor_criteria.SEGMENT_DEFAULTS``
+   （原 ``MATURITY_GATES`` 晋升系统已退役）、重复性阈值只出自
+   ``research.dup_criteria``。
 
 白名单只减不增；收口一个就从白名单删一个，数量只会单调下降。
 """
@@ -50,7 +52,7 @@ DEFINERS: dict[str, set[str]] = {
 #: 阈值常量名 → 允许的定义处。
 GATE_DEFINERS: dict[str, set[str]] = {
     "ADMISSION_GATES": {"research/factor_criteria.py"},
-    "MATURITY_GATES": {"research/factor_library.py"},
+    "MATURITY_GATES": set(),  # 晋升系统 2026-11-22 退役——再出现即视为复活
     "CORR_TRIGGER": {"research/dup_criteria.py"},
 }
 
@@ -135,32 +137,29 @@ def test_gate_constants_have_single_definition_site():
 # 3. 阈值聚合视图与真源一致
 # ---------------------------------------------------------------------------
 def test_all_thresholds_forward_real_sources():
-    """``all_thresholds()`` 的三段必须等于各自的真源（转发不是复制）。"""
+    """``all_thresholds()`` 的各段必须等于各自的真源（转发不是复制）。
+
+    晋升段 2026-11-22 退役：原 ``MATURITY_GATES`` 转发改指向
+    :data:`fc.SEGMENT_DEFAULTS`（IS/OOS 分段常量的唯一住址）。
+    """
     import research.dup_criteria as dc
     import research.factor_criteria as fc
-    from research.factor_library import MATURITY_GATES
 
     th = fc.all_thresholds()
     assert th["admission"] == fc.ADMISSION_GATES
-    assert th["promotion"] == MATURITY_GATES
+    assert th["segmentation"] == fc.SEGMENT_DEFAULTS
     assert th["dup"]["corr_trigger"] == dc.CORR_TRIGGER
     assert th["dup"]["rel_std_degenerate"] == dc.REL_STD_DEGENERATE
 
-    # 改真源，视图必须跟着动（证明不是快照）
-    orig = MATURITY_GATES["min_sharpe"]
-    try:
-        MATURITY_GATES["min_sharpe"] = orig + 1.0
-        assert fc.promotion_gates()["min_sharpe"] == orig + 1.0
-    finally:
-        MATURITY_GATES["min_sharpe"] = orig
 
-
-def test_admission_and_promotion_gates_are_distinct_concepts():
-    """准入没有 sharpe 门槛；晋升才有 —— 两段不许混成一个 dict。"""
+def test_promotion_system_stays_retired():
+    """晋升系统 2026-11-22 退役——阈值字典与评定方法不许复活。"""
     import research.factor_criteria as fc
 
     assert "min_sharpe" not in fc.ADMISSION_GATES
-    assert "min_sharpe" in fc.promotion_gates()
+    assert "min_sharpe" not in fc.SEGMENT_DEFAULTS
+    assert not (ROOT / "research/factor_library.py").read_text(
+        encoding="utf-8").count("MATURITY_GATES"), "MATURITY_GATES 不许复活"
 
 
 # ---------------------------------------------------------------------------

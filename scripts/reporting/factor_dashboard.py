@@ -391,7 +391,7 @@ def main() -> None:
         "formula": {str(r["name"]): str(r.get("formula") or "")
                     for _, r in reg.iterrows()},
         "meta": {str(r["name"]): {
-            "freq": str(r.get("frequency") or "—"), "mat": str(r.get("maturity") or "—"),
+            "freq": str(r.get("frequency") or "—"),
             "sub": str(r.get("subfamily") or ""),
             "af": "" if pd.isna(r.get("active_first")) else str(r.get("active_first"))[:10],
             "al": "" if pd.isna(r.get("active_last")) else str(r.get("active_last"))[:10],

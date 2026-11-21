@@ -4,7 +4,7 @@
 
 在此之前，「一条因子有没有效」在仓里有 **13 处独立实现的截面秩 IC**、**26 处残差
 正交**、**24 处裸调 Newey-West**，阈值散在 ``gate_core.DEFAULTS`` /
-``factor_library.MATURITY_GATES`` / 各探针的 argparse 默认值三处。后果是同一个概念
+原晋升门槛（已退役）/ 各探针的 argparse 默认值等多处。后果是同一个概念
 能给出两个答案，且无法横向比较。
 
 本模块把**判据**收口成一份纯函数实现。它**不做 IO**（不读面板、不读 registry），
@@ -16,8 +16,7 @@
 | 段 | 问的问题 | 函数 | 通过后状态 |
 |---|---|---|---|
 | ① 准入 | 对**现有体系**有没有增量 | :func:`verdict` L1~L5 | 可入库，``experimental`` |
-| ② 晋升 | **自己**能不能赚 + 不重复 + 不衰 | :func:`promotion_gates` +
-  ``factor_library.assess_maturity`` | ``oos_verified`` / ``active`` |
+| ~~② 晋升~~ | （2026-11-22 随晋升系统退役；原「独立成腿」问题由看板双尾/信号层 A/B 承接） | — | — |
 | ③ 组合 | 换成钱还剩多少 | ``caliber.evaluate_weights``（本模块不碰） | 进主链 |
 
 🚨 **为什么三段的差异不是"没统一"**：①问的是「相对主信号的增量」，②问的是
@@ -33,7 +32,8 @@
 ## 阈值在哪
 
 - 准入阈值：本模块 :data:`ADMISSION_GATES`（**唯一处**）
-- 晋升阈值：``factor_library.MATURITY_GATES``（**唯一处**，本模块只转发，不复制）
+- （原晋升阈值：随晋升系统 2026-11-22 退役；:func:`promotion_gates` 现为
+  :data:`SEGMENT_DEFAULTS` 的兼容名）
 - 重复性阈值：``research.dup_criteria``（**唯一处**，本模块只转发）
 - 口径窗口 ``caliber.WINDOWS`` **不在此列** —— 那是数据口径定义，改了历史结论作废，
   与"筛子松紧"性质不同，故意分开。
@@ -83,8 +83,7 @@ from stats.ic import ic_stats
 #: * ``min_n`` = 1000：有效格子数下限（掩码内、有前瞻收益、有因子值）。
 #: * ``ic_floor`` = 0.005：无条件 IC 入场线。**与 ``dup_criteria.RESID_IC_NEGLIGIBLE``
 #:   （0.02）不可比** —— 后者是"残差小到可删"的量级，用途相反；也**与
-#:   ``MATURITY_GATES["min_resid_ic"]``（0.01）不可比** —— 那个是"高相关时给豁免"
-#:   的**条件判据**，只在 ``dup_corr_max ≥ 0.95`` 时才检查，不是入场线。
+#:   亦与旧晋升系统的 ``min_resid_ic``（0.01，2026-11-22 随系统退役）不可比。
 #: * ``gap_floor`` / ``eff_ratio``：与安慰剂的绝对差与倍数，两者都要过。
 ADMISSION_GATES: dict[str, float] = {
     "min_cov": 0.30,
@@ -95,22 +94,27 @@ ADMISSION_GATES: dict[str, float] = {
 }
 
 
+#: IS/OOS 分段参数（2026-11-22 起**唯一真源在本模块**）。原转发
+#: ``factor_library.MATURITY_GATES``，晋升系统已于 2026-11-22 退役
+#: （零消费方 + 口径变动下静默腐烂）；这三个数只服务 :func:`seg_stability`
+#: 的 IS/OOS 切分，与晋升无关，故留此承载。
+SEGMENT_DEFAULTS: dict[str, float] = {
+    "split_frac": 0.7,
+    "recent_days": 250,
+    "min_seg_days": 60,
+}
+
+
 def promotion_gates() -> dict[str, float]:
-    """晋升段门槛（转发 ``factor_library.MATURITY_GATES``，**不复制**）。
-
-    延迟导入：``factor_library`` 是重模块（2400+ 行、拖 pandas/scipy），
-    本模块被 `gate` 入口在冷启动时导入，不该连带加载它。
-    """
-    from research.factor_library import MATURITY_GATES
-
-    return dict(MATURITY_GATES)
+    """兼容名：返回 :data:`SEGMENT_DEFAULTS`（原晋升门槛已随系统退役）。"""
+    return dict(SEGMENT_DEFAULTS)
 
 
 def all_thresholds() -> dict[str, dict]:
     """全部判据阈值的一站式视图（便于审计"有没有第二份定义"）。"""
     return {
         "admission": dict(ADMISSION_GATES),
-        "promotion": promotion_gates(),
+        "segmentation": dict(SEGMENT_DEFAULTS),
         "dup": {
             "corr_trigger": CORR_TRIGGER,
             "rel_std_degenerate": REL_STD_DEGENERATE,
@@ -246,19 +250,19 @@ def rank_corr(a: pd.DataFrame, b: pd.DataFrame, mask: pd.DataFrame) -> float:
 def seg_stability(dret: pd.Series, ic: pd.Series, *,
                   split_frac: float | None = None,
                   recent_days: int | None = None) -> dict:
-    """前段 / 后段 / 近 N 日三段统计，供晋升段判定 ``unstable`` / ``fading``。
+    """前段 / 后段 / 近 N 日三段统计（准入后段稳定性判据用）。
 
     直接转发 ``factor_library.window_stats``（**唯一实现**），默认值取
-    :func:`promotion_gates`，保证"分段用的 0.7 / 250 日"与库门槛同一来源。
+    :data:`SEGMENT_DEFAULTS`（晋升系统退役后分段常量的唯一住址）。
 
     Args:
         dret: 净多空日收益（``eval`` 的 ``dret_ls_M``）；拿不到就传空 Series，
             此时 ``sharpe_*`` 全 NaN，但 ``ic_back`` / ``ic_fwd`` 仍可用。
         ic: 逐日 IC（NaN = 当日无有效截面）。
     """
+    g = SEGMENT_DEFAULTS
     from research.factor_library import window_stats
 
-    g = promotion_gates()
     return window_stats(
         pd.Series(dret).astype(float), pd.Series(ic).astype(float),
         split_frac=float(g["split_frac"] if split_frac is None else split_frac),
@@ -325,8 +329,8 @@ def admission_verdict(row: dict, th: dict | None = None) -> tuple[str, str]:
     🚨 这里**不下最终结论**。``PASS`` 只代表"值得进组合层"，
     因为 IC ≠ 经济价值 —— 必须再跑 Top-N。
 
-    🚨 本函数**不检查 sharpe**：那是②晋升段的事（``MATURITY_GATES``），
-    两段问的问题不同，见模块 docstring。
+    🚨 本函数**不检查 sharpe**：IC ≠ 经济价值，组合层见 ``caliber``；
+    原晋升段已于 2026-11-22 退役，见模块 docstring。
     """
     t = {**ADMISSION_GATES, **(th or {})}
     # 🚨 门槛按 ``cov``（原始非空率）标定，不用 ``cov_eff``：后者还叠了掩码与

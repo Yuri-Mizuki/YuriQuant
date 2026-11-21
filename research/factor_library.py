@@ -140,49 +140,9 @@ MATURITY_VALUES: frozenset[str] = frozenset(
 #:
 #: 阈值来历（都对着实测分布定的，不是拍脑袋）：
 #:
-#: * ``min_sharpe`` = 0.5：新口径（复权 + 可交易掩码）下全库中位 **−0.29**、
-#:   ≥0.5 的只有 83 个（前 8.6%）。对照量级：`top10_sharpe` 榜单最好 0.52~0.55、
-#:   4,843 篇文献复现中位 0.37 ⇒ 0.5 意味着"明显好于文献基线"，而不是"库里靠前"。
-#: * ``min_recent_sharpe`` = 0.3：近 250 日窗口的夏普标准误约 ±0.25（√252/√250），
-#:   0.3 是"仍为正且不至于落在噪声带里"的下限；低于它不能说因子还活着。
-#: * ``max_dup_corr`` / ``min_resid_ic``：652 个近重复里，相关 ≥0.95 但残差 IC
-#:   ≥0.02 的（如 `alpha158_VSUMN30` vs `alpha360_VOLUME30`）确实有增量，
-#:   所以"相关高"本身不判死，要"高相关 **且** 残差没信息"才算重复。
-#: * ``max_active_corr`` = 0.85：`active` 是**生产白名单**，内部不许留近亲。
-#:   0.95 的完全链接簇太松（VOLUME 家族彼此 0.83~0.87 不在同簇却近乎同源），
-#:   改用"按 sharpe 降序贪心接受、与已选任一相关 ≥0.85 则拒"——结果可解释为
-#:   "active 集合内任意两因子 |corr| < 0.85"。
-#: * ``max_per_family`` = 2：**相关性抓不住的重复，靠命名族兜底**。实测要紧：
-#:   `alpha360_VOLUME36` 与 `alpha360_VOLUME9` 截面相关只有 0.4~0.6（跨越长短窗口
-#:   确实不重合），只靠相关去重会放进 **43 个** active，其中 40 个是同一公式的
-#:   窗口网格——它们是"一个想法调 60 次参数"，不是 60 个发现。平均链接聚类也救不了
-#:   （@corr≥0.6 仍有 6 个 VOLUME 簇）。族键 = 剥掉末尾连续数字（编号型命名如
-#:   `alpha191_166` 剥完以 ``_`` 结尾，判为编号不剥，否则会把 180 个 alpha191 归一族）。
-MATURITY_GATES: dict[str, float] = {
-    "min_sharpe": 0.5,
-    "min_recent_sharpe": 0.3,
-    "max_dup_corr": 0.95,
-    "min_resid_ic": 0.01,
-    "max_active_corr": 0.85,
-    "max_per_family": 2,
-    "recent_days": 250,
-    "split_frac": 0.7,
-    "min_seg_days": 60,
-}
-
-#: 晋升失败原因码 → 人话（报告与 note 共用，别在两处各写一套措辞）。
-MATURITY_REASONS: dict[str, str] = {
-    "no_eval": "无 eval 或 sharpe 为空",
-    "stale_caliber": "收益口径非复权/未套掩码",
-    "dup_unknown": "未做冗余检查（含死因子）",
-    "low_sharpe": "净多空夏普未达线",
-    "redundant": "与最近邻重复且残差无增量",
-    "unstable": "后段 IC 反向或后段夏普为负",
-    "fading": "近 250 日夏普未达线",
-    "crowded": "与已选 active 高相关",
-    "family_cap": "同族代表已达上限",
-    "uncovered": "不在相关矩阵内，无法证明独立性",
-}
+#: 晋升/成熟度系统已于 2026-11-22 整体退役（零生产消费方 + 口径变动下静默腐烂；
+#: 九道门的判据与教训保留在 reports/library_governance/maturity.md 与 TODO_ARCHIVE）。
+#: IS/OOS 分段常量（split_frac/recent_days/min_seg_days）迁至 research.factor_criteria.SEGMENT_DEFAULTS。
 
 #: ``source`` 命名规范：``<prefix>:<detail>[:<scope>]``。
 #:
@@ -1499,14 +1459,12 @@ class FactorLibrary:
     def contract_violations(self) -> list[dict]:
         """因子库**契约**检查：把"什么算一个合格的库"变成可执行断言。
 
-        三条规则（2026-11-02 与两段式入库同时建立）：
+        两条规则（2026-11-02 与两段式入库同时建立；原规则 1 的 maturity 检查
+        随晋升系统 2026-11-22 退役删除）：
 
-        1. ``maturity ∈ {oos_verified, active}`` 的因子必须真的评估过：
-           ``evaluated_at`` 非空、eval 文件存在、``t_stat_nw`` 有限、
-           ``dup_checked=True``（正式因子不许没查过冗余）。
-        2. ``eval_status == "evaluated"`` ⇒ eval 文件在盘上且 ``sharpe_ls_M``
-           非空（防止"标了已评估但指标是 NaN"的半写态）。
-        3. ``eval_status == "ingested"`` ⇒ canonical 指标必须全为空
+        1. ``eval_status == "evaluated"`` ⇒ eval 文件在盘上且 canonical 夏普
+           至少一套有限（防止"标了已评估但指标是 NaN"的半写态）。
+        2. ``eval_status == "ingested"`` ⇒ canonical 指标必须全为空
            （防止只登记却残留旧回测数字，造成"看起来评估过"）。
 
         Returns:
@@ -1539,256 +1497,9 @@ class FactorLibrary:
                     bad.append({"name": name, "rule": "ingested_with_metrics",
                                 "detail": ",".join(leaked[:3])})
 
-            mat = str(r.get("maturity") or "").strip()
-            if mat in ("oos_verified", "active"):
-                if not evaluated:
-                    bad.append({"name": name, "rule": "formal_without_eval",
-                                "detail": f"maturity={mat}"})
-                if not _finite(r.get("t_stat_nw")):
-                    bad.append({"name": name, "rule": "formal_without_t",
-                                "detail": f"maturity={mat}"})
-                if r.get("dup_checked") is not True and str(r.get("dup_checked")) != "True":
-                    bad.append({"name": name, "rule": "formal_without_dup_check",
-                                "detail": f"maturity={mat}"})
         return bad
 
     # ---- 成熟度评定（晋升 / 降级） ----
-    def _eval_series(self, row) -> tuple[pd.Series, pd.Series] | None:
-        """读某因子的 ``(日收益, 逐日 IC)`` 序列；缺 eval 文件返回 ``None``。
-
-        两列都可能含 NaN（IC 在无截面日为空、收益在末日为空），调用方自己 dropna。
-        """
-        name = str(row.get("name") or "")
-        p = self._resolve_eval_path(row)
-        if p is None:
-            p = self.evals_dir / f"{name_slug(name)}.parquet"
-        if not Path(p).exists():
-            return None
-        try:
-            ev = pd.read_parquet(p)
-        except Exception as e:                       # 坏文件不该拖垮整批评定
-            log.warning("[%s] eval 读取失败 %s: %s", name, p, e)
-            return None
-        if "dret_ls_M" not in ev.columns:
-            return None
-        ic = ev["ic"] if "ic" in ev.columns else pd.Series(np.nan, index=ev.index)
-        return ev["dret_ls_M"], ic
-
-    def assess_maturity(
-        self,
-        *,
-        names: list[str] | None = None,
-        corr: np.ndarray | None = None,
-        corr_names: np.ndarray | list[str] | None = None,
-        demote: bool = False,
-        gates: dict | None = None,
-        stamp: str | None = None,
-    ) -> pd.DataFrame:
-        """按 :data:`MATURITY_GATES` 评定每个因子的成熟度，返回**含证据的判定表**。
-
-        阶梯（每一档都是"全满足才进"，不是打分）：
-
-        1. ``invalid`` —— 面板没有可排名的截面信息（由 ``dup_audit`` 判，本方法不改）。
-        2. ``experimental`` —— 默认档；入库但证据不全或未达线。
-        3. ``oos_verified`` —— 六条硬门槛全过：
-           证据存在、口径正确（复权 + 掩码）、查过冗余、净多空夏普达标、
-           相对最近邻有增量、前后两段同号。
-        4. ``active`` —— 在 ``oos_verified`` 上再加"队列唯一性"：按夏普降序贪心选取，
-           与已选 ``active`` 相关 ≥ ``max_active_corr`` 的拒（``crowded``），
-           同族代表已达 ``max_per_family`` 个的拒（``family_cap``）。
-           **必须给 ``corr``/``corr_names``**——证不了独立性就不给 active，
-           没有相关矩阵时本方法的上限是 ``oos_verified``。
-        5. ``retired`` —— 只在 ``demote=True`` 时产生，且**仅对"曾经达标、现在失效"**
-           （``unstable`` / ``fading``）。若是证据缺失（没 eval、旧口径、没查冗余）
-           则降回 ``experimental``：那不是因子失效，是我们自己的账没记清。
-
-        Args:
-            names: 只评定这些因子（默认全库）。
-            corr: 截面相关矩阵（``dup_matrix.npz`` 的 ``corr``），用于队列去重。
-            corr_names: ``corr`` 的行列名，顺序须与矩阵一致。
-            demote: 允许把已达标的因子降级（默认只升不降，便于对照）。
-            gates: 覆盖 :data:`MATURITY_GATES` 里的阈值（测试/敏感性分析用）。
-            stamp: 写进 ``note`` 的日期戳（默认今天）。
-
-        Returns:
-            行索引为 ``name``，列含 ``current`` / ``verdict`` / ``reasons`` /
-            ``sharpe`` / ``sharpe_back`` / ``sharpe_fwd`` / ``sharpe_recent`` /
-            ``ic_back`` / ``ic_fwd`` / ``dup_corr_max`` / ``resid_ic`` / ``queue``。
-            ``queue`` 为 1 表示成为 ``active`` 队列成员。
-        """
-        g = dict(MATURITY_GATES)
-        if gates:
-            g.update(gates)
-        stamp = stamp or datetime.now().strftime("%Y-%m-%d")
-        reg = self._load_registry()
-        if names is not None:
-            keep = set(names)
-            reg = reg[reg["name"].isin(keep)]
-
-        # 相关矩阵的 name → 行号（缺矩阵时留空，active 一律不给）
-        cidx: dict[str, int] = {}
-        if corr is not None and corr_names is not None:
-            cidx = {str(n): i for i, n in enumerate(list(corr_names))}
-
-        rows: list[dict] = []
-        for _, r in reg.iterrows():
-            name = str(r["name"])
-            # ⚠️ 不能写 ``str(r.get("maturity") or "")``：NaN 是 truthy，空档会变成
-            # 字符串 "nan"，后续 ``cur in ("oos_verified", ...)`` 与报告全都跟着错。
-            _m = r.get("maturity")
-            cur = "" if self._is_blank(_m) or str(_m).strip() in ("nan", "None") \
-                else str(_m).strip()
-            rec = {
-                "name": name, "current": cur, "family": _family_key(name),
-                "sharpe": _f(r.get("sharpe_ls_M")),
-                "dup_corr_max": _f(r.get("dup_corr_max")),
-                "resid_ic": _f(r.get("resid_ic")),
-                "sharpe_back": np.nan, "sharpe_fwd": np.nan,
-                "sharpe_recent": np.nan, "ic_back": np.nan, "ic_fwd": np.nan,
-            }
-            fails: list[str] = []
-
-            # —— 门槛 1：证据存在
-            series = self._eval_series(r)
-            if (str(r.get("eval_status") or "").strip() != "evaluated"
-                    or series is None or not np.isfinite(rec["sharpe"])):
-                fails.append("no_eval")
-            # —— 门槛 2：口径（旧口径的数字不许晋级：未复权 + 无掩码会把
-            #     "买涨停"当成 alpha，2026-11-04 实测过 2.86 → −0.71）
-            if (str(r.get("ret_basis") or "").strip() != "adj_close_pct_v1"
-                    or not str(r.get("mask_basis") or "").strip()):
-                fails.append("stale_caliber")
-            # —— 门槛 3：查过冗余（死因子 dup_checked=False，别拿 True 掩盖）
-            if not (r.get("dup_checked") is True or str(r.get("dup_checked")) == "True"):
-                fails.append("dup_unknown")
-            # —— 门槛 4：绝对业绩
-            if not (np.isfinite(rec["sharpe"]) and rec["sharpe"] >= g["min_sharpe"]):
-                fails.append("low_sharpe")
-            # —— 门槛 5：相对最近邻有增量（高相关 + 残差无信息才是重复）
-            if (np.isfinite(rec["dup_corr_max"]) and rec["dup_corr_max"] >= g["max_dup_corr"]
-                    and not (np.isfinite(rec["resid_ic"]) and rec["resid_ic"] >= g["min_resid_ic"])):
-                fails.append("redundant")
-
-            # —— 门槛 6：时间稳健（前 70% / 后 30% 分段，样本外近似）
-            if series is not None:
-                st = window_stats(series[0], series[1],
-                                   split_frac=g["split_frac"],
-                                   recent_days=int(g["recent_days"]),
-                                   min_days=int(g["min_seg_days"]))
-                rec.update({k: st[k] for k in
-                            ("sharpe_back", "sharpe_fwd", "sharpe_recent",
-                             "ic_back", "ic_fwd")})
-                if fails == []:      # 前面已废的不用重复算判据
-                    bad_seg = (np.isfinite(rec["ic_fwd"]) and np.isfinite(rec["ic_back"])
-                               and np.sign(rec["ic_fwd"]) != np.sign(rec["ic_back"]))
-                    if bad_seg or not (np.isfinite(rec["sharpe_fwd"]) and rec["sharpe_fwd"] > 0):
-                        fails.append("unstable")
-                # —— 门槛 7：没在衰（近 250 日）
-                if fails == [] and not (np.isfinite(rec["sharpe_recent"])
-                                        and rec["sharpe_recent"] >= g["min_recent_sharpe"]):
-                    fails.append("fading")
-
-            rec["fails"] = tuple(fails)
-            rec["queue"] = 0
-            rows.append(rec)
-
-        out = pd.DataFrame(rows).set_index("name") if rows else pd.DataFrame()
-        if out.empty:
-            out["reasons"] = pd.Series(dtype=str)
-            out["verdict"] = pd.Series(dtype=str)
-            return out
-
-        # —— 队列去重：只在"前七条全过"的候选里，按夏普降序贪心。
-        #    两道闸：① 与已选 active 相关 ≥ max_active_corr → crowded；
-        #    ② 同族代表 ≥ max_per_family → family_cap（相关抓不住窗口网格，见 _family_key）。
-        cand = out[out["fails"].str.len() == 0].sort_values("sharpe", ascending=False)
-        picked: list[str] = []
-        fam_n: dict[str, int] = {}
-        for name in cand.index:
-            fk = str(out.at[name, "family"])
-            if not cidx or name not in cidx:
-                out.at[name, "fails"] = ("uncovered",)
-                out.at[name, "queue"] = -1        # −1 = 无法验证独立性
-                continue
-            i = cidx[name]
-            if any(abs(float(corr[i, cidx[p]])) >= g["max_active_corr"] for p in picked):
-                out.at[name, "fails"] = ("crowded",)
-                continue
-            if fam_n.get(fk, 0) >= int(g["max_per_family"]):
-                out.at[name, "fails"] = ("family_cap",)
-                continue
-            picked.append(name)
-            fam_n[fk] = fam_n.get(fk, 0) + 1
-            out.at[name, "queue"] = 1
-
-        # —— 定档
-        verdicts, reasons = [], []
-        for name, rec in out.iterrows():
-            f = rec["fails"]
-            cur = rec["current"]
-            if cur == "invalid":
-                verdicts.append("invalid")
-                reasons.append("面板无可排名信息（人工复核，不由本方法改判）")
-                continue
-            if not f:
-                verdicts.append("active" if rec["queue"] == 1 else "oos_verified")
-                reasons.append("")
-                continue
-            # 队列类失败（crowded / family_cap / uncovered）只挡 active，不否定个体证据
-            hard = [k for k in f if k not in ("crowded", "family_cap", "uncovered")]
-            if not hard:
-                verdicts.append("oos_verified")
-                reasons.append("；".join(MATURITY_REASONS.get(k, k) for k in f))
-                continue
-            # 降级判定：只有"失效"才 retired，"账没记清"退回 experimental
-            if demote and cur in ("oos_verified", "active") and (
-                    {"unstable", "fading"} & set(f)):
-                verdicts.append("retired")
-            else:
-                verdicts.append("experimental")
-            reasons.append("；".join(MATURITY_REASONS.get(k, k) for k in f))
-        out["verdict"] = verdicts
-        out["reasons"] = reasons
-        out["stamp"] = stamp
-        return out
-
-    def apply_maturity(self, assess: pd.DataFrame, *, note: bool = True,
-                       only_change: bool = True) -> int:
-        """把 :meth:`assess_maturity` 的判定写回 registry，**一次落盘**。
-
-        ``only_change=True`` 只写"判定变了"或"``note`` 里还没有本次证据标签"的行
-        （外加 maturity 为空的补实，空值既不属于任何档、在过滤时等于永久隐身，
-        比 ``experimental`` 更糟）。判定没变时不写 note，是为了幂等——否则每跑一次
-        note 就长一截。
-        ``note`` 为真时追加标签，保留原有内容不覆盖。
-        """
-        if assess.empty:
-            return 0
-        reg = self._load_registry().set_index("name")
-        payload: dict[str, dict] = {}
-        for name, r in assess.iterrows():
-            if name not in reg.index:
-                continue
-            cur = str(reg.at[name, "maturity"] or "").strip()
-            new = str(r["verdict"])
-            blank = cur in ("", "nan", "None")
-            same = (not blank) and cur == new
-            old = "" if pd.isna(reg.at[name, "note"]) else str(reg.at[name, "note"])
-            # 不达标的写失败原因；达标的写证据摘要——否则 registry 里 active 的
-            # note 全空，回头审计只能翻报告，没法在表里自证。
-            body = (str(r.get("reasons") or "").strip() or _evidence_brief(r)) if note else ""
-            tag = f"[{r['stamp']} {new}] {body}" if body else ""
-            if only_change and same and (not tag or tag in old):
-                continue
-            upd: dict = {"maturity": new}
-            if tag and tag not in old:
-                upd["note"] = (old + " | " + tag).strip(" |")
-            payload[name] = upd
-        if payload:
-            # 逐条写：apply_eval_many 已处理"数值列改写字符串"的 dtype 问题
-            self.apply_eval_many(payload)
-        return len(payload)
-
     def register(
         self,
         name: str,
