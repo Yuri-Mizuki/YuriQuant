@@ -543,6 +543,10 @@ model层 / ML合成，其余已删、可重跑复现——结论见 §三.13~17�
     （`panels` 原始 / `panels_neu` 慢信号 / `panels_neu_fundind` 特征源），`sdk_cache/infodata` 16GB
     财报 `.h5` 是 `parquet/` 未落盘的**唯一副本**（删了要重拉付费源），`dup_signatures.npy` 2.6GB
     是入库门禁的秒级查表索引。三者都不可再生或重建代价高。
+    🔧 2026-11-21 财报部分该判断已被推翻并执行删除：`data/datasource.py` 全部 14 处
+    SDK 调用 `is_local=False`（读侧不走 SDK 缓存），infodata 10 表 + basedata 3 表在
+    `parquet/` 全有副本（水位短路 + 增量回源见 `data/cache.py:815`），`sdk_cache`
+    17.5GB 已删；若 SDK 写入侧日后重新生成属预期，不再挡回源。
   - **顺带查出的环境债**：`config/settings.yaml` 的默认解释器 `D:\python\Python312\python.exe`
     在本机**不存在**，系统 3.13 也没装 pandas ⇒ `.venv`（5.1GB）是本机唯一可运行环境，
     **不删**；`.env` 里 `YQ_PYTHON` 已正确指向 `.venv/Scripts/python.exe`，无需改动。

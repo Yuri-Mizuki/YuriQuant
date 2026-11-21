@@ -101,3 +101,5 @@ warn_unused_ignores = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# 2026-11-21：pytest-xdist 并行（16 核，全量 16.5min → ~4-5min）。单测调试可加 -p no:xdist。
+addopts = "-n auto"
