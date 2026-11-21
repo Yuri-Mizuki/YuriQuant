@@ -43,6 +43,8 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.tree import DecisionTreeClassifier
 
 from backtest.metrics import annual_return, max_drawdown, sharpe_ratio
+from scripts.timing.shell import load_index_daily as _generic_load
+from scripts.timing.shell import run_rebalance_shell as run_strategy  # 共享调仓壳（2026-11-21 抽取）
 from stats import PERIODS_PER_YEAR
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -91,20 +93,8 @@ REPORT_LABEL_RATIO = {"train_osc": 456, "train_trend": 505, "test_osc": 197, "te
 
 # ---------------------------------------------------------------- 数据
 def load_index_daily(refresh: bool = False) -> pd.DataFrame:
-    """上证指数日K（000001.SH），带 parquet 缓存（>5 天自动重拉）。"""
-    if DATA_CACHE.exists() and not refresh:
-        df = pd.read_parquet(DATA_CACHE)
-        if df.index.max() >= pd.Timestamp(dt.date.today()) - pd.Timedelta(days=5):
-            return df
-    from data.datasource import create_datasource
-
-    ds = create_datasource()
-    raw = ds.get_daily_kline([INDEX_CODE], FETCH_BEGIN, int(dt.date.today().strftime("%Y%m%d")))
-    df = raw.xs(INDEX_CODE, level="code").sort_index()
-    df = df[~df.index.duplicated(keep="last")]
-    DATA_CACHE.parent.mkdir(parents=True, exist_ok=True)
-    df.to_parquet(DATA_CACHE)
-    return df
+    """上证指数日K（000001.SH），缓存到本实验 data/（走共享件泛化装载）。"""
+    return _generic_load(INDEX_CODE, FETCH_BEGIN, OUT / "data", refresh)
 
 
 # ---------------------------------------------------------------- 标注
@@ -300,43 +290,9 @@ def accuracy(pred: pd.Series, label: pd.Series, mask: pd.Series) -> float:
     return float(ok.mean())
 
 
-# ---------------------------------------------------------------- 策略（研报 §3 规则）
-def run_strategy(close: pd.Series, sig: pd.Series, cost_bps: float) -> dict:
-    """研报动态仓位：周三调仓，回看期收益 = 上次调仓日收盘 → 本次调仓前一交易日收盘；
-    趋势追涨杀跌 / 震荡均值回归，每满 1% 动 0.1 仓，钳 [0,1]。
-    ``sig`` 传入**调用方已延迟到 T+1 可用**的信号；调仓以收盘价执行、次日起生效。
-    首日以 0.5 基础仓位进入（建仓成本不计，见 §四 边界）。
-    """
-    ret = close.pct_change().fillna(0.0)
-    dates = close.index
-    pos_eff = pd.Series(INIT_POS, index=dates)  # 每日生效仓位（调仓次日起更新）
-    cost = pd.Series(0.0, index=dates)
-    cur = INIT_POS
-    prev_r: pd.Timestamp | None = None
-    for r in [d for d in dates if d.weekday() == REBALANCE_WEEKDAY]:
-        loc = dates.get_loc(r)
-        if loc == 0:
-            continue
-        if prev_r is not None:
-            lb = float(close.iloc[loc - 1] / close.loc[prev_r] - 1.0)
-        else:
-            lb = 0.0  # 首个调仓日无回看期，仓位不动
-        s = float(sig.loc[r])
-        pct = float(np.floor(abs(lb) * 100.0) * STEP) * np.sign(lb)
-        new = float(np.clip(cur + (pct if s >= 0.5 else -pct), 0.0, 1.0))
-        cost.iloc[loc] = abs(new - cur) * cost_bps * 1e-4
-        cur = new
-        pos_eff.iloc[loc + 1:] = cur
-        prev_r = r
-    sr = pos_eff * ret - cost
-    return {
-        "ret": sr,
-        "pos": pos_eff,
-        "avg_pos": float(pos_eff.mean()),
-        "turnover": float(cost.sum() / max(cost_bps * 1e-4, 1e-12)) if cost_bps > 0 else float("nan"),
-    }
-
-
+# ---------------------------------------------------------------- 策略
+# run_strategy 已抽取为共享件 scripts/timing/shell.py::run_rebalance_shell（顶部 import
+# 别名），逻辑逐位不变（step_pct=1.0/step=0.1/init_pos=0.5/周三 = 原 STEP/INIT_POS 常量）。
 def metrics_row(ret: pd.Series) -> dict:
     return {
         "total": float((1 + ret).prod() - 1),

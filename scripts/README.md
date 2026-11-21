@@ -1,6 +1,6 @@
 # scripts 入口索引
 
-> 自动生成（120 个活跃入口）。改脚本 docstring 后运行 `python -m scripts.data_tools.gen_scripts_index` 更新；`--check` 校验是否过期。
+> 自动生成（122 个活跃入口）。改脚本 docstring 后运行 `python -m scripts.data_tools.gen_scripts_index` 更新；`--check` 校验是否过期。
 
 约定：`python -m scripts.<目录>.<文件名>` 运行；`scripts/archive/` 已于 2026-11-18 整体下线（活代码已上移，其余删除）；实验结论查 `reports/README.md` §一「结论速查」，产物落盘规则见其 §1.6。
 
@@ -187,4 +187,6 @@
 
 | 脚本 | 说明 |
 |---|---|
+| `timing/rev_shell_probe.py` | 周频均值回归壳稳健性探针（纯择时线缝合清单③，reports/rev_shell_probe/）。 |
+| `timing/shell.py` | 纯择时研究线共享件：调仓壳 + 指数日K装载（2026-11-21 自 sws_regime_probe 抽取）。 |
 | `timing/sws_regime_probe.py` | 申万 0922 择时研报门槛探针（纯择时研究线首篇，reports/sws_timing_probe/）。 |
