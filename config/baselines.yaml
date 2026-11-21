@@ -592,8 +592,7 @@ baselines:
         delta_ann_vs_anchor_pp: [+0.97, +1.17, +0.44, +1.10]   # 4/4 为正
     reproducible_local: true
     regen_cmd: >
-      D:/python/Python312/python.exe -m scripts.evaluation.cheap_lever_revalidate_920
-      （本机 .venv 亦可：.venv/Scripts/python.exe -m scripts.evaluation.cheap_lever_revalidate_920）
+      D:/miniconda3/envs/yuriquant/python.exe -m scripts.evaluation.cheap_lever_revalidate_920
     source: "reports/cheap_lever_scan/{README.md,revalidate_920.csv,_anchor_check/}"
     verified_local: true
     caveats: >
