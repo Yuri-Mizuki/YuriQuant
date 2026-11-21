@@ -1,6 +1,6 @@
 # scripts 入口索引
 
-> 自动生成（121 个活跃入口）。改脚本 docstring 后运行 `python -m scripts.data_tools.gen_scripts_index` 更新；`--check` 校验是否过期。
+> 自动生成（122 个活跃入口）。改脚本 docstring 后运行 `python -m scripts.data_tools.gen_scripts_index` 更新；`--check` 校验是否过期。
 
 约定：`python -m scripts.<目录>.<文件名>` 运行；`scripts/archive/` 已于 2026-11-18 整体下线（活代码已上移，其余删除）；实验结论查 `reports/README.md` §一「结论速查」，产物落盘规则见其 §1.6。
 
@@ -87,6 +87,7 @@
 | `factors/factor_board_data.py` | 因子看板数据层：为因子库里每个因子算「分位组合净值 + IC 序列 + 行业 IC」。 |
 | `factors/factor_library.py` | 因子库 CLI |
 | `factors/formula_extract.py` | 从 factor/ 源码反解析因子的**可读公式**，供 registry ``formula`` 列与看板展示。 |
+| `factors/fuse_ic.py` | ic_h 融合入口：把指定因子（缺省=库内全部）的 IC 列补进 ic_h{1,5,10,20}。 |
 | `factors/library_dedup_apply.py` | 库内去重的**执行层**：把决策表的 ``safe_drop`` 从 registry 退登记。 |
 | `factors/library_dedup_plan.py` | 因子库去重决策表：把「相关 → 质量 → 生产依赖」三条判据并成一张可拍板的清单。 |
 | `factors/mine_factors.py` | 因子挖掘 CLI |
