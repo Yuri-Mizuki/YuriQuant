@@ -144,9 +144,10 @@ def _ak():
         import akshare as ak
     except ImportError as e:  # pragma: no cover - 环境缺失路径
         raise ImportError(
-            "另类数据抓取依赖 akshare，但当前解释器未安装。安装（.venv 由 uv 创建、"
-            "内无 pip，必须走 uv）：\n"
-            "  uv pip install -e \".[altdata]\" --python <repo>/.venv/Scripts/python.exe"
+            "另类数据抓取依赖 akshare，但当前解释器未安装。安装（2026-11-21 起"
+            "依赖统一收敛到 conda 环境 yuriquant，解释器路径见 config/settings.yaml"
+            " runtime.python / .env 的 YQ_PYTHON）：\n"
+            "  python -m pip install -e \".[altdata]\""
         ) from e
     return ak
 

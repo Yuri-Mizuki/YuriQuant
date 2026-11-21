@@ -62,8 +62,9 @@ def _ak():
         import akshare as ak
     except ImportError as e:  # pragma: no cover
         raise ImportError(
-            "新闻存档依赖 akshare。安装：uv pip install -e \".[altdata]\" "
-            "--python <repo>/.venv/Scripts/python.exe"
+            "新闻存档依赖 akshare。安装：在项目解释器（conda 环境 yuriquant，路径见"
+            "config/settings.yaml runtime.python / .env 的 YQ_PYTHON）里执行：\n"
+            "  python -m pip install -e \".[altdata]\""
         ) from e
     return ak
 

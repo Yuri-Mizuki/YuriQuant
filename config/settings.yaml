@@ -44,10 +44,10 @@ cache:
 # --- 运行时 ---
 runtime:
   # 装了 akshare 等**可选依赖**的解释器绝对路径（多机适配：见文件头「路径约定」）。
-  # 消费方：scripts/pipelines/fetch_altdata_daily.py（2026-10-10 实测 akshare 只装在
-  # 系统 Python，`.venv` 里没有 ⇒ 该链必须能指定解释器）。与 config/schedule.yaml 的
-  # ${YQ_PYTHON:...} 用**同一个环境变量** ⇒ 换机器时只改一处。
-  python: '${YQ_PYTHON:D:\python\Python312\python.exe}'
+  # 消费方：scripts/pipelines/fetch_altdata_daily.py。2026-11-21 解释器收敛：
+  # 依赖统一装在 conda 环境 yuriquant（.venv 已删），默认值直接指向它；
+  # 与 config/schedule.yaml 的 ${YQ_PYTHON:...} 用**同一个环境变量** ⇒ 换机器只改 .env 一处。
+  python: '${YQ_PYTHON:D:/miniconda3/envs/yuriquant/python.exe}'
 
 # --- 股票池配置 ---
 universe:

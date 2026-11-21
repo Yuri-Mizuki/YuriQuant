@@ -546,6 +546,8 @@ model层 / ML合成，其余已删、可重跑复现——结论见 §三.13~17�
   - **顺带查出的环境债**：`config/settings.yaml` 的默认解释器 `D:\python\Python312\python.exe`
     在本机**不存在**，系统 3.13 也没装 pandas ⇒ `.venv`（5.1GB）是本机唯一可运行环境，
     **不删**；`.env` 里 `YQ_PYTHON` 已正确指向 `.venv/Scripts/python.exe`，无需改动。
+    🔧 2026-11-21 该判断已被推翻：依赖收敛到 conda 环境 yuriquant，`.venv` 已删，
+    `YQ_PYTHON` 已改指 conda（见 `config/settings.yaml` runtime.python 注释）。
   - 快照清单存 `D:/project/_yq_snapshots/2026-11-18_data_cleanup.txt`（文件数/字节/mtime/路径）。
 
 - **2026-11-19（`panels_neu_fundind` 改覆盖层：48GB → 4.3GB，省 43.7GB）**：

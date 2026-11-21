@@ -298,11 +298,11 @@ baselines:
     reproducible_local: false   # 2026-11-12 核实：登记路径本机已不存在（见 retired_reason）
     regen_cmd: >
       ① 重构造定版信号（慢信号随 panels_neu 变 ⇒ **重建后必跑**，否则 caliber 读到旧信号）：
-         D:/project/YuriQuant/.venv/Scripts/python.exe -m scripts.evaluation.buffer_arm_920
+         D:/miniconda3/envs/yuriquant/python.exe -m scripts.evaluation.buffer_arm_920
          --pred-dir reports/alla_rolling_ortho920fundind --variant defv
          --save-sig reports/frontier_audit_920_reval/defv_sig__h1.parquet --sig-only
       ② 报数：
-         D:/project/YuriQuant/.venv/Scripts/python.exe -m scripts.evaluation.caliber
+         D:/miniconda3/envs/yuriquant/python.exe -m scripts.evaluation.caliber
          --signal dingban_fundind --window prod --profile production
          --json reports/rebuild_impact_920/caliber_v2_prod.json
     source: "reports/rebuild_impact_920/caliber_v2_prod.json（2026-11-08 caliber 产出）；重建影响与逐年拆解见 reports/rebuild_impact_920/README.md"

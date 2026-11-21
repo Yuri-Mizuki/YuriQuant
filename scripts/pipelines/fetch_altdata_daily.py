@@ -45,11 +45,12 @@ akshare 的 ``stock_hold_management_detail_cninfo`` 把日期写死在函数体�
     python scripts/pipelines/fetch_altdata_daily.py --install-news-task 09:00 --every-minutes 10
     python scripts/pipelines/fetch_altdata_daily.py --remove-task
 
-⚠️ **解释器（2026-10-10 订正）**：本脚本依赖 akshare。实测 akshare 只装在
-**系统 Python**（``D:\python\Python312\python.exe``，1.18.56），``.venv`` 里**没有**
-akshare ⇒ 用 ``.venv`` 跑会 ``_check_interpreter`` 直接 ``SystemExit(2)``（任务层
-表现为 rc=0x80070002「文件未找到」）。故计划任务用**系统 Python**（登记表
-``config/schedule.yaml`` 为唯一真源；搬动仓库后须 ``task_scheduler install altdata_daily``
+⚠️ **解释器（2026-11-21 再订正）**：本脚本依赖 akshare。解释器已收敛到
+**conda 环境 yuriquant**（akshare 1.20.65，``pip install -e ".[altdata]"``）；
+历史变迁：2026-10-10 曾订正到系统 Python（彼时 ``.venv`` 无 akshare），但该
+``D:\python\Python312`` 本机已不存在、``.venv`` 已删。现在统一走
+``settings.runtime.python``（``${YQ_PYTHON:...}``，与登记表 ``config/schedule.yaml``
+同一环境变量；搬动仓库后须 ``task_scheduler install altdata_daily``
 重注册 —— TR/XML 内嵌绝对路径，与 ``alla_daily_rank`` 同一坑）。
 """
 from __future__ import annotations
@@ -92,8 +93,8 @@ CLS_BACKFILL_TASK = "YuriQuant AltDataClsBackfill"
 NEWS_TASK_NAME = "YuriQuant AltDataNews"
 
 #: 本脚本必须跑在装了 akshare 的解释器上。
-#: 2026-10-10 实测：akshare 装在**系统 Python**（``D:\python\Python312``，1.18.56），
-#: ``.venv`` 里没有 ⇒ 原来的 ``.venv`` 常量是错的（用 YQ_ALT_PY 可覆盖）。
+#: 2026-11-21：akshare 在 conda 环境 yuriquant（settings.runtime.python 默认值）；
+#: 2026-10-10 的「系统 Python」口径已作废（该路径本机已删除）。YQ_ALT_PY 可覆盖。
 _i = os.environ.get("YQ_ALT_PY")
 if _i:
     ALT_PY = Path(_i)

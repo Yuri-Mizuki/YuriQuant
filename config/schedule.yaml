@@ -57,7 +57,7 @@ tasks:
     status: active
     time: '06:00'
     schedule: daily
-    command: '${YQ_PYTHON:D:\python\Python312\python.exe}'
+    command: '${YQ_PYTHON:D:/miniconda3/envs/yuriquant/python.exe}'
     arguments: >-
       "${YQ_REPO:E:\YuriQuant}\scripts\pipelines\rebuild_panel_library.py" --run
       --log-file logs\rebuild_panels_task_{date}.log
@@ -86,7 +86,7 @@ tasks:
     status: active
     time: '18:30'
     schedule: daily
-    command: '${YQ_PYTHON:D:\python\Python312\python.exe}'
+    command: '${YQ_PYTHON:D:/miniconda3/envs/yuriquant/python.exe}'
     arguments: '"${YQ_REPO:E:\YuriQuant}\scripts\pipelines\alla_daily_rank.py" --preset dingban --log-file logs\alla_daily_rank_task_{date}.log'
     working_dir: '${YQ_REPO:E:\YuriQuant}'
     execution_limit: PT3H
@@ -116,7 +116,7 @@ tasks:
     status: active
     time: '18:00'
     schedule: daily
-    command: '${YQ_PYTHON:D:\python\Python312\python.exe}'
+    command: '${YQ_PYTHON:D:/miniconda3/envs/yuriquant/python.exe}'
     arguments: '"${YQ_REPO:E:\YuriQuant}\scripts\pipelines\fetch_altdata_daily.py" --tables all --log-file logs\altdata_daily_task_{date}.log'
     working_dir: '${YQ_REPO:E:\YuriQuant}'
     execution_limit: PT3H
@@ -135,6 +135,10 @@ tasks:
       直接 SystemExit(2)（任务层表现为 rc=0x80070002 文件未找到、产物停 09-23）。
       原「必须 .venv（akshare 是本地 wheel，进不了 uv.lock）」的口径已过时：系统
       Python 不受 `uv sync` 影响，反而更稳。若日后重装，请仍装进系统 Python。
+      🔧 2026-11-21 再订正：解释器**收敛到 conda 环境 yuriquant**（akshare 1.20.65
+      已装入，`pip install -e ".[altdata]"`）；D:\python\Python312 本机已不存在，
+      `.venv` 已删除。默认兜底值已直接写 conda 绝对路径，.env 的 YQ_PYTHON 仍是
+      本机覆盖位。改解释器后必须重注册任务（task_scheduler install <key>）。
       与出榜并行无依赖；`--log-file` = 失败留痕；脚本内 keep_system_awake 防 S0 待机中断。
       **🔴 2026-10-29 判据改造**：`product_glob` → `product_check: altdata_tables`。
       病根 = `_alt_meta.json` 由 `_save_meta()` **逐表增量**写（前三张快照表成功即
@@ -183,7 +187,7 @@ tasks:
     status: planned
     time: '17:30'
     schedule: daily
-    command: '${YQ_PYTHON:D:\python\Python312\python.exe}'
+    command: '${YQ_PYTHON:D:/miniconda3/envs/yuriquant/python.exe}'
     arguments: '-m scripts.reporting.monitor_factor_health --dataset all_a_2018_2026'
     working_dir: '${YQ_REPO:E:\YuriQuant}'
     execution_limit: PT1H
@@ -201,7 +205,7 @@ tasks:
     status: planned
     time: '12:00'
     schedule: daily
-    command: '${YQ_PYTHON:D:\python\Python312\python.exe}'
+    command: '${YQ_PYTHON:D:/miniconda3/envs/yuriquant/python.exe}'
     arguments: >-
       -m scripts.factors.run_factor_pipeline --skip-build
       --log-file logs\factor_pipeline_{date}.log
@@ -223,7 +227,7 @@ tasks:
     status: planned
     time: '17:30'
     schedule: daily
-    command: '${YQ_PYTHON:D:\python\Python312\python.exe}'
+    command: '${YQ_PYTHON:D:/miniconda3/envs/yuriquant/python.exe}'
     arguments: >-
       "${YQ_REPO:E:\YuriQuant}\scripts\pipelines\fetch_altdata_daily.py" --tables cls
       --cls-backfill --cls-max-pages 3000
@@ -240,7 +244,7 @@ tasks:
     schedule: minute
     every_minutes: 10
     end_time: '21:00'
-    command: '${YQ_PYTHON:D:\python\Python312\python.exe}'
+    command: '${YQ_PYTHON:D:/miniconda3/envs/yuriquant/python.exe}'
     arguments: '"${YQ_REPO:E:\YuriQuant}\scripts\pipelines\fetch_altdata_daily.py" --tables news'
     working_dir: '${YQ_REPO:E:\YuriQuant}'
     execution_limit: PT1H
