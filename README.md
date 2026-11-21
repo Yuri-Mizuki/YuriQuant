@@ -152,7 +152,7 @@ research/    研究层 —— IC 与分层、归因、DPP 选样、因子库、�
              晋升 / `dup_criteria` 重复性），脚本只准调用、不准另写一份
 stats/       统计层 —— 稳健统计、PBO / DSR、显著性检验
 monitoring/  监控层 —— IC 台账、告警、账本、拥挤度
-scripts/     入口层 —— 129 个可执行入口（ingest / builders / pipelines / factors /
+scripts/     入口层 —— 119 个可执行入口（ingest / builders / pipelines / factors /
              portfolio / evaluation / reporting / textmining / live / common）
 config/      参数真源 —— settings.yaml（环境与数据源）/ baselines.yaml（基线登记表）/
              schedule.yaml（调度登记表）

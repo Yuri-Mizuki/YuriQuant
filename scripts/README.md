@@ -1,6 +1,6 @@
 # scripts 入口索引
 
-> 自动生成（127 个活跃入口）。改脚本 docstring 后运行 `python -m scripts.data_tools.gen_scripts_index` 更新；`--check` 校验是否过期。
+> 自动生成（119 个活跃入口）。改脚本 docstring 后运行 `python -m scripts.data_tools.gen_scripts_index` 更新；`--check` 校验是否过期。
 
 约定：`python -m scripts.<目录>.<文件名>` 运行；`scripts/archive/` 已于 2026-11-18 整体下线（活代码已上移，其余删除）；实验结论查 `reports/README.md` §一「结论速查」，产物落盘规则见其 §1.6。
 
@@ -53,7 +53,6 @@
 |---|---|
 | `data_tools/audit_fundind_split.py` | E5 覆盖层体检：``panels_neu_fundind`` vs 基准层 ``panels_neu``。 |
 | `data_tools/docs_lint.py` | 文档规范校验（docs 治理 P0，2026-10-28）。 |
-| `data_tools/dump_pdf_text.py` | 把研报 PDF 抽成带页码标记的纯文本，便于按关键词定位口径参数。 |
 | `data_tools/gen_scripts_index.py` | 生成 ``scripts/README.md`` 入口索引（2026-10-19 审计 ③）。 |
 | `data_tools/memory_lint.py` | 记忆层治理校验（memory_lint，2026-11-03）。 |
 | `data_tools/new_experiment.py` | 新建实验目录：一条命令完成「建目录 + 复制模板 + 登记判定」。 |
@@ -78,14 +77,10 @@
 | `factors/backfill_library.py` | 因子库回填：体检（dry-run）+ 并行补 canonical 评估。 |
 | `factors/backfill_library_metrics.py` | 因子库指标批量回填：canonical 分层回测 + 显著性 + 路径/公式/族标签（维护工具）。 |
 | `factors/backfill_metadata.py` | registry 元数据回填：``formula`` 与 ``family``（只补空缺，不动任何统计列）。 |
-| `factors/build_alpha_factors.py` | 公开经典因子集（Alpha101 / GTJA Alpha191）→ 构建入库 |
 | `factors/build_fd_factors.py` | 飞书《因子字典》候选因子 → 因子库体检入库 |
-| `factors/build_fundamental_factors.py` | 基本面因子构建与入库（价值/质量/成长/规模） |
 | `factors/build_intraday_factors.py` | 日内特征 → 日频因子构建与入库 |
 | `factors/build_intraday_stat_factors.py` | 分钟统计特征 → 因子库体检入库（降维路线第一层） |
 | `factors/build_minute_panel.py` | 分钟面板构建入口 |
-| `factors/build_paper_factors.py` | 论文复现因子构建与入库（awesome-systematic-trading 21 式） |
-| `factors/build_technical_factors.py` | 技术面迭代/累积类指标 → 日频因子构建与入库 |
 | `factors/build_top10_factors.py` | 「中国因子十强」复现与统一评估（JKP 口径榜单，2026-11-02） |
 | `factors/dup_audit.py` | 全库冗余审计：一次性算清 965 个因子的两两截面相关，并把结论写回 registry。 |
 | `factors/dup_precheck.py` | **登记前**冗余预检：这批因子该不该进库，先看一眼它最像谁。 |
@@ -105,14 +100,11 @@
 | `factors/run_llm_mcts.py` | 东吴 LLM-MCTS 因子迭代 Phase 0 —— 同题四引擎对照 runner |
 | `factors/run_portfolio_phase2.py` | stage2 Phase 2：zz1000 主实验（信号管线 + PPO 滚动集成 / 银河口径 QP / 基准）。 |
 | `factors/run_portfolio_ppo.py` | stage2 Phase 1：hs300 平价验证（PPO vs QP vs 等权基准 vs TopN）。 |
-| `factors/synthesize_factors.py` | 多因子合成 CLI |
-| `factors/synthesize_library.py` | 从因子库加载 raw 因子 → 四种合成 → 评估对比 + 入库（带血缘） |
 
 ## ingest
 
 | 脚本 | 说明 |
 |---|---|
-| `ingest/check_data_quality.py` | 数据质量检查 CLI |
 | `ingest/extend_factor_library.py` | 因子库数据延长 —— 面板刷新到数据源最新交易日 |
 | `ingest/fetch_minute_all.py` | 全 A 分钟数据拉取（5 分钟 / 1 分钟） |
 | `ingest/fetch_minute_gap.py` | 补齐 HS300 动态池（PIT 成分）缺失的分钟数据 |
