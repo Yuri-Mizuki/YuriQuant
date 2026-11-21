@@ -221,6 +221,33 @@ tasks:
       前置：`reports/factor_board/cache/` 已存在（`--resume` 只补缺）。
       产物：`reports/factor_board/index.html` + `f/*.html`。
 
+  - key: minute_tail
+    name: 'YuriQuant MinuteTail'
+    system: schtasks
+    status: planned
+    time: '06:00'
+    schedule: weekly
+    weekday: Monday
+    command: '${YQ_PYTHON:D:/miniconda3/envs/yuriquant/python.exe}'
+    arguments: >-
+      -m scripts.ingest.fetch_minute_all --tail 20261121 --end 20261231
+      --pool all_a --log-file logs\minute_tail_{date}.log
+    working_dir: '${YQ_REPO:E:\YuriQuant}'
+    execution_limit: PT2H
+    description: '全A 5 分钟数据周更尾巴：拉上周增量段并 merge 进当年 part（fd/im 分钟因子数据线）'
+    notes: >-
+      2026-11-22 新增，**当前 planned、未注册**。`--tail` 绕开常规分片的块号
+      命名陷阱（tail 分片独立命名、永不撞名），merge 只重写有新数据的年份
+      part。⚠️ 首次激活前把 `--tail 20261121` 改成「上次已覆盖末日的次日」
+      （当前=20261121，因数据已到 11-20）；每周跑完不需要再全量 `--compact`
+      （merge 已就地更新年分区）。`--end 20261231` 是故意越界：get_minute_kline
+      按实际交易日返回，日历末日之后自然为空。后续重建面板（分钟因子要用）：
+      `python -m scripts.factors.build_minute_panel --from-parts --period 5
+      --universe all_a`（~18 min）——暂不进任务，等分钟因子重建有守卫后再挂。
+      依赖：交易日历（daily_all_a）已更新到本周 ⇒ 排在 `alla_daily_rank` 之外
+      的任意清晨均可；与 `rebuild_panels`（06:00）同窗，两者都只读不写对方
+      产物，实测可并行（2026-11-21 全链在 rebuild 未跑时验证过）。
+
   - key: altdata_cls_backfill
     name: 'YuriQuant AltDataClsBackfill'
     system: schtasks

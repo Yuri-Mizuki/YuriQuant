@@ -40,7 +40,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-STAGES = ("build", "evaluate", "board_data", "board")
+STAGES = ("extend", "build", "evaluate", "board_data", "board")
 
 
 def build_commands(*, dataset: str, root: str, names: list[str] | None = None,
@@ -51,6 +51,12 @@ def build_commands(*, dataset: str, root: str, names: list[str] | None = None,
     py = sys.executable
     cmds: list[tuple[str, list[str]]] = []
 
+    if "extend" in steps:
+        # 日频可重算因子面板延长到数据源最新交易日（2026-11-22 接线为管线首段；
+        # alpha101/191/gp 三族，带重叠区校验守卫，历史不可复现的因子自动跳过）
+        cmds.append(("extend", [py, "-m", "scripts.ingest.extend_factor_library",
+                                "--sets", "alpha101,alpha191,gp"]))
+
     if "build" in steps:
         extra = shlex.split(builder_args, posix=False) if builder_args else []
         for mod in builders:
@@ -59,9 +65,19 @@ def build_commands(*, dataset: str, root: str, names: list[str] | None = None,
 
     if "evaluate" in steps:
         # 只补 eval_status=ingested / 缺指标的行；已 evaluated 的自动跳过（幂等）
+        # 2026-11-22 加 --stale-only：面板 mtime 晚于 evaluated_at 的行才重评
+        # （面板延长/重建后不触发重评的洞）。backfill 侧同日新增该开关。
         cmds.append(("evaluate", [py, "-m",
                                   "scripts.factors.backfill_library_metrics",
-                                  "--dataset", dataset]))
+                                  "--dataset", dataset, "--stale-only"]))
+        # ic_h 融合（2026-11-22 接线）：fd/im 等 factors 通道 builder 不经过
+        # builders.common 的 IC 融合步骤，ic_h 面板曾停在 11-07 漏掉整个分钟族
+        # （analyze 时「要 IC 先读这里」会静默漏列）。names 缺省=全库补齐，
+        # 已存在列按 skip_existing 跳过 ⇒ 幂等增量。
+        if names:
+            cmds.append(("ic_fuse", [py, "-m", "scripts.factors.fuse_ic",
+                                     "--dataset", dataset,
+                                     "--names", ",".join(names)]))
 
     if "board_data" in steps:
         argv = [py, "-m", "scripts.factors.factor_board_data",

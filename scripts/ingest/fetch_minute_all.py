@@ -211,6 +211,74 @@ def fetch_year(period: int, pool: str, codes: list[str], year: int,
     return added
 
 
+def fetch_tail(period: int, pool: str, begin: int, end: int,
+               batch: int) -> int:
+    """增量尾巴：只拉 ``begin~end`` 段、落 ``chunk_tail_*``、merge 进当年 part。
+
+    与常规路径的三点不同（2026-11-22 周更链用）：
+    ① **绕开块号陷阱**——常规分片按「块号」判已完成，增量段的代码块号与
+       既有分片重名会被跳过；tail 用独立命名 ``chunk_tail_<begin>``，永不撞名。
+    ② 请求区间只有增量段（几天），不是整年。
+    ③ merge 只重写**有新数据的年份**的 ``part_<year>.parquet``，其余年份不动
+       （全量 compact 的 concat 会把 8 年全部重写一遍，纯浪费）。
+    """
+    from data.datasource import create_datasource
+
+    codes = pool_codes(begin, end, pool)
+    if not codes:
+        log.info("tail：代码清单为空")
+        return 0
+    ds = create_datasource()
+    parts = paths(period, pool)["parts"]
+    parts.mkdir(parents=True, exist_ok=True)
+    touched: set[int] = set()
+    added = 0
+    t0 = time.time()
+    for i in range(0, len(codes), batch):
+        grp = codes[i:i + batch]
+        df = ds.get_minute_kline(grp, begin, end, period=period)
+        if df is None or df.empty:
+            log.warning("  tail 批 %d~%d 返回空，跳过", i, i + len(grp))
+            continue
+        df = df[~df.index.duplicated(keep="last")].sort_index()
+        name = f"chunk_tail_{begin}_{i // batch:04d}"
+        write_parquet_atomic(
+            paths(period, pool)["staging"] / "tail" / f"{name}.parquet", df)
+        added += 1
+        for y in pd.to_datetime(
+                df.index.get_level_values("kline_time")).year.unique():
+            touched.add(int(y))
+        log.info("  tail 块 %d/%d：%d 行 / %.0fs",
+                 i // batch + 1, (len(codes) + batch - 1) // batch, len(df),
+                 time.time() - t0)
+    # merge：touched 年份的 part 重写（part + staging/tail 对应段）
+    tail_dir = paths(period, pool)["staging"] / "tail"
+    for y in sorted(touched):
+        part_f = parts / f"part_{y}.parquet"
+        frames = []
+        if part_f.exists():
+            frames.append(pd.read_parquet(part_f))
+        kept = []
+        for f in sorted(tail_dir.glob(f"chunk_tail_{begin}_*.parquet")):
+            d = pd.read_parquet(f)
+            yr = pd.to_datetime(d.index.get_level_values("kline_time")).year
+            k = d[yr == y]
+            if not k.empty:
+                kept.append(k)
+        frames.extend(kept)
+        merged = pd.concat(frames, ignore_index=False)
+        merged = merged[~merged.index.duplicated(keep="last")].sort_index()
+        write_parquet_atomic(part_f, merged)
+        log.info("  part_%d 已合并增量：%d 行 / %d 只",
+                 y, len(merged),
+                 merged.index.get_level_values("code").nunique())
+    # 清 tail 分片
+    for f in tail_dir.glob("chunk_tail_*.parquet"):
+        f.unlink()
+    log.info("tail 完成：%d 分片，touch 年份 %s", added, sorted(touched))
+    return added
+
+
 def compact(period: int, pool: str, *, single: bool) -> None:
     """分片 → 年分区；``single=True`` 时再合并成单表（面板构建读单表）。"""
     p = paths(period, pool)
@@ -262,12 +330,18 @@ def main() -> None:
     ap.add_argument("--batch", type=int, default=DEFAULT_BATCH)
     ap.add_argument("--plan", action="store_true", help="只出计划：不联网、不建目录")
     ap.add_argument("--compact", action="store_true", help="只做合并，不拉数据")
+    ap.add_argument("--tail", type=int, default=None, metavar="BEGIN",
+                    help="增量尾巴：拉 BEGIN~--end 段并直接 merge 进当年 part"
+                         "（绕开块号命名陷阱；全量 --compact 仍可用但不必再跑）")
     ap.add_argument("--single", action="store_true",
                     help="与 --compact 同用：再合并成单表并更新 _meta.json")
     args = ap.parse_args()
 
     if args.compact:
         compact(args.period, args.pool, single=args.single)
+        return
+    if args.tail is not None:
+        fetch_tail(args.period, args.pool, args.tail, args.end, args.batch)
         return
 
     codes = ([c.strip() for c in args.codes.split(",") if c.strip()]

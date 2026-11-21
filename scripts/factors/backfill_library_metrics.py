@@ -93,10 +93,13 @@ def main() -> None:
     ap.add_argument("--with-evidence", action="store_true",
                     help="同时补 ic_decay5 / autocorr（每因子约 30 s，批量回填默认关）")
     ap.add_argument("--flush-every", type=int, default=50)
+    ap.add_argument("--stale-only", action="store_true",
+                    help="已评估行按水位重评：仅面板 mtime 晚于 evaluated_at 的"
+                         "（面板延长/重建后的重评口径；随 run_factor_pipeline 接线）")
     args = ap.parse_args()
 
     from research.factor_analysis import calc_ir, ic_stats
-    from research.factor_library import FactorLibrary
+    from research.factor_library import FactorLibrary, name_slug
     from stats.significance import mean_inference
 
     lib = FactorLibrary(dataset=args.dataset)
@@ -133,10 +136,34 @@ def main() -> None:
         if c not in reg.columns:
             reg[c] = np.nan
 
+    def _panel_mtime(r) -> float:
+        """面板文件 mtime（panel_path 优先，退化按 name_slug）；缺失返回 0。"""
+        pp = r.get("panel_path")
+        fp = (Path(str(pp)) if pd.notna(pp) and str(pp).strip()
+              else ds_dir / "panels" / f"{name_slug(str(r['name']))}.parquet")
+        try:
+            return fp.stat().st_mtime
+        except OSError:
+            return 0.0
+
+    def _evaluated_at_ts(r) -> float:
+        v = r.get("evaluated_at")
+        if pd.isna(v) or not str(v).strip():
+            return 0.0
+        try:
+            return pd.Timestamp(str(v)).timestamp()
+        except ValueError:
+            return 0.0
+
     todo_idx: list[int] = []
     for i, r in reg.iterrows():
-        if not args.force and pd.notna(r.get("annual_return_ls_M")) and \
-                (ic1 is None or pd.notna(r.get("t_stat_nw"))):
+        already = (not args.force and pd.notna(r.get("annual_return_ls_M"))
+                   and (ic1 is None or pd.notna(r.get("t_stat_nw"))))
+        if already and args.stale_only:
+            # 水位比较：面板在评估之后没变 ⇒ 跳过；变过 ⇒ 重评
+            if _panel_mtime(r) <= _evaluated_at_ts(r):
+                continue
+        elif already:
             continue
         if args.skip_backtest and pd.notna(r.get("t_stat_nw")) and \
                 pd.notna(r.get("panel_path")):
