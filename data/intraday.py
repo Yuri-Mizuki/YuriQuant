@@ -64,7 +64,7 @@ _META = "meta.json"
 _DAYS = "days.json"
 
 
-def _panel_root(cache_root: Path | str | None) -> Path:
+def panel_root(cache_root: Path | str | None) -> Path:
     if cache_root is None:
         cache_root = Config.cache()["root"]
     return Path(str(cache_root).replace("//", "/")) / "intraday"
@@ -180,7 +180,7 @@ class MinutePanelStore:
             _tod=tod,
         )
         years = sorted(df["_day"].dt.year.unique())
-        root = _panel_root(cache_root) / f"min{period}_{pool}"
+        root = panel_root(cache_root) / f"min{period}_{pool}"
         root.mkdir(parents=True, exist_ok=True)
         return cls._densify(
             root, period, pool, float_dtype, codes, bar_keys,
@@ -202,7 +202,7 @@ class MinutePanelStore:
         ``build`` 整表进内存（hs300 级 ~1 GB 无所谓），本方法单年 ~7 GB，
         全 A 八年长表才能在常规内存里物化。每个 part 必须恰好单年。
         """
-        root = _panel_root(cache_root) / f"min{period}_{pool}"
+        root = panel_root(cache_root) / f"min{period}_{pool}"
         root.mkdir(parents=True, exist_ok=True)
         parts = [Path(p) for p in part_paths]
         if not parts:
@@ -240,7 +240,7 @@ class MinutePanelStore:
     def open(cls, period: int, pool: str,
              cache_root: Path | str | None = None) -> "MinutePanelStore":
         """打开已构建的面板（等价于直接构造，语义更明确的读取入口）。"""
-        return cls(_panel_root(cache_root) / f"min{period}_{pool}", period, pool)
+        return cls(panel_root(cache_root) / f"min{period}_{pool}", period, pool)
 
     # ------------------------------------------------------------------ 元信息
     @property

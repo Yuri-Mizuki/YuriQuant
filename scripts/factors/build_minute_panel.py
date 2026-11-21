@@ -28,7 +28,7 @@ if str(ROOT) not in sys.path:
 
 from config import Config  # noqa: E402
 from data.cache import DataCache  # noqa: E402
-from data.intraday import MinutePanelStore, _panel_root  # noqa: E402
+from data.intraday import MinutePanelStore, panel_root  # noqa: E402
 from factor.intraday_features import FEATURE_DOCS, extract_all  # noqa: E402
 from scripts.common.cli_common import setup_logging  # noqa: E402
 from stats.significance import mean_inference  # noqa: E402
@@ -116,7 +116,7 @@ def main():
         minute = gen_mock_minute(period=args.period)
         log.info("mock 分钟长表 %d 行（临时根 %s）", len(minute), cache_root)
     elif args.from_parts:
-        parts_dir = _panel_root(cache_root) / f"min{args.period}_{pool}_parts"
+        parts_dir = panel_root(cache_root) / f"min{args.period}_{pool}_parts"
         parts = sorted(parts_dir.glob("part_*.parquet"))
         if not parts:
             raise SystemExit(
