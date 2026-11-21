@@ -477,11 +477,34 @@ def cs_spread_panel(fields: dict[str, np.ndarray], days: Sequence[int],
     日内取 ``S`` 均值得到日值，再取 ``window`` 日标准差（原文：分钟数据用
     标准差合成优于均值，且标准差合成的 IC 为负）。
     """
-    high = np.asarray(fields["high"], dtype=np.float64)
-    low = np.asarray(fields["low"], dtype=np.float64)
-    ok = np.isfinite(high) & np.isfinite(low) & (high > 0) & (low > 0)
-    h = np.where(ok, high, np.nan)
-    lo = np.where(ok, low, np.nan)
+    high = np.asarray(fields["high"])
+    low = np.asarray(fields["low"])
+    parts = []
+    for i in range(0, high.shape[0], _BAR_BLOCK_DAYS):
+        parts.append(_cs_spread_daily(high[i:i + _BAR_BLOCK_DAYS],
+                                      low[i:i + _BAR_BLOCK_DAYS], min_bars))
+    daily = np.vstack(parts)
+    return _minute_frame(daily, days, codes).rolling(
+        window, min_periods=window).std()
+
+
+#: bar 级中间量按天分块的大小：64 天 × 48 bar × 5,692 码 float64 ≈ 140 MB，
+#: 全 A 5.3 亿格整表展开 ~4.25 GB/步必 OOM（2026-11-20 实测）。
+_BAR_BLOCK_DAYS = 64
+
+
+def _cs_spread_daily(high: np.ndarray, low: np.ndarray,
+                     min_bars: int = 24) -> np.ndarray:
+    """CS 价差日值内核：[B, n_bars, C] → [B, C]。
+
+    bar 级中间量**日内封闭**（beta/gamma 只耦合同日相邻 bar），按天分块计算
+    与整表计算逐位等价；float64 上转换放到块内，全 A 规模下不爆内存。
+    """
+    h = np.asarray(high, dtype=np.float64)
+    lo = np.asarray(low, dtype=np.float64)
+    ok = np.isfinite(h) & np.isfinite(lo) & (h > 0) & (lo > 0)
+    h = np.where(ok, h, np.nan)
+    lo = np.where(ok, lo, np.nan)
     lh2 = np.log(h / lo) ** 2
     beta = np.full_like(h, np.nan)
     beta[:, 1:, :] = 0.5 * (lh2[:, 1:, :] + lh2[:, :-1, :])
@@ -495,9 +518,7 @@ def cs_spread_panel(fields: dict[str, np.ndarray], days: Sequence[int],
         s = 2.0 * np.exp(alpha - 1.0) / (1.0 + np.exp(alpha))
     cnt = np.isfinite(s).sum(axis=1)
     daily = np.nansum(s, axis=1) / np.maximum(cnt, 1)
-    daily = np.where(cnt >= min_bars, daily, np.nan)
-    return _minute_frame(daily, days, codes).rolling(
-        window, min_periods=window).std()
+    return np.where(cnt >= min_bars, daily, np.nan)
 
 
 def smart_vwap_panel(fields: dict[str, np.ndarray], days: Sequence[int],
@@ -512,12 +533,14 @@ def smart_vwap_panel(fields: dict[str, np.ndarray], days: Sequence[int],
     本仓库只有 5 分钟 bar，故 ``skip=3``（去掉前 15 分钟）、``follow=1``
     （紧随 1 根，即 5 分钟）、``dedupe=2``（10 分钟内算同一簇）。
     """
-    vol = np.asarray(fields["volume"], dtype=np.float64)
-    amt = np.asarray(fields["amount"], dtype=np.float64)
+    vol = np.asarray(fields["volume"])
+    amt = np.asarray(fields["amount"])
     D, B, C = vol.shape
     out = np.full((D, C), np.nan)
     for d in range(D):
-        v_all, a_all = vol[d], amt[d]
+        # float64 上转换放逐日内（整表展开 ~8.5 GB 会 OOM；float32→float64
+        # 精确无损失，逐日结果与整表上转换逐位一致）
+        v_all, a_all = vol[d].astype(np.float64), amt[d].astype(np.float64)
         v, a = v_all[skip:], a_all[skip:]
         nb = v.shape[0]
         if nb <= 0:
@@ -555,10 +578,22 @@ def net_support_panel(fields: dict[str, np.ndarray], days: Sequence[int],
     （《"量价淘金"系列》净支撑量因子）。原文用流通股本，本仓库缓存无流通股，
     改用 PIT 总股本（与内部换手率同口径）。
     """
-    close = np.asarray(fields["close"], dtype=np.float64)
-    vol = np.asarray(fields["volume"], dtype=np.float64)
-    c = np.where(np.isfinite(close), close, np.nan)
-    v = np.where(np.isfinite(vol), vol, np.nan)
+    close = np.asarray(fields["close"])
+    vol = np.asarray(fields["volume"])
+    shares = np.asarray(shares, dtype=np.float64)
+    parts = []
+    for i in range(0, close.shape[0], _BAR_BLOCK_DAYS):
+        j = i + _BAR_BLOCK_DAYS
+        parts.append(_net_support_daily(close[i:j], vol[i:j], shares[i:j],
+                                        min_bars))
+    return _minute_frame(np.vstack(parts), days, codes)
+
+
+def _net_support_daily(close: np.ndarray, vol: np.ndarray,
+                       shares: np.ndarray, min_bars: int = 24) -> np.ndarray:
+    """净支撑量日值内核：[B, n_bars, C] → [B, C]（日内封闭，同 cs 内核）。"""
+    c = np.where(np.isfinite(close), close.astype(np.float64), np.nan)
+    v = np.where(np.isfinite(vol), vol.astype(np.float64), np.nan)
     cnt = np.isfinite(c).sum(axis=1)
     mean_c = (np.nansum(c, axis=1, keepdims=True)
               / np.maximum(cnt, 1)[:, None, :])
@@ -566,8 +601,7 @@ def net_support_panel(fields: dict[str, np.ndarray], days: Sequence[int],
     res = np.nansum(np.where(c > mean_c, v, 0.0), axis=1)
     with np.errstate(divide="ignore", invalid="ignore"):
         val = (sup - res) / shares
-    val = np.where(cnt >= min_bars, val, np.nan)
-    return _minute_frame(val, days, codes)
+    return np.where(cnt >= min_bars, val, np.nan)
 
 
 def _xs_neutralize(x: pd.Series, cap: pd.Series,
