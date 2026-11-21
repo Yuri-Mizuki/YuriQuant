@@ -2085,6 +2085,35 @@ Q1−Q5 年化 +12.9%（t 2.24），但多头端 15% 超额仅 **+0.196%/月（t
   （`all_a_pit_union_2019.json` / `mine_im_combos.csv` 移出——读取方已删、文件不在本机，
   `docs_lint` `ROOT_ALLOWED` 白名单同步）；`.workbuddy/memory` 顶层 12 份历史日报
   归档进 `archive/`（对齐「日报不驻顶层」约定，lint 28 项提示清零）；入口索引 127。
+  ⑥ **结构三轮（2026-11-21，盘点「定版外存量」）**：
+  - **数据**：删 `report_replica/dl/arrays_2015.npz` **903MB**（中间数组缓存，可由
+    D:/data 重算；该线判负、唯一活口 250 日动量腿待样本外只需 pred parquet）；删 3 个
+    判负目录产物留结论文档 —— `frontier_audit_920_reval`（177MB，含
+    `defv_sig__h1.parquet.bak_20261021_prerebuild` 备份残件）/ `views_arm_920`（152MB）/
+    `yelaoshi_first_board_2026-10-25`（61MB）⇒ 各剩 README / summary.md（44KB）；
+    `views_arm_920_smoke` 未动。
+  - **代码**：删 8 个孤儿脚本（判据同 11-20 批：调度 / 测试 / 活跃 TODO / lib 引用全零）——
+    HS300 时代 builder 6（`build_{alpha,paper,fundamental,technical}_factors` +
+    `synthesize_{factors,library}`）+ `check_data_quality` + `dump_pdf_text`；入口索引
+    127→**119**，根 README 入口数同步 129→119。⚠️ 4 个候选经引用扫描**豁免**：
+    `fetch_status_batched`（update_data subprocess + 断更守卫 + 出榜提示）、
+    `update_sw_industry`（industry_rotation 引用、行业指数唯一更新工具）、
+    `build_monitor_seed`（production_ic 换机重建依赖）、`fetch_alla_history`
+    （全A 全量回填灾备入口）。
+  - **文档**：盘点报 `reports/docs/TEMPLATE_实验README.md` 与 `reports/docs/README.md`
+    悬空（AGENTS.md §1 / 根 README 能力表引用）。查证后**模板真源一直在 git**
+    （`scripts/data_tools/templates/实验README.md`，2026-11-06 迁入并有
+    `test_new_experiment` 三重守卫 + 占位符渲染协议；本地 `TEMPLATE_实验README.md`
+    只是可选覆盖）——悬空的是过时措辞。处置：**不重建本地副本**（渲染器会优先选它、
+    徒增双真源漂移），改 AGENTS.md §1 与新建的 `reports/docs/README.md`
+    （§一目录职责 / §二写作通则 / §三导航 / §五命名与四要素约定）指向真源 +
+    `new_experiment` 一条命令；重建的 `reports/docs/README.md` 现存文档表与
+    research_notes 实际账实对齐；顺带修本条目 `reports/docs/consistency_checks/`
+    坏指针（见下）。
+  校验：`gen_scripts_index --check` / `docs_lint --check` 全绿。顺带修一颗**存量红**
+  （与本次删除无关，`042bc96` 引入即红）：`test_no_private_names_cross_module` 抓到
+  `build_minute_panel.py` 跨模块 import `data.intraday._panel_root` ⇒ 公开化为
+  `panel_root`（全库 4 处引用随改，无测试引用该私有名）。
 - [x] **✅ 指标口径全仓收口四步（2026-11-19）** —— 审计「同一指标多份实现 / 多套口径」后一次清完：
   ① `pit_intraday_probe` 的朴素 `t = IC/std·√n` 改 `stats.robust_stats.nw_tstat`（NW HAC，
      滞后用 Andrews 自动）——该探针历史 `t` 全部虚高，**旧 t 值不再引用**；
@@ -2103,7 +2132,8 @@ Q1−Q5 年化 +12.9%（t 2.24），但多头端 15% 超额仅 **+0.196%/月（t
   **背景**：`all_a_2018_2026` 库 950 因子经批量通道（`upsert_rows`）入库，`register()`
   正常会算的东西全部缺位——分层回测指标 / significant / formula / panel_path / eval_path
   均 0% 填充（hs300 旧库三项都是 100%）；`family` 有 17 个旧英文码出受控词表。
-  体检明细 → `reports/docs/consistency_checks/`（2026-11-05 因子库管理体检）。
+  体检明细 → `reports/docs/consistency_checks/`（2026-11-05 因子库管理体检；
+  ⚠️ 该目录文件已不在本机，结论收口在本条目与 `library_governance` README）。
 
   **📌 2026-11-07 更新：`formula` / `family` 两列已单独回填完，不用等这个任务**——
   `family` 965/965、`formula` 871/965（`scripts/factors/backfill_metadata.py`，

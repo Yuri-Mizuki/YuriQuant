@@ -37,7 +37,10 @@
 
 ## 1. 报告 / 文档产出纪律（2026-09-24 起；2026-10-28 加校验）
 
-- **先看模板**：新建实验 README 一律复制 `reports/docs/TEMPLATE_实验README.md`，
+- **先看模板**：新建实验 README 的真源模板是
+  `scripts/data_tools/templates/实验README.md`（随 git 跟踪；`reports/docs/TEMPLATE_实验README.md`
+  只是可选本地覆盖，缺省时 `new_experiment` 工具自动回退内置版），一条命令建目录+复制模板+登记判定：
+  `python -m scripts.data_tools.new_experiment <名> --script <路径>`；
   四段固定为 `〇 结论先行 / 一 口径与判据 / 二 证据 / 三 复现与边界`；
   `docs/` 下的新文档先读 `reports/docs/README.md` §五 命名与四要素约定。
 - **合并优先，不先建新文件**：写分析报告、调研笔记、核对结论之前，先查
