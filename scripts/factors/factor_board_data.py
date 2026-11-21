@@ -30,6 +30,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
@@ -451,7 +452,10 @@ def main() -> None:
         df.to_csv(path, index=False, encoding="utf-8-sig")
         print(f"汇总 {len(df)} 行 → {path}")
     if failed:
+        # 2026-11-21：失败必须反映在 rc 上——此前全失败仍 rc=0，下游
+        # factor_board 拿空 summary 才以 KeyError 暴雷（当天实战踩了两次）。
         print(f"失败 {len(failed)} 个：{failed[:5]}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

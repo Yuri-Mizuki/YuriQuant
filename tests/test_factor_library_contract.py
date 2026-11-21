@@ -341,3 +341,55 @@ def test_resolve_panel_file_finds_both_layouts(tmp_path):
     assert resolve_panel_file(ds, "by_name").name == "by_name.parquet"
     assert resolve_panel_file(ds, "by_slug").name == f"{name_slug('by_slug')}.parquet"
     assert resolve_panel_file(ds, "missing") is None
+
+
+# ---------------------------------------------------------------------------
+# 5. canonical 回测执行时点（2026-11-21 口径修复的回归锁）
+# ---------------------------------------------------------------------------
+def test_as_unshifted_detects_and_converts():
+    """前视指纹 → shift(1) 转换；未 shift 面板原样返回。"""
+    lib = _real_lib()
+    if lib is None or not lib._registry_path.exists():
+        pytest.skip("本机无该数据集")
+    rng = np.random.default_rng(7)
+    base = pd.DataFrame(rng.normal(0, 0.02, (60, 8)),
+                        index=pd.bdate_range("2025-01-01", periods=60),
+                        columns=[f"c{i}" for i in range(8)])
+    fwd = base.shift(-1)           # 前视指纹：尾行 NaN、首行有值
+    unshifted = base.copy()        # pct_change 指纹：首行 NaN
+    unshifted.iloc[0] = np.nan
+
+    out1 = lib._as_unshifted(fwd)
+    assert out1.iloc[0].isna().all()
+    pd.testing.assert_frame_equal(out1.iloc[1:], base.iloc[1:])  # shift(1) 还原
+    out2 = lib._as_unshifted(unshifted)
+    pd.testing.assert_frame_equal(out2, unshifted)  # 已是引擎口径 → 不动
+
+
+def test_canonical_eval_convention_invariant():
+    """同一前视面板与其未 shift 版必须产生**完全相同**的 canonical 回测。
+
+    修复前：前视面板被直接喂引擎（等效 T+1 收盘执行），两种入参结果不同；
+    修复后：``_as_unshifted`` 把前视转成引擎口径，两路逐位一致 —— 这是
+    「IC 与 Sharpe 共享 t 收盘执行假设」的机器可验不变量。
+    """
+    lib = _real_lib()
+    if lib is None or not lib._registry_path.exists():
+        pytest.skip("本机无该数据集")
+    rng = np.random.default_rng(11)
+    dates = pd.bdate_range("2024-01-01", periods=80)
+    cols = [f"c{i}" for i in range(12)]
+    factor = pd.DataFrame(rng.normal(0, 1, (80, 12)), index=dates, columns=cols)
+    fwd = pd.DataFrame(rng.normal(0, 0.02, (80, 12)), index=dates, columns=cols)
+    fwd.iloc[-1] = np.nan                      # 前视指纹
+    unshifted = fwd.shift(1)                   # 对应的引擎口径面板
+
+    e1, m1, s1, c1 = lib._canonical_eval(factor.copy(), fwd.copy())
+    e2, m2, s2, c2 = lib._canonical_eval(factor.copy(), unshifted.copy())
+    assert s1 == s2 and c1 == c2
+    assert m1 == m2
+    # 日收益序列逐位一致（无成本设定下引擎输出即毛收益路径）
+    for k in e1:
+        if k.startswith("dret_"):
+            np.testing.assert_allclose(
+                e1[k].to_numpy(), e2[k].to_numpy(), rtol=0, atol=1e-15)

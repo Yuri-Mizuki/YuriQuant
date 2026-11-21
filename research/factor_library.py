@@ -1230,6 +1230,26 @@ class FactorLibrary:
         reg = new_df if reg.empty else pd.concat([reg, new_df], ignore_index=True)
         self._save_registry(reg)
 
+    def _as_unshifted(self, returns_panel: pd.DataFrame) -> pd.DataFrame:
+        """前视面板（第 i 行 = i→i+1）→ 引擎口径（第 i 行 = i-1→i）。
+
+        2026-11-21 口径修复的核。IC 用前视面板（t 信号 vs t→t+1 收益），但引擎
+        「先结算后换仓」在 shift(-1) 面板下等效 **T+1 收盘执行**——调仓日 t 的
+        新权重从 t+1 才开始赚 t+1→t+2，与 IC 的时点错一天：月频慢信号影响小，
+        分钟频快信号被系统性低估（当日实测 ``fd_net_support`` 的 ls_M：
+        immediate +0.70 / 延迟 −0.27 / 含成本融券 −0.89），且 ``ic_mean`` 与
+        ``sharpe_ls_M`` 同屏时回答的是两个执行假设下的问题。
+
+        转换 = ``shift(1)``（逐位精确：前视第 i-1 行即未 shift 第 i 行；掩码已
+        烘在值里随行整体平移）。入参若已是未 shift（首行 NaN、尾行有值——
+        ``pct_change`` 指纹）则原样返回，两种口径都接。
+        """
+        last = returns_panel.iloc[-1].notna().mean()
+        first = returns_panel.iloc[0].notna().mean()
+        if last < 0.05 and first > 0.95:  # shift(-1) 前视指纹
+            return returns_panel.shift(1)
+        return returns_panel
+
     def _canonical_eval(self, panel, returns_panel, *, short_costs=None,
                         deleverage=False):
         """跑三套 canonical 配置，返回 (eval 列, 指标列, 最优 sharpe, 最优配置)。"""
@@ -1237,16 +1257,18 @@ class FactorLibrary:
         metric_rows: dict = {}
         best_sharpe = -np.inf
         best_config = CANONICAL_CONFIGS[0].key
-        # 超额基准 = 全A等权日收益（截面均值，NaN=停牌自动剔除）。
-        # 只对纯多（lo_*）算超额；LS 对基准求超额无经济含义。
-        bench = returns_panel.mean(axis=1, skipna=True)
+        # 2026-11-21 修复：回测喂**未 shift** 面板（IC 仍用前视面板，各守各的
+        # 语义）。引擎在未 shift 口径下「结算后换仓」= 调仓日 t 收盘按信号 t
+        # 换仓、新权重立即赚 t→t+1 —— 与 IC 时点一致。未 shift 面板天然通过
+        # 引擎的 shift 指纹守卫，不再需要 check_convention=False。
+        rp_bt = self._as_unshifted(returns_panel)
+        # 超额基准 = 全A等权日收益（截面均值，NaN=停牌自动剔除），与
+        # daily_returns 同为未 shift 标签。只对纯多（lo_*）算超额。
+        bench = rp_bt.mean(axis=1, skipna=True)
         for cfg in CANONICAL_CONFIGS:
             bt = VectorBacktest(cfg.strategy(k=cfg.k), rebalance_freq=cfg.freq,
                                 short_costs=short_costs, deleverage=deleverage)
-            # 库内收益口径为 shift(-1)（第 i 行 = i→i+1 收益，调仓日 t 权重赚
-            # rp[t]=t→t+1，无前视）；canonical 回测只算绝对指标、不对齐指数
-            # 算 beta/IR，故显式声明关闭引擎的 shift 指纹守卫。
-            res = bt.run(panel, returns_panel, check_convention=False)
+            res = bt.run(panel, rp_bt)
             dret = res.daily_returns
             eval_cols[f"dret_{cfg.key}"] = dret
             eval_cols[f"equity_{cfg.key}"] = res.equity_curve
