@@ -125,7 +125,7 @@ def build_frontier_features(daily_k: pd.DataFrame, minute_agg: pd.DataFrame) -> 
     return f
 
 
-def ic_of(x: pd.Series, y: pd.Series) -> float:
+def ts_corr_of(x: pd.Series, y: pd.Series) -> float:
     s = pd.concat([x, y], axis=1).dropna()
     if len(s) < 200:
         return float("nan")
@@ -176,8 +176,8 @@ def main() -> int:
 
     rows = []
     for c in FEATURES:
-        ic_d = ic_of(feat[c], tgt_d)
-        ic_w = ic_of(feat[c], tgt_w)
+        ic_d = ts_corr_of(feat[c], tgt_d)
+        ic_w = ts_corr_of(feat[c], tgt_w)
         rows.append({"feature": c, "source": "非价格" if c in NONPRICE else "高频对照",
                      "ic_daily": ic_d, "ic_weekly": ic_w,
                      "abs_ic_daily": abs(ic_d),

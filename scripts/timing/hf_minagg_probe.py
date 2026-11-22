@@ -156,7 +156,7 @@ def build_features(daily_k: pd.DataFrame, minute_agg: pd.DataFrame) -> pd.DataFr
 
 
 # ---------------------------------------------------------------- 判据
-def daily_ic(feat: pd.Series, target: pd.Series, mask: pd.Series | None = None) -> float:
+def ts_ic(feat: pd.Series, target: pd.Series, mask: pd.Series | None = None) -> float:
     """日度 Pearson IC（特征 t vs 目标 t→t+1 open-to-open）。"""
     s = pd.concat([feat, target], axis=1).dropna()
     if mask is not None:
@@ -251,12 +251,12 @@ def main() -> int:
     train_mask = pd.Series(feat.index < feat.index[half], index=feat.index)
     ic_rows = []
     for name in IC_FEATURES:
-        ours = daily_ic(feat[name], seg_ret)
+        ours = ts_ic(feat[name], seg_ret)
         claim = REPORT_CLAIMS.get(name, float("nan"))
         ic_rows.append({
             "feature": name, "ic_ours": ours, "abs_ic_ours": abs(ours),
             "abs_ic_claim": claim, "ratio": abs(ours) / claim if claim == claim and claim > 0 else float("nan"),
-            "train_ic": daily_ic(feat[name], seg_ret, train_mask),
+            "train_ic": ts_ic(feat[name], seg_ret, train_mask),
         })
     ic_df = pd.DataFrame(ic_rows)
     print("\n[L1] 日度 IC vs 报告声称（判据：核心四特征中 ≥2 个 |IC| ≥ 声称/2）")
@@ -274,7 +274,7 @@ def main() -> int:
         survivors = core[core["abs_ic_ours"] >= core["abs_ic_claim"] / 2]["feature"].tolist()
         for name in survivors:
             polarity = int(np.sign(
-                daily_ic(feat[name].loc[: feat.index[half]], seg_ret.loc[: feat.index[half]])
+                ts_ic(feat[name].loc[: feat.index[half]], seg_ret.loc[: feat.index[half]])
             ))
             for q in QUANTILES:
                 for cbps in COST_GRID_BPS:

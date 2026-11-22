@@ -148,7 +148,7 @@ def build_source_features(daily_k: pd.DataFrame, minute_agg: pd.DataFrame,
 
 
 # ---------------------------------------------------------------- 判据与回测
-def ic_of(x: pd.Series, y: pd.Series) -> float:
+def ts_corr_of(x: pd.Series, y: pd.Series) -> float:
     s = pd.concat([x, y], axis=1).dropna()
     if len(s) < 200:
         return float("nan")
@@ -243,11 +243,11 @@ def main() -> int:
     half = len(feat) // 2
     rows = []
     for c in feat.columns:
-        ic_d = ic_of(feat[c], tgt_d)
-        ic_w = ic_of(feat[c], tgt_w)
+        ic_d = ts_corr_of(feat[c], tgt_d)
+        ic_w = ts_corr_of(feat[c], tgt_w)
         passed = abs(ic_d) >= L1_IC_DAILY or abs(ic_w) >= L1_IC_WEEKLY
         rows.append({"feature": c, "ic_daily": ic_d, "ic_weekly": ic_w,
-                     "train_ic_daily": ic_of(feat[c].iloc[:half], tgt_d.iloc[:half]),
+                     "train_ic_daily": ts_corr_of(feat[c].iloc[:half], tgt_d.iloc[:half]),
                      "abs_ic_daily": abs(ic_d), "pass": passed})
     ic_df = pd.DataFrame(rows)
     print("\n[L1] 逐源 IC 门（日 ≥2% / 周 ≥3%）")
@@ -266,7 +266,7 @@ def main() -> int:
         zs = []
         for n in names:
             z = causal_z(feat[n])
-            sgn = np.sign(ic_of(feat[n].loc[:half_loc], tgt_d.loc[:half_loc]))
+            sgn = np.sign(ts_corr_of(feat[n].loc[:half_loc], tgt_d.loc[:half_loc]))
             if sgn == 0:
                 sgn = 1.0
             zs.append(z * sgn)

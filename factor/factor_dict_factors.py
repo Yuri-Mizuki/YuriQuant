@@ -57,6 +57,7 @@
 """
 from __future__ import annotations
 
+import warnings
 from typing import Sequence
 
 import numpy as np
@@ -761,10 +762,716 @@ def price_delay_panel(ret: pd.DataFrame, market_ret: pd.Series | None = None,
     return pd.DataFrame(out, index=ret.index, columns=ret.columns)
 
 
+# ======================================================================
+# 第五轮（2026-11-22）：字典分钟频候选的**日值内核**
+#
+# 统一口径：入参为 **[D, B, C]** 的 5 分钟 bar 数组；返回 [D, C] 日值。
+# 原文多为 1 分钟数据，本仓库只有 5 分钟面板，逐函数在 docstring 标注近似。
+# ======================================================================
+def _nan_moments(x: np.ndarray, axis: int):
+    """带样本量的均值/标准差（ddof=1），全 NaN 切片返回 NaN，不告警。"""
+    x = np.asarray(x, dtype=np.float64)
+    ok = np.isfinite(x)
+    n = ok.sum(axis=axis)
+    total = np.where(ok, x, 0.0).sum(axis=axis)
+    mu = np.where(n > 0, total / np.maximum(n, 1), np.nan)
+    dev = np.where(ok, x - np.expand_dims(mu, axis), 0.0)
+    var = (dev * dev).sum(axis=axis) / np.maximum(n - 1, 1)
+    sd = np.where(n >= 2, np.sqrt(var), np.nan)
+    return mu, sd, n
+
+
+def peak_count_daily(amount: np.ndarray, min_bars: int = 24) -> np.ndarray:
+    """成交额波峰计数（长江 2024《高频因子（九）》）。
+
+    日内容量 ``amount >= mean+std`` 为喷发；连续喷发只计一次（``shift(1)``
+    为 False 的起点计数）。原文 1 分钟，本仓库 48 根 5 分钟 bar。
+    """
+    a = np.asarray(amount, dtype=np.float64)
+    mu, sd, n = _nan_moments(a, axis=1)
+    thr = (mu + sd)[:, None, :]
+    flag = np.isfinite(a) & np.isfinite(thr) & (a >= thr)
+    prev = np.zeros_like(flag)
+    prev[:, 1:, :] = flag[:, :-1, :]
+    cnt = (flag & ~prev).sum(axis=1).astype(np.float64)
+    return np.where(n >= min_bars, cnt, np.nan)
+
+
+def peak_ridge_daily(vol: np.ndarray, amount: np.ndarray,
+                     hist_vol: Sequence[np.ndarray] | None,
+                     min_hist: int = 20, min_bars: int = 24):
+    """峰岭成交比的两条日值腿：量峰成交额 / 量岭成交额。
+
+    划分（开源证券 2025《高频成交量的峰、岭、谷信息》）：过去 20 日**同一
+    时刻**成交量均值 + 1 倍标准差为阈值，高于阈值 = 喷发；**孤立喷发 = 量峰**，
+    与相邻 bar 连成片 = 量岭。原文 1 分钟，本仓库 48 根 5 分钟 bar。
+
+    Returns:
+        ``(peak_amt, ridge_amt)``，均为 [D, C]；历史不足 20 日的日子为 NaN。
+    """
+    v = np.asarray(vol, dtype=np.float64)
+    a = np.asarray(amount, dtype=np.float64)
+    d, b, c = v.shape
+    nan = np.full((d, c), np.nan)
+    if hist_vol is None or len(hist_vol) < min_hist:
+        return nan, nan
+    h = np.stack([np.asarray(x, dtype=np.float64)
+                  for x in list(hist_vol)[-min_hist:]], axis=0)
+    mu, sd, _ = _nan_moments(h, axis=0)
+    thr = mu + sd
+    spike = np.isfinite(v) & np.isfinite(thr)[None, :, :] & (v > thr[None, :, :])
+    # 邻居必须是「别的 bar」：不能把自身算进连续段，否则 ridge 恒等于 spike
+    nb = np.zeros_like(spike)
+    nb[:, 1:, :] |= spike[:, :-1, :]
+    nb[:, :-1, :] |= spike[:, 1:, :]
+    aa = np.where(np.isfinite(a), a, 0.0)
+    peak = np.where(spike & ~nb, aa, 0.0).sum(axis=1)
+    ridge = np.where(spike & nb, aa, 0.0).sum(axis=1)
+    ok = ((np.isfinite(v).sum(axis=1) >= min_bars)
+          & np.isfinite(thr).all(axis=0)[None, :])
+    return np.where(ok, peak, np.nan), np.where(ok, ridge, np.nan)
+
+
+def mainforce_vol_daily(close: np.ndarray, vol: np.ndarray,
+                        min_bars: int = 24) -> np.ndarray:
+    """主力波动率（放量上涨）的日值：该形态下分钟收益率的均值。
+
+    民生证券 2024：``vol_t > vol_{t−1}`` 且 ``r_t > 0`` 的分钟收益均值。
+    原文 1 分钟，本仓库 5 分钟 bar（``r_t`` 为 bar 收益）。
+    """
+    c = np.asarray(close, dtype=np.float64)
+    v = np.asarray(vol, dtype=np.float64)
+    r = np.full_like(c, np.nan)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        r[:, 1:, :] = c[:, 1:, :] / c[:, :-1, :] - 1.0
+    flag = np.zeros(c.shape, dtype=bool)
+    flag[:, 1:, :] = v[:, 1:, :] > v[:, :-1, :]
+    up = flag & np.isfinite(r) & (r > 0) & np.isfinite(v)
+    num = np.where(up, r, 0.0).sum(axis=1)
+    den = up.sum(axis=1)
+    out = np.where(den > 0, num / np.maximum(den, 1), np.nan)
+    return np.where(np.isfinite(c).sum(axis=1) >= min_bars, out, np.nan)
+
+
+def _seg_significance(x: np.ndarray, min_seg: int = 6) -> np.ndarray:
+    """分域自身显著性：``max_s |x_s − mean(x)| / (|x_s| + mean|x|)``。"""
+    mu, _, _ = _nan_moments(x, axis=1)
+    absm, _, _ = _nan_moments(np.abs(x), axis=1)
+    num = np.abs(x - mu[:, None, :])
+    den = np.abs(x) + absm[:, None, :]
+    with np.errstate(divide="ignore", invalid="ignore"):
+        s = np.where(den > 0, num / den, np.nan)
+    _, _, n = _nan_moments(s, axis=1)
+    with np.errstate(all="ignore"):
+        val = np.nanmax(np.where(np.isfinite(s), s, -np.inf), axis=1)
+    return np.where((n >= min_seg) & np.isfinite(val), val, np.nan)
+
+
+def ds_significance_daily(close: np.ndarray, open_: np.ndarray,
+                          vol: np.ndarray, n_seg: int = 8,
+                          seg_bars: int = 6, min_bars: int = 24):
+    """intraDSStd_byT / intraDSVol_byT（郑兆磊《日内分域显著性》）。
+
+    5 分钟 bar 重采样成 8 个 30 分钟段：段内波动 = bar 收益标准差，
+    段内成交量占比 = 段量 / 全日量；再按 ``(abs(x−mean))/(|x|+mean|x|)``
+    取 8 段最大值。原文 1 分钟滚动 30 分钟，本仓库为 30 分钟段内等价口径。
+
+    Returns:
+        ``(ds_std, ds_vol)``，均为 [D, C]。
+    """
+    c = np.asarray(close, dtype=np.float64)
+    o = np.asarray(open_, dtype=np.float64)
+    v = np.asarray(vol, dtype=np.float64)
+    d, b, c_n = c.shape
+    ok = np.isfinite(c) & np.isfinite(o) & np.isfinite(v) & (o > 0) & (v >= 0)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        r = np.where(ok, c / o - 1.0, np.nan)
+    vv = np.where(ok, v, np.nan)
+    n_seg = min(int(n_seg), b // int(seg_bars))
+    use = n_seg * int(seg_bars)
+    r3 = r[:, b - use:, :].reshape(d, n_seg, int(seg_bars), c_n)
+    v3 = vv[:, b - use:, :].reshape(d, n_seg, int(seg_bars), c_n)
+    seg_ok = np.isfinite(r3).all(axis=2) & np.isfinite(v3).all(axis=2)
+    _, sd, _ = _nan_moments(r3, axis=2)
+    sd = np.where(seg_ok, sd, np.nan).astype(np.float64)
+    vsum = np.where(seg_ok, np.nansum(v3, axis=2), np.nan)
+    day_v = np.nansum(vv, axis=1)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        share = np.where(day_v[:, None, :] > 0, vsum / day_v[:, None, :], np.nan)
+    good_day = np.isfinite(c).sum(axis=1) >= min_bars
+    return (np.where(good_day, _seg_significance(sd), np.nan),
+            np.where(good_day, _seg_significance(share), np.nan))
+
+
+def sigup_pv_daily(close: np.ndarray, open_: np.ndarray,
+                   vol: np.ndarray, min_bars: int = 24):
+    """价格显著上行「价稳量比」的两条日值腿（东北证券 2023）。
+
+    ``flag = r>0 且 r > mean(r)+std(r)``（日内分钟收益）；``sigma = std(r|flag)``；
+    ``ratio = sigma·mean(vol|flag)/mean(vol)``；
+    ``ratio_std = sigma·std(vol|flag)/mean(vol)``。
+
+    Returns:
+        ``(ratio, ratio_std)``，均为 [D, C]。
+    """
+    c = np.asarray(close, dtype=np.float64)
+    o = np.asarray(open_, dtype=np.float64)
+    v = np.asarray(vol, dtype=np.float64)
+    ok = np.isfinite(c) & np.isfinite(o) & np.isfinite(v) & (o > 0)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        r = np.where(ok, c / o - 1.0, np.nan)
+    mu, sd, _ = _nan_moments(r, axis=1)
+    thr = mu + sd
+    flag = np.isfinite(r) & (r > 0) & np.isfinite(thr)[:, None, :] & (r > thr[:, None, :])
+    nf = flag.sum(axis=1)
+    _, sigma, _ = _nan_moments(np.where(flag, r, np.nan), axis=1)
+    vmu, _, _ = _nan_moments(v, axis=1)
+    vmean, _, _ = _nan_moments(np.where(flag, v, np.nan), axis=1)
+    _, vstd, _ = _nan_moments(np.where(flag, v, np.nan), axis=1)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        ratio = sigma * vmean / vmu
+        ratio_std = sigma * vstd / vmu
+    good = (nf >= 2) & (vmu > 0) & (np.isfinite(c).sum(axis=1) >= min_bars)
+    return np.where(good, ratio, np.nan), np.where(good, ratio_std, np.nan)
+
+
+def dazzle_daily(close: np.ndarray, vol: np.ndarray, min_bars: int = 24):
+    """耀眼波动率 / 耀眼收益率（方正证券 2022 曹春晓）。
+
+    成交量一阶差分 > ``mean+std`` 为激增时刻。收益率 = 激增时刻的分钟收益
+    均值；波动率 = 激增时刻 n 之后 4 分钟的局部波动。去掉首末 bar。
+
+    5 分钟近似：``shift(4)`` 在 1 分钟数据上是 20 分钟后，本仓库 4 根 bar
+    正好也是 20 分钟；局部波动用**该 bar 的 |收益|**（5 分钟随机游走的
+    已实现波动近似）代替原文 5 根 1 分钟收益的标准差。
+
+    Returns:
+        ``(dazzle_vol, dazzle_ret)``，均为 [D, C]。
+    """
+    c = np.asarray(close, dtype=np.float64)
+    v = np.asarray(vol, dtype=np.float64)
+    r = np.full_like(c, np.nan)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        r[:, 1:, :] = c[:, 1:, :] / c[:, :-1, :] - 1.0
+    r, v = r[:, 1:-1, :], v[:, 1:-1, :]
+    dv = np.full_like(v, np.nan)
+    dv[:, 1:, :] = v[:, 1:, :] - v[:, :-1, :]
+    mu, sd, _ = _nan_moments(dv, axis=1)
+    thr = mu + sd
+    flag = np.isfinite(dv) & np.isfinite(thr)[:, None, :] & (dv > thr[:, None, :])
+    f4 = np.zeros_like(flag)
+    f4[:, 4:, :] = flag[:, :-4, :]
+    av = np.abs(r)
+    vol_num = np.nansum(np.where(f4 & np.isfinite(av), av, np.nan), axis=1)
+    vol_den = (f4 & np.isfinite(av)).sum(axis=1)
+    ret_num = np.nansum(np.where(flag & np.isfinite(r), r, np.nan), axis=1)
+    ret_den = (flag & np.isfinite(r)).sum(axis=1)
+    ok = np.isfinite(c).sum(axis=1) >= min_bars
+    with np.errstate(divide="ignore", invalid="ignore"):
+        dvol = np.where(vol_den > 0, vol_num / np.maximum(vol_den, 1), np.nan)
+        dret = np.where(ret_den > 0, ret_num / np.maximum(ret_den, 1), np.nan)
+    return np.where(ok, dvol, np.nan), np.where(ok, dret, np.nan)
+
+
+def undercurrent_daily(vol: np.ndarray, min_bars: int = 24) -> np.ndarray:
+    """暗流涌动（方正证券 2023 曹春晓）：日内成交量分布熵的截面均值距离。
+
+    相对成交量 → 5 分钟占比 → 香农熵 → ``|熵 − 截面均值|``。
+    本仓库 5 分钟 bar 恰好就是原文 ``rolling(5).sum()`` 的 48 个桶。
+    """
+    v = np.asarray(vol, dtype=np.float64)
+    v = np.where(np.isfinite(v) & (v >= 0), v, np.nan)
+    cs = np.nansum(v, axis=1, keepdims=True)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        vn = np.where(cs > 0, v / cs, np.nan)
+    day = np.nansum(vn, axis=1, keepdims=True)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        p = np.where(day > 0, vn / day, np.nan)
+    okp = np.isfinite(p) & (p > 0)
+    ent = -(p * np.log(np.where(okp, p, 1.0))).sum(axis=1)
+    good = (np.isfinite(v).sum(axis=1) >= min_bars) & (day[:, 0, :] > 0)
+    ent = np.where(good, ent, np.nan)
+    cs_mean = np.nanmean(np.where(np.isfinite(ent), ent, np.nan), axis=1,
+                         keepdims=True)
+    return np.abs(ent - cs_mean)
+
+
+def attention_spill_panel(ret: pd.DataFrame, industry: pd.DataFrame,
+                          market_cap: pd.DataFrame, window: int = 21,
+                          min_group: int = 1) -> pd.DataFrame:
+    """基于异常收益率的注意力溢出（中信建投 2024 陈升锐）。
+
+    ① 注意力 = 过去 21 日 ``(r_i − 当日截面均值)²`` 的均值；
+    ② 申万一级行业内按市值升序切 30% / 40% / 30%，个股注意力减**同组均值**
+       （原文为组均值减个股，作者代码符号相反，故 IC 方向为负）。
+    """
+    r = ret.astype(np.float64)
+    cs = r.mean(axis=1)
+    attn = (r.sub(cs, axis=0) ** 2).rolling(window, min_periods=window).mean()
+    out = pd.DataFrame(np.nan, index=attn.index, columns=attn.columns)
+    for dt in attn.index:
+        a = attn.loc[dt]
+        ind = industry.loc[dt] if dt in industry.index else None
+        cap = market_cap.loc[dt] if dt in market_cap.index else None
+        if ind is None or cap is None:
+            continue
+        df = pd.DataFrame({"attn": a, "ind": ind, "cap": cap}).dropna()
+        if df.empty:
+            continue
+        n = df.groupby("ind")["cap"].transform("size")
+        rk = df.groupby("ind")["cap"].rank(method="first")
+        b0 = (n * 0.3).astype(int)
+        b1 = (n * 0.7).astype(int)
+        bucket = np.where(rk <= b0, 0, np.where(rk <= b1, 1, 2))
+        df = df.assign(bucket=bucket)
+        cnt = df.groupby(["ind", "bucket"])["attn"].transform("size")
+        gm = df.groupby(["ind", "bucket"])["attn"].transform("mean")
+        val = (df["attn"] - gm).where(cnt >= min_group)
+        out.loc[dt, df.index] = val.to_numpy()
+    return out
+
+
+# ======================================================================
+# 第六轮（2026-11-22）：字典 Fitness 1.7~2.0 去重后的新候选
+#
+# 公式全部来自公众号原文（抓取记录见 TODO.md 第五轮块下的预注册）。
+# 原文为 1 分钟数据的因子在本仓库的 5 分钟面板上做近似，逐条写在 docstring。
+# ======================================================================
+def _quiet(fn, *args, **kwargs):
+    """屏蔽全 NaN 切片的 RuntimeWarning（结果仍是 NaN，语义不变）。"""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        return fn(*args, **kwargs)
+
+
+def _nanmean(x: np.ndarray, axis: int) -> np.ndarray:
+    """忽略 NaN 的均值，全 NaN 切片返回 NaN（不告警）。"""
+    a = np.asarray(x, dtype=np.float64)
+    ok = np.isfinite(a)
+    n = ok.sum(axis=axis)
+    s = np.where(ok, a, 0.0).sum(axis=axis)
+    return np.where(n > 0, s / np.maximum(n, 1), np.nan)
+
+
+def abnormal_ret_max_panel(ret: pd.DataFrame, window: int = 21) -> pd.DataFrame:
+    """最大异常日收益率 / abnormal_rtn（日频，两篇原文同式）。
+
+    ``|r_t − median_i(r_i,t)|`` 的 ``window`` 日最大值。原文一篇用不复权价、
+    另一篇用复权价；本仓库统一用后复权收益。文档方向为负（异常关注 → 反转）。
+    """
+    dev = ret.sub(ret.median(axis=1), axis=0).abs()
+    return dev.rolling(window, min_periods=window).max()
+
+
+def network_centrality_panel(ret: pd.DataFrame, window: int = 21,
+                             min_stocks: int = 30) -> pd.DataFrame:
+    """空间网络相对中心度（曹春晓 2021）。
+
+    过去 ``window`` 日**不含当日**的收益两两相关，去掉自身后取均值
+    ``rho_i``，因子 ``= 1 / (2·(1 − rho_i))``（原文代码版；文字版多一步
+    开方再平方，等价于同一式）。窗口内必须每天有收益才参与，避免停牌票
+    的相关性被 0 填出来。
+
+    ⚠️ 这是 O(N²)/日 的全截面相关矩阵（全 A 约 5,800²），全样本约十分钟量级。
+    """
+    arr = ret.to_numpy(dtype=np.float32)
+    t_len, n_col = arr.shape
+    out = np.full((t_len, n_col), np.nan, dtype=np.float32)
+    for i in range(window, t_len):
+        w = arr[i - window:i]        # 不含当日
+        ok = np.isfinite(w).all(axis=0)
+        if ok.sum() < min_stocks:
+            continue
+        x = w[:, ok]
+        mu = x.mean(axis=0)
+        sd = x.std(axis=0, ddof=1)
+        good = sd > 0
+        if good.sum() < min_stocks:
+            continue
+        z = (x[:, good] - mu[good]) / sd[good]
+        corr = (z.T @ z) / np.float32(window - 1)
+        np.fill_diagonal(corr, np.nan)
+        with np.errstate(invalid="ignore"):
+            rho = np.nanmean(corr, axis=0)
+        out[i, np.flatnonzero(ok)[good]] = 1.0 / (2.0 * (1.0 - rho))
+    return pd.DataFrame(out, index=ret.index, columns=ret.columns)
+
+
+def emo_spill_panel(turnover: pd.DataFrame, nbr: int = 10,
+                    window: int = 21) -> pd.DataFrame:
+    """情绪溢出（任曈）：自信溢出的换手率版。
+
+    与 ``rnbr_panel`` 完全同构：邻域换手率均值对自身换手率做带截距截面
+    OLS，残差取 ``window`` 日标准差。原文另有 ``corr`` 变体（残差与收益
+    残差的相关），此处只复现主因子。
+    """
+    return rnbr_panel(turnover, nbr=nbr, window=window)
+
+
+def neutralize_panel(panel: pd.DataFrame, industry: pd.DataFrame,
+                     market_cap: pd.DataFrame,
+                     n_mad: float = 5.0) -> pd.DataFrame:
+    """截面 5×MAD 去极值 → 申万一级行业去均值 → log 市值回归取残差。"""
+    out = pd.DataFrame(np.nan, index=panel.index, columns=panel.columns)
+    for dt in panel.index:
+        if dt not in industry.index or dt not in market_cap.index:
+            continue
+        df = pd.DataFrame({"v": panel.loc[dt], "ind": industry.loc[dt],
+                           "cap": market_cap.loc[dt]}).dropna()
+        if len(df) < 30:
+            continue
+        med = float(df["v"].median())
+        mad = float((df["v"] - med).abs().median())
+        v = df["v"].clip(med - n_mad * mad, med + n_mad * mad) if mad > 0 \
+            else df["v"]
+        v = v - v.groupby(df["ind"]).transform("mean")
+        x = np.c_[np.ones(len(df)), np.log(df["cap"].clip(lower=1e-6))]
+        beta = np.linalg.lstsq(x, v.to_numpy(dtype=float), rcond=None)[0]
+        out.loc[dt, df.index] = v.to_numpy(dtype=float) - x @ beta
+    return out
+
+
+def jump_daily(close: np.ndarray, min_bars: int = 24) -> np.ndarray:
+    """日内跳跃度（方正 2022《个股股价跳跃及其振幅因子的改进》）。
+
+    原文 5 分钟最优：``s = P_t/P_{t−1}−1``、``c = ln(P_t/P_{t−1})``，
+    剔除首尾各 1 点后 ``Jump = 2·mean(s−c) − mean(c²)``。
+    """
+    c = np.asarray(close, dtype=np.float64)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        s = c[:, 1:-1, :] / c[:, :-2, :] - 1.0
+        comp = np.log(c[:, 1:-1, :] / c[:, :-2, :])
+    sc = _nanmean(s - comp, axis=1)
+    jump = 2.0 * sc - _nanmean(comp * comp, axis=1)
+    return np.where(np.isfinite(c).sum(axis=1) >= min_bars, jump, np.nan)
+
+
+def traj_illiq_daily(close: np.ndarray, open_: np.ndarray, vol: np.ndarray,
+                     shares: np.ndarray, min_bars: int = 24) -> np.ndarray:
+    """轨迹非流动性（长江 2019《高频因子（五）》）。
+
+    ``ln Π(|close/open − 1| + 1) / Σ换手``，换手用 分钟成交量 / PIT 总股本。
+    原文 1 分钟，本仓库 48 根 5 分钟 bar（频率对秩相关影响 <0.13）。
+    """
+    c = np.asarray(close, dtype=np.float64)
+    o = np.asarray(open_, dtype=np.float64)
+    v = np.asarray(vol, dtype=np.float64)
+    sh = np.atleast_2d(np.asarray(shares, dtype=np.float64))
+    if sh.shape[0] == 1 and c.shape[0] > 1:
+        sh = np.repeat(sh, c.shape[0], axis=0)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        r = c / o - 1.0
+        lp = np.nansum(np.log(np.abs(r) + 1.0), axis=1)
+        turn = np.nansum(v, axis=1) / sh
+        val = lp / turn
+    ok = ((np.isfinite(c).sum(axis=1) >= min_bars)
+          & (turn > 0) & np.isfinite(val))
+    return np.where(ok, val, np.nan)
+
+
+def lcp_daily(close: np.ndarray, vol: np.ndarray, amount: np.ndarray,
+              prev_close: np.ndarray, min_bars: int = 24) -> np.ndarray:
+    """卖出反弹偏离 LCP（高智威）：``Σ卖出反弹额/Σ卖出反弹量 ÷ 收盘 − 1``。
+
+    卖出分钟 = 分钟收盘价下跌；卖出反弹 = 该分钟 vwap 仍低于当日收盘价。
+    原文 1 分钟，本仓库 5 分钟 bar；首根 bar 的涨跌用前一日收盘价。
+    """
+    c = np.asarray(close, dtype=np.float64)
+    v = np.asarray(vol, dtype=np.float64)
+    a = np.asarray(amount, dtype=np.float64)
+    prev = np.empty_like(c)
+    prev[:, 0, :] = np.asarray(prev_close, dtype=np.float64)
+    prev[:, 1:, :] = c[:, :-1, :]
+    sell = c < prev
+    day_close = c[:, -1:, :]
+    with np.errstate(divide="ignore", invalid="ignore"):
+        vwap = a / np.where(v > 0, v, np.nan)
+    flags = sell & np.isfinite(vwap) & (vwap < day_close)
+    sv = np.nansum(np.where(flags, v, 0.0), axis=1)
+    sa = np.nansum(np.where(flags, a, 0.0), axis=1)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        val = (sa / sv) / day_close[:, 0, :] - 1.0
+    ok = (sv > 0) & (np.isfinite(c).sum(axis=1) >= min_bars) & np.isfinite(val)
+    return np.where(ok, val, np.nan)
+
+
+def amt_lead_daily(close: np.ndarray, amount: np.ndarray, q: float = 0.1,
+                   min_bars: int = 24) -> np.ndarray:
+    """领先成交额异动（任曈）。
+
+    ``m_t = 成交额占比``；取当日分钟收益 10% 分位，统计**极值分钟前一分钟**
+    的 ``m_t`` 均值，再除以全天 ``m_t`` 均值。原文 240 根 1 分钟，本仓库
+    48 根 5 分钟（分位对应约 5 根）。
+    """
+    c = np.asarray(close, dtype=np.float64)
+    a = np.asarray(amount, dtype=np.float64)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        r = c[:, 1:, :] / c[:, :-1, :] - 1.0
+    tot = np.nansum(a, axis=1)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        m = a / tot[:, None, :]
+    thr = _quiet(np.nanquantile, r, q, axis=1)
+    below = r < thr[:, None, :]
+    num = np.nansum(np.where(below, m[:, :-1, :], 0.0), axis=1)
+    cnt = below.sum(axis=1)
+    den = _nanmean(m, axis=1)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        val = (num / np.maximum(cnt, 1)) / den
+    ok = (cnt > 0) & np.isfinite(den) & (den > 0) \
+        & (np.isfinite(c).sum(axis=1) >= min_bars)
+    return np.where(ok, val, np.nan)
+
+
+def rev_imp_pos_daily(close: np.ndarray, open_: np.ndarray, vol: np.ndarray,
+                      min_bars: int = 24) -> np.ndarray:
+    """改进的正收益反转（于明明）。
+
+    放量（``vol > mean+std``）且上涨的分钟，取分钟收益均值后**取负**。
+    原文剔除末 5 分钟（235 根），本仓库剔除最后 1 根 bar。
+    """
+    c = np.asarray(close, dtype=np.float64)[:, :-1, :]
+    o = np.asarray(open_, dtype=np.float64)[:, :-1, :]
+    v = np.asarray(vol, dtype=np.float64)[:, :-1, :]
+    with np.errstate(divide="ignore", invalid="ignore"):
+        r = c / o - 1.0
+    mu, sd, _ = _nan_moments(v, axis=1)
+    flag = np.isfinite(r) & (r > 0) & np.isfinite(mu)[:, None, :] \
+        & (v > (mu + sd)[:, None, :])
+    cnt = flag.sum(axis=1)
+    mean_up = _nanmean(np.where(flag, r, np.nan), axis=1)
+    val = -mean_up
+    ok = (cnt > 0) & np.isfinite(val) \
+        & (np.isfinite(np.asarray(close)).sum(axis=1) >= min_bars)
+    return np.where(ok, val, np.nan)
+
+
+def elasticity_daily(close: np.ndarray, lam: float | None = None,
+                     min_bars: int = 24) -> np.ndarray:
+    """高频弹性（陈原文）：对数价 HP 周期项 FFT 的幅度加权频率均值。
+
+    ``cycle = log P − HP_trend(log P)``，``z = mean(2·|FFT(cycle)|_{k≥1}·k/B)``。
+    原文 240 点、λ=409600；本仓库 48 点，λ 按 ``(B/240)^4`` 同比例缩放到
+    ``409600·(48/240)^4 ≈ 655``，避免 48 点被过度平滑（已在预注册标注）。
+    """
+    c = np.asarray(close, dtype=np.float64)
+    d, b, n = c.shape
+    if lam is None:
+        lam = 409600.0 * (b / 240.0) ** 4
+    y = np.where(c > 0, np.log(np.where(c > 0, c, 1.0)), np.nan)
+    eye = np.eye(b)
+    diff2 = np.diff(eye, n=2, axis=0)
+    a_mat = eye + lam * (diff2.T @ diff2)
+    out = np.full((d, n), np.nan)
+    good = np.isfinite(y).all(axis=1) & (np.isfinite(c).sum(axis=1) >= min_bars)
+    for i in range(d):
+        cols = np.flatnonzero(good[i])
+        if cols.size == 0:
+            continue
+        trend = np.linalg.solve(a_mat, y[i][:, cols])
+        cycle = y[i][:, cols] - trend
+        spec = np.abs(np.fft.rfft(cycle, axis=0))[1:]
+        w = np.arange(1, spec.shape[0] + 1)[:, None] / float(b)
+        out[i, cols] = (2.0 * spec * w).mean(axis=0)
+    return out
+
+
+def ifle_daily(open_: np.ndarray, high: np.ndarray, low: np.ndarray,
+               close: np.ndarray, amount: np.ndarray, seg_bars: int = 6,
+               min_bars: int = 24) -> np.ndarray:
+    """日内分形流动熵 IFLE。
+
+    ``FD = 1 + ln(L/R)/ln(B)``（L=Σ|high−low|、R=|收盘−开盘|）；
+    ``LE = −Σ p ln p``（成交额占比熵）；``AD = |(M开−M收)/M总·(1−R/(最高−最低))|``
+    其中 M开/M收 为开盘/收盘各 30 分钟成交额；``IFLE = FD·(1−LE)·AD·sign(收盘−开盘)``。
+    原文用 240 根 1 分钟 + 5 分钟成交额，本仓库全部取 5 分钟。
+    """
+    o = np.asarray(open_, dtype=np.float64)
+    h = np.asarray(high, dtype=np.float64)
+    lo = np.asarray(low, dtype=np.float64)
+    c = np.asarray(close, dtype=np.float64)
+    a = np.asarray(amount, dtype=np.float64)
+    d, b, n = c.shape
+    day_open, day_close = o[:, 0, :], c[:, -1, :]
+    rng = np.abs(day_close - day_open)
+    path = np.nansum(np.abs(h - lo), axis=1)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        fd = 1.0 + np.log(path / rng) / np.log(float(b))
+    tot = np.nansum(a, axis=1)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        p = a / tot[:, None, :]
+    okp = np.isfinite(p) & (p > 0)
+    le = -np.nansum(np.where(okp, p * np.log(np.where(okp, p, 1.0)), 0.0),
+                    axis=1)
+    m_open = np.nansum(a[:, :seg_bars, :], axis=1)
+    m_close = np.nansum(a[:, -seg_bars:, :], axis=1)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        hmax = np.nanmax(h, axis=1)
+        lmin = np.nanmin(lo, axis=1)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        ad = np.abs((m_open - m_close) / tot
+                    * (1.0 - rng / (hmax - lmin)))
+        val = fd * (1.0 - le) * ad * np.sign(day_close - day_open)
+    ok = ((np.isfinite(c).sum(axis=1) >= min_bars) & (tot > 0)
+          & (rng > 0) & (hmax > lmin) & np.isfinite(val) & (path > 0))
+    return np.where(ok, val, np.nan)
+
+
+def wind_tide_daily(close: np.ndarray, vol: np.ndarray,
+                    prev_close: np.ndarray, min_valid: int = 20,
+                    min_bars: int = 24) -> np.ndarray:
+    """风起潮随（codex 复现）：量潮位置 × 涨幅到收盘的共振。
+
+    原文：超额对数收益 ``e``、市场成交节奏 ``q_t=median_j(V_jt/V_jd)``、
+    ``L=max(ln(后窗u/前窗u),0)``、``G=ln(P收/P_{t−1})−截面均值``、
+    ``H=min(max(e,0), max(G,0))``、日值 = 有效窗口 ``L·H`` 均值（有效窗口
+    <20 记缺失），再取 21 日均值并做 5×MAD + 行业 + 市值中性化（后两步在
+    builder/主流程完成）。原文 46 根 5 分钟 + 15:00 收盘，本仓库 48 根。
+    """
+    c = np.asarray(close, dtype=np.float64)
+    v = np.asarray(vol, dtype=np.float64)
+    d, b, n = c.shape
+    prev = np.empty_like(c)
+    prev[:, 0, :] = np.asarray(prev_close, dtype=np.float64)
+    prev[:, 1:, :] = c[:, :-1, :]
+    with np.errstate(divide="ignore", invalid="ignore"):
+        r = np.log(c / prev)
+    n_r = np.isfinite(r).sum(axis=1)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        rbar = np.where(n_r[:, None, :] > 1,
+                        (np.nansum(r, axis=1, keepdims=True) - r)
+                        / np.maximum(n_r[:, None, :] - 1, 1), np.nan)
+    e = r - rbar
+    day_v = np.nansum(v, axis=1)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        q = v / day_v[:, None, :]
+    qmed = _quiet(np.nanmedian, q, axis=2)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        u = v / qmed[:, :, None]
+    ub = np.full_like(u, np.nan)
+    ua = np.full_like(u, np.nan)
+    ub[:, 2:, :] = (u[:, :-2, :] + u[:, 1:-1, :]) / 2.0
+    ua[:, :-2, :] = (u[:, 1:-1, :] + u[:, 2:, :]) / 2.0
+    valid = np.isfinite(ub) & np.isfinite(ua) & (ub > 0) & (ua >= 0)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        l_up = np.where(valid, np.maximum(np.log(
+            np.where(valid, ua / ub, 1.0)), 0.0), np.nan)
+    day_close = c[:, -1:, :]
+    with np.errstate(divide="ignore", invalid="ignore"):
+        g = np.log(day_close / prev)
+    n_g = np.isfinite(g).sum(axis=1)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        gbar = np.where(n_g[:, None, :] > 1,
+                        (np.nansum(g, axis=1, keepdims=True) - g)
+                        / np.maximum(n_g[:, None, :] - 1, 1), np.nan)
+    g_ex = g - gbar
+    hval = np.minimum(np.maximum(e, 0.0), np.maximum(g_ex, 0.0))
+    cnt = valid.sum(axis=1)
+    val = np.nansum(np.where(valid, l_up * hval, 0.0), axis=1) \
+        / np.maximum(cnt, 1)
+    ok = (cnt >= min_valid) & (np.isfinite(c).sum(axis=1) >= min_bars)
+    return np.where(ok, val, np.nan)
+
+
+def ex_rtn_max_daily(close: np.ndarray, industry: np.ndarray,
+                     market_cap: np.ndarray, q: float = 0.95,
+                     min_stocks: int = 30) -> np.ndarray:
+    """收益率极大值幅度（VaR 邪修版，5 分钟口径）。
+
+    当日「行业 × 市值三档」组内收益均值序列取 ``q`` 分位；个股把超过该
+    分位的 bar 收益求均值，再除以分位阈值。原文 1 分钟 + 5 分钟收益，
+    本仓库 5 分钟 bar 收益。
+    """
+    c = np.asarray(close, dtype=np.float64)
+    d, b, n = c.shape
+    ind = np.asarray(industry)
+    cap = np.asarray(market_cap, dtype=np.float64)
+    out = np.full((d, n), np.nan)
+    for i in range(d):
+        with np.errstate(divide="ignore", invalid="ignore"):
+            r = c[i, 1:, :] / c[i, :-1, :] - 1.0
+        ind_i, cap_i = ind[i], cap[i]
+        ok = pd.notna(ind_i) & np.isfinite(cap_i) \
+            & np.isfinite(r).any(axis=0)
+        if ok.sum() < min_stocks:
+            continue
+        sub = pd.DataFrame({"ind": ind_i[ok], "cap": cap_i[ok]})
+        rk = sub.groupby("ind")["cap"].rank(method="first")
+        sz = sub.groupby("ind")["cap"].transform("size")
+        bucket = np.where(rk <= (sz * 0.3).astype(int), 0,
+                           np.where(rk <= (sz * 0.7).astype(int), 1, 2))
+        code_ind, _ = pd.factorize(sub["ind"])
+        grp = code_ind * 3 + bucket
+        ng = int(grp.max()) + 1 if len(grp) else 0
+        rr = r[:, ok]
+        sums = np.zeros((ng, rr.shape[0]))
+        np.add.at(sums, grp, rr.T)
+        cnts = np.bincount(grp, minlength=ng).astype(float)
+        with np.errstate(invalid="ignore"):
+            gmean = sums / np.maximum(cnts, 1)[:, None]
+        thr_g = _quiet(np.nanquantile, gmean, q, axis=1)
+        thr = thr_g[grp]
+        exceed = np.isfinite(rr) & (rr > thr[None, :])
+        num = np.nansum(np.where(exceed, rr, 0.0), axis=0)
+        cnt = exceed.sum(axis=0)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            val = (num / np.maximum(cnt, 1)) / thr
+        row = np.full(n, np.nan)
+        row[np.flatnonzero(ok)] = np.where(cnt > 0, val, np.nan)
+        out[i] = row
+    return out
+
+
+def corr_lagret(flow: np.ndarray, ret_lag: np.ndarray,
+                min_obs: float = 0.6) -> np.ndarray:
+    """滞后 |收益| 与同分钟资金流的相关系数（东吴 / 朱定豪）。
+
+    ``flow`` / ``ret_lag`` 形状 ``[W, B, C]``（W 为 21 个交易日）。先对
+    ``flow`` 在**同一分钟、跨 W 日**做 z-score，再把 W×B 个点池化求 Pearson
+    相关。原文 ``ret = |ln(1+r)|.shift(1)``，首根 bar 为 NaN。
+    """
+    mu, sd, _ = _nan_moments(flow, axis=0)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        z = (flow - mu) / sd
+    ok = np.isfinite(z) & np.isfinite(ret_lag)
+    cnt = ok.sum(axis=(0, 1))
+    r0 = np.where(ok, ret_lag, 0.0)
+    z0 = np.where(ok, z, 0.0)
+    rm = r0.sum(axis=(0, 1)) / np.maximum(cnt, 1)
+    zm = z0.sum(axis=(0, 1)) / np.maximum(cnt, 1)
+    cov = np.where(ok, (ret_lag - rm) * (z - zm), 0.0).sum(axis=(0, 1))
+    vr = np.where(ok, (ret_lag - rm) ** 2, 0.0).sum(axis=(0, 1))
+    vz = np.where(ok, (z - zm) ** 2, 0.0).sum(axis=(0, 1))
+    with np.errstate(divide="ignore", invalid="ignore"):
+        val = cov / np.sqrt(vr * vz)
+    need = min_obs * flow.shape[0] * flow.shape[1]
+    return np.where((cnt >= need) & (vr > 0) & (vz > 0), val, np.nan)
+
+
+def foc_autocorr(flag: np.ndarray) -> np.ndarray:
+    """0/1 序列的一阶自相关（全 0/全 1 记 1）。"""
+    x = np.asarray(flag, dtype=np.float64)
+    if x.shape[1] < 2:
+        return np.full((x.shape[0], x.shape[2]), np.nan)
+    mu = x.mean(axis=1, keepdims=True)
+    dev = x - mu
+    num = (dev[:, 1:, :] * dev[:, :-1, :]).sum(axis=1)
+    den = (dev * dev).sum(axis=1)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        return np.where(den > 0, num / den, 1.0)
+
+
 __all__ = [
-    "cs_spread_panel", "csad_std21_panel", "entropy_amount_share", "fear_panel",
-    "group_abnormal_panel", "illiq_panel", "ind_joint_momentum_panel",
-    "mmd_asym_panel", "net_support_panel", "price_delay_panel", "rnbr_panel",
-    "smart_vwap_panel", "tcc_panel", "turnover_resid_vol_panel", "umr_panel",
-    "utr_panel",
+    "abnormal_ret_max_panel", "amt_lead_daily", "attention_spill_panel",
+    "corr_lagret", "cs_spread_panel", "csad_std21_panel", "dazzle_daily",
+    "ds_significance_daily", "elasticity_daily", "emo_spill_panel",
+    "entropy_amount_share", "ex_rtn_max_daily", "fear_panel",
+    "foc_autocorr", "group_abnormal_panel", "ifle_daily", "illiq_panel",
+    "ind_joint_momentum_panel", "jump_daily", "lcp_daily",
+    "mainforce_vol_daily", "mmd_asym_panel", "net_support_panel",
+    "network_centrality_panel", "neutralize_panel", "peak_count_daily",
+    "peak_ridge_daily", "price_delay_panel", "rev_imp_pos_daily",
+    "rnbr_panel", "sigup_pv_daily", "smart_vwap_panel", "tcc_panel",
+    "traj_illiq_daily", "turnover_resid_vol_panel", "umr_panel",
+    "undercurrent_daily", "utr_panel", "wind_tide_daily",
 ]
