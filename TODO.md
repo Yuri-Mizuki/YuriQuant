@@ -2007,6 +2007,29 @@
 
 ## 二、资源墙后置（依赖分钟数据扩容，同一堵墙）
 
+- [ ] **⏳ 分钟因子进模型 A/B（2026-11-22 预注册，先写死后跑）**：
+  数据态 = 日线到 2026-11-20、97 个分钟因子已入 panels_neu(_fundind)。
+  **两臂同码同数据重跑**（现有 ortho 臂是旧窗口产物，直接对比不公平）：
+  ① 基线臂 `--preproc ortho_fundind --models gbdt --out-tag g_base`；
+  ② 对照臂 同配置 + `--force-features <精选 15>` `--out-tag im15`。
+  精选臂两级（2026-11-22 由莉酱确认加宽到 25）：im15 = 量占比族
+  （im_pv_seg06/07/08/10_volshare）+ 慢速独立族（im_pv_vol_skew /
+  im_dom_vol_rv_sig / im_vol_extreme_bar_share / im_pv_big_move_vol_share /
+  im_ret_kurt / im_pv_volshare_ar1_resid_acf / im_pv_ret_vol_corr_up）+
+  反转对照（im_mom_last_bar / im_mom_seg12_ret / im_mom_close30_ret）+
+  fd_smart_vwap；im25 = im15 + seg04/05/09/11_volshare（量占比族补全，
+  含曾被无理由剔除的 seg09）+ vol_seg04/05/06_rvshare（时段波动占比 top3）+
+  fd_net_support / im_pv_volshare_autocorr_l1 / im_evt_down_tail_share /
+  im_ret_min。
+  **预注册判据（跑前写死）**：
+  G1 信息：im15 臂 gbdt OOS IC（多 horizon 均值）≥ g_base **+0.002**；
+  G2 经济：回测净年化 ≥ **+1.0pp** 且换手不升超 20%（caliber 27bp 口径复核）；
+  G3 反过拟合：年度胜率 ≥5/8、逐年不出现 >−2pp 的新增亏损年；
+  G4 归因：force 的 15 特征在 gbdt importance 有真实席位（否则 Δ=噪声重排，判不过）。
+  判定：G1+G2 全过 ⇒ 进定版信号候选池（走 caliber 登记流程）；G1 过 G2 不过 ⇒
+  记「信息有、经济无」（多半换手/成本），留特征池不加权；都不过 ⇒ 分钟特征增强
+  线判负收口（国金24 残余② 关闭）。
+
 - [ ] **⏳ 全 A 5 分钟数据落地 + 字典分钟频因子全 A 重建（2026-11-20 晚启动，链式后台）**：
   `fetch_minute_all --begin 20180101 --end 20251231` 已在跑（5,692 只 / 5.31 亿行 /
   9.4 GB / ~31s×1,144 块 ≈ 10h，断点续传；**夜间待机可能杀进程，断了重跑同一命令续传**）。
