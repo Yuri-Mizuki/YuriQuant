@@ -2069,14 +2069,17 @@
   （ic_fuse 常驻），dup 签名追加随下次 audit 周期。
   ③ 17 个零读者 registry 指标列**保留**（metrics() 本来就算、删列不省计算；
   borrow_fee_drag 等在本次口径分析中实际有用，休眠诊断数据 ≠ 腐烂）。
-- [ ] **🚨 P2 待查：看板缓存 sharpe 分母异常**（2026-11-22 发现）：factor_board
-  cache 的 metrics 里 `q1_net/all` 年化 +14.85% 但 sharpe **−29.8**（数学上不可能），
-  疑似对 excess 口径日收益算 sharpe 时分母/口径错位。registry 的 canonical sharpe
-  已验证与引擎一致，**看板排序列（q5_net_all_sharpe）在查清前不可引用**。
-- [ ] **🚨 P2：dup 签名窗口敏感性实验**（2026-11-22 立项）：同一签名矩阵在
-  200 vs 500 日窗口重算全库两两判定，统计三分类翻转率与 129 退登记决策表重合率。
-  翻转率 <5% ⇒ 边界写成文档一句话；高 ⇒ 判据有 regime 依赖，退登记决策需窗口
-  交叉校验。跑一次 ~20 分钟，产物落 `reports/library_governance/`。
+- [x] **✅ P2 看板 sharpe 异常已修（2026-11-22）**：根因 =
+  `sharpe_arithmetic(r, PPY)` 把 PPY 误传第二位置参数 **rf**（日无风险被折成
+  ~2.18%，全部分位 sharpe 打成 −20~−100 假大负、看板排序键自建成起失效）。
+  改 `periods_per_year=PPY` 关键字传参 + 回归测试（`test_factor_board_data.py`：
+  正收益 ⇒ sharpe>0 且 |SR|<10）。97 个分钟因子缓存已重算、看板已重渲染。
+  ⚠️ 另一台机器的 894 个缓存同病，pull 后需重跑 board_data 刷新。
+- [x] **✅ P2 dup 签名窗口敏感性已收口（2026-11-22）**：1,067 因子 ×
+  200 vs 500 采样日，**近邻更换率 3.2%、档位翻转率 1.1%、T1 硬重复对 90/90
+  重合 100%** ⇒ 200 日窗口稳健，等价判定按现状使用；边界已写成文档
+  （`reports/library_governance/dup_window_sensitivity.md` + 近邻更换明细 CSV）。
+  结论：判据无 regime 依赖问题，退登记决策无需窗口交叉校验。
 - [ ] **华泰 AI3128 全频段**：同上资源墙，墙后复评。
 
 ### 周频方向：三次证伪，别重投（2026-11-13 收口）

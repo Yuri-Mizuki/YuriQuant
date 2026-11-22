@@ -206,7 +206,9 @@ def _window_metrics(nav: pd.Series, bench_nav: pd.Series,
             "cum": cum, "ann": ann, "bench_ann": bann,
             "excess_ann": float((1 + ann) / (1 + bann) - 1),
             "mdd": float(dd.min()),
-            "sharpe": float(sharpe_arithmetic(r, PPY)) if r.std() else None,
+            # 2026-11-22 修：PPY 此前误传第二位置参数 rf（日无风险被折成 2.18%，
+            # 全部 sharpe 打成 −20~−100 的假大负、看板排序键失效）。
+            "sharpe": float(sharpe_arithmetic(r, periods_per_year=PPY)) if r.std() else None,
             "turnover": float(to.mean() * 12) if len(to) else None,
             "n_days": n,
         }
