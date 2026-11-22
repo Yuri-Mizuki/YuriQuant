@@ -269,8 +269,30 @@ def main():
 
     show_cols = ["name", "ic_mean", "t_stat_nw", "ic_ir", "best_sharpe",
                  "dup_corr1", "dup_top1", "resid_t_nw"]
-    new_reg["_abs_t"] = new_reg["t_stat_nw"].abs()
-    report = new_reg.sort_values("_abs_t", ascending=False)[show_cols]
+    # ---- 批内多重检验（BH）+ 有效独立维数 + 溯源（2026-11-22，与 fd 体检同款）----
+    from stats.significance import t_pvalue, benjamini_hochberg, effective_dims
+    from stats.ic import calc_ic_series as _calc_ic
+    from research.factor_library import FactorLibrary as _FL
+
+    report = new_reg.sort_values("_abs_t", ascending=False)
+    report["p_value_nw"] = report["t_stat_nw"].map(
+        lambda v: float(t_pvalue(float(v))) if pd.notna(v) and np.isfinite(v) else np.nan)
+    surv = benjamini_hochberg(report["p_value_nw"].to_numpy(), q=0.05)
+    report["fdr_pass"] = surv
+    _lib = _FL(dataset=args.dataset)
+    _rp = _lib.default_returns_panel()
+    _icf = pd.DataFrame({
+        n: _calc_ic(feats[n[len(PREFIX):]], _rp) for n in report["name"]
+        if n.startswith(PREFIX) and n[len(PREFIX):] in feats})
+    n_eff = effective_dims(_icf)
+    data_end = str(pd.to_datetime(_rp.index.max()).date())
+    report["admission_basis"] = (
+        f"returns=adj_close_shift(-1)@{data_end}; nw=andrews; batch_bh_q=0.05")
+    report["panel_end"] = data_end
+    log.info("批内多重检验: m=%d → BH 存活 %d | n_eff=%.1f（名义 %d）",
+             len(surv), int(surv.sum()), n_eff, len(surv))
+    report = report[show_cols + ["p_value_nw", "fdr_pass",
+                                 "admission_basis", "panel_end"]]
     out = ROOT / "reports" / "intraday_stat_checkup.csv"
     report.to_csv(out, index=False, encoding="utf-8-sig")
     with pd.option_context("display.width", 200, "display.max_colwidth", 28,

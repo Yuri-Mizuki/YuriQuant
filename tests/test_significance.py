@@ -416,3 +416,22 @@ def test_missing_pvalue_nw_is_backfilled(tmp_path):
     assert ((tbl["p_value_nw"] >= 0) & (tbl["p_value_nw"] <= 1)).all()
 
 
+def test_effective_dims_scales_with_correlation():
+    """n_eff：正交=名义 m；近拷贝对塌到 1~m 之间；完全相关=1。"""
+    import numpy as np
+    import pandas as pd
+    from stats.significance import effective_dims
+
+    rng = np.random.default_rng(3)
+    base = pd.Series(rng.normal(0, 1, 500))
+    orth = pd.DataFrame(rng.normal(0, 1, (500, 3)), columns=list("abc"))
+    assert 2.8 < effective_dims(orth) <= 3.0
+
+    near = pd.DataFrame({"a": base,
+                         "b": base + rng.normal(0, 0.1, 500),
+                         "c": pd.Series(rng.normal(0, 1, 500))})
+    n = effective_dims(near)
+    assert 1.0 < n < 3.0          # 名义 3，两列近拷贝 ⇒ 明显小于 3
+
+    ident = effective_dims(pd.DataFrame({"x": base, "y": base}))
+    assert abs(ident - 1.0) < 1e-6  # 完全相关对 = 1 个有效维数

@@ -391,6 +391,41 @@ def main():
     rep = rep[["name", "cov", "cov_eff", "n_valid", "n_days", "ic_mean",
                "ic_ir", "t_stat_nw", "best_sharpe", "best_config",
                "dup_corr_max", "dup_top", "plc_ic", "eff_ratio", "eff_gap"]]
+    # ---- 批内多重检验（BH）+ 有效独立维数 + 溯源（2026-11-22）----
+    # 用 p_value_nw（NW t 的双侧正态近似 p）做 BH；eff_ratio 门槛不动——
+    # BH 只回答「这批里哪些是多重比较下的幸存者」，不改变单因子判定。
+    from stats.significance import t_pvalue, benjamini_hochberg, effective_dims
+
+    rep["p_value_nw"] = rep["t_stat_nw"].map(
+        lambda v: float(t_pvalue(float(v))) if np.isfinite(v) else np.nan)
+    surv = benjamini_hochberg(rep["p_value_nw"].to_numpy(), q=0.05)
+    rep["fdr_pass"] = surv
+    ic_frame = pd.DataFrame(
+        {n: calc_ic_series(panels[n], returns_fwd) for n in rep["name"]})
+    n_eff = effective_dims(ic_frame)
+    data_end = str(pd.to_datetime(returns_fwd.index.max()).date())
+    basis = (f"returns=adj_close_shift(-1)@{data_end}; "
+             "placebo=cyclic_crc32(name); nw=andrews; batch_bh_q=0.05")
+    rep["admission_basis"] = basis
+    rep["panel_end"] = data_end
+    n_pass_bh = int(surv.sum()) if len(surv) else 0
+    log.info("批内多重检验: m=%d → BH(FDR 5%%) 存活 %d | 批内有效独立维数 "
+             "n_eff=%.1f（名义 m=%d）| 溯源: %s",
+             len(surv), n_pass_bh, n_eff, len(surv), basis)
+
+    # ① 区分力验证（并列报告，不进 ladder）：|t|≥2 与安慰剂门槛（eff≥2×）
+    # 的一致率——t 已在表里，先看它对安慰剂的区分力再谈是否立阈值。
+    ok_eff = rep["eff_ratio"].ge(2.0) & rep["eff_ratio"].notna()
+    ok_t = rep["t_stat_nw"].abs().ge(2.0)
+    both = ok_eff & ok_t
+    neither = (~ok_eff) & (~ok_t)
+    agree = float((both | neither).mean()) if len(rep) else float("nan")
+    log.info("t_nw 区分力验证: |t|≥2 与 eff_ratio≥2 一致率 %.0f%%（n=%d；"
+             "仅 t 过 %d / 仅 eff 过 %d / 双过 %d / 双不过 %d）",
+             agree * 100, len(rep),
+             int((ok_t & ~ok_eff).sum()), int((ok_eff & ~ok_t).sum()),
+             int(both.sum()), int(neither.sum()))
+
     rep["_abs_ic"] = rep["ic_mean"].abs()
     rep = rep.sort_values("_abs_ic", ascending=False).drop(columns="_abs_ic")
 

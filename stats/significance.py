@@ -44,6 +44,7 @@
 """
 from __future__ import annotations
 
+import pandas as pd
 from typing import Sequence
 
 import numpy as np
@@ -51,7 +52,7 @@ from scipy import stats
 
 from stats.robust_stats import nw_tstat
 
-__all__ = ["t_pvalue", "benjamini_hochberg", "mean_inference"]
+__all__ = ["t_pvalue", "benjamini_hochberg", "mean_inference", "effective_dims"]
 
 
 def t_pvalue(t: float | np.ndarray, df: float | None = None) -> float | np.ndarray:
@@ -217,3 +218,35 @@ def mean_inference(
             "t_stat": float(t_ols), "p_value": float(p_ols),
             "t_stat_nw": float(t_nw), "p_value_nw": float(p_nw),
             "se_nw": float(se_nw), "lag": int(lag)}
+
+
+def effective_dims(ic: "pd.DataFrame", min_overlap: int = 60) -> float:
+    """批内 IC 序列的**有效独立维数** ``n_eff = (Σλ)² / Σλ²``（Cheverud/Nyholt）。
+
+    多重检验校正的检验数不该用名义假设数 m（成员高相关时严重高估）：
+    对批内 IC 序列的两两相关矩阵做特征值分解，λ 为裁剪到非负的特征值。
+    全体完全相关 ⇒ n_eff=1；全体正交 ⇒ n_eff=m；实测参考：同族窗口网格
+    的 n_eff 会远小于 m（本项目 intraday 复合分析实测 22.14 vs 名义 71）。
+
+    Args:
+        ic: 列 = 各假设（因子）的逐日 IC/统计序列（允许 NaN，成对完整观测）。
+        min_overlap: 两列有效重叠 < 该值的相关记 0（视为独立），防小样本
+            假高相关。全部序列同窗口时此参数不起作用。
+
+    Returns:
+        n_eff（≥1，输入列 <2 或无有效序列时 NaN）。
+    """
+    import numpy as np
+    import pandas as pd
+
+    c = ic.corr(min_periods=min_overlap)
+    c = c.dropna(axis=0, how="all").dropna(axis=1, how="all").fillna(0.0)
+    m = c.shape[0]
+    if m < 2:
+        return float("nan")
+    c = (c + c.T) / 2
+    arr = c.to_numpy(dtype=float, copy=True)
+    np.fill_diagonal(arr, 1.0)
+    lam = np.clip(np.linalg.eigvalsh(arr), 0.0, None)
+    s1, s2 = float(lam.sum()), float((lam ** 2).sum())
+    return float(s1 * s1 / s2) if s2 > 0 else float("nan")

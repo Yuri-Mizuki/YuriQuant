@@ -2112,6 +2112,16 @@
   `fd_price_delay` 等，作模型层复测对照）vs 同一 g_base 基线，独立预注册
   （不混入本轮分钟假设）。注：12/15 个此前的判负结论是单变量/池竞争层面的，
   模型层增量是未测过的新问题——但按纪律先预注册再跑。
+- [x] **✅ 准入管线三补强落地（2026-11-22，口径维持）**：① t_nw **并列报告**
+  不新增拒绝分支——区分力验证待 fd 补注册行并入 checkup（n=17）后跑
+  （|t|≥2 vs eff≥2 一致率/点二列相关），n=3 的初值（67%、r=0.76）仅供参考；
+  ② 批内 BH + 存活数 + 有效独立维数接线（`effective_dims` 进
+  `stats/significance`，Cheverud/Nyholt 特征值法；fd 与 im 两个 builder 体检
+  都接：`p_value_nw` → BH(FDR 5%) → `fdr_pass` 列 + n_eff 日志；**eff_ratio
+  门槛一字未动**）；③ 溯源字段（`admission_basis` = 收益口径@数据末日 +
+  placebo 机制 + NW 滞后 + BH 阈值；`panel_end`）落 checkup 产物两列。
+  ⚠️ 发现：`admission_verdict`（L1-L5）当前**无生产调用方**（原 gate 入口
+  已随 11-19 删批消失）——verdict 的正式落盘接线并入 fd 臂实验范围。
 - [ ] **华泰 AI3128 全频段**：同上资源墙，墙后复评。
 
 ### 周频方向：三次证伪，别重投（2026-11-13 收口）
