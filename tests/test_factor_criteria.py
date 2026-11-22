@@ -38,7 +38,7 @@ DEFINERS: dict[str, set[str]] = {
     "panel_coverage": {"research/factor_criteria.py"},
     "cyclic_placebo": {"research/factor_criteria.py"},
     "effect_size": {"research/factor_criteria.py"},
-    "admission_verdict": {"research/factor_criteria.py"},
+    # 准入判定 2026-11-22 已删除（无生产调用方）；再出现即视为复活。
     # 指标口径（2026-11-19 收口）：显著性 / IC 摘要全仓各一处实现。
     # ``ic_stats`` 8 处复制、``nw_t`` 12 处复制，语义统一后按名字钉死。
     "ic_stats": {"stats/ic.py"},

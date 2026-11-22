@@ -99,7 +99,8 @@ FAMILY = {"fd_tcc": "波动率", "fd_tcc_g": "波动率", "fd_grp_abn": "波动�
           "fd_hf_cs": "流动性", "fd_smart_vwap": "资金流", "fd_net_support": "量价",
           "fd_utr": "流动性", "fd_ind_mom": "动量", "fd_price_delay": "动量"}
 
-#: 从 5 分钟面板出发的因子（hs300 池、2022 起；其余走日线全 A）
+#: 从 5 分钟面板出发的因子（池由 `--minute-pool` / `--entropy-pool` 决定；
+#: 2026-11-22 起默认全 A，hs300 仅用于复现第四轮历史口径）
 MINUTE_FACTORS = frozenset({"fd_ent30", "fd_hf_cs", "fd_smart_vwap",
                             "fd_net_support"})
 
@@ -179,16 +180,30 @@ def load_daily_context(begin: int, end: int, *, with_prices: bool = False):
     return ret, market_cap, industry, returns_fwd, close.index, list(close.columns), extra
 
 
-def build_entropy(begin: int, end: int) -> pd.DataFrame:
-    """5 分钟面板重采样 30 分钟 → 单一成交额占比熵（hs300 池）。"""
-    store = MinutePanelStore.open(5, "hs300")
-    days = [d for d in store.all_days() if begin <= d <= end]
-    if not days:
-        raise RuntimeError(f"分钟面板在 {begin}-{end} 无交易日")
-    fields = store.load(("close", "volume"), begin_date=days[0], end_date=days[-1])
-    panel = entropy_amount_share(fields, days, store.codes, period=5, target=30)
-    log.info("分钟熵面板 %d 日 × %d 股（%d→%d）", panel.shape[0], panel.shape[1],
-             days[0], days[-1])
+def build_entropy(begin: int, end: int, pool: str = "all_a",
+                  block_days: int = 8) -> pd.DataFrame:
+    """5 分钟面板重采样 30 分钟 → 单一成交额占比熵（``pool`` 选池）。
+
+    2026-11-22 起默认全 A（新增版本，不覆盖 hs300 历史探针）。用
+    ``iter_blocks`` 逐块计算，峰值内存只与块大小相关——整面板
+    ``load`` 转 float64 会到 20GB+，低内存机器直接被打爆。
+    """
+    store = MinutePanelStore.open(5, pool)
+    frames: list[pd.DataFrame] = []
+    n_days = 0
+    for chunk, block in store.iter_blocks(
+            ("close", "volume"), block_days=block_days,
+            begin_date=begin, end_date=end):
+        frames.append(entropy_amount_share(block, chunk, store.codes,
+                                           period=5, target=30)
+                      .astype(np.float32))
+        n_days += len(chunk)
+    if not frames:
+        raise RuntimeError(f"分钟面板 min5_{pool} 在 {begin}-{end} 无交易日")
+    panel = pd.concat(frames)
+    log.info("分钟熵面板 %d 日 × %d 股（%d→%d，pool=%s，%d 天/块）",
+             panel.shape[0], panel.shape[1], int(panel.index[0].strftime("%Y%m%d")),
+             int(panel.index[-1].strftime("%Y%m%d")), pool, block_days)
     return panel
 
 
@@ -277,6 +292,8 @@ def main():
     ap.add_argument("--dataset", default="all_a_2018_2026")
     ap.add_argument("--minute-pool", default="all_a",
                     help="分钟频 3 因子用的分钟面板池（hs300 为第四轮历史口径）")
+    ap.add_argument("--entropy-pool", default="all_a",
+                    help="fd_ent30 用的分钟面板池（hs300 为 11-19 历史探针口径）")
     ap.add_argument("--features", default=None)
     ap.add_argument("--no-save", action="store_true", help="只算不入库")
     ap.add_argument("--report-only", action="store_true",
@@ -346,7 +363,8 @@ def main():
         if need("fd_fear_std"):
             panels["fd_fear_std"] = fear_panel(ret)
     if need("fd_ent30"):
-        panels["fd_ent30"] = build_entropy(args.begin, args.end)
+        panels["fd_ent30"] = build_entropy(args.begin, args.end,
+                                           pool=args.entropy_pool)
     if need("fd_hf_cs", "fd_smart_vwap", "fd_net_support"):
         panels.update(build_minute_factors(args.begin, args.end, want,
                                            extra["tot_share"],
@@ -441,7 +459,7 @@ def main():
     rep.to_csv(out, index=False, encoding="utf-8-sig")
     with pd.option_context("display.width", 220, "display.max_colwidth", 26,
                            "display.float_format", "{:.4f}".format):
-        print("\n==== 因子字典候选体检（全 A 日频 / 熵为 hs300 30min） ====")
+        print(f"\n==== 因子字典候选体检（全 A 日频 / 熵为 {args.entropy_pool} 30min） ====")
         print(rep.to_string(index=False))
     log.info("报告落盘: %s", out)
 

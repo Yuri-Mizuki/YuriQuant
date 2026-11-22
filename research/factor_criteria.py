@@ -15,9 +15,11 @@
 
 | 段 | 问的问题 | 函数 | 通过后状态 |
 |---|---|---|---|
-| ① 准入 | 对**现有体系**有没有增量 | :func:`verdict` L1~L5 | 可入库，``experimental`` |
+| ~~① 准入~~ | （2026-11-22 删除：无生产调用方、残差口径需主信号） | — | — |
 | ~~② 晋升~~ | （2026-11-22 随晋升系统退役；原「独立成腿」问题由看板双尾/信号层 A/B 承接） | — | — |
 | ③ 组合 | 换成钱还剩多少 | ``caliber.evaluate_weights``（本模块不碰） | 进主链 |
+
+（① 判定函数已删除，以下对比保留作历史说明。）
 
 🚨 **为什么三段的差异不是"没统一"**：①问的是「相对主信号的增量」，②问的是
 「独立成腿的绝对业绩」（``sharpe_ls_M ≥ 0.5``）。两个答案经常相反——单腿夏普 0.8
@@ -320,62 +322,11 @@ def effect_size(real_ic: float, plc_ic: float) -> dict:
     return {"eff_ratio": ratio, "eff_gap": float(gap)}
 
 
-# ---------------------------------------------------------------------------
-# ① 准入判定（筛子，不是结论）
-# ---------------------------------------------------------------------------
-def admission_verdict(row: dict, th: dict | None = None) -> tuple[str, str]:
-    """按 L1~L5 给出**准入**标记与理由。返回 ``(tag, why)``。
-
-    🚨 这里**不下最终结论**。``PASS`` 只代表"值得进组合层"，
-    因为 IC ≠ 经济价值 —— 必须再跑 Top-N。
-
-    🚨 本函数**不检查 sharpe**：IC ≠ 经济价值，组合层见 ``caliber``；
-    原晋升段已于 2026-11-22 退役，见模块 docstring。
-    """
-    t = {**ADMISSION_GATES, **(th or {})}
-    # 🚨 门槛按 ``cov``（原始非空率）标定，不用 ``cov_eff``：后者还叠了掩码与
-    # 前瞻收益（掩码覆盖率约 0.96），换口径等于换门槛松紧，必须重新标定。
-    # ``cov_eff`` 照样输出到表里，供人工判断"面板铺得开但有效格少"这种情形。
-    if not np.isfinite(row.get("cov", np.nan)) or row["cov"] < t["min_cov"]:
-        return "DATA", f"覆盖率 {row.get('cov', float('nan')):.2f} < {t['min_cov']}"
-    if row.get("n_valid", 0) < t["min_n"]:
-        return "DATA", f"有效格 {row.get('n_valid', 0)} < {t['min_n']:.0f}"
-
-    raw, res = row.get("raw_ic", np.nan), row.get("resfac_ic", np.nan)
-    if not np.isfinite(raw) or abs(raw) < t["ic_floor"]:
-        return "NOIC", f"raw IC {raw:+.4f} 不足 {t['ic_floor']}"
-    if not np.isfinite(res) or abs(res) < t["ic_floor"]:
-        return "ABSORBED", f"残差 IC {res:+.4f} 不足（信息被主信号吸收）"
-
-    plc = row.get("plc_ic", np.nan)
-    if not np.isfinite(plc):
-        return "NOPLC", "安慰剂缺失 —— 按铁律不得判增益"
-    # 符号翻转：raw 与残差方向相反 ⇒ 原始预测力全部来自与主信号共线的那部分，
-    # 扣掉之后方向反转。**不是自动拒绝**，而是"方向只能取残差那一侧"，
-    # 且残差侧必须单独过组合层（2026-11-18 cyq_benefit 实证：残差方向打平市场）。
-    if np.sign(raw) != np.sign(res):
-        return "SIGNFLIP", (f"raw {raw:+.4f} 与残差 {res:+.4f} 反号 ⇒ "
-                            f"raw 方向不可交易，只能测残差方向 {np.sign(res):+.0f} 侧")
-    ratio, gap = row.get("eff_ratio", np.nan), row.get("eff_gap", np.nan)
-    if np.sign(plc) != np.sign(res):
-        return "PASS*", f"安慰剂反号（plc {plc:+.4f}），效应量比不可算，看 gap {gap:+.4f}"
-    if abs(gap) < t["gap_floor"]:
-        return "NOISE", f"真实与安慰剂差 {gap:+.4f} < {t['gap_floor']}"
-    if np.isfinite(ratio) and ratio < t["eff_ratio"]:
-        return "WEAK", f"效应量比 {ratio:.1f}× < {t['eff_ratio']}×"
-    return "PASS", f"效应量比 {ratio:.1f}×，gap {gap:+.4f}（仍需 Top-N 组合验证）"
-
-
-#: 兼容别名（旧调用方写 ``gc.verdict`` / ``schema.verdict_admission``）。
-verdict = admission_verdict
-verdict_admission = admission_verdict
-
 __all__ = [
     "ADMISSION_GATES", "CORR_TRIGGER", "MIN_SPAN", "REL_STD_DEGENERATE",
-    "admission_verdict",
     "REL_STD_TINY", "RESID_IC_NEGLIGIBLE", "Verdict", "all_thresholds",
     "classify_independent", "cyclic_placebo", "dup_classify", "dup_explain",
     "effect_size", "ic_calibers", "ic_stats", "panel_coverage",
     "promotion_gates", "qualifier", "rank_corr", "resid_rank", "seg_stability",
-    "should_check", "tier_of", "verdict", "verdict_admission", "yearly_ic",
+    "should_check", "tier_of", "yearly_ic",
 ]

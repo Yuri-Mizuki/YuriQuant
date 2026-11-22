@@ -2123,6 +2123,39 @@
   placebo 机制 + NW 滞后 + BH 阈值；`panel_end`）落 checkup 产物两列。
   ⚠️ 发现：`admission_verdict`（L1-L5）当前**无生产调用方**（原 gate 入口
   已随 11-19 删批消失）——verdict 的正式落盘接线并入 fd 臂实验范围。
+  ✅ **verdict 机制已删除（2026-11-22）**：`admission_verdict` 及 `verdict` /
+  `verdict_admission` 别名全部移除。理由：无生产调用方；通用入库无主信号 ⇒
+  `resfac_ic` 结构性缺失，硬接只会把合规因子误标 ABSORBED（fd_ent30 实测
+  IC +0.0464、eff 12.6× 仍被判"被吸收"）。`ADMISSION_GATES` 保留（L5 的
+  eff 门槛仍在用），`all_thresholds` / `qualifier` 保留；体检表继续输出
+  cov/IC/安慰剂/BH 原始列，不再合成准入标签；守卫白名单同步收口。
+- [ ] **⏳ 预注册：fd_ent30 全A 30min 版本（2026-11-22，可行性 gate 已过）**。定位为新版本登记，
+  不覆盖 11-19 的 hs300 探针结论（IC +0.0266 / SR 0.230）。文档行 228
+  「单一成交额占比熵」mean 版：IC 0.044 / IR 0.738 / IC>0 77.58%。
+  假设：全A口径下 IC 方向为正，且与低波/流动性族 \|ρ\|<0.3。
+  主口径锁定 **30min**（原作者结论），5/15/60 只作稳健性、不参与选择；
+  收益 `adj_close_pct_v1`、mask `tradable_t0`、2018–2026 分年度报告。
+  主指标：日均截面 IC 均值 / NW-t（lag 按新息）、IC>0 月份占比、分年度符号一致率。
+  **可行性 gate（先跑，不过则只留档不跑 IC）**：8 个 30min 段全齐的交易日占比 ≥80%，
+  且覆盖率不随年份单调恶化。判负即留档、不进模型臂：全A IC <0.01 或 NW-t <2，
+  或与最近邻 \|ρ\|≥0.7。工程前置：`build_entropy` 补 `pool` 参数、改 `iter_blocks`
+  逐块流式（全A float64 峰值 20GB+）。产物落 `reports/factor_dict_probe/ent30_all_a_*`。
+  回测统一 30bp 往返。
+  ✅ **覆盖率探针已跑（2026-11-22）**：抽样 2018/2021/2024/2026，8 段全齐覆盖率
+  （相对当日有数据股票）四年均为 **1.000**（p10 亦 1.0），覆盖股票数 3,362 → 5,512，
+  逐年改善 ⇒ gate 通过。抽检 2024 前 20 日，entropy 有效截面 **5,094 码/日**
+  （hs300 的 17×），截面 std 0.017。明细 `reports/factor_dict_probe/ent30_all_a_coverage.csv`，
+  探针 `scripts/oneoff/ent30_coverage_probe.py`（gitignored）。下一步：builder 补 `pool`
+  + `iter_blocks` 流式后跑 2018–2026 全量。
+  ✅ **全A 已跑并入库（2026-11-22）**：IC **+0.0464** / ICIR 9.35 / NW-t **25.60**
+  （2155 日、9.40M 有效格），best_sharpe **0.882 @ls_W**，最近邻
+  `im_pv_seg01_volshare` |ρ|=0.574（独立），eff_ratio 12.6× / eff_gap 0.0412，
+  p_nw=0 / 批内 BH 存活 1；`panel_end=2026-11-20`。文档行 228 的 0.044 基本复现
+  ⇒ 11-19 的「IC 掉一半（0.0266）」确系 hs300 样本口径所致，不是因子失效。
+  工程侧：`build_entropy` 已补 `--entropy-pool` + 8 天/块 `iter_blocks`（全量 43s，
+  内存无增长）；顺手修了 `dup_index` 的 `dup_norms` 缓存长度校验
+  （1067 签名 vs 965 norms 的广播崩溃）。下一步：组合层增量检验（与低波/流动性族并集）。
+
 - [ ] **华泰 AI3128 全频段**：同上资源墙，墙后复评。
 
 ### 周频方向：三次证伪，别重投（2026-11-13 收口）

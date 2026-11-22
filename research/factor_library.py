@@ -2259,9 +2259,10 @@ class FactorLibrary:
                             "回退逐面板比对", sig.shape, len(names), len(codes))
                 return None
             norms_f = base / "dup_norms.npy"
-            if norms_f.exists():
-                norms = np.load(norms_f)
-            else:
+            norms = np.load(norms_f) if norms_f.exists() else None
+            # 缓存校验：索引扩过因子后旧 norms 会短一截，直接广播会炸
+            # （2026-11-22 实测 1067 签名 vs 965 norms）。长度不符即重算。
+            if norms is None or len(norms) != len(names):
                 norms = np.zeros(len(names), dtype=np.float64)
                 for k in range(sig.shape[0]):
                     norms += (sig[k].astype(np.float64) ** 2).sum(axis=1)
