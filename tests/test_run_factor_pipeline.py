@@ -7,12 +7,20 @@ def test_full_chain_order_and_args():
                           names=["a", "b"],
                           builders=("build_fd_factors",),
                           builder_args="--real --begin 20250101")
+    # 39048cc 起首段 extend（面板延长）、evaluate 后接 ic_fuse（fd/im 通道补 IC）
     assert [c[0] for c in cmds] == [
-        "build:build_fd_factors", "evaluate", "board_data", "board"]
-    assert cmds[0][1][-3:] == ["--real", "--begin", "20250101"]
-    bd = cmds[2][1]
+        "extend", "build:build_fd_factors", "evaluate", "ic_fuse",
+        "board_data", "board"]
+    assert cmds[1][1][-3:] == ["--real", "--begin", "20250101"]
+    assert "--stale-only" in cmds[2][1]
+    bd = cmds[4][1]
     assert "--resume" in bd and "--names" in bd and "a,b" in bd
     assert "--root" in bd and "/tmp/lib/ds" in bd
+
+
+def test_ic_fuse_only_with_names():
+    cmds = build_commands(dataset="ds", root="/tmp/lib/ds")
+    assert "ic_fuse" not in [c[0] for c in cmds]
 
 
 def test_steps_selection():
