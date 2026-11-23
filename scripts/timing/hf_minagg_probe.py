@@ -175,7 +175,10 @@ def threshold_backtest(feat: pd.Series, open_px: pd.Series, polarity: int,
     """
     thr = feat.rolling(ROLL_Q_WIN, min_periods=ROLL_Q_WIN // 2).quantile(q)
     raw = (feat > thr).astype(float) if polarity > 0 else (feat < thr).astype(float)
-    pos_for_next = raw.shift(1)  # t 收盘算出 → 作用于 t+1 open 开始的段
+    # ⚠️ 2026-11-23 滞后订正：原式 ``raw.shift(1)`` 与段 ``open_{t+2}/open_{t+1}`` 叠加后实际是
+    # T+2 open 生效（比 docstring 多滞后一日）。11-22 README 的 L2 14 臂数字为 T+2 口径——
+    # 须在有分钟数据的机器重跑后改写（TODO 已记）；self_check 第 4 条锁定 T+1。
+    pos_for_next = raw  # t 收盘算出 → 恰作用于 t 行的段 open_{t+1}→open_{t+2}
     seg_ret = open_px.shift(-2) / open_px.shift(-1) - 1.0  # t 日的目标段（open_{t+1}→open_{t+2}）
     trade = pos_for_next.diff().abs().fillna(0.0)
     ret = pos_for_next * seg_ret - trade * cost_bps * 1e-4
@@ -192,6 +195,7 @@ def threshold_backtest(feat: pd.Series, open_px: pd.Series, polarity: int,
         "excess_annual": annual_return(ret) - annual_return(bench),
         "avg_pos": float(pos_for_next.dropna().mean()),
         "turnover": float(trade.sum()),
+        "ret": ret,  # 仅供 self_check 的滞后不变量使用
     }
 
 
@@ -214,6 +218,15 @@ def self_check(feat: pd.DataFrame, open_px: pd.Series) -> list[str]:
         bad.append("price_vs_resistance 出现负值（收盘高于日高？）")
     if (feat["price_vs_support"].dropna() < -1e-9).any():
         bad.append("price_vs_support 出现负值（收盘低于日低？）")
+    # 4) 执行滞后不变量（2026-11-23 立）：单点信号 raw_s 必须恰在 s 行吃 open_{s+1}→open_{s+2}
+    L = 1000
+    if len(d) > L + 3:
+        probe = pd.Series(0.0, index=d.index)
+        probe.iloc[L] = 1.0  # 其余为 0 ⇒ 滚动中位数阈值为 0 ⇒ raw 仅 s 行为 1
+        nz = threshold_backtest(probe, d, polarity=1, q=0.5, cost_bps=0.0)["ret"]
+        nz = nz[nz != 0]
+        if len(nz) != 1 or abs(float(nz.iloc[0]) - float(d.iloc[L + 2] / d.iloc[L + 1] - 1)) > 1e-12:
+            bad.append("执行滞后错位：raw_s 应恰在 s 行吃 open_{s+1}→open_{s+2}（T+1 open）")
     return bad
 
 

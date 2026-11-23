@@ -166,11 +166,15 @@ def composite_positions(comp_z: pd.Series) -> pd.Series:
 
 
 def run_continuous(pos: pd.Series, open_px: pd.Series, cost_bps: float) -> dict:
-    """连续仓位：pos_t 于 t 收盘可知，t+1 open→t+2 open 段生效；换仓成本在 t+1 open。"""
+    """连续仓位：pos_t 于 t 收盘可知，t+1 open→t+2 open 段生效；换仓成本在 t+1 open。
+
+    ⚠️ 2026-11-23 滞后订正：原式 ``earn = pos.shift(1)`` 与段 ``open_{t+2}/open_{t+1}`` 叠加后
+    实际是 **T+2 open 生效**（pos_s 吃 open_{s+2}→open_{s+3}），比本 docstring 多滞后一日。
+    11-22 README 的 L2 v1/v2 数字为 T+2 口径——**须在有数据的机器重跑后改写**（TODO 已记）；
+    ``self_check`` 的仓位探针不变量锁定 T+1。"""
     seg = open_px.shift(-2) / open_px.shift(-1) - 1.0
-    earn = pos.shift(1)
-    cost = earn.diff().abs().fillna(0.0) * cost_bps * 1e-4
-    ret = (earn * seg - cost).dropna()
+    cost = pos.diff().abs().fillna(0.0) * cost_bps * 1e-4
+    ret = (pos * seg - cost).dropna()
     bench = seg.dropna()
     return {
         "annual": annual_return(ret),
@@ -178,8 +182,8 @@ def run_continuous(pos: pd.Series, open_px: pd.Series, cost_bps: float) -> dict:
         "mdd": max_drawdown(ret),
         "bench_annual": annual_return(bench),
         "excess": annual_return(ret) - annual_return(bench),
-        "avg_pos": float(earn.dropna().mean()),
-        "turnover": float(earn.diff().abs().fillna(0).sum()),
+        "avg_pos": float(pos.dropna().mean()),
+        "turnover": float(pos.diff().abs().fillna(0).sum()),
         "ret": ret,
     }
 
@@ -193,6 +197,13 @@ def self_check(feat: pd.DataFrame, open_px: pd.Series, pos: pd.Series) -> list[s
         got = (open_px.shift(-2) / open_px.shift(-1) - 1.0).loc[t0]
         if abs(float(expect) - float(got)) > 1e-12:
             bad.append(f"目标段错位 @{t0.date()}")
+    # 执行滞后不变量（2026-11-23 立）：pos_s 必须恰在 s 行吃 open_{s+1}→open_{s+2}（T+1 open）
+    probe = pd.Series(0.0, index=open_px.index)
+    probe.iloc[1000] = 1.0
+    nz = run_continuous(probe, open_px, 0.0)["ret"]
+    nz = nz[nz != 0]
+    if len(nz) != 1 or abs(float(nz.iloc[0]) - float(d.iloc[1002] / d.iloc[1001] - 1)) > 1e-12:
+        bad.append("执行滞后错位：pos_s 应恰在 s 行吃 open_{s+1}→open_{s+2}（T+1 open）")
     if not ((pos.dropna() >= 0).all() and (pos.dropna() <= 1).all()):
         bad.append("仓位越界 [0,1]")
     nb = feat["notice_breadth20"].dropna()

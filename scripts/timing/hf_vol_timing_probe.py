@@ -13,10 +13,14 @@
      ③c 放量状态满仓。G3-风控 = MDD 改善≥2pp 且年化恶化≤0.5pp；G3-进攻 = 年化
      +≥0.5pp 且 MDD 恶化≤2pp。对照 pos≡0/≡0.5/≡1。T+1 open 执行，10bp（敏感性 30bp）。
   ④ 连续特征：vr=amt/MA20−1、flat=std/mean(close)。门 = |日IC|≥2% 或 |周IC|≥3%
-     且半窗同号（frontier 线口径）。
+     且半窗同号（frontier 线口径）；过门才做兑现（④b）。
+  ④c 退化对照（11-23 补）：vr vs 四个价格趋势/动量过滤 + 两个量能近亲——vr 不是趋势马甲。
   OOS = 事件日 > 2025-05-12（研报数据截止）。敏感性网格只报不选峰。
   事件层口径注记：fwd 收益从 T 收盘起算（研报同口径，信息可知性检验）；
   策略臂才用 T+1 open 可执行口径。
+
+⚠️ 2026-11-23 滞后订正：本探针首版 run_continuous 沿用 multisrc 的 ``pos.shift(1)``，实际
+T+2 open 生效；当日改为 T+1 并加仓位探针不变量，首版 ③/④b 数字全部作废重跑（见 README §三）。
 
 用法::
 
@@ -32,6 +36,7 @@ import pandas as pd
 
 from backtest.metrics import annual_return, calmar_ratio, max_drawdown, sharpe_ratio
 from scripts.timing.shell import ROOT, load_index_daily
+from stats.robust_stats import nw_tstat
 
 OUT = ROOT / "reports" / "hf_vol_timing_probe"
 
@@ -46,6 +51,8 @@ INDICES: dict[str, tuple[str, int]] = {
 }
 OVERLAY_CODE = "000300.SH"
 REPORT_CUTOFF = pd.Timestamp("2025-05-12")
+BEGIN = "2016-01-01"   # 仓位层窗口（与 legs/downfreq 对齐；事件研究用全历史）
+HALF = "2021-01-01"
 ANCHORS = ("2024-08-12", "2024-12-24", "2025-03-25")
 HORIZONS = (1, 5, 10, 20, 40)
 
@@ -138,12 +145,15 @@ def yearly_counts(event: pd.Series) -> pd.Series:
 
 # ---------------------------------------------------------------- ③ 回测壳
 def run_continuous(pos: pd.Series, open_px: pd.Series, cost_bps: float) -> dict:
-    """连续仓位（multisrc_timing_probe 口径复制）：pos_t 于 t 收盘可知，
-    t+1 open→t+2 open 段生效；换仓成本在 t+1 open。"""
+    """连续仓位：pos_t 于 t 收盘可知，t+1 open→t+2 open 段生效；换仓成本在 t+1 open。
+
+    ⚠️ 2026-11-23 滞后订正：multisrc 原式 ``earn = pos.shift(1)`` 与段 ``open_{t+2}/open_{t+1}``
+    叠加后实际是 **T+2 open 生效**（pos_s 吃 open_{s+2}→open_{s+3}），比文档多滞后一日。
+    本探针 11-23 首版数字（及 legs/downfreq）均为 T+2 口径、已作废重跑；
+    ``self_check`` 的仓位探针不变量锁定 T+1。"""
     seg = open_px.shift(-2) / open_px.shift(-1) - 1.0
-    earn = pos.shift(1)
-    cost = earn.diff().abs().fillna(0.0) * cost_bps * 1e-4
-    ret = (earn * seg - cost).dropna()
+    cost = pos.diff().abs().fillna(0.0) * cost_bps * 1e-4
+    ret = (pos * seg - cost).dropna()
     bench = seg.dropna()
     return {
         "annual": annual_return(ret),
@@ -152,8 +162,8 @@ def run_continuous(pos: pd.Series, open_px: pd.Series, cost_bps: float) -> dict:
         "calmar": calmar_ratio(ret),
         "bench_annual": annual_return(bench),
         "excess": annual_return(ret) - annual_return(bench),
-        "avg_pos": float(earn.dropna().mean()),
-        "turnover": float(earn.diff().abs().fillna(0).sum()),
+        "avg_pos": float(pos.dropna().mean()),
+        "turnover": float(pos.diff().abs().fillna(0).sum()),
         "ret": ret,
     }
 
@@ -210,6 +220,15 @@ def self_check(daily: dict[str, pd.DataFrame]) -> list[str]:
         got = (op.shift(-2) / op.shift(-1) - 1.0).iloc[loc]
         if abs(float(expect) - float(got)) > 1e-12:
             bad.append(f"目标段错位 @{d.index[loc].date()}")
+    # 执行滞后不变量（2026-11-23 立）：pos_s（s 收盘定）必须吃 open_{s+1}→open_{s+2}，
+    # 不是 T+2——首版 pos.shift(1)×seg 的双滞后正是靠这条抓不到才漏进 legs/downfreq
+    op = daily[OVERLAY_CODE]["open"]
+    probe = pd.Series(0.0, index=op.index)
+    probe.iloc[1000] = 1.0
+    nz = run_continuous(probe, op, 0.0)["ret"]
+    nz = nz[nz != 0]
+    if len(nz) != 1 or abs(float(nz.iloc[0]) - float(op.iloc[1002] / op.iloc[1001] - 1)) > 1e-12:
+        bad.append("执行滞后错位：pos_s 应恰在 s 行吃 open_{s+1}→open_{s+2}（T+1 open）")
     return bad
 
 
@@ -230,7 +249,7 @@ def main() -> int:
             print("SELF-CHECK FAIL:", b)
         if bad:
             return 1
-        print("SELF-CHECK PASS（us_ret1 锚点/条件重算/事件链首/执行段对齐全过）")
+        print("SELF-CHECK PASS（us_ret1 锚点/条件重算/事件链首/执行段对齐/T+1 执行滞后全过）")
         return 0
 
     gates: list[dict] = []
@@ -366,14 +385,22 @@ def main() -> int:
         "③c' z5+放量满仓": pd.concat([pos_base5, c3["surge_state"].astype(float)], axis=1).max(axis=1),
     }
     rows3b = []
+    m5_base = run_continuous(pos_base5, d3["open"], COST_BPS)
     for name, pos in arms5.items():
         m = run_continuous(pos, d3["open"], COST_BPS)
+        dlt = (m["ret"] - m5_base["ret"]).dropna()
         rows3b.append({"arm": name, "annual": m["annual"], "sharpe": m["sharpe"],
                        "mdd": m["mdd"], "calmar": m["calmar"], "avg_pos": m["avg_pos"],
-                       "turnover": m["turnover"]})
-    print("  诊断（非预注册，5 日平滑 z 基线，10bp）：")
+                       "turnover": m["turnover"],
+                       "d_excess": m["annual"] - m5_base["annual"],
+                       "d_nw_t": float(nw_tstat(dlt)[0])})
+    print("  诊断（非预注册，5 日平滑 z 基线，10bp；d_* = 相对 ③a' 的增量）：")
     print(pd.DataFrame(rows3b).round(4).to_string(index=False))
     pd.DataFrame(rows3b).to_csv(OUT / "overlay_arms_diag.csv", index=False, encoding="utf-8-sig")
+    # 预注册臂相对 ③a 的增量显著性（死基线，仅作记录：名义过门是否只是噪声）
+    for label, m in (("③b", filt), ("③c", atk)):
+        dlt = (m["ret"] - base["ret"]).dropna()
+        print(f"  增量 {label}−③a: {m['annual'] - base['annual']:+.2%}/年  NW-t {nw_tstat(dlt)[0]:.2f}")
     gates.append({"gate": "G3-风控（③b 缩量清零）",
                   "pass": g3_risk,
                   "detail": f"MDD {base['mdd']:.2%}→{filt['mdd']:.2%}，年化 "
@@ -427,6 +454,37 @@ def main() -> int:
                            "excess_vs_hold": m["excess"], "turnover": m["turnover"]})
     print(pd.DataFrame(rows4b).round(4).to_string(index=False))
     pd.DataFrame(rows4b).to_csv(OUT / "cont_features_realize.csv", index=False, encoding="utf-8-sig")
+
+    # ④c 退化对照（2026-11-23 补；线纪律④：信号必须和自己的退化形态比）：vr 是否只是
+    # 「价格趋势」的马甲——四个价格趋势/动量过滤 + 两个量能近亲，同口径同台。窗口与
+    # legs/downfreq 对齐（2016→now），基准=半仓
+    print("\n[④c] vr 退化对照（长平，T+1 open，10bp，2016→now，vs 半仓；ex30 = 30bp 超额）")
+    rows4c = []
+    for c in (OVERLAY_CODE, "399317.SZ", "000852.SH"):
+        d4 = daily[c]
+        cl, amt4 = d4["close"], d4["amount"]
+        vr = amt4 / amt4.rolling(WIN).mean() - 1.0
+        half4 = run_continuous(pd.Series(0.5, index=d4.index), d4["open"], 0.0)["ret"].loc[BEGIN:]
+        ctrls = {
+            "vr_z5": causal_z(vr).rolling(5).mean() > 0,
+            "close>MA20": cl > cl.rolling(WIN).mean(),
+            "close>MA60": cl > cl.rolling(60).mean(),
+            "ret20>0": cl / cl.shift(WIN) - 1.0 > 0,
+            "z5(5日收益)>0": causal_z(cl / cl.shift(5) - 1.0).rolling(5).mean() > 0,
+            "vr原始>0": vr > 0,
+            "z5(成交额水平)>0": causal_z(amt4).rolling(5).mean() > 0,
+        }
+        for name, sig in ctrls.items():
+            r10 = run_continuous(sig.astype(float), d4["open"], COST_BPS)["ret"].loc[BEGIN:]
+            r30 = run_continuous(sig.astype(float), d4["open"], 30.0)["ret"].loc[BEGIN:]
+            rows4c.append({"index": INDICES[c][0], "arm": name,
+                           "excess": annual_return(r10) - annual_return(half4),
+                           "nw_t": float(nw_tstat((r10 - half4).dropna())[0]),
+                           "h1": annual_return(r10.loc[:HALF]) - annual_return(half4.loc[:HALF]),
+                           "h2": annual_return(r10.loc[HALF:]) - annual_return(half4.loc[HALF:]),
+                           "ex30": annual_return(r30) - annual_return(half4)})
+    print(pd.DataFrame(rows4c).round(4).to_string(index=False))
+    pd.DataFrame(rows4c).to_csv(OUT / "vr_degenerate_controls.csv", index=False, encoding="utf-8-sig")
 
     # ================= 敏感性网格（只报不选峰） =================
     grid = []

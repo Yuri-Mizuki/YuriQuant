@@ -11,6 +11,10 @@
 门：G0 独立性（两两 |ρ|<0.3）/ G1 单腿弱门（超额>0 双半窗同号、30bp 仍>0）/
 G2 组合主门（等权 vs 半仓 NW-t≥2 且 Sharpe≥最强单腿+0.2）/ G3 剔 vr 双腿仍正 /
 G4 30bp 组合正 + 等权 vs 因果逆波动率排序半窗不翻转。000001 同流程作信息行。
+另报跨资产形态信息行（壳@000001 + vr@000300 + vr@000852，不判门）。
+
+⚠️ 2026-11-23 滞后订正：首版 L2/L3 沿用 run_continuous 的 T+2 口径，当日改 T+1 重跑，
+首版全表作废（见 README §三）。
 
 用法::
 
@@ -75,6 +79,33 @@ def combo_series(legs: dict[str, pd.Series]) -> dict[str, pd.Series]:
     invvol = (df * w).sum(axis=1, min_count=1)
     ex_vr = df[["L1", "L2"]].mean(axis=1)
     return {"C_equal": equal, "C_invvol": invvol, "C_ex_vr": ex_vr}
+
+
+# ---------------------------------------------------------------- 跨资产（信息行）
+def cross_asset(cost: float) -> tuple[dict, pd.DataFrame]:
+    """跨资产形态（信息行，不判门；2026-11-23 自 downfreq 的 inline 诊断转正）：
+    壳@上证 + vr_z5@沪深300 + vr_z5@中证1000 等权，基准 = 三指数等权 open-open × 半仓。"""
+    sse = load_index_daily(INFO_CODE, begin=20130101, cache_dir=OUT / "data")
+    cl = sse["close"].loc[BEGIN:]
+    legs = {"shell@000001": run_rebalance_shell(
+        cl, pd.Series(0.0, index=cl.index), cost_bps=cost, step_pct=1.0, step=0.1,
+        init_pos=0.5, weekday=2)["ret"]}
+    segs = [(sse["open"].shift(-2) / sse["open"].shift(-1) - 1.0).loc[BEGIN:]]
+    for code in (INDEX_CODE, "000852.SH"):
+        d = load_index_daily(code, begin=20130101, cache_dir=OUT / "data")
+        z = causal_z(d["amount"] / d["amount"].rolling(20).mean() - 1.0).rolling(5).mean()
+        legs[f"vr_z5@{code[:6]}"] = run_continuous((z > 0).astype(float), d["open"], cost)["ret"].loc[BEGIN:]
+        segs.append((d["open"].shift(-2) / d["open"].shift(-1) - 1.0).loc[BEGIN:])
+    df = pd.concat(legs, axis=1, join="inner").dropna()
+    bench = 0.5 * pd.concat(segs, axis=1, join="inner").mean(axis=1)
+    combo = df.mean(axis=1)
+    return ({"cost_bp": cost, "annual": annual_return(combo), "sharpe": sharpe_ratio(combo),
+             "mdd": max_drawdown(combo),
+             "excess": annual_return(combo) - annual_return(bench),
+             "nw_t": float(nw_tstat((combo - bench).dropna())[0]),
+             "h1": annual_return(combo.loc[:HALF]) - annual_return(bench.loc[:HALF]),
+             "h2": annual_return(combo.loc[HALF:]) - annual_return(bench.loc[HALF:])},
+            df.corr())
 
 
 # ---------------------------------------------------------------- 指标
@@ -245,6 +276,16 @@ def main() -> int:
     for g in gates:
         print(f"{g['gate']}: {'PASS' if g['pass'] else 'FAIL'}  {g['detail']}")
     pd.DataFrame(gates).to_csv(OUT / "gates.csv", index=False, encoding="utf-8-sig")
+
+    rows_x, corr_x = [], None
+    for cost in (COST, 30.0):
+        m, corr_x = cross_asset(cost)
+        rows_x.append(m)
+    print("\n[跨资产·信息行，不判门] 壳@000001 + vr_z5@000300 + vr_z5@000852 等权 vs 匹配基准")
+    print(pd.DataFrame(rows_x).round(4).to_string(index=False))
+    print(corr_x.round(3).to_string())
+    pd.DataFrame(rows_x).to_csv(OUT / "cross_asset.csv", index=False, encoding="utf-8-sig")
+    corr_x.to_csv(OUT / "cross_asset_corr.csv", encoding="utf-8-sig")
     return 0
 
 

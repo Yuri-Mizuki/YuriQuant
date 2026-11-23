@@ -11,6 +11,10 @@
 G2 显著性（该臂 10bp NW-t≥2.0）/ G3 不劣（10bp 超额 ≥ A0 的 50%）。
 判读：G1+G2 过 ⇒ 兑现成立；G1 过 G2 不过 ⇒ 成本稳健、信息量天花板；G1 不过 ⇒ 收线。
 机制归因：A1 存活=边缘在 regime 级、仅 A3/A4 存活=大动量门控、全灭=纯日频不可分。
+附：us_ret1 分段 IC（``segment_decomposition``，回答「隔夜信息是否已在开盘缺口定价」）。
+
+⚠️ 2026-11-23 滞后订正：首版沿用 ``run_continuous`` 的 T+2 口径，当日改 T+1 重跑，
+首版全表作废（见 README §三）。
 
 用法::
 
@@ -81,6 +85,41 @@ def arm_metrics(pos: pd.Series, open_px: pd.Series, cost: float, half_bench: pd.
            "excess": annual_return(r) - annual_return(half_bench),
            "nw_t": float(nw_tstat(d)[0]), "n": len(r)}
     return row, r
+
+
+def segment_decomposition(daily: pd.DataFrame) -> tuple[pd.DataFrame, float]:
+    """us_ret1 分段 IC（2026-11-23 补，inline 诊断转正）：隔夜信息落在哪一段。
+
+    A 缺口 close(t-1)→open(t)：现货吃不到（标普 04:00 收盘时 A 股已收盘）；B 缺口后盘中；
+    C 当开→次开（信号晨间已知 ⇒ 可交易的自然形态）；E 次开→再次开（frontier 的 IC 目标）；
+    F 隔两日（T+2 滞后 bug 时回测实际吃的段）。另报 E 段的周一/非周一拆分
+    （frontier 原式把周一静默丢成 NaN）。返回 (表, 缺口传导 beta)。"""
+    o, c = daily["open"], daily["close"]
+    u = build_us_ret1(daily)
+    segs = {
+        "A 缺口 close(t-1)->open(t) [吃不到]": o / c.shift(1) - 1,
+        "B 盘中 open(t)->close(t)": c / o - 1,
+        "C 当开->次开 open(t)->open(t+1)": o.shift(-1) / o - 1,
+        "E 次开->再次开 open(t+1)->open(t+2) [IC目标]": o.shift(-2) / o.shift(-1) - 1,
+        "F 隔两日 open(t+2)->open(t+3) [首版回测实际]": o.shift(-3) / o.shift(-2) - 1,
+    }
+    rows = []
+
+    def one(tag: str, x: pd.Series, y: pd.Series) -> None:
+        s = pd.concat([x, y], axis=1).dropna()
+        h = len(s) // 2
+        rows.append({"segment": tag, "ic": s.iloc[:, 0].corr(s.iloc[:, 1]),
+                     "ic_h1": s.iloc[:h, 0].corr(s.iloc[:h, 1]),
+                     "ic_h2": s.iloc[h:, 0].corr(s.iloc[h:, 1]), "n": len(s)})
+
+    for k, v in segs.items():
+        one(k, u, v)
+    mon = u.index.weekday == 0
+    one("E 仅周一", u[mon], segs["E 次开->再次开 open(t+1)->open(t+2) [IC目标]"])
+    one("E 去周一", u[~mon], segs["E 次开->再次开 open(t+1)->open(t+2) [IC目标]"])
+    s = pd.concat([u, segs["A 缺口 close(t-1)->open(t) [吃不到]"]], axis=1).dropna()
+    beta = float(s.cov().iloc[0, 1] / s.iloc[:, 0].var())
+    return pd.DataFrame(rows), beta
 
 
 # ---------------------------------------------------------------- 自检
@@ -200,6 +239,11 @@ def main() -> int:
     print("\n判读（预注册）：", "兑现成立 → 进采纳候选（降频形态）" if g1 and g2 else
           ("成本稳健、显著性未达标 → 兑现降档开放" if g1 else
            "降频也救不了 → us_ret1 兑现收线（IC 层结论保留）"))
+
+    seg_tbl, beta = segment_decomposition(daily)
+    print(f"\n[机制] us_ret1 分段 IC（缺口传导 beta={beta:.3f}：标普隔夜 -1% ⇒ 沪深300 平均低开 {beta:.2%}）")
+    print(seg_tbl.round(4).to_string(index=False))
+    seg_tbl.to_csv(OUT / "us_ret1_segments.csv", index=False, encoding="utf-8-sig")
     return 0
 
 

@@ -54,7 +54,8 @@ def load_us_daily(refresh: bool = False) -> pd.Series:
         return pd.read_parquet(cache)["close"]
     import akshare as ak
 
-    df = ak.index_us_daily_sina(symbol=".INX")
+    # akshare ≥1.18 已无 index_us_daily_sina（2026-11-23 实测 1.18.56 报 AttributeError）
+    df = ak.index_us_stock_sina(symbol=".INX")
     s = df.set_index(pd.to_datetime(df["date"]))["close"].astype(float).sort_index()
     cache.parent.mkdir(parents=True, exist_ok=True)
     s.to_frame("close").to_parquet(cache)
@@ -104,9 +105,12 @@ def build_frontier_features(daily_k: pd.DataFrame, minute_agg: pd.DataFrame) -> 
     us = load_us_daily()
     us_ret = us.pct_change()
     # 标普 t-1（最后一个严格早于 A 股 t 的美股交易日）→ A 股 t 日特征
-    f["us_ret1"] = pd.Series(us_ret.reindex(us_ret.index.union(daily_k.index)).ffill()
-                             .reindex(daily_k.index - pd.Timedelta(days=1))
-                             .values, index=daily_k.index)
+    # ⚠️ 2026-11-23 订正：原式 reindex(daily_k.index - 1day) 在 t-1 既非美股交易日也非 A 股
+    # 交易日（周一/节后首日）处留 NaN ⇒ **周一被静默丢弃**。实测 E 段 IC：去周一 7.7% /
+    # 全样本 5.3% / 仅周一 −5.5%（变号）⇒ 11-22 README 的 +7.52% 是去周一口径，须重跑改写。
+    cal = daily_k.index - pd.Timedelta(days=1)
+    s = us_ret.reindex(us_ret.index.union(cal)).ffill().reindex(cal)
+    f["us_ret1"] = pd.Series(s.values, index=daily_k.index)
     hk = load_hk_daily()
     hk_ret = hk.pct_change().reindex(daily_k.index)  # 恒指同日（16:00 收盘 > A 股 15:00）
     f["hk_ret1"] = hk_ret
