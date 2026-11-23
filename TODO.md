@@ -2167,6 +2167,23 @@
   g_base2 已完成（同态基线在盘）。fdnat 因另一会话并发内存竞争两次 DPP OOM
   （select y2020 附近），已暂停待低峰窗口重跑（守卫：free>20GB 且 python≤3）。
   跑完自动 G1/G2 vs g_base2（脚本已备）。**待办更新**：
+
+  （**本机（E 盘数据根）fd 同步状态 2026-11-23**：两机 factor_library 独立副本，
+  本机 46 个里已有 **22**——一~四轮 18 个（11-19/20 老口径入库）+ 本日补的 4 个
+  日频新因子。**已补 4 个（2019–2025 同口径，BH 4/4 存活，IC 与另一台机器逐位
+  一致，t/SR 偏差 <1.5% 属两机冗余索引/掩码水位差异）**：`fd_abn_ret_max`
+  −0.0580/t−19.39/best −0.500、`fd_net_cent` +0.0453/15.08/0.984@ls_W、
+  `fd_emo_spill` −0.0453/−14.74/−0.801、`fd_attn_spill` −0.0468/−25.70/−0.690；
+  dup 全部 <0.85；fuse_ic + 看板缓存已刷。**其余 24 个分钟因子 + fd_ent30 全A 版
+  被数据墙挡住**：本机 `parquet/intraday/` 只有退役的 `min5_hs300`（583MB），无
+  `min5_all_a` 面板（估 17–20GB，5min 全A 2018–2026）。补齐方式 = 从另一台机器
+  整目录拷 `<数据根>/parquet/intraday/min5_all_a/` → `E:/data/parquet/intraday/`，
+  然后一条命令：
+  `python -m scripts.factors.build_fd_factors --offline --features <24 名+fd_ent30>`
+  （fd_ent30 会以 all_a 池重建、覆盖本机 11-19 的 hs300 口径行——与另一台机器
+  11-22 的处理一致）。另：`test_run_factor_pipeline` 契约测试在 HEAD 即红
+  （`39048cc` 加 extend 首段 + ic_fuse 段未同步测试），本机已修复并补
+  `test_ic_fuse_only_with_names`。）
 - [ ] **H 扫描 v2：全库因子调仓频率画像（fdnat 之后，预注册）**。动机：im15
   G2 FAIL + 文章评审（小红书「半衰期配调仓频率」，框架采纳、两条规则证伪——
   ① 指数衰减假设不成立（factor_half_life：h5 正占比 0.352，多数因子 IC 随 h 升）；
@@ -2514,8 +2531,10 @@ Q1−Q5 年化 +12.9%（t 2.24），但多头端 15% 超额仅 **+0.196%/月（t
   tie-break 修复的滞后显影（该信号取值全是 1/31 倍数、大量精确并列），
   **旧产物已不可复现**；已写入 `reports/industry_rotation/README.md` §七 变更记录。
   其余 9/10 行逐位不变，`sue_low` 结论不动。
-  🔴 **仍未处理**：`test_layering::test_no_private_names_cross_module` 存量 20 条
-  （`_exec_rows`/`_row`/`_is_weekly`/`_hrp_weights` 等被跨模块 import），修法=改公开名。
+  🔴 **仍未处理**：~~`test_layering::test_no_private_names_cross_module` 存量 20 条~~
+  ✅ **已清零（2026-11-23，E 盘机）**：历轮公开化后仅剩
+  `tests/test_factor_board_data` import `_window_metrics` 一条（35e0f1a 引入即漏），
+  已公开化为 `window_metrics`（def + 4 调用点 + 测试），全量 1761 绿。
 - [x] **✅ P0 数据缓存已补齐 10-27/10-28（2026-10-28 18:17 收口）**：原缺口
   `daily_all_a.parquet` 末 `2026-10-26`（2868 交易日）⇒ 缺 **10-27、10-28**。
   **不是数据源问题**——直接调 `ds.get_daily_kline(['600000.SH','000001.SZ'], 20261023, 20261028)`
