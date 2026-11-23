@@ -1,6 +1,6 @@
 # scripts 入口索引
 
-> 自动生成（126 个活跃入口）。改脚本 docstring 后运行 `python -m scripts.data_tools.gen_scripts_index` 更新；`--check` 校验是否过期。
+> 自动生成（129 个活跃入口）。改脚本 docstring 后运行 `python -m scripts.data_tools.gen_scripts_index` 更新；`--check` 校验是否过期。
 
 约定：`python -m scripts.<目录>.<文件名>` 运行；`scripts/archive/` 已于 2026-11-18 整体下线（活代码已上移，其余删除）；实验结论查 `reports/README.md` §一「结论速查」，产物落盘规则见其 §1.6。
 
@@ -187,11 +187,11 @@
 
 | 脚本 | 说明 |
 |---|---|
+| `timing/downfreq_realize_probe.py` | 降频兑现探针（纯择时线第六篇，reports/downfreq_realize_probe/）。 |
 | `timing/frontier_timing_probe.py` | 择时前沿三源探针（纯择时线，reports/frontier_timing_probe/）。 |
 | `timing/hf_minagg_probe.py` | 华福 1114 高频聚合特征探针（纯择时线，reports/hf_minagg_probe/）。 |
-| `timing/hf_vol_timing_probe.py` | 华福 0516 放量/缩量择时探针（纯择时线第四篇：事件复现+us_ret1 叠加+vr 连续特征，reports/hf_vol_timing_probe/）。 |
-| `timing/legs_combo_probe.py` | 三腿兑现与组合探针（纯择时线第五篇：rev_shell/us_ret1-z5/vr-z5 组合判负、正交瓶颈归因，reports/legs_combo_probe/）。 |
-| `timing/downfreq_realize_probe.py` | 降频兑现探针（纯择时线第六篇：月频/周频/滞回全灭，us_ret1 兑现收线，reports/downfreq_realize_probe/）。 |
+| `timing/hf_vol_timing_probe.py` | 华福量价择时探针（纯择时线第四篇，reports/hf_vol_timing_probe/）。 |
+| `timing/legs_combo_probe.py` | 三腿兑现与组合探针（纯择时线第五篇，reports/legs_combo_probe/）。 |
 | `timing/multisrc_timing_probe.py` | 多源日频择时信号合成探针（纯择时线主攻，reports/multisrc_timing_probe/）。 |
 | `timing/rev_shell_probe.py` | 周频均值回归壳稳健性探针（纯择时线缝合清单③，reports/rev_shell_probe/）。 |
 | `timing/revshell_stitch_probe.py` | rev_shell 组合层缝合评估（纯择时线，reports/revshell_stitch_probe/）。 |
