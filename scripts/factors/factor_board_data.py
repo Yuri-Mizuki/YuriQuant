@@ -181,7 +181,7 @@ def _industry_ic(panel: pd.DataFrame, fwd: pd.DataFrame, ind: pd.DataFrame,
     return {k: float(np.mean(v)) for k, v in rows.items() if v}
 
 
-def _window_metrics(nav: pd.Series, bench_nav: pd.Series,
+def window_metrics(nav: pd.Series, bench_nav: pd.Series,
                     turnover: pd.Series) -> dict:
     out = {}
     for wname, yrs in WINDOWS.items():
@@ -312,10 +312,10 @@ def compute_one(name: str) -> dict | None:
     base.update({
         "n_days": int(len(nav)),
         "metrics": {
-            "q1_net": _window_metrics(nav["nav_q1_net"], bench_nav, to_q1),
-            "q5_net": _window_metrics(nav["nav_q5_net"], bench_nav, to_q5),
-            "q1_gross": _window_metrics(nav["nav_q1_gross"], bench_nav, to_q1),
-            "q5_gross": _window_metrics(nav["nav_q5_gross"], bench_nav, to_q5),
+            "q1_net": window_metrics(nav["nav_q1_net"], bench_nav, to_q1),
+            "q5_net": window_metrics(nav["nav_q5_net"], bench_nav, to_q5),
+            "q1_gross": window_metrics(nav["nav_q1_gross"], bench_nav, to_q1),
+            "q5_gross": window_metrics(nav["nav_q5_gross"], bench_nav, to_q5),
         },
         "turnover": {
             "q1": {"dates": [str(d.date()) for d in to_q1.index],

@@ -9,7 +9,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from scripts.factors.factor_board_data import _window_metrics
+from scripts.factors.factor_board_data import window_metrics
 
 
 def test_window_metrics_sharpe_sign_matches_return():
@@ -22,7 +22,7 @@ def test_window_metrics_sharpe_sign_matches_return():
     bench = (1 + pd.Series(rng.normal(0.0002, 0.012, len(idx)), index=idx)).cumprod()
     to = pd.Series(0.5, index=idx[::21])
 
-    m = _window_metrics(nav, bench, to)
+    m = window_metrics(nav, bench, to)
     for w, v in m.items():
         assert v["ann"] == v["ann"]  # 全窗口可算
         if v["ann"] > 0.02:
