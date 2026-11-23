@@ -177,6 +177,20 @@ class DataSource(ABC):
         """
         raise NotImplementedError("该数据源未实现 get_fund_iopv")
 
+    # ---- 中金所股指期货代码表（基差探针，2026-11-23）----
+    def get_future_code_list(self, security_type: str = "ZJ_FUTURE") -> list[str]:
+        """期货最新代码表（``ZJ_FUTURE`` = 中金所，含已挂牌合约）。
+
+        默认不可用，具体数据源覆盖。代码格式形如 ``IF2706.CFE``。
+        """
+        raise NotImplementedError("该数据源未实现 get_future_code_list")
+
+    def get_hist_future_code_list(
+        self, security_type: str, start_date: int, end_date: int
+    ) -> list[str]:
+        """期货历史代码表（含区间内已到期的合约），构建连续合约/基差必需。"""
+        raise NotImplementedError("该数据源未实现 get_hist_future_code_list")
+
     # ---- 历史涨跌停/停牌/ST ----
     @abstractmethod
     def get_history_stock_status(
@@ -568,6 +582,20 @@ class AmazingDataSource(DataSource):
         out = pd.concat(frames, ignore_index=True)
         out = out.set_index(["date", "code"])
         return out.sort_index()
+
+    # ---- 中金所期货代码表（基差探针，2026-11-23）----
+    def get_future_code_list(self, security_type: str = "ZJ_FUTURE") -> list[str]:
+        """期货最新代码表。``ZJ_FUTURE`` 为中金所（IF/IH/IC/IM/T/TF/TS/TL）。"""
+        return list(self._base.get_future_code_list(security_type=security_type))
+
+    def get_hist_future_code_list(
+        self, security_type: str, start_date: int, end_date: int
+    ) -> list[str]:
+        """期货历史代码表（含已到期合约）。SDK 走 local_path 增量缓存。"""
+        return list(self._base.get_hist_code_list(
+            security_type=security_type, start_date=start_date, end_date=end_date,
+            local_path=self._local_path,
+        ))
 
     # ---- 分钟K线 ----
     def get_minute_kline(
