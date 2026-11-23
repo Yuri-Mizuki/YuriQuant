@@ -189,6 +189,7 @@
 |---|---|
 | `timing/frontier_timing_probe.py` | 择时前沿三源探针（纯择时线，reports/frontier_timing_probe/）。 |
 | `timing/hf_minagg_probe.py` | 华福 1114 高频聚合特征探针（纯择时线，reports/hf_minagg_probe/）。 |
+| `timing/hf_vol_timing_probe.py` | 华福 0516 放量/缩量择时探针（纯择时线第四篇：事件复现+us_ret1 叠加+vr 连续特征，reports/hf_vol_timing_probe/）。 |
 | `timing/multisrc_timing_probe.py` | 多源日频择时信号合成探针（纯择时线主攻，reports/multisrc_timing_probe/）。 |
 | `timing/rev_shell_probe.py` | 周频均值回归壳稳健性探针（纯择时线缝合清单③，reports/rev_shell_probe/）。 |
 | `timing/revshell_stitch_probe.py` | rev_shell 组合层缝合评估（纯择时线，reports/revshell_stitch_probe/）。 |
