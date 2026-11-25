@@ -154,10 +154,14 @@ def plan(period: int, pool: str, codes: list[str], begin: int, end: int,
     print(f"  区间/频率     {begin} ~ {end} / {period} 分钟"
           f"（每日 {bars_per_day} 根 × {n_days} 个交易日）")
     print(f"  分批          {batch} 只/批 × {len(spans)} 年")
-    print(f"  已有单表      {'有，覆盖 %d 只（%s ~ %s）' % (len(have), str(cov['first'])[:10],
-                                                      str(cov['last'])[:10])
-                    if cov['first'] is not None else ('有，但 >2GB 未解析覆盖' if cov['size'] else '无')}"
-          f" / 年分区 {len(parts)} 个 / 已存分片 {staged} 个")
+    if cov["first"] is not None:
+        cov_desc = "有，覆盖 %d 只（%s ~ %s）" % (
+            len(have), str(cov["first"])[:10], str(cov["last"])[:10])
+    elif cov["size"]:
+        cov_desc = "有，但 >2GB 未解析覆盖"
+    else:
+        cov_desc = "无"
+    print(f"  已有单表      {cov_desc} / 年分区 {len(parts)} 个 / 已存分片 {staged} 个")
     print(f"  待拉代码      {len(todo_codes)} 只（已覆盖 {covered_ratio * 100:.0f}%）")
     print(f"  待拉行数      约 {total_rows / 1e8:.2f} 亿行，"
           f"{total_rows * BYTES_PER_BAR / 1024**3:.1f} GB（长表口径）")

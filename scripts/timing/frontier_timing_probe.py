@@ -26,14 +26,13 @@ L2 合成**——若 L1 出强源，另行立项）。
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
 
-import numpy as np
 import pandas as pd
 
 from scripts.timing.hf_minagg_probe import build_features, load_minute_daily
 from scripts.timing.shell import load_index_daily
 from scripts.timing.shell import ROOT
+from data.atomic_io import write_parquet_atomic
 
 OUT = ROOT / "reports" / "frontier_timing_probe"
 INDEX_CODE = "000300.SH"
@@ -58,7 +57,7 @@ def load_us_daily(refresh: bool = False) -> pd.Series:
     df = ak.index_us_stock_sina(symbol=".INX")
     s = df.set_index(pd.to_datetime(df["date"]))["close"].astype(float).sort_index()
     cache.parent.mkdir(parents=True, exist_ok=True)
-    s.to_frame("close").to_parquet(cache)
+    write_parquet_atomic(s.to_frame("close"), cache)
     return s
 
 
@@ -72,7 +71,7 @@ def load_hk_daily(refresh: bool = False) -> pd.Series:
     df = ak.index_hk_daily_sina(symbol="HSI")
     s = df.set_index(pd.to_datetime(df["date"]))["close"].astype(float).sort_index()
     cache.parent.mkdir(parents=True, exist_ok=True)
-    s.to_frame("close").to_parquet(cache)
+    write_parquet_atomic(s.to_frame("close"), cache)
     return s
 
 
@@ -94,7 +93,7 @@ def load_bond_yield(refresh: bool = False) -> pd.DataFrame:
     out = g[["1年", "10年"]].astype(float).sort_index()
     out.columns = ["y1y", "y10y"]
     cache.parent.mkdir(parents=True, exist_ok=True)
-    out.to_parquet(cache)
+    write_parquet_atomic(out, cache)
     return out
 
 

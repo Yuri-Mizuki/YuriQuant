@@ -1,6 +1,6 @@
 # scripts 入口索引
 
-> 自动生成（129 个活跃入口）。改脚本 docstring 后运行 `python -m scripts.data_tools.gen_scripts_index` 更新；`--check` 校验是否过期。
+> 自动生成（134 个活跃入口）。改脚本 docstring 后运行 `python -m scripts.data_tools.gen_scripts_index` 更新；`--check` 校验是否过期。
 
 约定：`python -m scripts.<目录>.<文件名>` 运行；`scripts/archive/` 已于 2026-11-18 整体下线（活代码已上移，其余删除）；实验结论查 `reports/README.md` §一「结论速查」，产物落盘规则见其 §1.6。
 
@@ -155,6 +155,7 @@
 | `portfolio/industry_rotation.py` | 行业池轮动线（独立实验线，不与 ETF 三锋混跑）。 |
 | `portfolio/multi_period_backtest.py` | 多期组合执行回测脚本（P3，2026-08-20） |
 | `portfolio/report_replica.py` | 研报复现线（国泰海通 2026-10-29《七维共振》）· 只做可行的部分。 |
+| `portfolio/style_exposure_check.py` | 定版持仓的 Barra 风格暴露体检（2026-11-25 建）。 |
 
 ## reporting
 
@@ -189,11 +190,15 @@
 |---|---|
 | `timing/downfreq_realize_probe.py` | 降频兑现探针（纯择时线第六篇，reports/downfreq_realize_probe/）。 |
 | `timing/frontier_timing_probe.py` | 择时前沿三源探针（纯择时线，reports/frontier_timing_probe/）。 |
+| `timing/futures_basis_probe.py` | 股指期货基差方向预测探针（纯择时线第八篇，reports/futures_basis_probe/）。 |
 | `timing/hf_minagg_probe.py` | 华福 1114 高频聚合特征探针（纯择时线，reports/hf_minagg_probe/）。 |
 | `timing/hf_vol_timing_probe.py` | 华福量价择时探针（纯择时线第四篇，reports/hf_vol_timing_probe/）。 |
+| `timing/index_rebalance_flow_probe.py` | 指数调样 + ETF 申赎流方向预测探针（纯择时线第九篇，reports/index_rebalance_flow_probe/）。 |
 | `timing/legs_combo_probe.py` | 三腿兑现与组合探针（纯择时线第五篇，reports/legs_combo_probe/）。 |
 | `timing/multisrc_timing_probe.py` | 多源日频择时信号合成探针（纯择时线主攻，reports/multisrc_timing_probe/）。 |
 | `timing/rev_shell_probe.py` | 周频均值回归壳稳健性探针（纯择时线缝合清单③，reports/rev_shell_probe/）。 |
 | `timing/revshell_stitch_probe.py` | rev_shell 组合层缝合评估（纯择时线，reports/revshell_stitch_probe/）。 |
 | `timing/shell.py` | 纯择时研究线共享件：调仓壳 + 指数日K装载（2026-11-21 自 sws_regime_probe 抽取）。 |
 | `timing/sws_regime_probe.py` | 申万 0922 择时研报门槛探针（纯择时研究线首篇，reports/sws_timing_probe/）。 |
+| `timing/valuation_position_rule.py` | 估值定仓位规则（个人投资用）：沪深300 估值/风险状态 → 目标仓位。 |
+| `timing/vr_realize_probe.py` | vr 量能腿预注册兑现探针（纯择时线第七篇，reports/vr_realize_probe/）。 |

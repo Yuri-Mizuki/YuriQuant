@@ -88,6 +88,7 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+from data.atomic_io import write_parquet_atomic  # noqa: E402
 
 from scripts.common.cli_common import setup_logging  # noqa: E402
 
@@ -549,11 +550,11 @@ def main() -> None:
         if name in done:
             continue
         p = panels_all[name].replace([np.inf, -np.inf], np.nan).clip(
-            -1e4, 1e4).astype(np.float32)
+            *common.CLIP["WIDE"]).astype(np.float32)
         if p.notna().sum().sum() == 0:
             log.warning("[%d/%d] %s 全 NaN，跳过落盘", i, len(defs), name)
             continue
-        p.to_parquet(panels_dir / f"{name}.parquet")
+        write_parquet_atomic(p, panels_dir / f"{name}.parquet")
 
         cov = float(p.notna().mean().mean())
         row_std = p.std(axis=1, skipna=True)

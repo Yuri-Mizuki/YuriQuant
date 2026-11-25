@@ -38,7 +38,7 @@ def run_main_strategy_backtest(frac: float = 0.10):
     from backtest.costs import default_costs
     from backtest.engine import VectorBacktest
     from backtest.metrics import annual_return
-    from scripts.common.alla_common import load_base
+    from scripts.common.alla_common import load_base, load_same_day_mask
     from strategy.examples import TopFracLongOnly
 
     base = load_base()
@@ -49,13 +49,13 @@ def run_main_strategy_backtest(frac: float = 0.10):
     pred = pd.read_parquet(pred_path)
     oos_days = pred.index
     fwd = close.pct_change(fill_method=None).loc[oos_days]  # h=1：未 shift 口径
-    mask_oos = base["mask"].astype(bool).reindex(
-        index=oos_days, columns=close.columns).fillna(True)
 
     strat = TopFracLongOnly(frac=frac, weight_mode="equal")
     bt = VectorBacktest(strategy=strat, rebalance_freq="M",
                         initial_capital=1_000_000.0, costs=default_costs())
-    res = bt.run(pred, fwd, executable_mask=mask_oos, horizon=1)
+    same = load_same_day_mask().reindex(
+        index=oos_days, columns=close.columns).fillna(True)
+    res = bt.run(pred, fwd, executable_mask=same, horizon=1)
     dr = res.daily_returns.dropna()
     ann = annual_return(dr)
     log.info("回测复跑完成：%d 日（%s ~ %s），年化 %.2f%%",

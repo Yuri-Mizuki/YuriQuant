@@ -29,9 +29,7 @@
 from __future__ import annotations
 
 import argparse
-import json
 import sys
-import time
 from pathlib import Path
 
 import numpy as np
@@ -45,7 +43,6 @@ from scripts.common.cli_common import setup_logging  # noqa: E402
 
 log = setup_logging("build_alla_constructed")
 from scripts.builders import common  # noqa: E402
-from scripts.builders.common import HORIZONS, IC_CODE_STRIDE  # noqa: E402
 
 DATASET = "all_a_2018_2026"
 
@@ -228,9 +225,7 @@ def _div_consecutive(div: pd.DataFrame, cal_idx, codes) -> pd.DataFrame:
              .groupby(["code", "year"], as_index=False).last()[["code", "year", "ann_date", "cps"]])
     one["pay"] = one["cps"] > 0.0
     one = one.sort_values(["code", "year"])
-    one["brk"] = one.groupby("code")["pay"].apply(
-        lambda s: (~s).cumsum()).reset_index(drop=True) if False else \
-        one.groupby("code")["pay"].transform(lambda s: (~s).cumsum())
+    one["brk"] = one.groupby("code")["pay"].transform(lambda s: (~s).cumsum())
     one["consec"] = one.groupby(["code", "brk"]).cumcount() + 1
     one["consec"] = one["consec"].where(one["pay"], 0.0).astype(np.float32)
     pit_df = one.rename(columns={"consec": "_value"})[["code", "ann_date", "_value"]]
@@ -248,20 +243,10 @@ def main() -> None:
     args = ap.parse_args()
 
     from config import Config
-    from stats.ic import calc_ic_series
 
     lib_root = Path(str(Config.get()["factor_library"]["root"]))
     ds_dir = lib_root / DATASET
-    panels_dir = ds_dir / "panels"
-    panels_dir.mkdir(parents=True, exist_ok=True)
-    stats_path = ds_dir / "factor_stats_constructed.jsonl"
-    done = {json.loads(l)["name"] for l in
-            stats_path.read_text(encoding="utf-8").splitlines() if l.strip()} \
-        if args.resume and stats_path.exists() else set()
-
     close_adj, close_raw, income, balance, cashflow, equity, dividend = load_panels()
-    fwd = {h: close_adj.pct_change(h, fill_method=None).shift(-h) for h in HORIZONS}
-    ic_codes = close_adj.columns[::IC_CODE_STRIDE]
 
     names_all = [
         "np_ded_ratio", "main_profit_ratio", "ebit_margin",
@@ -270,8 +255,6 @@ def main() -> None:
         "margin_delta_ttm", "np_accel_sq", "roe_vol_pit",
         "risky_asset_ratio", "div_growth_yoy", "div_consecutive_years",
     ]
-    if args.only:
-        names_all = [n for n in names_all if n in set(args.only)]
     labels = {
         "np_ded_ratio": "扣非/净利", "main_profit_ratio": "主营贡献度",
         "ebit_margin": "EBIT率", "altman_zscore": "Altman Z",
@@ -284,25 +267,13 @@ def main() -> None:
     }
 
     panels = build_panels(close_adj, close_raw, income, balance, cashflow, dividend)
-    t0 = time.time()
-    for i, name in enumerate([n for n in names_all if n in panels], 1):
-        if name in done:
-            continue
-        p = panels[name].fillna(np.nan).astype(np.float32)
-        p = p.replace([np.inf, -np.inf], np.nan).clip(-1e4, 1e4)
-        p.to_parquet(panels_dir / f"{name}.parquet")
-        cov = float(p.notna().mean().mean())
-        ic = {h: calc_ic_series(p[ic_codes], fwd[h]).astype(np.float32) for h in HORIZONS}
-        row = {"name": name, "set": "fundamental",
-               "label": labels.get(name, name), "coverage": cov,
-               **{f"ic_mean_h{h}": float(ic[h].mean()) for h in HORIZONS}}
-        with stats_path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(row, ensure_ascii=False) + "\n")
-        log.info("[%d/%d] %s cov=%.3f ic_h1=%+.4f | %.0fs",
-                 i, len(names_all), name, cov, row["ic_mean_h1"], time.time() - t0)
-
-    common.merge_outputs(ds_dir, 'constructed', skip_existing=True, empty_log='无 B++ 构造因子统计产出')
-    log.info("B++ 构造型基本面因子完成 %.0fs", time.time() - t0)
+    common.write_family_panels(
+        ds_dir, panels, family="constructed", set_name="fundamental", labels=labels,
+        close_adj=close_adj, clip=common.CLIP["WIDE"], order=names_all,
+        resume=args.resume, only=args.only,
+        merge_kwargs={"skip_existing": True,
+                      "empty_log": "无 B++ 构造因子统计产出"})
+    log.info("B++ 构造型基本面因子完成")
 
 
 if __name__ == "__main__":

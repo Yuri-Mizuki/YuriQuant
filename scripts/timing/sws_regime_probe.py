@@ -34,7 +34,6 @@ G3 上界可实现：完美标签 T+1 延迟 + 研报仓位规则 + 10bp/边成�
 from __future__ import annotations
 
 import argparse
-import datetime as dt
 from pathlib import Path
 
 import numpy as np
@@ -414,7 +413,6 @@ def main() -> int:
 
     # ---------- 模型准确度 + 持续性基线（G1，研报表 11） ----------
     pred = fit_predict(X_tr, y_tr, X_te)
-    full_mask = tr_mask | te_mask
     rows = []
     for name in ("equal", "logit", "tree4"):
         raw_p = pred[name]

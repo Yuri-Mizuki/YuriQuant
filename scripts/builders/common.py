@@ -27,10 +27,12 @@ import time
 from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime
 from pathlib import Path
+from typing import Callable
 
 import numpy as np
 import pandas as pd
 
+from data.atomic_io import write_parquet_atomic  # noqa: E402
 from data.financials import to_datetime_col as to_datetime_col  # noqa: E402,F401
 from scripts.common.cli_common import setup_logging
 
@@ -42,6 +44,96 @@ KEEP_FROM = "2016-07-01"
 HORIZONS = (1, 5, 10, 20)
 #: IC 抽稀取列步长（全市场 5500+ 股，逐日 Spearman 抽 1/3 列加速）
 IC_CODE_STRIDE = 3
+
+#: 入库前截断档位。历史上各 builder 各写一个魔法数（100 / 1000 / 1e4 / 1e11），
+#: 同一「防异常值」动作有五套口径，raw-value 模型下不可比。这里集中定义，
+#: builder 按因子语义选档；**不要**再在脚本里写裸数字。
+#: ⚠️ 金额/市值类不能用 ``PCT``（会把整列钉在上限），选 ``MONEY``（≈不截断）。
+CLIP = {
+    "RATIO": (-10.0, 10.0),      # 标准化 z 值 / 对数比率
+    "PCT": (-100.0, 100.0),      # 百分比、占比、增速
+    "COUNT": (-1000.0, 1000.0),  # 事件计数、幅度
+    "MONEY": (-1e11, 1e11),      # 金额、市值（实际不截断，仅为统一接口）
+    "WIDE": (-1e4, 1e4),         # 历史宽档（混合语义，新因子请按语义选档）
+}
+
+
+def write_family_panels(
+    ds_dir: Path,
+    panels: dict[str, pd.DataFrame],
+    *,
+    family: str,
+    set_name: str | Callable[[str], str],
+    labels: dict[str, str],
+    close_adj: pd.DataFrame,
+    clip: tuple[float, float] | None = None,
+    stats_file: str | None = None,
+    order: list[str] | None = None,
+    resume: bool = False,
+    only: str | None = None,
+    merge_kwargs: dict | None = None,
+) -> None:
+    """一个因子族的统一入库链：写面板 → 算 IC → 追加 stats → 合并 registry。
+
+    此前 10 个 builder 各持一份逐行相同的循环（仅 clip 上限与名字不同），
+    已漂移出 5 种 clip 口径。这里合并为一个实现。
+
+    Args:
+        panels: ``{因子名: date×code 面板}``。
+        family: 落盘族名（``merge_outputs`` 的 family）。
+        set_name: stats 行里的 ``set`` 字段；可传函数按因子名分派。
+        labels: 因子名 → 中文标签（缺失时用因子名）。
+        close_adj: 后复权收盘（算前向收益）。
+        clip: 截断上下限，见 :data:`CLIP`；``None`` 不截断。
+        stats_file: stats 文件名，缺省 ``factor_stats_<family>.jsonl``。
+        order: 写盘顺序；缺省按因子名排序。
+        resume: 跳过 stats 里已出现的因子。
+        only: 只构建指定因子（同时抑制 registry 合并）。
+        merge_kwargs: 透传给 :func:`merge_outputs`。
+    """
+    from stats.ic import calc_ic_series
+
+    ds_dir = Path(ds_dir)
+    panels_dir = ds_dir / "panels"
+    panels_dir.mkdir(parents=True, exist_ok=True)
+    stats_path = ds_dir / (stats_file or f"factor_stats_{family}.jsonl")
+    done = ({json.loads(line)["name"] for line in
+             stats_path.read_text(encoding="utf-8").splitlines() if line.strip()}
+            if resume and stats_path.exists() else set())
+
+    fwd = {h: close_adj.pct_change(h, fill_method=None).shift(-h)
+           for h in HORIZONS}
+    ic_codes = close_adj.columns[::IC_CODE_STRIDE]
+
+    names = [n for n in (order or sorted(panels)) if n in panels]
+    if only:
+        names = [n for n in names if n == only]
+
+    t0 = time.time()
+    for i, name in enumerate(names, 1):
+        if name in done:
+            continue
+        p = panels[name].fillna(np.nan).astype(np.float32)
+        p = p.replace([np.inf, -np.inf], np.nan)
+        if clip is not None:
+            p = p.clip(*clip)
+        write_parquet_atomic(p, panels_dir / f"{name}.parquet")
+
+        cov = float(p.notna().mean().mean())
+        ic = {h: calc_ic_series(p[ic_codes], fwd[h]).astype(np.float32)
+              for h in HORIZONS}
+        row = {"name": name,
+               "set": set_name(name) if callable(set_name) else set_name,
+               "label": labels.get(name, name),
+               "coverage": cov,
+               **{f"ic_mean_h{h}": float(ic[h].mean()) for h in HORIZONS}}
+        with stats_path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+        log.info("[%d/%d] %s cov=%.2f ic_h1=%+.4f | %.0fs", i, len(names),
+                 name, cov, row["ic_mean_h1"], time.time() - t0)
+
+    if not only:
+        merge_outputs(ds_dir, family, **(merge_kwargs or {}))
 
 
 def resolve_panel_file(ds: Path, name: str) -> Path | None:

@@ -53,6 +53,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from config import Config  # noqa: E402
 from model.seq_deep import DailyCrossSectionTrainer  # noqa: E402
+from data.atomic_io import write_parquet_atomic
 
 ROOT = Path(__file__).resolve().parents[2]
 OUT_DIR = ROOT / "reports" / "report_replica"
@@ -378,7 +379,7 @@ def rolling_predict(name: str, cfg: dict, arr: dict, *, years: list[int],
         del tr
         if ckpt is not None:
             # 逐年落盘 + 同步日志：长跑被杀也能续（`--resume`）
-            pd.DataFrame(out, index=idx, columns=arr["codes"]).to_parquet(ckpt)
+            write_parquet_atomic(pd.DataFrame(out, index=idx, columns=arr["codes"]), ckpt)
             pd.DataFrame(log_rows).to_csv(DL_DIR / f"train_log_{name}.csv", index=False,
                                           encoding="utf-8-sig")
 
@@ -456,7 +457,7 @@ def main() -> None:
                                    resume=args.resume)
             fp = DL_DIR / (f"pred_{key}.parquet" if len(seeds) == 1
                            else f"pred_{key}_s{seed}.parquet")
-            pred.to_parquet(fp)
+            write_parquet_atomic(pred, fp)
             cov = pred.notna().any(axis=1)
             rng = (f"{pred.index[cov][0].date()}~{pred.index[cov][-1].date()}"
                    if cov.any() else "空")

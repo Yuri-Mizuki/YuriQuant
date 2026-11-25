@@ -40,6 +40,7 @@ import numpy as np
 import pandas as pd
 
 from config import Config
+from data.atomic_io import write_parquet_atomic
 
 ROOT = Path(__file__).resolve().parents[2]
 OUT_DIR = ROOT / "reports" / "industry_rotation"
@@ -253,7 +254,7 @@ def main() -> None:
     print("构建相关性行业归属面板 …")
     panel, log = build()
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    panel.to_parquet(PANEL_PATH)
+    write_parquet_atomic(panel, PANEL_PATH)
 
     rec, mig = overlap_report(panel)
     log.to_csv(LOG_PATH, index=False)

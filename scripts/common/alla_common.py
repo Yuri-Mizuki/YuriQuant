@@ -11,6 +11,7 @@
 """
 from __future__ import annotations
 
+from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
@@ -22,6 +23,7 @@ from backtest.metrics import (
     information_ratio,
     sharpe_arithmetic,
 )
+from data.atomic_io import write_parquet_atomic
 
 ROOT = Path(__file__).resolve().parents[2]
 DATASET = "all_a_2018_2026"
@@ -69,6 +71,39 @@ def ds_root() -> Path:
     from config import Config
 
     return Path(str(Config.get()["factor_library"]["root"])) / DATASET
+
+
+@lru_cache(maxsize=8)
+def _load_same_day_mask_cached(base: str) -> pd.DataFrame:
+    b = Path(base)
+    p = b / "tradable_mask_same_day.parquet"
+    if p.exists():
+        return pd.read_parquet(p)
+
+    from config import Config
+    from data.tradability import build_tradable_mask
+
+    bwd = pd.read_parquet(
+        Path(str(Config.cache()["root"])) / "backward_factor.parquet")
+    m = build_tradable_mask(pd.read_parquet(b / "close_adj.parquet"),
+                            bwd=bwd, execution_lag=0)
+    write_parquet_atomic(m, p)
+    return m
+
+
+def load_same_day_mask(base_dir: str | Path | None = None) -> pd.DataFrame:
+    """同日可交易掩码（``mask[T]`` 只看 T 日）—— **T 日收盘成交用**。
+
+    ``tradable_mask.parquet`` 是 T+1 成交口径（``mask[T]`` = T 与 T+1 都可交易），
+    拿它做同日成交会引入未来状态（两个方向都错）。优先读 base 内
+    ``tradable_mask_same_day.parquet``（``stage_prep`` 会写）；缺失则用本 base 的
+    ``close_adj`` + 缓存后复权因子重建并落盘。
+
+    结果按 base 路径缓存（同一进程重复调用只读一次盘）。⚠️ 返回的是**缓存对象**，
+    调用方只读（``where`` / ``reindex`` / 切片都会产生新对象）；不要原地赋值。
+    """
+    b = Path(base_dir) if base_dir is not None else BASE_DIR
+    return _load_same_day_mask_cached(str(b))
 
 
 def load_base(base_dir: str | Path | None = None) -> dict:
@@ -168,12 +203,6 @@ def fundind_dirs(root: Path | None = None) -> tuple[Path, dict[str, Path]]:
             f"python -m scripts.builders.build_alla_factor_neutralized_fundind "
             f"--only {' '.join(missing[:8])}")
     return base, name_dir
-
-
-def fundind_store(**kwargs) -> FeatureStore:
-    """E5 fundind 口径的 :class:`FeatureStore`（基准层 + 覆盖层）。"""
-    base, name_dir = fundind_dirs()
-    return FeatureStore(base, name_dir=name_dir, **kwargs)
 
 
 def fundind_names(root: Path | None = None) -> list[str]:

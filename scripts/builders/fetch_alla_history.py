@@ -33,6 +33,7 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+from data.atomic_io import write_parquet_atomic  # noqa: E402
 
 from data.atomic_io import write_json_atomic  # noqa: E402
 from scripts.common.cli_common import setup_logging  # noqa: E402
@@ -129,12 +130,12 @@ def main():
         _save_progress(prog_path, prog)
         n_done_this_run += 1
         if n_done_this_run % 5 == 0:
-            merged.to_parquet(daily_path)
+            write_parquet_atomic(merged, daily_path)
             log.info("批 %d/%d 完成，已落盘 %d 行", bi + 1, len(batches), len(merged))
         log.info("批 %d/%d: +%d 行 (累计 %d, %.0fs)", bi + 1, len(batches),
                  len(df), len(merged), time.time() - t0)
 
-    merged.to_parquet(daily_path)
+    write_parquet_atomic(merged, daily_path)
     log.info("日线回填完成: %d 行, 代码 %d, %s ~ %s", len(merged),
              merged.index.get_level_values("code").nunique(),
              merged.index.get_level_values(0).min().date(),

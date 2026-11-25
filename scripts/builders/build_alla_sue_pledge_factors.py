@@ -33,9 +33,7 @@ frozen_ratio），缺"新增质押边际/变化率/冻结对市值密度"等深�
 from __future__ import annotations
 
 import argparse
-import json
 import sys
-import time
 from pathlib import Path
 
 import numpy as np
@@ -49,7 +47,6 @@ from scripts.common.cli_common import setup_logging  # noqa: E402
 
 log = setup_logging("build_alla_sue_pledge")
 from scripts.builders import common  # noqa: E402
-from scripts.builders.common import HORIZONS, IC_CODE_STRIDE  # noqa: E402
 
 DATASET = "all_a_2018_2026"
 EVENT_WINDOW = 20
@@ -287,22 +284,12 @@ def main() -> None:
     args = ap.parse_args()
 
     from config import Config
-    from stats.ic import calc_ic_series
 
     lib_root = Path(str(Config.get()["factor_library"]["root"]))
     ds_dir = lib_root / DATASET
-    panels_dir = ds_dir / "panels"
-    panels_dir.mkdir(parents=True, exist_ok=True)
-    stats_path = ds_dir / "factor_stats_sue_pledge.jsonl"
-    done = {json.loads(l)["name"] for l in
-            stats_path.read_text(encoding="utf-8").splitlines() if l.strip()} \
-        if args.resume and stats_path.exists() else set()
-
     close_adj, close_raw, tabs = load_panels()
     codes = close_adj.columns
     cal_idx = close_adj.index
-    fwd = {h: close_adj.pct_change(h, fill_method=None).shift(-h) for h in HORIZONS}
-    ic_codes = close_adj.columns[::IC_CODE_STRIDE]
 
     labels = {
         "sue_notice_cs": "业绩预告盈利意外横截面zscore",
@@ -321,27 +308,13 @@ def main() -> None:
         log.warning("无可构建因子，跳过")
         return
 
-    t0 = time.time()
-    for i, name in enumerate(sorted(panels), 1):
-        if name in done:
-            continue
-        p = panels[name].fillna(np.nan).astype(np.float32)
-        p = p.replace([np.inf, -np.inf], np.nan)
-        p.to_parquet(panels_dir / f"{name}.parquet")
-        cov = float(p.notna().mean().mean())
-        ic = {h: calc_ic_series(p[ic_codes], fwd[h]).astype(np.float32)
-              for h in HORIZONS}
-        row = {"name": name, "set": next((v for k, v in sets.items()
-                                          if name.startswith(k)), "fundamental"),
-               "label": labels.get(name, name), "coverage": cov,
-               **{f"ic_mean_h{h}": float(ic[h].mean()) for h in HORIZONS}}
-        with stats_path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(row, ensure_ascii=False) + "\n")
-        log.info("[%d/%d] %s cov=%.2f ic_h1=%+.4f | %.0fs", i, len(panels),
-                 name, cov, row["ic_mean_h1"], time.time() - t0)
+    def _set_of(name: str) -> str:
+        return next((v for k, v in sets.items() if name.startswith(k)), "fundamental")
 
-    common.merge_outputs(ds_dir, 'sue_pledge')
-    log.info("SUE+质押深度因子构建完成 %.0fs", time.time() - t0)
+    common.write_family_panels(
+        ds_dir, panels, family="sue_pledge", set_name=_set_of, labels=labels,
+        close_adj=close_adj, resume=args.resume)
+    log.info("SUE+质押深度因子构建完成")
 
 
 if __name__ == "__main__":

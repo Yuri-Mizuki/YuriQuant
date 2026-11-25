@@ -607,6 +607,7 @@ def signal_day_tradable(close_raw: pd.DataFrame, predict_date: pd.Timestamp,
     （2026-09-08 实测：状态表停在 09-02 时此前版本全部放行，一字板漏标进 picks）。
     """
     from config import Config
+    from data.tradability import SEALED_TOL
 
     codes = close_raw.columns
     p = Path(cache_root or str(Config.cache()["root"])) / "history_stock_status.parquet"
@@ -643,7 +644,7 @@ def signal_day_tradable(close_raw: pd.DataFrame, predict_date: pd.Timestamp,
         hi, lo, susp = est
         raw = pd.to_numeric(close_raw.loc[predict_date],
                             errors="coerce").reindex(codes)
-        tol = 1e-4
+        tol = SEALED_TOL
         sealed_up = (raw >= hi * (1 - tol)) & hi.notna()
         sealed_dn = (raw <= lo * (1 + tol)) & lo.notna()
         bad = susp | sealed_up | sealed_dn | stale_st
@@ -658,7 +659,7 @@ def signal_day_tradable(close_raw: pd.DataFrame, predict_date: pd.Timestamp,
     is_st = _row("is_st").fillna(False).astype(bool)
     hi, lo = _row("high_limited"), _row("low_limited")
     raw = pd.to_numeric(close_raw.loc[predict_date], errors="coerce").reindex(codes)
-    tol = 1e-6
+    tol = SEALED_TOL
     sealed_up = (raw >= hi * (1 - tol)) & hi.notna()
     sealed_dn = (raw <= lo * (1 + tol)) & lo.notna()
     bad = susp | is_st | sealed_up | sealed_dn

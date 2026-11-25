@@ -42,6 +42,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from backtest import calendar as CAL  # noqa: E402
 from scripts.common.cli_common import setup_logging  # noqa: E402
 
 log = setup_logging("cheap_lever_920")
@@ -99,9 +100,10 @@ def main(argv: list[str] | None = None) -> None:
 
     from backtest.costs import default_costs
     from backtest.engine import VectorBacktest, build_execution_split
+    from data.tradability import apply_execution_mask
+    from scripts.common import alla_common as AC
     from scripts.evaluation.fundamental_blend import build_slow_panel
     from scripts.evaluation.horizon_mix import load
-    from scripts.common import alla_common as AC
     from strategy.examples import BufferedTopFracLongOnly
 
     t0 = time.time()
@@ -158,8 +160,7 @@ def main(argv: list[str] | None = None) -> None:
         oos = sig.index
         mask_oos = mask.reindex(index=oos, columns=close.columns).fillna(True)
         bench = base["bench_index"].reindex(oos).fillna(0.0)
-        s_ = pd.Series(oos, index=oos)
-        firsts = s_.groupby(s_.index.to_period("M")).first()
+        firsts = CAL.month_firsts(oos)
         pos_ = {d: i for i, d in enumerate(oos)}
         rb_signal = {t for t in firsts if pos_[t] + 1 < len(oos)}
         rb_exec = {oos[pos_[t] + 1] for t in rb_signal}
@@ -168,8 +169,8 @@ def main(argv: list[str] | None = None) -> None:
         bt = VectorBacktest(strategy=BufferedTopFracLongOnly(fe, fx),
                             rebalance_freq="M", initial_capital=1_000_000.0,
                             costs=costs)
-        res = bt.run(sig.reindex(index=oos, columns=close.columns)
-                     .shift(1).where(mask_oos),
+        res = bt.run(apply_execution_mask(
+                         sig.reindex(index=oos, columns=close.columns), mask_oos),
                      fwd.loc[oos], horizon=1, rebalance_days=rb_exec,
                      execution_split=split)
         m = AC.res_metrics(res.daily_returns, bench, res.turnover_series)

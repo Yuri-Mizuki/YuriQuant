@@ -51,6 +51,7 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+from data.atomic_io import write_parquet_atomic  # noqa: E402
 
 OUT = ROOT / "reports" / "report_replica" / "panels"
 
@@ -160,7 +161,7 @@ def main() -> None:
     out = build(args.only)
     for k, v in out.items():
         p = OUT / f"{k}.parquet"
-        v.to_parquet(p)
+        write_parquet_atomic(v, p)
         print(f"→ {p}  {v.shape}")
 
 

@@ -24,8 +24,10 @@ import numpy as np
 import pandas as pd
 
 from scripts.common import alla_common as AC
+from backtest import calendar as CAL
 from backtest.costs import default_costs
 from backtest.engine import VectorBacktest, build_execution_split
+from data.tradability import apply_execution_mask
 from stats.ic import calc_ic_series
 from strategy.examples import TopFracLongOnly
 
@@ -100,6 +102,12 @@ def main():
     bench_idx = base["bench_index"].reindex(oos_days).fillna(0.0)
     bench_eqw = base["bench_eqw"].reindex(oos_days).fillna(0.0)
 
+    mask_same_oos = None
+    if args.execution == "close":
+        # T 日收盘成交 ⇒ 同日掩码（base["mask"] 是 T+1 口径，会拿未来状态剔股）
+        mask_same_oos = AC.load_same_day_mask().reindex(
+            index=oos_days, columns=close.columns).fillna(True)
+
     exec_split = None
     rb_exec = None
     if args.execution != "close":
@@ -107,8 +115,7 @@ def main():
         if not fp.exists():
             raise SystemExit(f"{fp} 缺失：先跑 rolling_grid_alla --stage prep 重建基础面板")
         fill = pd.read_parquet(fp)
-        s_ = pd.Series(oos_days, index=oos_days)
-        firsts = s_.groupby(s_.index.to_period("M")).first()
+        firsts = CAL.month_firsts(oos_days)
         pos_ = {d: i for i, d in enumerate(oos_days)}
         rb_signal = {t for t in firsts if pos_[t] + 1 < len(oos_days)}
         rb_exec = {oos_days[pos_[t] + 1] for t in rb_signal}
@@ -125,11 +132,12 @@ def main():
         bt = VectorBacktest(strategy=strat, rebalance_freq="M",
                             initial_capital=1_000_000.0, costs=costs)
         if exec_split is not None:
-            # 信号预掩码：引擎 executable_mask 会重归一多头、抹掉执行价分段
-            res = bt.run(sig.shift(1).where(mask_oos), fwd, horizon=1,
+            # mask[T] 含 T 与 T+1 两天 ⇒ 先掩码再位移；引擎 executable_mask 会
+            # 重归一多头、抹掉执行价分段
+            res = bt.run(apply_execution_mask(sig, mask_oos), fwd, horizon=1,
                          rebalance_days=rb_exec, execution_split=exec_split)
         else:
-            res = bt.run(sig, fwd, executable_mask=mask_oos, horizon=1,
+            res = bt.run(sig, fwd, executable_mask=mask_same_oos, horizon=1,
                          rebalance_days=None)
         dr = res.daily_returns
         m = AC.res_metrics(dr, bench_idx, res.turnover_series)

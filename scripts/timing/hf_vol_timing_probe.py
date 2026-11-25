@@ -37,6 +37,7 @@ import pandas as pd
 from backtest.metrics import annual_return, calmar_ratio, max_drawdown, sharpe_ratio
 from scripts.timing.shell import ROOT, load_index_daily
 from stats.robust_stats import nw_tstat
+from data.atomic_io import write_parquet_atomic
 
 OUT = ROOT / "reports" / "hf_vol_timing_probe"
 
@@ -83,7 +84,7 @@ def load_us_daily(refresh: bool = False) -> pd.Series:
     df = ak.index_us_stock_sina(symbol=".INX")
     s = df.set_index(pd.to_datetime(df["date"]))["close"].astype(float).sort_index()
     cache.parent.mkdir(parents=True, exist_ok=True)
-    s.to_frame("close").to_parquet(cache)
+    write_parquet_atomic(s.to_frame("close"), cache)
     return s
 
 

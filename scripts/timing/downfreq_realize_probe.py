@@ -28,7 +28,7 @@ import argparse
 import numpy as np
 import pandas as pd
 
-from backtest.metrics import annual_return, calmar_ratio, max_drawdown, sharpe_ratio
+from backtest.metrics import annual_return
 from scripts.timing.hf_vol_timing_probe import build_us_ret1, causal_z, run_continuous
 from scripts.timing.shell import ROOT, load_index_daily
 from stats.robust_stats import nw_tstat

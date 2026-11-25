@@ -43,6 +43,7 @@ import pandas as pd
 from backtest.metrics import annual_return, max_drawdown, sharpe_ratio
 from scripts.timing.shell import load_index_daily
 from stats import PERIODS_PER_YEAR
+from data.atomic_io import write_parquet_atomic
 
 ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / "reports" / "hf_minagg_probe"
@@ -129,7 +130,7 @@ def load_minute_daily(code: str, refresh: bool = False) -> pd.DataFrame:
 
     daily = m.groupby("day").apply(_day_agg, include_groups=False)
     cache.parent.mkdir(parents=True, exist_ok=True)
-    daily.to_parquet(cache)
+    write_parquet_atomic(daily, cache)
     return daily
 
 

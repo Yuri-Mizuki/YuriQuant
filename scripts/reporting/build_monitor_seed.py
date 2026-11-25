@@ -32,6 +32,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+from data.atomic_io import write_parquet_atomic  # noqa: E402
 
 from scripts.common.cli_common import setup_logging  # noqa: E402
 
@@ -72,7 +73,7 @@ def main(argv: list[str] | None = None) -> None:
 
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    seed.to_parquet(out)
+    write_parquet_atomic(seed, out)
     log.info("种子落盘 %s：%d 日 × %d 股（%s ~ %s），h1w=%.3f，耗时 %.0fs",
              out, seed.shape[0], seed.shape[1], seed.index[0].date(),
              seed.index[-1].date(), w, time.time() - t0)

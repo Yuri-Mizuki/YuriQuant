@@ -34,6 +34,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from backtest import calendar as CAL  # noqa: E402
 from scripts.common.cli_common import setup_logging  # noqa: E402
 
 
@@ -80,7 +81,7 @@ def gen_mock_attribution_data(
     # 组合权重：每月首个交易日选 size 暴露最大的 20 只等权；基准 = 全市场等权
     port_w = pd.DataFrame(np.nan, index=idx, columns=codes)
     bench_w = pd.DataFrame(np.nan, index=idx, columns=codes)
-    months = pd.Series(idx).groupby(idx.to_period("M")).first()
+    months = CAL.month_firsts(idx)
     for d in months:
         top = size_panel.loc[d].nlargest(20).index
         port_w.loc[d, top] = 1.0 / 20

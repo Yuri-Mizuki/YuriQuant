@@ -33,6 +33,7 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+from data.atomic_io import write_parquet_atomic  # noqa: E402
 
 from backtest.metrics import drawdown_series  # noqa: E402
 from stats import PERIODS_PER_YEAR  # noqa: E402
@@ -171,7 +172,7 @@ def fit_label_models(df: pd.DataFrame, year: int, seed: int,
 
     cache_dir.mkdir(parents=True, exist_ok=True)
     for lab, d in out.items():
-        d["pred"].rename("pred").to_frame().to_parquet(
+        write_parquet_atomic(d["pred"].rename("pred").to_frame(), 
             cache_dir / f"pred_{lab}_{year}.parquet")
     pd.DataFrame({lab: {"gate": d["gate"], "valid_ic": d["valid_ic"]}
                   for lab, d in out.items()}).T.to_csv(
@@ -514,14 +515,7 @@ def qp_arm_galaxy(px, mask, codes, f, z, decision_dates, bw, reward_kw):
 # 评估（与 Phase 1 同口径）
 # ===========================================================================
 def evaluate(name, weights, codes, decision_dates, period_returns, bw):
-    bw_row_cache = {d: bw.loc[d].to_numpy(dtype=float)
-                    for d in decision_dates[:-1]}
-    import scripts.factors.run_portfolio_ppo as p1
-    p1.bw_row_cache.update(bw_row_cache)
-    return p1.evaluate_arm(name, weights, codes, decision_dates,
-                           period_returns, None) \
-        if False else _evaluate(name, weights, codes, decision_dates,
-                                period_returns, bw)
+    return _evaluate(name, weights, codes, decision_dates, period_returns, bw)
 
 
 def _evaluate(name, weights, codes, decision_dates, period_returns, bw):

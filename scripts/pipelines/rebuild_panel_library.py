@@ -353,8 +353,7 @@ def _steps(workers: int) -> list[tuple[str, list[str]]]:
     ⚠️ `build_alla_alpha_panels` **不吃 ``--workers``**：其多进程实现里**每个 worker
     各自 ``load_alla_panels(warmup)`` 重新加载一遍全量日线**（2861 日 × 5807 股 ≈ 1150
     万行）⇒ 内存 ∝ workers。本机（31GB）`--workers 6` 实测 `_ArrayMemoryError`——连
-    11 MiB 都分不到、6 个 worker 全崩（2026-10-16 首次计划任务触发即踩到）。这正是
-    `MEMORY-engineering.md` §B4 已记的坑「多进程 worker 读原始日线会 MemoryError」。
+    11 MiB 都分不到、6 个 worker 全崩（2026-10-16 首次计划任务触发即踩到）。
     ⇒ 此处**固定单进程**（`--workers 1`，走 builder 的单进程分支、只加载一份数据）。
     """
     py = sys.executable

@@ -40,6 +40,7 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+from data.atomic_io import write_parquet_atomic  # noqa: E402
 
 from scripts.common.cli_common import setup_logging  # noqa: E402
 
@@ -309,7 +310,7 @@ def main() -> None:
             continue
         p = panels[name].fillna(np.nan).astype(np.float32)
         p = p.replace([np.inf, -np.inf], np.nan)
-        p.to_parquet(panels_dir / f"{name}.parquet")
+        write_parquet_atomic(p, panels_dir / f"{name}.parquet")
         cov = float(p.notna().mean().mean())
         ic = {h: calc_ic_series(p[ic_codes], fwd[h]).astype(np.float32)
               for h in HORIZONS}

@@ -33,15 +33,12 @@ end=20260907（登记 check_end，与登记值逐位对照 21.81%/1.013，先复
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
 
-import numpy as np
 import pandas as pd
 
 from backtest.metrics import annual_return, max_drawdown, sharpe_ratio
 from scripts.timing.shell import load_index_daily, run_rebalance_shell
 from scripts.timing.shell import ROOT
-from stats import PERIODS_PER_YEAR
 
 OUT = ROOT / "reports" / "revshell_stitch_probe"
 CHECK_END = "2026-09-07"  # 登记口径末日（check_end）

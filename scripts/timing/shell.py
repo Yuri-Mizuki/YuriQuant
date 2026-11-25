@@ -15,6 +15,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from data.atomic_io import write_parquet_atomic
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -34,7 +35,7 @@ def load_index_daily(code: str, begin: int = 20140101, cache_dir: Path | None = 
     df = raw.xs(code, level="code").sort_index()
     df = df[~df.index.duplicated(keep="last")]
     cache.parent.mkdir(parents=True, exist_ok=True)
-    df.to_parquet(cache)
+    write_parquet_atomic(df, cache)
     return df
 
 

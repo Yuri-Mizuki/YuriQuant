@@ -25,6 +25,7 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+from data.atomic_io import write_parquet_atomic  # noqa: E402
 
 from config import Config  # noqa: E402
 from data.cache import DataCache  # noqa: E402
@@ -129,7 +130,7 @@ def main():
         if not (args.features or args.demo_ic):
             log.info("完成（面板根: %s）。统计特征可用 --features 提取。", store.root)
             return
-        _features_tail(store, args)
+        _features_tail(store, args, pool=pool)
         return
     else:
         if args.real:
@@ -151,10 +152,11 @@ def main():
         log.info("完成（面板根: %s）。统计特征可用 --features 提取。", store.root)
         return
 
-    _features_tail(store, args, cache=None if args.mock else cache)
+    _features_tail(store, args, cache=None if args.mock else cache, pool=pool)
 
 
-def _features_tail(store: "MinutePanelStore", args, cache: "DataCache | None" = None) -> None:
+def _features_tail(store: "MinutePanelStore", args, cache: "DataCache | None" = None,
+                   pool: str | None = None) -> None:
     """面板就绪后的公共段：统计特征提取 + 落盘 + 可选 IC 快照。
 
     ``cache`` 仅供 ``--demo-ic``；未传入且需要时现场建离线缓存。
@@ -176,7 +178,7 @@ def _features_tail(store: "MinutePanelStore", args, cache: "DataCache | None" = 
             }))
         long = pd.concat(frames, ignore_index=True)
         out = store.root / "features_long.parquet"
-        long.to_parquet(out, compression="snappy")
+        write_parquet_atomic(long, out, compression="snappy")
         log.info("特征长表落盘: %s（%d 行）", out, len(long))
 
     if args.demo_ic:
@@ -186,7 +188,8 @@ def _features_tail(store: "MinutePanelStore", args, cache: "DataCache | None" = 
             if cache is None:
                 from data.offline import OfflineDataSource
                 cache = DataCache(OfflineDataSource())
-            ic = demo_ic(feats, cache, pool)
+            ic = demo_ic(feats, cache,
+                         pool or args.universe or Config.universe().get("default", "hs300"))
             with pd.option_context("display.width", 120, "display.float_format", "{:.4f}".format):
                 print(ic.head(20).to_string(index=False))
 

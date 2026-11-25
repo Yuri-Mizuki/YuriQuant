@@ -17,9 +17,7 @@
 from __future__ import annotations
 
 import argparse
-import json
 import sys
-import time
 from pathlib import Path
 
 import numpy as np
@@ -33,7 +31,6 @@ from scripts.common.cli_common import setup_logging  # noqa: E402
 
 log = setup_logging("build_alla_pledge")
 from scripts.builders import common  # noqa: E402
-from scripts.builders.common import HORIZONS, IC_CODE_STRIDE  # noqa: E402
 
 DATASET = "all_a_2018_2026"
 
@@ -121,17 +118,9 @@ def main() -> None:
     args = ap.parse_args()
 
     from config import Config
-    from stats.ic import calc_ic_series
 
     lib_root = Path(str(Config.get()["factor_library"]["root"]))
     ds_dir = lib_root / DATASET
-    panels_dir = ds_dir / "panels"
-    panels_dir.mkdir(parents=True, exist_ok=True)
-    stats_path = ds_dir / "factor_stats_pledge.jsonl"
-    done = {json.loads(l)["name"] for l in
-            stats_path.read_text(encoding="utf-8").splitlines() if l.strip()} \
-        if args.resume and stats_path.exists() else set()
-
     cache_root = Path(str(Config.cache()["root"]))
     close_adj, close_raw, balance = load_panels()
     pledge = (pd.read_parquet(cache_root / "equity_pledge_freeze.parquet")
@@ -140,9 +129,6 @@ def main() -> None:
               if (cache_root / "profit_notice.parquet").exists() else None)
     express = (pd.read_parquet(cache_root / "profit_express.parquet")
                if (cache_root / "profit_express.parquet").exists() else None)
-
-    fwd = {h: close_adj.pct_change(h, fill_method=None).shift(-h) for h in HORIZONS}
-    ic_codes = close_adj.columns[::IC_CODE_STRIDE]
 
     labels = {
         "goodwill_ratio": "商誉/净资产",
@@ -155,27 +141,12 @@ def main() -> None:
     }
 
     panels = build_pledge_factors(close_adj, close_raw, balance, pledge, notice, express)
-    t0 = time.time()
-    for i, name in enumerate(sorted(panels), 1):
-        if name in done:
-            continue
-        p = panels[name].fillna(np.nan).astype(np.float32)
-        p = p.replace([np.inf, -np.inf], np.nan)
-        p = p.clip(-1e4, 1e4)
-        p.to_parquet(panels_dir / f"{name}.parquet")
-
-        cov = float(p.notna().mean().mean())
-        ic = {h: calc_ic_series(p[ic_codes], fwd[h]).astype(np.float32) for h in HORIZONS}
-        row = {"name": name, "set": "fundamental",
-               "label": labels.get(name, name), "coverage": cov,
-               **{f"ic_mean_h{h}": float(ic[h].mean()) for h in HORIZONS}}
-        with stats_path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(row, ensure_ascii=False) + "\n")
-        log.info("[%d/%d] %s cov=%.2f ic_h1=%+.4f | %.0fs", i, len(panels),
-                 name, cov, row["ic_mean_h1"], time.time() - t0)
-
-    common.merge_outputs(ds_dir, 'pledge', skip_existing=False, empty_log='无 B+ 三件套因子统计产出')
-    log.info("B+ 三件套基本面因子构建完成 %.0fs", time.time() - t0)
+    common.write_family_panels(
+        ds_dir, panels, family="pledge", set_name="fundamental", labels=labels,
+        close_adj=close_adj, clip=common.CLIP["WIDE"], resume=args.resume,
+        merge_kwargs={"skip_existing": False,
+                      "empty_log": "无 B+ 三件套因子统计产出"})
+    log.info("B+ 三件套基本面因子构建完成")
 
 
 if __name__ == "__main__":

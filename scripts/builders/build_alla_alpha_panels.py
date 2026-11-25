@@ -42,6 +42,7 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+from data.atomic_io import write_parquet_atomic  # noqa: E402
 
 from scripts.common.cli_common import setup_logging  # noqa: E402
 
@@ -192,7 +193,7 @@ def _worker(wid: int, n_workers: int, warmup: int, keep_from: int,
             df = pd.DataFrame(ic_frames[h])
             if len(df):
                 df.index.name = "date"
-                df.astype(np.float32).to_parquet(parts_dir / f"w{wid}_h{h}.parquet")
+                write_parquet_atomic(df.astype(np.float32), parts_dir / f"w{wid}_h{h}.parquet")
 
     n_done = 0
     for i, name in enumerate(todo, 1):
@@ -207,7 +208,7 @@ def _worker(wid: int, n_workers: int, warmup: int, keep_from: int,
         # 故 astype 之后再 replace（2026-09-01 alpha101_084/alpha191_017 教训）
         p = p.loc[p.index >= k0].astype(np.float32)
         p = p.replace([np.inf, -np.inf], np.nan)
-        p.to_parquet(panels_dir / f"{name}.parquet")
+        write_parquet_atomic(p, panels_dir / f"{name}.parquet")
 
         cov = float(p.notna().mean().mean())
         ic_means = {}
@@ -321,7 +322,7 @@ def _merge_outputs(dataset: str, n_workers: int = 1):
                 f"ic_h{h} 合并出现 {len(dup)} 个重复列（如 {dup[:3]}）——"
                 f"ic_parts/ 下有非本次 run 的残留分片，清理后重跑")
         merged.index.name = "date"
-        merged.astype(np.float32).to_parquet(ds_dir / f"ic_h{h}.parquet")
+        write_parquet_atomic(merged.astype(np.float32), ds_dir / f"ic_h{h}.parquet")
         log.info("ic_h%d: %d 因子 × %d 日", h, merged.shape[1], len(merged))
     log.info("本次 run: %d 因子 | IC(h1) 中位数 %.4f, |IC|>0.01 的 %d 个",
              len(df), df["ic_mean_h1"].median(),

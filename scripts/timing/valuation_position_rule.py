@@ -39,6 +39,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from data.atomic_io import write_parquet_atomic
 
 ROOT = Path(__file__).resolve().parents[2]
 OUT_DIR = ROOT / "reports" / "valuation_position_rule"
@@ -91,7 +92,7 @@ def refresh_data(root: Path) -> None:
     }, index=pd.to_datetime(df["日期"]))
     pe.index.name = "date"
     pe = pe.dropna().sort_index()
-    pe.to_parquet(root / "index_valuation_000300.parquet")
+    write_parquet_atomic(pe, root / "index_valuation_000300.parquet")
     print(f"[refresh] PE(TTM) {len(pe)} 行  {pe.index.min():%Y-%m-%d} → {pe.index.max():%Y-%m-%d}")
 
     # --- 中债国债收益率曲线：按年分段拉取（长区间查询会返回空）-------------
@@ -111,7 +112,7 @@ def refresh_data(root: Path) -> None:
     bond.index.name = "date"
     bond = bond.dropna().sort_index()
     bond = bond[~bond.index.duplicated(keep="last")]
-    bond.to_parquet(root / "bond_yield.parquet")
+    write_parquet_atomic(bond, root / "bond_yield.parquet")
     print(f"[refresh] 国债收益率 {len(bond)} 行  {bond.index.min():%Y-%m-%d} → {bond.index.max():%Y-%m-%d}")
 
 
@@ -419,8 +420,9 @@ def _render_panel(monthly: pd.DataFrame, panel: pd.DataFrame, res: dict,
         _ind("两融余额 20日动量", "参考",
              _pct(last["margin_mom20"]) if np.isfinite(last["margin_mom20"]) else "-",
              _rank("margin_mom20"),
-             "加杠杆" if last["margin_mom20"] > 0.02 else
-             ("去杠杆" if last["margin_mom20"] < -0.02 else "平稳"),
+             "数据已过期" if margin_stale else
+             ("加杠杆" if last["margin_mom20"] > 0.02 else
+              ("去杠杆" if last["margin_mom20"] < -0.02 else "平稳")),
              better="↓ 越低越好"),
     ]
 

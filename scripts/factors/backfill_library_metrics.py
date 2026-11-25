@@ -54,6 +54,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, ROOT)
 
 from scripts.common.cli_common import setup_logging  # noqa: E402
+from data.atomic_io import write_parquet_atomic  # noqa: E402
 
 log = setup_logging("backfill_library_metrics")
 
@@ -126,7 +127,7 @@ def main() -> None:
     if returns_panel is not None:
         bench = returns_panel.mean(axis=1, skipna=True)
         bp = ds_dir / "bench_returns.parquet"
-        bench.rename("bench_ew").to_frame().to_parquet(bp)
+        write_parquet_atomic(bench.rename("bench_ew").to_frame(), bp)
         log.info("基准(全A等权): %d 日 → %s", len(bench), bp.name)
 
     # 超额列预建（避免逐行 .at 增列的版本差异）

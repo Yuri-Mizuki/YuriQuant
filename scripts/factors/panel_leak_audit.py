@@ -219,7 +219,6 @@ def main(argv: list[str] | None = None) -> None:
 
     dest = Path(args.out)
     dest.mkdir(parents=True, exist_ok=True)
-    order = ["verdict", "frozen", "jump", "stale_now", "stale_prev", "tainted"]
     table = table.sort_values(["frozen", "jump"], ascending=[False, False])
     table.to_csv(dest / f"audit_{args.layer}.csv", index=False, encoding="utf-8-sig")
 

@@ -61,6 +61,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from backtest import calendar as CAL  # noqa: E402
 from backtest.costs import ImpactCostModel, TransactionCosts  # noqa: E402
 from backtest.engine import (  # noqa: E402
     BacktestResult,
@@ -77,7 +78,9 @@ from backtest.metrics import (  # noqa: E402
     years_to_prove_from_sharpe,
 )
 from config import Config, baselines_path, load_baselines  # noqa: E402
+from data.tradability import apply_execution_mask  # noqa: E402,F401  (re-export)
 from optimize.multi_period import PrecomputedWeightsStrategy  # noqa: E402
+from scripts.common.alla_common import load_same_day_mask  # noqa: E402
 from stats.robust_stats import nw_tstat  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -201,7 +204,7 @@ N_ACTIVE_TOL = 1e-4
 #: 成交价口径 —— 决定「信号日 → 成交日」的结算方式：
 #:   ``close`` = T 收盘成交（引擎默认；**乐观上限**，比生产高约 +0.7pp）；
 #:   ``open`` / ``vwap`` = T+1 开盘 / T+1 VWAP 成交（**生产定版口径**，经
-#:   ``build_execution_split`` + 信号 ``shift(1)`` 预掩码）。
+#:   ``build_execution_split`` + 掩码前置（``panel.where(mask).shift(1)``））。
 EXECUTIONS: tuple[str, ...] = ("close", "open", "vwap")
 
 
@@ -225,10 +228,10 @@ class Profile:
 PROFILES: dict[str, Profile] = {
     "production": Profile(
         name="production", cost="production", execution="open", capital=1e6,
-        note="生产定版口径（buffer_arm_920.py：27bp 时变成本 + T+1 open + 1e6 + 预掩码）。"
+        note="生产定版口径（buffer_arm_920.py：27bp 时变成本 + T+1 open + 1e6 + 掩码前置）。"
              "与登记表 `status: production` 条目同源，绝对数字可直接比。"
-             "掩码口径 = 方案② mask-lag 1（T+1 状态，由莉酱 2026-10-15 拍板："
-             "报数一律本口径；mask-lag 0 + T 收盘仅研究上限，数字不得并列）。"
+             "掩码口径：``ctx.mask``（``mask[T]`` = T 与 T+1 都可交易），信号"
+             "``panel.where(mask).shift(1)`` —— 执行日 E 判 state[T] 与 state[E]。"
              "🚨 成本 2026-11-11 修正：原「固定 10bp」文案已作废 —— 实收往返 27bp"
              "（佣金万1 双边 2bp + 印花税万5 单边 5bp + 滑点 10bp 双边 20bp），"
              "且**印花税按调仓日时变**（2023-08-28 前千1、之后万5，见"
@@ -258,66 +261,19 @@ def _daily_candidates() -> tuple[Path, ...]:
 # ---------------------------------------------------------------------------
 # 2) 基础原语
 # ---------------------------------------------------------------------------
-#: 支持的调仓频率（与 ``VectorBacktest._get_rebalance_days`` 同名同义）。
-#: 2026-11-10 起 ``rebalance_dates`` / ``next_day_rebalance`` / ``run_once`` 参数化，
-#: 周频实验不再需要在探针里另写一套调仓日（那会与引擎静默漂移）。
-#: 2026-11-13 加 ``2M`` / ``Q``：solo 档调仓节奏研究（``rebalance_granularity_probe``）
-#: 需要「比月频更慢」的一侧 —— 此前只有更快的一侧（D/W/2W）被测过。
-REBALANCE_FREQS: tuple[str, ...] = ("D", "W", "2W", "M", "2M", "Q")
+#: 支持的调仓频率（re-export 自 :mod:`backtest.calendar`，全库一份定义）。
+REBALANCE_FREQS = CAL.REBALANCE_FREQS
 
 
 def rebalance_dates(idx: pd.DatetimeIndex, freq: str = "M",
                     phase: int = 0) -> pd.DatetimeIndex:
-    """调仓**信号日**（T）。
+    """调仓**信号日**（T）。薄封装 :func:`backtest.calendar.rebalance_days`。
 
-    Args:
-        freq: ``D`` / ``W`` / ``2W`` / ``M``。``phase=0`` 时**必须与
-            ``VectorBacktest._get_rebalance_days`` 逐位一致**（引擎用
-            ``groupby(to_period(freq)).first()`` / ``2W`` 取 ``[::2]``）；否则
-            ``PrecomputedWeightsStrategy`` 按日期查表落空、退化为「恒用最后一期
-            权重」，回测数字失真（2026-10-13 踩坑）。
-        phase: 周内/月内相位 —— 取该周期第 ``phase`` 个交易日（0 = 首日）。
-            引擎不认这个参数（它只会取首日），故 ``phase>0`` 只能配合
-            ``run(rebalance_days=...)`` 显式传日期使用；周内交易日不足时回退到
-            该周期**最后**一个交易日（防节假日把整周丢掉）。
-
-    ``phase`` 存在的理由（2026-11-10）：周频的毛超额在四个周内相位上差异极大
-    （既有记录：单相位可达四相位均值 1.9 倍），固定「周一」会把结论锁死在一个
-    相位上，必须能扫。
+    与引擎共用同一实现，``phase=0`` 时逐位一致（否则 ``PrecomputedWeightsStrategy``
+    按日期查表落空、退化为「恒用最后一期权重」，2026-10-13 踩过）。``phase`` 供
+    研究扫相位用，引擎不认（只能配合 ``run(rebalance_days=...)`` 显式传日期）。
     """
-    if freq not in REBALANCE_FREQS:
-        raise KeyError(f"未知调仓频率 {freq!r}，可选 {list(REBALANCE_FREQS)}")
-    if freq == "D":
-        return pd.DatetimeIndex(idx)
-    s = pd.Series(idx, index=idx)
-    if freq in ("2M", "Q"):
-        # 2026-11-13 新增（solo 节奏研究的「更慢」一侧）。pandas 无 "2M" 周期，
-        # 用**月份序数**分组：错开 phase 个月再整除周期长度 ⇒ phase 即「周期内
-        # 第几个自然月起步」（2M: 0~1；Q: 0~3）。相位必须能扫，否则 2M 与 Q 的单点
-        # 差异分不清「频率效应」与「调仓日运气」（见 reports/rebalance_granularity）。
-        per_len = 2 if freq == "2M" else 3
-        if not 0 <= phase < per_len:
-            raise ValueError(f"freq={freq!r} 的 phase 须在 [0,{per_len})，收到 {phase}")
-        m = s.index.to_period("M").asi8
-        return pd.DatetimeIndex(s.groupby((m - phase) // per_len).first().values)
-    per = s.index.to_period(freq)
-    if phase <= 0:
-        picked = s.groupby(per).first()
-        if freq == "2W":
-            picked = picked.iloc[::2]
-        return pd.DatetimeIndex(picked.values)
-    # 周期内第 phase 个交易日；不足则回退该周期最后一日（防节假日丢整周）
-    pos = pd.Series(s.groupby(per).cumcount().to_numpy(), index=s.index)
-    nth = s[pos == phase]
-    have = set(nth.index.to_period(freq))
-    last = pd.DatetimeIndex(s.groupby(per).last().to_numpy())
-    # groupby(PeriodIndex).last() 的索引是 Period ⇒ 必须先还原 Timestamp
-    # （2026-11-10 踩坑：混着 concat 会 TypeError）。
-    tail = last[~last.to_period(freq).isin(have)]
-    picked = pd.DatetimeIndex(sorted(set(nth.values) | set(tail.values)))
-    if freq == "2W":
-        picked = picked.iloc[::2]
-    return pd.DatetimeIndex(picked.values)
+    return CAL.rebalance_days(idx, freq, phase)
 
 
 def sharpe_pair(dr: pd.Series) -> dict:
@@ -381,7 +337,8 @@ class CaliberContext:
     pred: pd.DataFrame          # 窗口内信号（date × code）
     close: pd.DataFrame         # 窗口内后复权收盘
     fwd: pd.DataFrame           # 窗口内日收益（close.pct_change, fill_method=None）
-    mask: pd.DataFrame          # 可交易掩码（窗口内，NaN→True）
+    mask: pd.DataFrame          # 可交易掩码：mask[T] = T 与 T+1 **都**可交易（T+1 成交用）
+    mask_same_day: pd.DataFrame  # 可交易掩码：mask[T] = T **当日**可交易（close 成交用）
     amt: pd.DataFrame           # 窗口内成交额（ADV 用）
     vol60: pd.DataFrame         # 窗口内 60 日滚动波动（冲击模型用）
     ret_hist: pd.DataFrame      # **不截断**收益（协方差暖机专用）
@@ -504,6 +461,8 @@ def load_context(signal: str = "ens_h1h5", window: str = DEFAULT_WINDOW,
     pred = pred_full.reindex(index=keep, columns=cols)
     close = close_full.reindex(index=keep, columns=cols)
     mask = mask_full.reindex(index=keep, columns=cols).fillna(True)
+    mask_same_day = (load_same_day_mask()
+                     .reindex(index=keep, columns=cols).fillna(True))
     amt = amt_full.reindex(index=keep, columns=cols)
 
     fwd = (close.pct_change(fill_method=None)
@@ -524,7 +483,8 @@ def load_context(signal: str = "ens_h1h5", window: str = DEFAULT_WINDOW,
 
     return CaliberContext(
         window=window, signal=signal, begin=lo, pred=pred, close=close, fwd=fwd,
-        mask=mask, amt=amt, vol60=vol60, ret_hist=ret_hist,
+        mask=mask, mask_same_day=mask_same_day, amt=amt, vol60=vol60,
+        ret_hist=ret_hist,
         fingerprint=fingerprint_panel(pred), execution=execution, fill=fill,
     )
 
@@ -628,8 +588,8 @@ def run_once(bt: VectorBacktest, ctx: CaliberContext, execution: str,
              freq: str = "M", phase: int = 0):
     """按成交价口径执行一次回测。
 
-    ``close``：T 收盘成交（引擎默认路径，传 ``executable_mask``）。
-    ``open`` / ``vwap``：**生产 T+1 口径** —— 信号 ``shift(1)`` 预掩码、
+    ``close``：T 收盘成交，用**同日掩码**（``ctx.mask_same_day``）。
+    ``open`` / ``vwap``：**生产 T+1 口径** —— ``apply_execution_mask``（掩码前置）、
     执行日 = 信号日次一交易日、经 ``build_execution_split`` 结算。与
     ``buffer_arm_920.py`` 的三行调用逐字对齐。
 
@@ -651,19 +611,18 @@ def run_once(bt: VectorBacktest, ctx: CaliberContext, execution: str,
             ``_get_rebalance_days`` 自算调仓日）；``phase>0`` 仅对
             ``open``/``vwap`` 生效（显式传 ``rebalance_days``）。
     """
+    panel = ctx.pred if signal is None else signal
     if execution == "close":
         if freq != "M":
             bt.rebalance_freq = freq
-        panel = ctx.pred if signal is None else signal
-        return bt.run(panel, ctx.fwd, executable_mask=ctx.mask,
+        return bt.run(panel, ctx.fwd, executable_mask=ctx.mask_same_day,
                       adv_panel=ctx.amt, vol_panel=ctx.vol60,
                       price_panel=price_panel, lot_size=lot_size)
     if ctx.fill is None:
         raise ValueError(
             f"execution={execution!r} 需要 ctx.fill；请用 "
             f"load_context(..., execution={execution!r}) 加载成交价面板。")
-    panel = ctx.pred if signal is None else signal
-    sig_used = panel.shift(1).where(ctx.mask)
+    sig_used = apply_execution_mask(panel, ctx.mask)
     rb_signal = set(rebalance_dates(ctx.pred.index, freq=freq, phase=phase))
     rb_exec = next_day_rebalance(ctx.pred.index, freq=freq, phase=phase)
     split = build_execution_split(ctx.fill, ctx.close, rb_signal)

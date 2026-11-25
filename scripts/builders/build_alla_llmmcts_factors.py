@@ -13,6 +13,7 @@ import numpy as np, pandas as pd
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+from data.atomic_io import write_parquet_atomic  # noqa: E402
 
 DATASET = "all_a_2018_2026"
 KEEP_FROM = "2016-07-01"
@@ -54,7 +55,7 @@ def main() -> None:
         except Exception as e:
             print(f"[跳过] {f}: {e}", flush=True); continue
         p = p.loc[p.index >= k0].astype(np.float32).replace([np.inf, -np.inf], np.nan)
-        p.to_parquet(ds / "panels" / f"{name}.parquet")
+        write_parquet_atomic(p, ds / "panels" / f"{name}.parquet")
         cov = float(p.notna().mean().mean())
         icm = {h: float(calc_ic_series(p[ic_codes], fwd[h]).mean()) for h in HORIZONS}
         with stats_path.open("a", encoding="utf-8") as fh:

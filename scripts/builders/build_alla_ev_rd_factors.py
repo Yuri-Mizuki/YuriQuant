@@ -51,6 +51,7 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+from data.atomic_io import write_parquet_atomic  # noqa: E402
 
 from config import Config  # noqa: E402
 from data.financials import build_pit_panel  # noqa: E402
@@ -201,7 +202,7 @@ def save(panels: dict[str, pd.DataFrame]) -> None:
         # 全 NaN 列（退市/未上市）直接砍，避免中性化退化成假面板
         d = d.loc[:, d.notna().any(axis=0)]
         path = OUT / f"{k}.parquet"
-        d.astype(np.float32).to_parquet(path)
+        write_parquet_atomic(d.astype(np.float32), path)
         print(f"  saved {path.name:12s} {d.shape} "
               f"{d.index.min().date()}~{d.index.max().date()} "
               f"覆盖 {float(d.notna().mean().mean()):.3f}")

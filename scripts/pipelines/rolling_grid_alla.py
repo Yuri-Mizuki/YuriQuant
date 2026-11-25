@@ -49,14 +49,17 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+from data.atomic_io import write_parquet_atomic  # noqa: E402
 
+from backtest import calendar as CAL  # noqa: E402
 from config import Config  # noqa: E402
-from scripts.common.cli_common import setup_logging  # noqa: E402
+from data.tradability import apply_execution_mask  # noqa: E402
 from scripts.common.alla_common import (  # noqa: E402
     FUNDAMENTAL_FAMILY_SETS, FeatureStore, ann, ds_root,
-    existence_mask, fundind_dirs, load_base, rank_average as _rank_average,
-    res_metrics, yearly_rows as _yearly_rows,
+    existence_mask, fundind_dirs, load_base, load_same_day_mask,
+    rank_average as _rank_average, res_metrics, yearly_rows as _yearly_rows,
 )
+from scripts.common.cli_common import setup_logging  # noqa: E402
 from stats.ic import calc_ir, ic_stats  # noqa: E402
 
 log = setup_logging("rolling_grid_alla")
@@ -354,16 +357,19 @@ def _warn_duplicate_base(base: Path) -> None:
         )
 
 
-def stage_prep(mask_lag: int = 1):
-    """构建回测所需基础面板：复权价、风格协变量、可执行掩码、基准。
+def stage_prep():
+    """构建回测所需基础面板：复权价、风格协变量、可交易掩码、基准。
 
-    Args:
-        mask_lag: 可交易掩码的**状态取样日**相对信号日的偏移（2026-10-13，P1 口径）。
-            ``1``（默认）：T+1 状态——现行口径，零回归；
-            ``0``：T 日状态——与「T 日收盘成交」自洽的研究口径（方案 A）。
-            口径不自洽的代价与实测量级见
-            ``reports/docs/consistency_checks/口径核对_掩码取样日错配.md``（月频噪声级、
-            周频 +3.76pp；**不可只改一半**）。
+    掩码恒生成**两份**，各自绑定一种成交口径，不再提供取样日开关：
+
+    * ``tradable_mask.parquet`` —— ``execution_lag=1``，``mask[T]`` = T 与 T+1
+      都可交易。**T+1 成交（open/vwap）专用**：执行日 E=T+1，E 行信号应配
+      ``mask[E-1]``（见 ``caliber.apply_execution_mask``）。
+    * ``tradable_mask_same_day.parquet`` —— ``execution_lag=0``，``mask[T]``
+      只判 T 日。**T 日收盘成交（close/fair）专用**。
+
+    混用两者都会引入未来状态或漏剔，两个方向的逐格量级见
+    ``reports/docs/consistency_checks/掩码顺序_offbyone_审计.md``。
     """
     from config import Config
     from data.cache import DataCache
@@ -402,51 +408,53 @@ def stage_prep(mask_lag: int = 1):
     # 次日执行价模式的执行价面板：开盘价 / 当日 VWAP（amount/volume × 后复权）
     vwap_adj = ((amt / v.replace(0, np.nan)) * f).astype(np.float32)
     vwap_adj = vwap_adj.replace([np.inf, -np.inf], np.nan)
-    o.astype(np.float32).to_parquet(base / "open_adj.parquet")
-    vwap_adj.to_parquet(base / "vwap_adj.parquet")
+    write_parquet_atomic(o.astype(np.float32), base / "open_adj.parquet")
+    write_parquet_atomic(vwap_adj, base / "vwap_adj.parquet")
     log.info("复权面板: %d 日 × %d 股（%s ~ %s）", len(c), c.shape[1],
              c.index[0].date(), c.index[-1].date())
-    c.astype(np.float32).to_parquet(base / "close_adj.parquet")
-    raw_close.astype(np.float32).to_parquet(base / "close_raw.parquet")
+    write_parquet_atomic(c.astype(np.float32), base / "close_adj.parquet")
+    write_parquet_atomic(raw_close.astype(np.float32), base / "close_raw.parquet")
 
     # 市值（未复权 close × 总股本，市场真实口径）
     eq = pd.read_parquet(cache_root / "equity_structure.parquet")
     shares = _shares_panel(eq, c.index, c.columns)
     mktcap = (shares * raw_close).astype(np.float32)
-    mktcap.to_parquet(base / "market_cap.parquet")
+    write_parquet_atomic(mktcap, base / "market_cap.parquet")
     log.info("市值面板完成（覆盖 %.2f）", float(mktcap.notna().mean().mean()))
 
     # 风格协变量（中性化用）
     cache = DataCache(OfflineQuietDataSource())
     industry = IndustryClassification(cache, level=1).get_industry_panel(
         list(c.columns), c.index)
-    industry.to_parquet(base / "industry.parquet")
+    write_parquet_atomic(industry, base / "industry.parquet")
     cov = build_style_covariates(
         {"close": c, "volume": v, "tot_share": shares},
         market_cap_panel=mktcap, industry_panel=industry)
     for k, pnl in cov.items():
         if k == "industry":
-            pnl.to_parquet(base / f"cov_{k}.parquet")   # 字符串行业代码，原样保存
+            write_parquet_atomic(pnl, base / f"cov_{k}.parquet")   # 字符串行业代码，原样保存
         else:
-            pnl.astype(np.float32).to_parquet(base / f"cov_{k}.parquet")
+            write_parquet_atomic(pnl.astype(np.float32), base / f"cov_{k}.parquet")
     log.info("风格协变量: %s", list(cov))
 
     # 可执行性掩码（涨跌停封板/停牌/ST；状态表 2019 起，2018 视为可交易）
-    # mask_lag=1（默认）= T+1 状态（现行口径）；0 = T 日状态（研究自洽口径，方案 A）。
+    # 两份、各自绑定成交口径：lag=1 给 T+1 成交（open/vwap），lag=0 给 T 日成交。
     mask = build_tradable_mask(c, bwd=f, cache_root=str(cache_root),
-                               execution_lag=int(mask_lag))
-    mask.to_parquet(base / "tradable_mask.parquet")
-    log.info("可执行掩码: 不可交易占比 %.4f（状态取样日 = 信号日 +%d）",
-             float((~mask).mean().mean()), int(mask_lag))
+                               execution_lag=1)
+    write_parquet_atomic(mask, base / "tradable_mask.parquet")
+    write_parquet_atomic(build_tradable_mask(c, bwd=f, cache_root=str(cache_root),
+                        execution_lag=0), 
+        base / "tradable_mask_same_day.parquet")
+    log.info("可执行掩码: T+1 口径不可交易占比 %.4f", float((~mask).mean().mean()))
 
     # 基准：上证指数 + 全A等权
     idx_ret = load_index_returns(BENCH_INDEX, begin=int(str(PANEL_BEGIN)[:8]),
                                  real=True)
     if idx_ret is None:
         raise RuntimeError("上证指数基准不可用（index_daily 缓存缺失）")
-    idx_ret.to_frame("ret").to_parquet(base / "bench_index.parquet")
+    write_parquet_atomic(idx_ret.to_frame("ret"), base / "bench_index.parquet")
     eqw = c.pct_change(fill_method=None).mean(axis=1)
-    eqw.to_frame("ret").to_parquet(base / "bench_eqw.parquet")
+    write_parquet_atomic(eqw.to_frame("ret"), base / "bench_eqw.parquet")
     log.info("基准: 指数 %d 日 / 等权 %d 日（%s ~ %s）", len(idx_ret), len(eqw),
              idx_ret.index[0].date(), idx_ret.index[-1].date())
     log.info("prep 完成 %.0fs", time.time() - t0)
@@ -947,7 +955,7 @@ def stage_predict(quick: bool = False, only_horizons: list[int] | None = None):
                 log.info("  拼接：保留 %d 日（%s），重算 %d 日（%s）",
                          len(keep), sorted(set(keep.index.year)),
                          len(pred) - len(keep), years_run)
-            pred.to_parquet(out_path)
+            write_parquet_atomic(pred, out_path)
             _fp_write(out_path, pfp, {"model": mname, "h": h})
             ic = calc_ic_series(pred, fwd)
             ic_by_year = ic.groupby(ic.index.year).mean()
@@ -990,10 +998,7 @@ def _rebalance_days_validated(dates: pd.DatetimeIndex, horizon: int,
     月首交易日（如 2026-09-01）到序列末跨度为 0，会触发守卫误杀整个回测
     ——该调仓日本就无收益可结（引擎也会跳过末日活动），剔除即可。
     """
-    s = pd.Series(dates, index=dates)
-    firsts = sorted(set(s.groupby(s.index.to_period("M")).first()))
-    if freq == "2M":
-        firsts = firsts[::2]
+    firsts = list(CAL.rebalance_days(dates, freq))
     pos = {d: i for i, d in enumerate(dates)}
     out = []
     for i, d in enumerate(firsts):
@@ -1172,6 +1177,7 @@ def stage_backtest(quick: bool = False, execution: str = "open"):
     base = load_base()
     close = base["close"]
     mask = base["mask"].astype(bool)
+    mask_same = load_same_day_mask() if execution == "close" else None
     cov = base["cov"]
     costs = default_costs()
     eq_dir = OUT / f"equity{_exec_sfx(execution)}"
@@ -1204,6 +1210,8 @@ def stage_backtest(quick: bool = False, execution: str = "open"):
             close.pct_change(h, fill_method=None).shift(-h)
         fwd = fwd.loc[oos_days]
         mask_oos = mask.reindex(index=oos_days, columns=close.columns).fillna(True)
+        mask_same_oos = None if mask_same is None else mask_same.reindex(
+            index=oos_days, columns=close.columns).fillna(True)
 
         sig_variants = {"raw": pred}
         try:
@@ -1232,13 +1240,13 @@ def stage_backtest(quick: bool = False, execution: str = "open"):
                         if execution != "close":
                             # 次日执行价模式（仅 h=1）：信号 shift(1)（T 收盘产生的
                             # 信号在 T+1 执行），调仓日 = 信号日次一交易日；可交易性
-                            # 改为信号预掩码——引擎 executable_mask 会把多头权重
-                            # 重归一，抹掉执行价分段
+                            # 用信号预掩码（mask[T] 已含 T 与 T+1 两天 ⇒ 先掩码再位移；
+                            # 引擎 executable_mask 会重归一多头、抹掉执行价分段）
                             if h != 1:
                                 log.warning("[execution=%s] 跳过 h>1: %s",
                                             execution, run_id)
                                 continue
-                            sig_used = sig.shift(1).where(mask_oos)
+                            sig_used = apply_execution_mask(sig, mask_oos)
                             s_ = pd.Series(oos_days, index=oos_days)
                             period = {"D": "D", "W": "W"}.get(freq, "M")
                             firsts = s_.groupby(s_.index.to_period(period)).first()
@@ -1265,7 +1273,8 @@ def stage_backtest(quick: bool = False, execution: str = "open"):
                                              rebalance_days=rb_exec,
                                              execution_split=exec_split)
                             else:
-                                res = bt.run(sig, fwd, executable_mask=mask_oos,
+                                # T 日收盘成交 ⇒ 同日掩码（mask_oos 会多看 T+1）
+                                res = bt.run(sig, fwd, executable_mask=mask_same_oos,
                                              horizon=h, rebalance_days=rb_exec)
                         except ValueError as e:
                             log.warning("[%s] 不可行: %s", run_id, str(e)[:100])
@@ -1337,7 +1346,6 @@ def stage_smallcap(quick: bool = False):
     t0 = time.time()
     base = load_base()
     close = base["close"]
-    mask = base["mask"].astype(bool)
     cov = base["cov"]
     costs = default_costs()
 
@@ -1348,9 +1356,10 @@ def stage_smallcap(quick: bool = False):
 
     pred = pd.read_parquet(pf)
     oos_days = pred.index
+    mask_same_oos = load_same_day_mask().reindex(
+        index=oos_days, columns=close.columns).fillna(True)
     fwd = close.pct_change(fill_method=None)   # h=1 单日收益，引擎约定
     fwd = fwd.loc[oos_days]
-    mask_oos = mask.reindex(index=oos_days, columns=close.columns).fillna(True)
     bench_idx = base["bench_index"].reindex(oos_days).fillna(0.0)
     bench_eqw = base["bench_eqw"].reindex(oos_days).fillna(0.0)
 
@@ -1392,7 +1401,8 @@ def stage_smallcap(quick: bool = False):
                 bt = VectorBacktest(strategy=strat, rebalance_freq=freq,
                                     initial_capital=1_000_000.0, costs=costs)
                 try:
-                    res = bt.run(sig, fwd, executable_mask=mask_oos,
+                    # T 日收盘成交 ⇒ 同日掩码（base["mask"] 是 T+1 口径，不能用）
+                    res = bt.run(sig, fwd, executable_mask=mask_same_oos,
                                  horizon=h, rebalance_days=rb)
                 except ValueError as e:
                     log.warning("[%s] 不可行: %s", run_id, str(e)[:100])
@@ -1459,6 +1469,7 @@ def stage_ensemble(quick: bool = False, execution: str = "open"):
     base = load_base()
     close = base["close"]
     mask = base["mask"].astype(bool)
+    mask_same = load_same_day_mask() if execution == "close" else None
     cov = base["cov"]
     costs = default_costs()
     h, freq, wmode = 1, "M", "equal"
@@ -1481,7 +1492,7 @@ def stage_ensemble(quick: bool = False, execution: str = "open"):
 
     pred_dir = OUT / "pred"
     for vname, v in variants.items():
-        v.reindex(columns=close.columns).astype(np.float32).to_parquet(
+        write_parquet_atomic(v.reindex(columns=close.columns).astype(np.float32), 
             pred_dir / f"{vname}__h{h}.parquet")
         log.info("[ensemble] %s -> OOS IC=%.4f",
                  vname, float(calc_ic_series(v, fwd.shift(-1)).mean()))
@@ -1492,6 +1503,8 @@ def stage_ensemble(quick: bool = False, execution: str = "open"):
     oos_days = variants["ens_rgr"].index
     fwd = fwd.loc[oos_days]
     mask_oos = mask.reindex(index=oos_days, columns=close.columns).fillna(True)
+    mask_same_oos = None if mask_same is None else mask_same.reindex(
+        index=oos_days, columns=close.columns).fillna(True)
     bench_idx = base["bench_index"].reindex(oos_days).fillna(0.0)
     bench_eqw = base["bench_eqw"].reindex(oos_days).fillna(0.0)
 
@@ -1502,8 +1515,7 @@ def stage_ensemble(quick: bool = False, execution: str = "open"):
         if not fp.exists():
             raise FileNotFoundError(f"{fp} 缺失：先跑 --stage prep 重建基础面板")
         fill = pd.read_parquet(fp)
-        s_ = pd.Series(oos_days, index=oos_days)
-        firsts = s_.groupby(s_.index.to_period("M")).first()
+        firsts = CAL.month_firsts(oos_days)
         pos_ = {d: i for i, d in enumerate(oos_days)}
         rb_signal = {t for t in firsts if pos_[t] + 1 < len(oos_days)}
         rb_exec = {oos_days[pos_[t] + 1] for t in rb_signal}
@@ -1530,13 +1542,14 @@ def stage_ensemble(quick: bool = False, execution: str = "open"):
                                     initial_capital=1_000_000.0, costs=costs)
                 try:
                     if execution == "close":
-                        res = bt.run(sg, fwd, executable_mask=mask_oos,
+                        # T 日收盘成交 ⇒ 同日掩码
+                        res = bt.run(sg, fwd, executable_mask=mask_same_oos,
                                      horizon=h, rebalance_days=None)
                     else:
-                        # 信号预掩码：引擎 executable_mask 会重归一多头、
-                        # 抹掉执行价分段（与 stage_backtest h=1 同一处理）
-                        res = bt.run(sg.shift(1).where(mask_oos), fwd, horizon=1,
-                                     rebalance_days=rb_exec,
+                        # mask[T] 含 T 与 T+1 两天 ⇒ 先掩码再位移；引擎
+                        # executable_mask 会重归一多头、抹掉执行价分段
+                        res = bt.run(apply_execution_mask(sg, mask_oos), fwd,
+                                     horizon=1, rebalance_days=rb_exec,
                                      execution_split=exec_split)
                 except ValueError as e:
                     log.warning("[%s] 不可行: %s", run_id, str(e)[:100])
@@ -1644,11 +1657,6 @@ def main():
                     help="忽略 pred 指纹跳过、强制重训（配合 --years 时只影响该年）")
     ap.add_argument("--out-tag", default=None,
                     help="消融臂输出目录后缀 -> reports/alla_rolling_<tag>")
-    ap.add_argument("--mask-lag", type=int, default=1, choices=[0, 1],
-                    help="可交易掩码状态取样日（2026-10-13，P1 口径）："
-                         "1(T+1 状态，现行口径，零回归) / "
-                         "0(T 日状态，与 T 日收盘成交自洽的研究口径；须配 --out-tag)。"
-                         "实测影响见 docs/consistency_checks/口径核对_掩码取样日错配.md")
     ap.add_argument("--sc-model", default=None,
                     help="smallcap 子网格信号模型（默认 gbdt）；覆盖时指标产物加"
                          " __<model> 后缀，避免覆盖出厂子网格对照表")
@@ -1664,10 +1672,6 @@ def main():
         SC_MODEL = args.sc_model
         log.info("+++ smallcap 信号模型 -> %s（产物加 __%s 后缀）",
                  SC_MODEL, SC_MODEL)
-    if args.mask_lag != 1 and not args.out_tag:
-        ap.error("--mask-lag 0（T 日状态口径）须配 --out-tag：否则 _base/ 掩码被替换，"
-                 "所有历史回测数字口径变更且与原产物不同目录混淆"
-                 "（详见 docs/consistency_checks/口径核对_掩码取样日错配.md）")
     if args.market_features:
         if not args.out_tag:
             ap.error("--market-features 须配 --out-tag：否则 pred 产物与主实验"
@@ -1822,7 +1826,7 @@ def main():
     for st in stages:
         log.info("===== 阶段: %s =====", st)
         if st == "prep":
-            stage_prep(args.mask_lag)
+            stage_prep()
         elif st == "select":
             stage_select(args.quick)
         elif st == "predict":

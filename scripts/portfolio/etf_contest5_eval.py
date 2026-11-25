@@ -31,6 +31,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from backtest import calendar as CAL
 from backtest.engine import build_execution_split
 from data.cache import DataCache
 from data.datasource import create_datasource
@@ -257,9 +258,7 @@ def main(argv: list[str] | None = None) -> int:
               f"（**池结构实验口径，非对外数字**）", flush=True)
         if unknown:
             print(f"   清单里 {len(unknown)} 只不在面板中，已忽略：{unknown[:5]}", flush=True)
-    mfs = pd.DatetimeIndex(
-        pd.Series(close.index, index=close.index)
-        .groupby(close.index.to_period("M")).first().to_numpy())
+    mfs = CAL.month_firsts(close.index)
     # 合成防御腿（仅 monthly 用）。DEF 是净值水平线，其「执行价」就是当日净值。
     extra_def = (pd.DataFrame({"DEF": level_from_returns(build_defense(close)["mix"])})
                  if any(n in DEF_VARIANTS for n in names) else None)

@@ -24,7 +24,6 @@ import numpy as np
 import pandas as pd
 
 from config import Config
-from stats.significance import mean_t
 
 CACHE_ROOT = Path(str(Config.cache()["root"]))
 
@@ -106,15 +105,6 @@ def build_share_signals(close: pd.DataFrame) -> dict[str, pd.DataFrame]:
     return out
 
 
-def month_first_dates(idx: pd.DatetimeIndex, begin: int, end: int) -> pd.DatetimeIndex:
-    """[begin, end] 内每月第一个交易日（与引擎 ``freq="M"`` 的信号日对齐）。"""
-    sel = idx[(idx >= pd.Timestamp(str(begin))) & (idx <= pd.Timestamp(str(end)))]
-    if len(sel) == 0:
-        return pd.DatetimeIndex([])
-    s = pd.Series(sel, index=sel)
-    return pd.DatetimeIndex(s.groupby(s.index.to_period("M")).first().to_numpy())
-
-
 def _spearman(a: pd.Series, b: pd.Series, min_n: int = 8) -> float:
     ok = a.notna() & b.notna()
     if int(ok.sum()) < min_n:
@@ -123,64 +113,6 @@ def _spearman(a: pd.Series, b: pd.Series, min_n: int = 8) -> float:
     if x.nunique() < 2 or y.nunique() < 2:
         return float("nan")
     return float(x.corr(y, method="spearman"))
-
-
-def share_ic_table(close: pd.DataFrame, signals: dict[str, pd.DataFrame],
-                   begin: int, end: int, placebo: int = 20,
-                   seed: int = 20261026) -> pd.DataFrame:
-    """月频 rank IC：t 日因子 vs 下一调仓日收益；附整条序列打乱的安慰剂。
-
-    判据（方案 §四）：|IC| ≥ 0.03、t ≥ 2、安慰剂 0/20 超越。
-    安慰剂按**整条序列**重置（每期都在截面内独立打乱，重复 ``placebo`` 次），
-    比较的是「mean IC」而不是单期 |IC| —— 单期 |IC| 在该截面上天然有
-    1/sqrt(N)≈0.14 的噪声（N≈50），用它做门槛会把真实信号误判。
-    """
-    rb = month_first_dates(close.index, begin, end)
-    pairs = [(t, tn) for t, tn in zip(rb[:-1], rb[1:])]
-    if len(pairs) < 10:
-        return pd.DataFrame()
-    rng = np.random.default_rng(seed)
-
-    def _mean_ic(sig: pd.DataFrame, shuffle: bool) -> float:
-        ics = []
-        for t, tn in pairs:
-            f = sig.loc[t].reindex(close.columns)
-            r = (close.loc[tn] / close.loc[t] - 1.0).reindex(close.columns)
-            ok = f.notna() & r.notna()
-            if int(ok.sum()) < 8:
-                continue
-            fv = f[ok].to_numpy()
-            if shuffle:
-                fv = rng.permutation(fv)
-            ic = _spearman(pd.Series(fv, index=r[ok].index), r[ok])
-            if not np.isnan(ic):
-                ics.append(ic)
-        return float(np.mean(ics)) if ics else float("nan")
-
-    rows = []
-    for name, sig in signals.items():
-        ics = []
-        for t, tn in pairs:
-            f = sig.loc[t].reindex(close.columns)
-            r = (close.loc[tn] / close.loc[t] - 1.0).reindex(close.columns)
-            ic = _spearman(f, r)
-            if not np.isnan(ic):
-                ics.append(ic)
-        s = pd.Series(ics, dtype=float)
-        n = int(s.notna().sum())
-        mean = float(s.mean()) if n else float("nan")
-        std = float(s.std(ddof=1)) if n > 1 else float("nan")
-        placebo_means = [abs(_mean_ic(sig, shuffle=True)) for _ in range(placebo)]
-        placebo_means = [x for x in placebo_means if not np.isnan(x)]
-        rows.append({
-            "signal": name, "n_periods": n, "mean_ic": mean,
-            "icir": (mean / std) if std and std > 0 else float("nan"),
-            "t_stat": (mean_t(s) if std and std > 0 and n > 1 else float("nan")),
-            "pos_rate": float((s > 0).mean()) if n else float("nan"),
-            "placebo_max_abs_mean_ic": max(placebo_means) if placebo_means else float("nan"),
-            "n_placebo": len(placebo_means),
-        })
-    return pd.DataFrame(rows).sort_values("mean_ic", ascending=False)
 
 
 def _rebalance_days(close: pd.DataFrame, spec: dict,

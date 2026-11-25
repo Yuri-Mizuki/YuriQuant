@@ -40,6 +40,7 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+from data.atomic_io import write_parquet_atomic  # noqa: E402
 from scripts.common.cli_common import setup_logging  # noqa: E402
 from scripts.textmining._paths import Out  # noqa: E402
 
@@ -161,7 +162,7 @@ def run(pool: str = "zz1000", begin: str = "20200701", max_len: int = 256,
             "p_neu": probs[:, 0], "p_pos": probs[:, 1], "p_neg": probs[:, 2],
             "title_head": sub["title"].str.slice(0, 60).values,
         })
-        part.to_parquet(part_path, compression="snappy")
+        write_parquet_atomic(part, part_path, compression="snappy")
         done_rows += len(sub)
         rate = done_rows / max((pd.Timestamp.now() - t0).total_seconds(), 1)
         eta_min = (len(rep_shard) - done_rows) / max(rate, 0.1) / 60
@@ -179,7 +180,7 @@ def run(pool: str = "zz1000", begin: str = "20200701", max_len: int = 256,
         keep = [c for c in reused.columns if c in df.columns or c == "n_chars"]
         df = pd.concat([df, reused[keep]], ignore_index=True)
     df = df.sort_values(["code", "date"]).reset_index(drop=True)
-    df.to_parquet(out_path, compression="snappy")
+    write_parquet_atomic(df, out_path, compression="snappy")
     log.info("情感得分已存: %s (%d 行, P(pos)均值 %.3f)",
              out_path, len(df), df["p_pos"].mean())
     return df

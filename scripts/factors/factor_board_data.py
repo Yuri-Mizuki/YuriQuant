@@ -47,10 +47,12 @@ from backtest.costs import default_costs  # noqa: E402
 from backtest.engine import VectorBacktest, build_execution_split  # noqa: E402
 from backtest.metrics import drawdown_series, sharpe_arithmetic  # noqa: E402
 from config import Config  # noqa: E402
+from data.tradability import apply_execution_mask  # noqa: E402
 from scripts.evaluation.caliber import next_day_rebalance, rebalance_dates  # noqa: E402
 from stats import PERIODS_PER_YEAR  # noqa: E402
 from stats.ic import calc_ic_series, ic_stats  # noqa: E402
 from strategy.base import Strategy  # noqa: E402
+from data.atomic_io import write_parquet_atomic  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 BASE = ROOT / "reports" / "alla_rolling" / "_base"
@@ -287,7 +289,10 @@ def compute_one(name: str) -> dict | None:
         return {"name": name, "nav": pd.DataFrame({"ic": ic.reindex(panel.index)}),
                 "meta": base}
 
-    sig = panel.shift(1).where(m)
+    # 2026-11-25 口径修复：mask[T] 已含「T 日 + 执行日 T+1」；执行日 E=T+1 应读 mask[T]，
+    # 故先掩码再位移（引擎在 E 行取 sig 与 executable_mask，两者必须同源同一天）。
+    sig = apply_execution_mask(panel, m)
+    m_exec = m.shift(1)
     rcc = CTX["rcc"].reindex(columns=codes)
     sp = (CTX["split"][0].reindex(columns=codes),
           CTX["split"][1].reindex(columns=codes))
@@ -296,7 +301,7 @@ def compute_one(name: str) -> dict | None:
         for tag, costs in (("net", CTX["costs"]), ("gross", CTX["costs_off"])):
             bt = VectorBacktest(_Group(side), rebalance_freq="M", costs=costs)
             res[(side, tag)] = bt.run(sig, rcc, horizon=1, rebalance_days=CTX["rb_exec"],
-                                      execution_split=sp, executable_mask=m)
+                                      execution_split=sp, executable_mask=m_exec)
 
     nav = pd.DataFrame({
         "nav_q1_net": (1 + res[("bottom", "net")].daily_returns).cumprod(),
@@ -379,7 +384,7 @@ def _scan_degenerate(names, out, reg, workers, base, panel_dir,
         r = compute_one(n)
         if r is None:
             continue
-        r["nav"].to_parquet(out / f"{n}.parquet")
+        write_parquet_atomic(r["nav"], out / f"{n}.parquet")
         (out / f"{n}.json").write_text(json.dumps(r["meta"], ensure_ascii=False),
                                        encoding="utf-8")
     print(f"已按「分位不可分」口径重算 {len(flagged)} 个")
@@ -437,7 +442,7 @@ def main() -> None:
                 continue
             if r is None:
                 continue
-            r["nav"].to_parquet(out / f"{n}.parquet")
+            write_parquet_atomic(r["nav"], out / f"{n}.parquet")
             (out / f"{n}.json").write_text(
                 json.dumps(r["meta"], ensure_ascii=False), encoding="utf-8")
             rows.append(_summary_row(r["meta"], reg.loc[n]))

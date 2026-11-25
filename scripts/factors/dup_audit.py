@@ -649,8 +649,6 @@ def write_report(lib: FactorLibrary, nb: pd.DataFrame, cl: pd.DataFrame,
     if "resid_ic" in reg.columns:
         pick = reg.reindex(nb_out["name"])
         ri = pd.to_numeric(pick["resid_ic"], errors="coerce").to_numpy(dtype=float)
-        rt = (pd.to_numeric(pick["resid_t_nw"], errors="coerce").to_numpy(dtype=float)
-              if "resid_t_nw" in reg.columns else np.full(len(ri), np.nan))
         pos = {n: i for i, n in enumerate(names)}
         ex = np.array([float(corr[pos[a], pos[b]]) if (a in pos and b in pos) else np.nan
                        for a, b in zip(nb_out["name"], nb_out["top"])])
@@ -902,7 +900,6 @@ def main() -> None:
     else:
         log.warning("子集审计（%d/%d），不覆盖库内矩阵与报告", len(names), len(reg))
 
-    mc = nb["max_corr"]
     _print_summary(nb)
 
     if args.apply:

@@ -31,9 +31,7 @@ ST状态因子族，并 append 进 registry.csv 与 ic_h{1,5,10,20}.parquet。
 from __future__ import annotations
 
 import argparse
-import json
 import sys
-import time
 from pathlib import Path
 
 import numpy as np
@@ -47,7 +45,6 @@ from scripts.common.cli_common import setup_logging  # noqa: E402
 
 log = setup_logging("build_alla_status")
 from scripts.builders import common  # noqa: E402
-from scripts.builders.common import HORIZONS, IC_CODE_STRIDE  # noqa: E402
 
 DATASET = "all_a_2018_2026"
 W60 = 60
@@ -159,7 +156,6 @@ def main() -> None:
     args = ap.parse_args()
 
     from config import Config
-    from stats.ic import calc_ic_series
 
     # 交易日历与股票池：builder 唯一构建入口（后复权 close + 未复权 close 同源）
     close_adj, close_raw = common.load_close_adj(with_raw=True)
@@ -168,12 +164,6 @@ def main() -> None:
 
     lib_root = Path(str(Config.get()["factor_library"]["root"]))
     ds_dir = lib_root / DATASET
-    panels_dir = ds_dir / "panels"
-    panels_dir.mkdir(parents=True, exist_ok=True)
-    stats_path = ds_dir / "factor_stats_status.jsonl"
-    done = {json.loads(l)["name"] for l in
-            stats_path.read_text(encoding="utf-8").splitlines() if l.strip()} \
-        if args.resume and stats_path.exists() else set()
 
     st = _load_status()
 
@@ -185,31 +175,9 @@ def main() -> None:
         log.warning("无可构建因子")
         return
 
-    fwd = {h: close_adj.pct_change(h, fill_method=None).shift(-h)
-           for h in HORIZONS}
-    ic_codes = close_adj.columns[::IC_CODE_STRIDE]
-    order = STATUS_ORDER
-
-    t0 = time.time()
-    for i, name in enumerate(order, 1):
-        if name not in panels or name in done:
-            continue
-        p = panels[name].fillna(np.nan).astype(np.float32)
-        p = p.replace([np.inf, -np.inf], np.nan)
-        p.to_parquet(panels_dir / f"{name}.parquet")
-        cov = float(p.notna().mean().mean())
-        ic = {h: calc_ic_series(p[ic_codes], fwd[h]).astype(np.float32)
-              for h in HORIZONS}
-        row = {"name": name, "set": "status", "label": labels.get(name, name),
-               "coverage": cov,
-               **{f"ic_mean_h{h}": float(ic[h].mean()) for h in HORIZONS}}
-        with stats_path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(row, ensure_ascii=False) + "\n")
-        log.info("[%d/%d] %s cov=%.2f ic_h1=%+.4f | %.0fs", i, len(order),
-                 name, cov, row["ic_mean_h1"], time.time() - t0)
-
-    common.merge_outputs(ds_dir, 'status')
-    log.info("停牌/ST因子构建完成 %.0fs", time.time() - t0)
+    common.write_family_panels(
+        ds_dir, panels, family="status", set_name="status", labels=labels,
+        close_adj=close_adj, order=STATUS_ORDER, resume=args.resume)
 
 
 if __name__ == "__main__":

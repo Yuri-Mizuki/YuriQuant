@@ -41,6 +41,7 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+from data.atomic_io import write_parquet_atomic  # noqa: E402
 from scripts.common.cli_common import setup_logging  # noqa: E402
 from scripts.textmining._paths import Out  # noqa: E402
 
@@ -270,13 +271,13 @@ def run(pool: str = "zz1000", begin: str = "20190101",
     wide = None
     for name, df in panels.items():
         out = OUT_DIR / f"senti_factor_{name}_{pool}.parquet"
-        df.set_index(["date", "code"]).sort_index().to_parquet(
+        write_parquet_atomic(df.set_index(["date", "code"]).sort_index(), 
             out, compression="snappy")
         w = df.rename(columns={"factor": name})[["date", "code", name]]
         wide = w if wide is None else wide.merge(w, on=["date", "code"], how="outer")
     wide = wide.sort_values(["date", "code"]).reset_index(drop=True)
     OUT_DIR / f"senti_factors_{pool}.parquet"
-    wide.to_parquet(OUT_DIR / f"senti_factors_{pool}.parquet", compression="snappy")
+    write_parquet_atomic(wide, OUT_DIR / f"senti_factors_{pool}.parquet", compression="snappy")
     log.info("宽表 %d 行 → senti_factors_%s.parquet", len(wide), pool)
 
     # 因子相关矩阵（AI 41 图表17 口径：pairwise Spearman）

@@ -28,9 +28,7 @@
 from __future__ import annotations
 
 import argparse
-import json
 import sys
-import time
 from pathlib import Path
 
 import numpy as np
@@ -44,7 +42,6 @@ from scripts.common.cli_common import setup_logging  # noqa: E402
 
 log = setup_logging("build_alla_moneyflow")
 from scripts.builders import common  # noqa: E402
-from scripts.builders.common import HORIZONS, IC_CODE_STRIDE  # noqa: E402
 
 DATASET = "all_a_2018_2026"
 WINDOW = 20
@@ -167,22 +164,12 @@ def main() -> None:
     args = ap.parse_args()
 
     from config import Config
-    from stats.ic import calc_ic_series
 
     lib_root = Path(str(Config.get()["factor_library"]["root"]))
     ds_dir = lib_root / DATASET
-    panels_dir = ds_dir / "panels"
-    panels_dir.mkdir(parents=True, exist_ok=True)
-    stats_path = ds_dir / "factor_stats_moneyflow.jsonl"
-    done = ({json.loads(line)["name"] for line in
-             stats_path.read_text(encoding="utf-8").splitlines() if line.strip()}
-            if args.resume and stats_path.exists() else set())
-
     close_adj, tables = load_panels()
     codes = close_adj.columns
     cal_idx = close_adj.index
-    fwd = {h: close_adj.pct_change(h, fill_method=None).shift(-h) for h in HORIZONS}
-    ic_codes = close_adj.columns[::IC_CODE_STRIDE]
 
     panels_all = build_panels(cal_idx, codes, tables=tables)
     defs: dict[str, dict] = {k: {"src": src, "label": lbl}
@@ -193,27 +180,12 @@ def main() -> None:
         log.warning("无资金流数据，跳过")
         return
 
-    t0 = time.time()
-    for i, (name, meta) in enumerate(sorted(defs.items()), 1):
-        if name in done or name not in panels_all:
-            continue
-        p = panels_all[name].fillna(np.nan).astype(np.float32)
-        p = p.replace([np.inf, -np.inf], np.nan).clip(-1e11, 1e11)
-        p.to_parquet(panels_dir / f"{name}.parquet")
-
-        cov = float(p.notna().mean().mean())
-        ic = {h: calc_ic_series(p[ic_codes], fwd[h]).astype(np.float32)
-              for h in HORIZONS}
-        row = {"name": name, "set": "moneyflow", "label": meta["label"],
-               "coverage": cov,
-               **{f"ic_mean_h{h}": float(ic[h].mean()) for h in HORIZONS}}
-        with stats_path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(row, ensure_ascii=False) + "\n")
-        log.info("[%d/%d] %s cov=%.2f ic_h1=%+.4f | %.0fs", i, len(defs),
-                 name, cov, row["ic_mean_h1"], time.time() - t0)
-
-    common.merge_outputs(ds_dir, 'moneyflow')
-    log.info("资金流因子构建完成 %.0fs", time.time() - t0)
+    common.write_family_panels(
+        ds_dir, {k: panels_all[k] for k in defs if k in panels_all},
+        family="moneyflow", set_name="moneyflow",
+        labels={k: v["label"] for k, v in defs.items()},
+        close_adj=close_adj, clip=common.CLIP["MONEY"], resume=args.resume)
+    log.info("资金流因子构建完成")
 
 
 if __name__ == "__main__":

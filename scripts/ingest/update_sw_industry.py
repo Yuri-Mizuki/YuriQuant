@@ -30,6 +30,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from config import Config  # noqa: E402
+from data.atomic_io import write_parquet_atomic
 
 OUT_NAME = "sw_industry_daily.parquet"
 
@@ -95,7 +96,7 @@ def main() -> None:
         return
 
     df = fetch_all()
-    df.to_parquet(p, index=False)
+    write_parquet_atomic(df, p, index=False)
     print(f"\n已写 {p}")
     report(df)
 

@@ -23,6 +23,7 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+from data.atomic_io import write_parquet_atomic  # noqa: E402
 
 from data.atomic_io import write_json_atomic  # noqa: E402
 from scripts.common.cli_common import setup_logging  # noqa: E402
@@ -73,7 +74,7 @@ def _consume_parts(base: pd.DataFrame) -> pd.DataFrame:
     frames = [base] + [pd.read_parquet(f) for f in files]
     merged = pd.concat(frames, axis=0)
     merged = merged[~merged.index.duplicated(keep="last")].sort_index()
-    merged.to_parquet(CACHE_PATH)
+    write_parquet_atomic(merged, CACHE_PATH)
     for f in files:
         f.unlink()
     _sync_meta_watermark(merged)
@@ -151,7 +152,7 @@ def main():
         df = df[~df.index.duplicated(keep="last")]
         # 只写本批分片（O(批大小)）。被 kill 也不丢——下次运行开头自动合并；
         # 旧写法每批 concat 全表，30 批 O(n²) 且在首日即 OOM（见 _consume_parts）。
-        df.to_parquet(parts / f"part_{i:05d}.parquet")
+        write_parquet_atomic(df, parts / f"part_{i:05d}.parquet")
         done += len(batch)
         log.info("batch %d-%d 落盘分片（本次累计 %d/%d）",
                  i, i + len(batch), done, len(todo))

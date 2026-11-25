@@ -143,9 +143,9 @@ def self_check() -> list[str]:
             # +15.7% open-to-open，信息日 09-27）与 2020-02-03 疫情缺口（−10.7%）为真实行情
             bad.append(f"{k} 出现 |日收益|>20%")
     # us_ret1 无内部 NaN（第四篇修正版不变量）
-    u = build_us_ret1(daily).dropna()
-    first = build_us_ret1(daily).first_valid_index()
-    if build_us_ret1(daily).loc[first:].isna().any():
+    us_ret1 = build_us_ret1(daily)
+    first = us_ret1.first_valid_index()
+    if us_ret1.loc[first:].isna().any():
         bad.append("us_ret1 内部 NaN（修正版失效？）")
     # 执行段对齐抽查（hf_vol 同款）
     op = daily["open"].dropna()

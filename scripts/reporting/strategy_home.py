@@ -57,6 +57,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from backtest import calendar as CAL
 from backtest.engine import build_execution_split
 from backtest.metrics import drawdown_series
 from data.cache import DataCache
@@ -201,9 +202,7 @@ def load_env() -> dict:
     ro = raw["open"].unstack("code").reindex(index=close.index, columns=close.columns)
     open_adj = (ro * (close / rc)).astype(np.float32)
     panels = build_extra_panels(close, build_panels(close, amount), rc)
-    mfs = pd.DatetimeIndex(
-        pd.Series(close.index, index=close.index)
-        .groupby(close.index.to_period("M")).first().to_numpy())
+    mfs = CAL.month_firsts(close.index)
     return {"bundle": bundle, "close": close, "panels": panels,
             "open_adj": open_adj, "mfs": mfs}
 

@@ -44,7 +44,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from backtest.costs import default_one_way_bp, turnover_cost  # noqa: E402
+from backtest.costs import turnover_cost  # noqa: E402
 from backtest.metrics import (  # noqa: E402
     annual_return,
     information_ratio,
@@ -53,12 +53,12 @@ from backtest.metrics import (  # noqa: E402
 )
 from config import Config  # noqa: E402
 from stats.robust_stats import nw_t  # noqa: E402
+from data.atomic_io import write_parquet_atomic
 
 ROOT = Path(__file__).resolve().parents[2]
 OUT_DIR = ROOT / "reports" / "report_replica"
 PQ = Path(Config.paths()["cache_root"])
 
-COST_BP = default_one_way_bp()
 MIN_IND = 20          # 截面最少行业数（28~31 个池，留余量）
 
 
@@ -853,8 +853,8 @@ def main() -> None:
                       f"t(IR) {r['t_ir']:+.2f} 换手 {r['turnover']:.0%}")
                 rets_all[name] = r["ret"]
                 bench_all[name] = r["bench"]
-    pd.DataFrame(rets_all).to_parquet(OUT_DIR / "port_returns.parquet")
-    pd.DataFrame(bench_all).to_parquet(OUT_DIR / "port_bench.parquet")
+    write_parquet_atomic(pd.DataFrame(rets_all), OUT_DIR / "port_returns.parquet")
+    write_parquet_atomic(pd.DataFrame(bench_all), OUT_DIR / "port_bench.parquet")
     pm = pd.DataFrame(rows)
     pm.to_csv(OUT_DIR / "port_metrics.csv", index=False, encoding="utf-8-sig")
     print(f"\n→ {OUT_DIR / 'port_metrics.csv'}")

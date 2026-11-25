@@ -21,7 +21,9 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+from data.atomic_io import write_parquet_atomic  # noqa: E402
 
+from backtest import calendar as CAL  # noqa: E402
 from scripts.common.cli_common import setup_logging  # noqa: E402
 
 log = setup_logging("buffer_arm_920")
@@ -49,8 +51,9 @@ def main(argv: list[str] | None = None) -> None:
 
     from backtest.costs import default_costs
     from backtest.engine import VectorBacktest, build_execution_split
-    from scripts.evaluation.horizon_mix import load
+    from data.tradability import apply_execution_mask
     from scripts.common import alla_common as AC
+    from scripts.evaluation.horizon_mix import load
     from strategy.examples import BufferedTopFracLongOnly, TopFracLongOnly
 
     pred_dir, dest = Path(args.pred_dir), Path(args.out)
@@ -77,7 +80,7 @@ def main(argv: list[str] | None = None) -> None:
         # 如在这里就 shift，caliber 会再 shift 一次，等于 T+2 成交。
         p = ROOT / args.save_sig
         p.parent.mkdir(parents=True, exist_ok=True)
-        sig.to_parquet(p)
+        write_parquet_atomic(sig, p)
         log.info("信号已落盘：%s  (%d 日 × %d 股)", p, sig.shape[0], sig.shape[1])
     if args.sig_only:
         log.info("--sig-only：跳过回测（%.1fs）", time.time() - t0)
@@ -99,8 +102,7 @@ def main(argv: list[str] | None = None) -> None:
         if not fp.exists():
             raise SystemExit(f"{fp} 缺失：先跑 rolling_grid_alla --stage prep")
         fill = pd.read_parquet(fp)
-        s_ = pd.Series(oos_days, index=oos_days)
-        firsts = s_.groupby(s_.index.to_period("M")).first()
+        firsts = CAL.month_firsts(oos_days)
         pos_ = {d: i for i, d in enumerate(oos_days)}
         rb_signal = {t for t in firsts if pos_[t] + 1 < len(oos_days)}
         rb_exec = {oos_days[pos_[t] + 1] for t in rb_signal}
@@ -118,10 +120,15 @@ def main(argv: list[str] | None = None) -> None:
         bt = VectorBacktest(strategy=make_strat(), rebalance_freq=args.freq,
                             initial_capital=1_000_000.0, costs=costs)
         if exec_split is not None:
-            res = bt.run(sig_in.shift(1).where(mask_oos), fwd, horizon=1,
+            # mask[T] 已含「信号日 T + 执行日 T+1」两天状态 ⇒ 先掩码再位移。
+            res = bt.run(apply_execution_mask(sig_in, mask_oos), fwd, horizon=1,
                          rebalance_days=rb_exec, execution_split=exec_split)
         else:
-            res = bt.run(sig_in, fwd, executable_mask=mask_oos, horizon=1,
+            # T 日收盘成交 ⇒ 用**同日**掩码（mask[T] 只判 T 日）；用 T+1 口径的
+            # ``mask_oos`` 会拿未来状态剔股。
+            same_day = AC.load_same_day_mask().reindex(
+                index=oos_days, columns=close.columns).fillna(True)
+            res = bt.run(sig_in, fwd, executable_mask=same_day, horizon=1,
                          rebalance_days=None)
         m = AC.res_metrics(res.daily_returns, bench_idx, res.turnover_series)
         rows.append({"variant": name, "annual": m["annual"],
