@@ -30,6 +30,8 @@
      FeatureStore 同口径）；h1/h5 清单取**并集只算一次**再切分；
   4. 每个 horizon 各自重训 gbdt（500 日窗）并预测最新截面，再逐股取截面百分位
      秩平均（`_rank_average_single_day`，与实验 `_rank_average` 同口径）；
+     **2026-11-25 起默认 `--model-mode panel`：不重训，直接读该臂 `pred/` 的回测
+     产物**（训练频率自动继承 h1 季度折、h20 半年度折），`--model-mode daily` 回旧口径；
   5. 幽灵股守卫（existence_mask，逐 horizon）+ 信号日可交易性标注（停牌/ST/封板）；
   6. 输出全A排名 CSV + Top10% 持仓候选 + history 追加（reports/alla_daily/，
      2026-10-09 起精简为每期 6 个文件）；可选 `--deliverable-k N` 额外产
@@ -164,6 +166,12 @@ ORTHO_SELECTION_DIR = ROOT / "reports" / "alla_rolling_ortho" / "selection"
 # 产出命令：rolling_grid_alla --preproc ortho_fundind
 #          --out-tag ortho920fundind --stage select
 FUNDIND_SELECTION_DIR = ROOT / "reports" / "alla_rolling_ortho920fundind" / "selection"
+# 2026-11-25：定版改 f50 臂（coverage 修复后 50 席优于 80 席，见 baselines.yaml
+# `yqcore-breadth` rev2）。出榜同时切 `--model-mode panel`：直接读该目录同级的
+# `pred/`（回测产物），训练频率自动继承 h1 季度、h20 半年度。
+# 产出命令：rolling_grid_alla --preproc ortho_fundind --out-tag ab_f50
+#          --max-features 50 --stage select / --stage predict
+FUNDIND_SELECTION_DIR_NEW = ROOT / "reports" / "alla_rolling_ab_f50" / "selection"
 OUT_DIR = ROOT / "reports" / "alla_daily"
 # 市场状态特征（`--market-features`）用的指数清单：上证指数 + 国证A指。
 # 与 `rolling_grid_alla.MARKET_FEATURE_INDICES` 同值 —— 实验侧已由批次 12②
@@ -192,7 +200,7 @@ PRESETS: dict[str, dict] = {
         "horizons": (1, 5, 10, 20),
         "slow_blend": 0.5,
         "slow_panels_subdir": "panels_neu",
-        "selection_dir": FUNDIND_SELECTION_DIR,
+        "selection_dir": FUNDIND_SELECTION_DIR_NEW,
         "out_tag": "_defv",
         "buffer_entry": 0.15,
         "buffer_exit": 0.40,
@@ -200,6 +208,30 @@ PRESETS: dict[str, dict] = {
         # （TODO_ARCHIVE.md 册Ⅲ §1.1 实测命令 + build_alla_factor_neutralized_fundind
         # 的 docstring 配套命令），故定版复现必须同开关；出榜链自身默认 False。
         # ✅ 已由莉酱拍板确认（2026-10-15）：定版口径采用 True。
+        "tradable_labels": True,
+    },
+    # 按持有周期拆分的出榜口径（只影响出榜排序，不参与定版登记 —— 定版信号仍是
+    # dingban = h1/h5/h10/h20 秩平均 ⊕ 慢信号 s0.5）。
+    # rank_short：只用 h1（次日强弱，IC 最高、换手最高）；
+    # rank_mid：h10+h20 秩平均（月度持有，换手低约 6pp）。
+    "rank_short": {
+        "preproc": "ortho_fundind",
+        "horizons": (1,),
+        "slow_blend": 0.0,
+        "selection_dir": FUNDIND_SELECTION_DIR_NEW,
+        "out_tag": "_short",
+        "buffer_entry": 0.15,
+        "buffer_exit": 0.40,
+        "tradable_labels": True,
+    },
+    "rank_mid": {
+        "preproc": "ortho_fundind",
+        "horizons": (10, 20),
+        "slow_blend": 0.0,
+        "selection_dir": FUNDIND_SELECTION_DIR_NEW,
+        "out_tag": "_mid",
+        "buffer_entry": 0.15,
+        "buffer_exit": 0.40,
         "tradable_labels": True,
     },
     "v1w2-cheap": {
@@ -535,6 +567,36 @@ def load_selection(predict_date: pd.Timestamp,
     if not names:
         raise ValueError(f"h{horizon} 特征清单为空（剔除后）")
     return names, sel_year
+
+
+def load_panel_pred(pred_dir: Path, predict_date: pd.Timestamp,
+                    h: int) -> tuple[pd.Series, dict]:
+    """读回测预生成的 pred 面板在某日的截面（``--model-mode panel``）。
+
+    出榜与回测共用同一份折模型产物（h<=5 季度折、h>=10 半年度折，频率由
+    ``rolling_grid_alla`` 决定），出榜侧不再自行重训 —— 两套流程的模型陈旧度
+    不同会让出榜与回测数字对不上（2026-11-25 定）。
+    """
+    fp = pred_dir / f"gbdt__h{h}.parquet"
+    if not fp.exists():
+        raise FileNotFoundError(
+            f"预测面板不存在：{fp}（--model-mode panel 需先跑 "
+            f"rolling_grid_alla --stage predict）")
+    panel = pd.read_parquet(fp)
+    # 跳过全 NaN 行：因子面板未更新到的尾部日期会被 existence_mask 清空
+    usable = panel.index[panel.notna().any(axis=1)]
+    usable = usable[usable <= predict_date]
+    if not len(usable):
+        raise ValueError(f"{fp.name} 无 <= {predict_date.date()} 的非空预测行")
+    d = usable[-1]
+    lag = int((predict_date - d).days)
+    if lag > 3:
+        log.warning("h%d panel 落后 %d 天（面板末行 %s，请求 %s）；"
+                    "请先跑 --stage predict 增量更新",
+                    h, lag, d.date(), predict_date.date())
+    meta = {"model_mode": "panel", "panel_date": str(d.date()),
+            "lag_days": lag, "horizon": h}
+    return panel.loc[d], meta
 
 
 def _limit_from_daily(close_raw: pd.DataFrame, predict_date: pd.Timestamp,
@@ -1853,13 +1915,16 @@ def run(args) -> dict:
         long_keys |= {"income", "balance", "cashflow", "dividend"}
     if preproc in ("ortho", "ortho_fundind"):
         long_keys.add("balance")   # 中性化需要 TOT_SHARE × 未复权收盘 的市值面板
-    long_tables = _load_long_tables(sorted(long_keys))
+    long_tables = ({} if args.model_mode == "panel"
+                   else _load_long_tables(sorted(long_keys)))
 
     # 正交化协变量面板：行业取自 tail["industry"]（与实验 cov_industry 同源
     # IndustryClassification level=1）；市值实时构造 —— 股本源与离线 `_base` 不同源
     # （balance.TOT_SHARE vs equity_structure 事件表），见 prod_pipeline_gap §5.5。
     cap_panel = None
-    if preproc == "ortho":
+    if args.model_mode == "panel":
+        set_panel_transform(None)   # panel 模式无现场特征，不需要中性化变换
+    elif preproc == "ortho":
         cap_panel = compute_market_cap(tail["close_raw"], long_tables)
         set_panel_transform(make_ortho_transform(cap_panel, tail.get("industry")))
         log.info("面板口径: 因子层正交化（MAD→行业+log市值中性化→zscore）| "
@@ -1879,7 +1944,14 @@ def run(args) -> dict:
         set_panel_transform(None)
 
     # 特征按并集**只算一次**，再按各 horizon 的子集切分（IO/计算与单模型臂同量级）
-    feats_all = compute_features(names_all, tail, long_tables=long_tables)
+    if args.model_mode == "panel":
+        # panel 模式：分数直接读 pred 面板，不现场重算特征。既省每日 5–10 分钟，
+        # 也避开「出榜侧缺 fd_*/im_* 分钟级构建器、与 select 清单不匹配」的问题
+        # （那些因子由 scripts/factors/build_fd_factors.py 从分钟数据产出）。
+        feats_all = {}
+        log.info("panel 模式：跳过特征现场计算，预测读自 %s", sel_dir.parent / "pred")
+    else:
+        feats_all = compute_features(names_all, tail, long_tables=long_tables)
     close_adj = tail["close_adj"]
 
     # 市场状态特征（`--market-features`，批次 12② 国金19 转译）：指数点位派生的
@@ -1934,19 +2006,28 @@ def run(args) -> dict:
                  f"{int((~lab_mask).to_numpy().sum()):,}")
 
     preds, per_h_meta, predictors = [], [], {}
+    # panel 模式的面板目录与 selection 同级（ab_f50/selection → ab_f50/pred）
+    pred_dir = sel_dir.parent / "pred"
     for h in horizons:
-        feats_h = {k: feats_all[k] for k in sel[h]["names"] if k in feats_all}
-        missing_h = [k for k in sel[h]["names"] if k not in feats_all]
-        if missing_h:
-            log.warning("h%d 有 %d 个特征未产出（构建失败），已忽略: %s",
-                        h, len(missing_h), missing_h)
-        if mkt_feats:
+        if args.model_mode == "panel":
+            feats_h = {}
+        else:
+            feats_h = {k: feats_all[k] for k in sel[h]["names"] if k in feats_all}
+            missing_h = [k for k in sel[h]["names"] if k not in feats_all]
+            if missing_h:
+                log.warning("h%d 有 %d 个特征未产出（构建失败），已忽略: %s",
+                            h, len(missing_h), missing_h)
+        if mkt_feats and args.model_mode != "panel":
             # 市场状态特征旁路并入本 horizon（同日同值广播面板，已对齐
             # tail 的日期×股票网格）——与实验侧 feats.update(mkt_feats) 同点。
             feats_h.update(mkt_feats)
-        pred_h, meta_h, mdl_h = train_and_predict(
-            feats_h, close_adj, predict_date, args.window, horizon=h,
-            tradable_mask=lab_mask)
+        if args.model_mode == "panel":
+            pred_h, meta_h = load_panel_pred(pred_dir, predict_date, h)
+            mdl_h = None
+        else:
+            pred_h, meta_h, mdl_h = train_and_predict(
+                feats_h, close_adj, predict_date, args.window, horizon=h,
+                tradable_mask=lab_mask)
         # 幽灵股守卫：掩掉未上市/无行情/特征不可用的股票（同实验 stage_predict）
         valid_h = existence_mask(feats_h, close_adj, pd.DatetimeIndex([predict_date]))
         pred_h = pred_h.where(valid_h.iloc[0])
@@ -2073,14 +2154,19 @@ def run(args) -> dict:
         else pd.DataFrame())
 
     # 选股解释：模型级（当日特征重要性）+ 个股级（Top20 SHAP 归因）
-    imp_table = explain_features(predictor.feature_importance("gain"))
-    contrib = predictor.predict_contrib(
-        {k: v.loc[[predict_date]] for k, v in feats.items()})
-    contrib_t = contrib.xs(predict_date, level="date")
-    z_scores = {f: feats[f].loc[predict_date] for f in feats}
-    explain_top = explain_stocks(contrib_t, z_scores, ranking.head(20))
-    log.info("解释: 特征重要性 %d 个 | Top%d SHAP 归因完成",
-             len(imp_table), len(explain_top))
+    if predictor is None:
+        # panel 模式没有本地模型，解释表留空（榜单本身不依赖它）
+        imp_table, explain_top = pd.DataFrame(), pd.DataFrame()
+        log.info("解释: panel 模式无本地模型，已跳过")
+    else:
+        imp_table = explain_features(predictor.feature_importance("gain"))
+        contrib = predictor.predict_contrib(
+            {k: v.loc[[predict_date]] for k, v in feats.items()})
+        contrib_t = contrib.xs(predict_date, level="date")
+        z_scores = {f: feats[f].loc[predict_date] for f in feats}
+        explain_top = explain_stocks(contrib_t, z_scores, ranking.head(20))
+        log.info("解释: 特征重要性 %d 个 | Top%d SHAP 归因完成",
+                 len(imp_table), len(explain_top))
 
     # 市值标注并入 ranking（mktcap 亿元 / cap_rank 全市场市值名次）。
     # 原独立 leaders 视图由此派生：cap_rank ≤ 200 中 score 最高若干。
@@ -2199,6 +2285,9 @@ def main() -> None:
                          "自动改用 ortho 臂特征清单；北交所无行业分类故被排除）；"
                          "ortho_fundind（E5：基本面/股东族只剥行业、保市值风格，"
                          "配 fundind 臂特征清单）；zscore（原始面板 + 截面 zscore）")
+    ap.add_argument("--model-mode", default="panel", choices=("panel", "daily"),
+                    help="预测来源：panel（**默认**，读 selection 同级 pred/ 的回测产物，"
+                         "不重训，训练频率与回测一致）；daily（旧口径，现场重算特征+重训）")
     ap.add_argument("--preset", choices=tuple(PRESETS), default=None,
                     help="口径预设，一次配齐需协同变动的多个参数（显式传参优先）："
                          "legacy（旧口径，仅复现历史产物）、dingban（**默认** = 现行"
