@@ -7,10 +7,15 @@
 - 全A 定版 `yqcore-breadth`：**21.81% / Sharpe 1.008 / MDD 27.3%**（27bp，2019-01 起）。
   集中档 k15 **30.13% / 1.144**、k8 **34.54% / 1.221** —— 高收益来自集中度，代价是 ~38% 回撤
   （`reports/yq_core/README.md`）。
+  ⚠️ 三个数字口径不齐：breadth/k15 是 uniform（1e6 无整手），k8 是 native（1e5 + 整手）⇒
+  不可相减。2026-11-25 起 k8 的 `exit_mult` 由 1.0 上调到 **5.0**（21 相位配对 +1.32pp、
+  t 2.86），native 重算后是 **35.01% / 1.229 / MDD 42.6% / 换手 84.4%**；b1.0 的 34.54%
+  是历史臂。`reports/yq_core/README.md` 正文表格**尚未按 5.0 重写**（数字以
+  `report_native.json` 为准），见 `reports/k8_buffer_scan/README.md`。
 - ETF 两档：`monthly` 默认、`balanced` 备选，`core` 已退役；对外一律引 5 相位均值
   （`reports/etf_contest5/README.md`）。
 - `inc_pure`（董监高增持，H=20）：毛超额 +14.53%、扣费 +11.95%、t 3.23；必须开盘集合竞价成交
-  （`reports/inc_pure_playbook/README.md`）。
+  （操作手册见 `TODO_ARCHIVE.md` ⑨·补·12，出单器 `scripts/live/inc_pure_live.py`）。
 - 估值定仓位规则已交付，只作个人纪律件，参数冻结、不入生产。
 - 研报 DL / 行业选因子 / 纯择时三线均已判负或收线，只剩 `sue_low`（行业）与 79 个 H=1
   单因子候选待验。
@@ -27,12 +32,21 @@
   alpha 上限 4 进程）；P0-F 三个计划任务需手工 `task_scheduler install`。
   → `reports/industry_rotation/oos_validation.md`
 - **⑨·补·13 `inc_pure` H=10 / H=20 纸面双轨 A/B 40 日**：单边 <30bp 切 H=10（净额高 5.67pp），
-  >48bp 维持 H=20。→ `reports/inc_pure_playbook/README.md`
+  >48bp 维持 H=20。→ `TODO_ARCHIVE.md` ⑨·补·13
 - **`keep_system_awake` 本机无效（P0 运维）**：应用层 API 压不住待机；唯一真解是系统层
   `PlatformAoAcOverride=0`（需管理员 + 重启）。
 
 ## P1
 
+- **⑬ yqcore 三档 Barra 风格归因（未启动）**：把「超额」拆成「因子 beta 的回报」与「真残差 α」。
+  现状是**只控了市场一个因子**：breadth 相对全A月频等权 α +7.67%/年（t 3.02）看着过关，但它
+  已测暴露是 resid_vol **z −22**、btop **z +24**、股息 z +9 ⇒ 这 7.67% 极可能是低波 + 价值
+  溢价的打包价，控住风格后大概率显著缩水。k8/k15 同理，问题更尖锐：74% 收益能被微盘宽基
+  解释（`microcap_ref`），剩下的 +5.85pp 是 alpha 还是「微盘内部的低波」没验过。
+  **做法**：`research/barra.py` 的 13 个风格面板 → 月度风格组合收益 → 对三档月收益做
+  多因子时序回归（规模 / 低波 / 价值 / 动量 / 流动性 + 市场），报 α 与 HAC t。判据 =
+  控住风格后 α 仍 >0 且 **t > 2**，否则三档一律降级为「风格产品」、不许再叫 alpha。
+  → `reports/breadth_alpha/README.md`（P1 原始读数）· `reports/style_exposure/README.md`（暴露快照）
 - **④ 模型层唯一未启动线索：反转 / 低位类欠拟合**：`alpha191_046` / `alpha360_LOW7` 在生产
   `panels_neu` 上 resfac t 7.7 / 8.1；做法 = 残差空间加两族或 gbdt 加单调约束，
   对照 `v1w-ortho882` 走 `caliber`。
@@ -41,7 +55,7 @@
   需重建纳入新 pap。→ `reports/library_governance/dedup_execution.md`
 - **因子库全A指标批量回填（另一台机器）**：`formula` / `family` 已回填，`annual_return_ls_M` /
   `significant` / `panel_path` 仍待跑 `scripts/factors/backfill_library_metrics.py`。
-  → `reports/library_metadata_backfill/README.md`
+  → `reports/library_governance/backfill_summary.json`
 - **无线网卡 `Netwtw14` 7021 掉线**：≥11 次/天则 altdata 必缺表；只能在脚本内做表级重试 /
   断点续跑（任务计划器重启条件对此无效）。
 
@@ -93,7 +107,7 @@
 - ⑨·补·8 事件当滤网：六族全负；⑨·补·14 L3 事件链 / L4 行业密度全负，四层探完不再开第五层。
 - ⑨·补·9/10/11/12 `inc_pure`：策略成立、无可调参数、必须开盘集合竞价买；
   是第二条 alpha 来源而非独立风险腿。
-- ⑩ RAFT 式样本加权：负增量（`reports/raft_weight/README.md`）。
+- ⑩ RAFT 式样本加权：负增量（`TODO_ARCHIVE.md` 册Ⅱ ⑩）。
 - ⑪ EV 分母 / 研发加回：`bp_ev` +3.63pp 有效、研发加回与合成判负
   （`reports/factor_ev_rd/README.md`）。
 - λ 维持 0.5、h20-only 不换、h40 不新增腿、池子探针不宜做沪深300 指增。
