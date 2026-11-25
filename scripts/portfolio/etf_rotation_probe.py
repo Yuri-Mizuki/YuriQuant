@@ -20,6 +20,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from backtest import calendar as CAL
 from backtest.costs import EtfCosts
 from backtest.engine import VectorBacktest
 from config import Config
@@ -319,35 +320,6 @@ def build_exit_schedule(close: pd.DataFrame, weekly: list[pd.Timestamp],
             "events": pd.DataFrame(events), "rule": kind}
 
 
-def whip_audit(events: pd.DataFrame, close: pd.DataFrame, rule: dict,
-               window: int = 20) -> dict:
-    """鞭打审计：离场后 ``window`` 日内「收复锚定价」的比例与代价。
-
-    参照价：``trail`` 用**入场后最高价**（真正的鞭打 = 砍在坑里又涨回前高）、
-    ``anchor`` 用锚定价阈值、其余用离场价。``med_fwd`` 是离场后窗口末的
-    中位收益——为正说明这笔卖出事后是亏的（提前离场代价）。
-    """
-    if events.empty:
-        return {"n": 0, "recover": np.nan, "med_fwd": np.nan, "med_cost": np.nan}
-    pos = {d: i for i, d in enumerate(close.index)}
-    ref_col = {"trail": "peak", "anchor": "threshold"}.get(rule["rule"], "exit_px")
-    rec, fwd = [], []
-    for _, e in events.iterrows():
-        i = pos[e["date"]]
-        fut = close[e["code"]].iloc[i + 1: i + 1 + window].dropna()
-        if fut.empty:
-            continue
-        ref = float(e[ref_col]) if np.isfinite(e[ref_col]) else float(e["exit_px"])
-        rec.append(bool(fut.max() >= ref))
-        fwd.append(float(fut.iloc[-1] / e["exit_px"] - 1.0))
-    rec_s, fwd_s = pd.Series(rec, dtype=float), pd.Series(fwd)
-    return {
-        "n": len(rec_s), "recover": float(rec_s.mean()) if len(rec_s) else np.nan,
-        "med_fwd": float(fwd_s.median()) if len(fwd_s) else np.nan,
-        "med_cost": float(fwd_s[fwd_s < 0].median()) if (fwd_s < 0).any() else np.nan,
-    }
-
-
 def run_variant(bundle, panels: dict, spec: dict, w0: int | None = None,
                 w1: int | None = None, extra_close: pd.DataFrame | None = None,
                 rebalance_days: set | None = None,
@@ -483,19 +455,14 @@ def run_variant(bundle, panels: dict, spec: dict, w0: int | None = None,
         # 次日执行价三件套之一：信号 shift(1) + 调仓日搬到 E=T+1。
         # 与 build_execution_split(fill, close, rb_signal) 配套（见 docstring）。
         freq = spec.get("freq", "M")
-        _s = pd.Series(close.index, index=close.index)
         if rebalance_days:
             # 显式传入的自定义调仓日按**信号日 rb_signal** 解释（再把 E=T+1 算出来）。
             # 非 freq 可表达的相位（如「周内第 k 个交易日」）必须走这条，否则会被
             # 下面的 freq 分支覆盖掉、静默变成周一调仓。
             _in_index = set(close.index)
             _sig = sorted(d for d in rebalance_days if d in _in_index)
-        elif freq == "W":
-            _sig = list(_s.groupby(_s.index.to_period("W")).first())
-        elif freq == "M":
-            _sig = list(_s.groupby(_s.index.to_period("M")).first())
-        elif freq == "2W":
-            _sig = list(_s.groupby(_s.index.to_period("W")).first())[::2]
+        elif freq in ("W", "M", "2W"):
+            _sig = list(CAL.rebalance_days(close.index, freq))
         else:
             _sig = list(close.index)
         _days = list(close.index)
@@ -529,8 +496,14 @@ def run_variant(bundle, panels: dict, spec: dict, w0: int | None = None,
                         costs=EtfCosts(commission_rate=commission_bp * 1e-4 * cx,
                                        commission_min=0.1 * cx,
                                        slippage_bp=slippage_bp * cx))
+    # 掩码与信号必须同源同日：``execution_shift`` 下 ``factor`` 已 shift 到执行日 E
+    # （E 行装 T 日信号），而 ``executable_mask`` 由引擎在 E 行读取 ⇒ 掩码同样要
+    # 取 T 日（否则用 E 日的 60 日均额判 E 日买什么 = 多看一天）。
+    mask_exec = mask.shift(1, fill_value=True) if execution_shift else mask
+    if not spec.get("mask", True):
+        mask_exec = None
     res = bt.run(factor_panel=factor, returns_panel=returns,
-                 executable_mask=mask if spec.get("mask", True) else None,
+                 executable_mask=mask_exec,
                  horizon=1, rebalance_days=rebalance_days,
                  execution_split=execution_split)
     m = res.metrics(benchmark_returns=bench if len(bench) else None)

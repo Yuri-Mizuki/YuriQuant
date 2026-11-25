@@ -19,13 +19,6 @@ TM = ROOT / "reports" / "textmining"
 KINDS = ("samples", "features", "models", "reports")
 
 
-def task_root(task: str) -> Path:
-    """返回某个研究的根目录并确保存在。"""
-    d = TM / task
-    d.mkdir(parents=True, exist_ok=True)
-    return d
-
-
 def out(task: str, kind: str, *parts: str) -> Path:
     """返回 reports/textmining/{task}/{kind}/{parts...} ，确保目录存在。"""
     if kind not in KINDS:

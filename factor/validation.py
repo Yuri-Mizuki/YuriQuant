@@ -234,24 +234,6 @@ def read_panel_sample(path: str | Path, *, windows: int = 5,
     return pd.concat([df.iloc[s:s + rows] for s in starts])
 
 
-def read_panel_tail(path: str | Path, rows: int = TAIL_DAYS) -> pd.DataFrame:
-    """只读 parquet 最后一个 row group 的末尾 ``rows`` 行（快速体检用）。
-
-    入库闸请用 ``read_panel_sample``（全期抽样），本函数只适合「扫一眼现在
-    长什么样」。两者混用会导致低更新频率因子被误判。
-
-    🚨 parquet 里索引列排在**数据列之后**，所以这里用 ``to_pandas()`` 的默认
-    列语义而非按位置取列——历史上 `column(0)` 取到的是第一只股票的值。
-    """
-    import pyarrow.parquet as pq
-
-    p = Path(path)
-    pf = pq.ParquetFile(p)
-    tb = pf.read_row_group(pf.num_row_groups - 1)
-    df = tb.to_pandas()
-    return df.iloc[-rows:]
-
-
 _REASON_TEXT = {
     "flat": "截面恒常数（当日全市场同值 ≥50% 天数）",
     "noise": "浮点噪声格点（唯一值数停在几十）",

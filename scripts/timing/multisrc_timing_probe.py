@@ -32,7 +32,6 @@ L3 稳健（附表）：成本敏感性 {1,5,10}bp、逐年超额表。
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -41,7 +40,7 @@ from backtest.metrics import annual_return, max_drawdown, sharpe_ratio
 from scripts.timing.hf_minagg_probe import build_features, load_minute_daily
 from scripts.timing.shell import load_index_daily
 from scripts.timing.shell import ROOT
-from stats import PERIODS_PER_YEAR
+from data.atomic_io import write_parquet_atomic
 
 OUT = ROOT / "reports" / "multisrc_timing_probe"
 INDEX_CODE = "000300.SH"
@@ -70,7 +69,7 @@ def load_margin_daily(refresh: bool = False) -> pd.Series:
     g["balance"] = g["SUM_BORROW_MONEY_BALANCE"]
     g["purch"] = g["SUM_PURCH_WITH_BORROW_MONEY"]
     cache.parent.mkdir(parents=True, exist_ok=True)
-    g[["balance", "purch"]].to_parquet(cache)
+    write_parquet_atomic(g[["balance", "purch"]], cache)
     return g["balance"]
 
 
@@ -80,12 +79,6 @@ def load_margin_purch() -> pd.Series:
     if not cache.exists():
         load_margin_daily()
     return pd.read_parquet(cache)["purch"]
-
-
-def load_treasury_daily(refresh: bool = False) -> pd.DataFrame:  # pragma: no cover
-    """⚠️ 已撤下：SDK treasury_yield 下载后返回空 dict（2026-11-22 实测），保留函数
-    体为空占位，源恢复可用后再接入。"""
-    raise NotImplementedError("SDK treasury_yield 返回空 dict，源撤下（见模块 docstring S3）")
 
 
 def load_notice_daily(code_list: list[str], refresh: bool = False) -> pd.DataFrame:
@@ -117,7 +110,7 @@ def load_notice_daily(code_list: list[str], refresh: bool = False) -> pd.DataFra
     bad = raw[raw["mid"] < 0].groupby("day").size()
     out = pd.DataFrame({"good": good, "bad": bad}).fillna(0.0).sort_index()
     cache.parent.mkdir(parents=True, exist_ok=True)
-    out.to_parquet(cache)
+    write_parquet_atomic(out, cache)
     return out
 
 
@@ -362,7 +355,7 @@ def main() -> int:
                   "detail": f"@10bp 超额 {arm2['excess'] * 100:+.2f}pp（判据 ≥+4pp）、Sharpe {arm2['sharpe']:.2f}（判据 ≥0.8）"})
     gates.append({"gate": "L2-v2 测试半窗", "pass": bool(ex_test2 > 0),
                   "detail": f"测试半窗超额 {ex_test2 * 100:+.2f}pp（判据 >0）"})
-    pos_v2.to_frame("pos_v2").to_parquet(OUT / "data" / "signal_hs300_v2.parquet")
+    write_parquet_atomic(pos_v2.to_frame("pos_v2"), OUT / "data" / "signal_hs300_v2.parquet")
 
     print("\n===== 全部判定 =====")
     for g in gates:

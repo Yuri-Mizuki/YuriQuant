@@ -177,6 +177,7 @@ def _read_daily_offline(cache, codes, begin: int, end: int,
     在 offline 桩下会抛错；离线时本地 parquet 就是数据全集。
     """
     import pandas as pd
+
     from config import Config
 
     pool = pool or Config.universe().get("default", "hs300")
@@ -514,22 +515,4 @@ def build_htai_neutral_panels(panel: dict[str, pd.DataFrame],
             out["turn20"] = turn.rolling(20).mean()
     except Exception as exc:
         _log.warning("华泰中性化协变量面板构建不完整（缺失项自动跳过）: %s", exc)
-    return out
-
-
-def load_pit_panels(begin: int, end: int | None) -> dict[str, pd.DataFrame]:
-    """日线缓存 → PIT mask 后的 OHLCV 宽表（date×code）。
-
-    2026-08-31 自 ml_algorithm_compare._px_panels 下沉（cpcv_eval 等共用）。
-    """
-    from data.cache import DataCache
-    from data.offline import OfflineDataSource
-    from data.universe import Universe
-
-    cache = DataCache(OfflineDataSource())
-    uni = Universe(cache)
-    _codes, _cal, daily = load_daily(cache, uni, "000300.SH", begin, end)
-    out = {}
-    for col in ("open", "high", "low", "close", "volume", "amount"):
-        out[col] = daily[col].unstack("code").sort_index()
     return out

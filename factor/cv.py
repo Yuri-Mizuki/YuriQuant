@@ -28,8 +28,8 @@
 """
 from __future__ import annotations
 
-from itertools import combinations
 from dataclasses import dataclass
+from itertools import combinations
 from typing import NamedTuple
 
 import numpy as np
@@ -42,7 +42,6 @@ __all__ = [
     "cpcv",
     "forward_folds",
     "forward_roll_folds",
-    "blocked_folds",
     "make_folds",
 ]
 
@@ -330,52 +329,6 @@ def forward_roll_folds(
 
 
 # ---------------------------------------------------------------------------
-# 5. Blocked 固定窗口交叉验证（滚动基准对照）
-# ---------------------------------------------------------------------------
-def blocked_folds(
-    index: pd.DatetimeIndex,
-    n_splits: int = 5,
-    embargo_days: int = 5,
-) -> list[Fold]:
-    """Blocked 固定窗口时序切分：把全历史切 n_splits 块，每折一个块当测试。
-
-    训练 = 所有块 *除去* 当前块 + 每个相邻块前后的 embargo。这是 purged_kfold
-    的特例（每个块恰好是一个测试组，所以等价于 `purged_kfold` 当 n_splits=n_groups。
-
-    与 purged 的区别：purged 允许测试在中间、训练取两侧，blocked 每个测试块独立，
-    训练是全部其他块拼接。用于基准对照。
-
-    Args:
-        index: 全量交易日索引（升序）。
-        n_splits: 折数（>=2）。
-        embargo_days: 测试块边界处剔除的训练天数。
-
-    Returns:
-        ``list[Fold]``，长度 ``n_splits``。
-    """
-    days = pd.DatetimeIndex(sorted(index.unique()))
-    n = len(days)
-    if n < n_splits:
-        raise ValueError(f"日期数 {n} < n_splits {n_splits}")
-
-    edges = np.linspace(0, n, n_splits + 1).astype(int)
-    folds: list[Fold] = []
-    for s in range(n_splits):
-        d0 = max(0, int(edges[s]))
-        d1 = min(n, int(edges[s + 1]))
-        if d1 <= d0:
-            continue
-        test_days = pd.DatetimeIndex(days[d0:d1])
-        # 训练集 = 全部日期 - 测试块 - 该块前后 embargo 带
-        purge_start = max(0, d0 - embargo_days)
-        purge_end = min(n, d1 + embargo_days)
-        purge_set = set(days[purge_start:purge_end])
-        train_days = pd.DatetimeIndex([d for d in days if d not in purge_set])
-        folds.append(Fold(train_days, test_days))
-    return folds
-
-
-# ---------------------------------------------------------------------------
 # 统一切分调度器 —— 按参数切换方法，返回统一 list[Fold]
 # ---------------------------------------------------------------------------
 def make_folds(
@@ -389,7 +342,8 @@ def make_folds(
     Methods:
         ``forward``: expanding 前推，测试折只在末尾 → **生产唯一合法方法**。
         ``purged``: 测试折可居中，训练取两侧，purge+embargo → 研究选参/评估。
-        ``blocked``: 固定块，每块一次测试 → 基准对照。
+        ``blocked``: 与 ``purged`` **同一实现**（曾是逐行相同的第二份拷贝，
+            对照结果恒为 0，会误导成「结论稳健」）。名字保留仅为兼容旧调用。
 
     语义保证：
     - 所有方法：严格按交易日边界切分，绝不把同一天劈开。
@@ -407,50 +361,8 @@ def make_folds(
     method = method.lower().strip()
     if method == "forward":
         return forward_folds(index, n_splits, embargo_days)
-    elif method == "purged":
+    elif method in ("purged", "blocked"):
         return purged_kfold(index, n_splits, embargo_days)
-    elif method == "blocked":
-        return blocked_folds(index, n_splits, embargo_days)
     else:
         raise ValueError(
             f"unknown method {method!r}, expected: forward/purged/blocked")
-
-
-# ---------------------------------------------------------------------------
-# 辅助：对任意切分跑评估器（供 CPCV 多路径评估脚本调用）
-# ---------------------------------------------------------------------------
-def run_cv_paths(
-    predictor_cls,
-    features: dict[str, pd.DataFrame],
-    labels: pd.DataFrame,
-    paths: list[Fold] | list[CPCVPath],
-    min_train_days: int = 120,
-    **predictor_params,
-) -> pd.DataFrame:
-    """对一组路径（Fold 或 CPCVPath）逐路径 fit→predict，拼接 OOS 面板。
-
-    返回 date×code 面板：每条路径的 test_days 段填入 OOS 预测，
-    多路径重叠区取最后一条路径的结果（CPCV 评估时通常按路径分别算 IC
-    再聚合，这里拼接面板仅用于快速查看）。
-
-    对于 CPCV，推荐调用方按路径分别计算 IC 再看分布，而非拼接后算全局 IC。
-    """
-    all_days = sorted(set().union(*[set(p.test_days) for p in paths]))
-    cols = labels.columns
-    out = pd.DataFrame(np.nan, index=pd.DatetimeIndex(all_days), columns=cols)
-
-    for p in paths:
-        train_days = p.train_days
-        test_days = p.test_days
-        if len(train_days) < min_train_days or len(test_days) == 0:
-            continue
-        model = predictor_cls(**predictor_params)
-        model.fit(
-            {k: v.loc[train_days] for k, v in features.items()},
-            labels.loc[train_days],
-        )
-        pred = model.predict(
-            {k: v.loc[test_days] for k, v in features.items()}
-        )
-        out.loc[test_days] = pred.reindex(index=test_days, columns=cols)
-    return out

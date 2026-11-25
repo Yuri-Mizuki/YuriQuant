@@ -52,6 +52,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from md_to_email_html import convert as md_to_html  # noqa: E402
 
+
 def _cache_file(name: str) -> Path:
     """行情缓存文件（Config.cache root；禁止硬编码盘符——多机适配约定）。"""
     from config import Config
@@ -94,10 +95,6 @@ def prev_file(d: Path, ds: str, prefix: str) -> Path | None:
         if m and m.group(1) < ds:
             cands.append((m.group(1), Path(p)))
     return sorted(cands)[-1][1] if cands else None
-
-
-def prev_ranking_file(d: Path, ds: str) -> Path | None:
-    return prev_file(d, ds, "ranking")
 
 
 def prev_industry_file(d: Path, pds: str, level: int = 2) -> Path | None:

@@ -27,12 +27,18 @@ from typing import Callable, Sequence
 import numpy as np
 import pandas as pd
 
-from factor.operators import (
-    CS_OPS, DEFAULT_FEATURES, DEFAULT_WINDOWS, TS_OPS, cs_rank, op_registry,
-    ts_corr, ts_mean,
-)
 from factor.cv import forward_folds
-from stats.ic import calc_ic_series, calc_ir, calc_ic_decay, factor_autocorr
+from factor.operators import (
+    CS_OPS,
+    DEFAULT_FEATURES,
+    DEFAULT_WINDOWS,
+    TS_OPS,
+    cs_rank,
+    op_registry,
+    ts_corr,
+    ts_mean,
+)
+from stats.ic import calc_ic_decay, calc_ic_series, calc_ir, factor_autocorr
 
 log = logging.getLogger(__name__)
 
@@ -60,8 +66,8 @@ def _init_eval_worker(panel, returns_panel, features):
 
 def _eval_candidate_worker(task: tuple) -> dict | None:
     """worker：按公式字符串重建求值器，计算 IC 摘要。返回 row dict 或 None（无效/异常）。"""
-    from stats.significance import mean_inference
     from factor.formula import formula_builder
+    from stats.significance import mean_inference
 
     name, method, min_obs, robust = task
     ctx = _EVAL_CTX
@@ -209,22 +215,6 @@ def generate_candidates(
 # ===========================================================================
 # 批量 IC 检验 + 显著性筛选
 # ===========================================================================
-@dataclass
-class EvalResult:
-    name: str
-    ic_mean: float
-    ic_std: float
-    ir: float
-    ic_win_rate: float
-    ic_decay5: float
-    ic_decay10: float
-    autocorr: float
-    t_stat: float
-    p_value: float
-    n: int
-    significant: bool
-
-
 def evaluate_candidates(
     candidates: list[Candidate],
     panel: dict[str, pd.DataFrame],

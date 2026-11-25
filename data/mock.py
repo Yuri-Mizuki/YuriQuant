@@ -10,27 +10,6 @@ import pandas as pd
 from data.datasource import DataSource
 
 
-def load_mock_data(n_days: int = 500, n_codes: int = 50, seed: int = 0) -> dict:
-    """生成 mock OHLCV 面板 {open/high/low/close/volume/amount: date×code}。"""
-    rng = np.random.RandomState(seed)
-    codes = [f"{i:06d}.SZ" for i in range(n_codes)]
-    dates = pd.bdate_range(end="2026-08-21", periods=n_days)
-    close = 100 * np.exp(np.cumsum(rng.randn(n_days, n_codes) * 0.02, axis=0))
-    px = {}
-    px["close"] = pd.DataFrame(close, index=dates, columns=codes)
-    px["open"] = px["close"] * (1 + rng.randn(n_days, n_codes) * 0.005)
-    px["high"] = pd.DataFrame(
-        np.maximum(px["open"].values, px["close"].values) * (1 + rng.rand(n_days, n_codes) * 0.01),
-        index=dates, columns=codes)
-    px["low"] = pd.DataFrame(
-        np.minimum(px["open"].values, px["close"].values) * (1 - rng.rand(n_days, n_codes) * 0.01),
-        index=dates, columns=codes)
-    px["volume"] = pd.DataFrame(rng.randint(1e6, 1e8, (n_days, n_codes)),
-                                index=dates, columns=codes)
-    px["amount"] = px["volume"] * px["close"]
-    return px
-
-
 def gen_mock_panel_with_signal(n_days: int = 400, n_codes: int = 50, seed: int = 0) -> dict:
     """AR(1) 收益注入动量信号：rets[t] = phi*rets[t-1] + noise，使 ts_mean/momentum 类因子有正 IC。
 

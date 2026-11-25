@@ -12,7 +12,6 @@ import io
 import logging
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 
 from backtest.metrics import (
@@ -23,68 +22,6 @@ from backtest.metrics import (
 )
 
 log = logging.getLogger("factor_report")
-
-
-# ---------------------------------------------------------------------------
-# 序列整理（因子检测报告用）
-# ---------------------------------------------------------------------------
-def family_of(source) -> str:
-    s = str(source) if pd.notna(source) else "unknown"
-    for pre in ("alpha101", "alpha158", "alpha191", "alpha360", "gp", "model"):
-        if s.startswith(pre):
-            return pre
-    return s.split(":")[0]
-
-
-def monthly_series(ic: pd.Series) -> dict:
-    """IC 按月的均值序列（dict month_str -> float）。"""
-    s = ic.dropna()
-    if len(s) == 0:
-        return {}
-    m = s.groupby(s.index.to_period("M")).mean()
-    return {str(p): round(float(v), 4) for p, v in m.items()}
-
-
-def monthly_nav(equity: pd.Series) -> dict:
-    """分层净值按月的月末值（dict month_str -> float），供前端画净值曲线。"""
-    s = equity.dropna()
-    if len(s) == 0:
-        return {}
-    last = s.groupby(s.index.to_period("M")).last()
-    return {str(p): round(float(v), 4) for p, v in last.items()}
-
-
-def weekly_ic_series(ic: pd.Series) -> dict:
-    """日频 IC -> 周频序列（每周最后一个有效值），供画 IC 时间序列 + 4 周 MA。"""
-    s = ic.dropna()
-    if len(s) == 0:
-        return {}
-    last = s.groupby(s.index.to_period("W")).last()
-    return {str(p.end_time.date()): round(float(v), 4) for p, v in last.items()}
-
-
-def ic_decay_series(ic: pd.Series, max_lag: int = 10) -> list:
-    """IC 衰减：IC(t) 与 IC(t+lag) 的相关（信号持久度），lag=1..max_lag。"""
-    s = ic.dropna()
-    if len(s) < max_lag + 5:
-        return []
-    out = []
-    for lag in range(1, max_lag + 1):
-        a, b = s.iloc[:-lag].values, s.iloc[lag:].values
-        if len(a) < 10 or a.std() == 0 or b.std() == 0:
-            out.append(None)
-        else:
-            out.append(round(float(np.corrcoef(a, b)[0, 1]), 4))
-    return out
-
-
-def ic_heatmap(monthly_ic: dict) -> dict:
-    """月度 IC -> {year: [12 个月的 IC]}（无数据填 None），供热力图。"""
-    years = {}
-    for mo, v in monthly_ic.items():
-        y, m = mo.split("-")
-        years.setdefault(y, [None] * 12)[int(m) - 1] = v
-    return {y: vals for y, vals in sorted(years.items())}
 
 
 # ---------------------------------------------------------------------------
@@ -246,26 +183,6 @@ def fig_to_b64(fig) -> str:
     fig.savefig(buf, format="png", dpi=110, bbox_inches="tight")
     _plt().close(fig)
     return base64.b64encode(buf.getvalue()).decode()
-
-
-def plot_layers(layer_nav: pd.DataFrame) -> str:
-    """分层累计收益图：Q1~Q5 与多空全部用累计收益（净值-1，0 起点），
-    同一量纲、Y 轴按百分比自动展开——避免净值 1 起点导致差异被压扁。"""
-    plt = _plt()
-    fig, ax = plt.subplots(figsize=(9, 4))
-    ret = layer_nav - 1.0  # 累计收益，起点 0
-    for q in layer_nav.columns:
-        ax.plot(ret.index, ret[q], label=q, linewidth=1.2)
-    ls = ret["Q5"] - ret["Q1"]  # 多空 = 收益差，同样 0 起点
-    ax.plot(ls.index, ls, label="Q5-Q1(多空)", linewidth=1.6,
-            color="#A32D2D", linestyle="--")
-    ax.axhline(0, color="gray", linewidth=0.6, linestyle=":")
-    ax.set_title("模型预测因子分层累计收益（Q1=预测最低组, Q5=最高组）")
-    ax.set_ylabel("累计收益")
-    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v * 100:.0f}%"))
-    ax.legend(ncol=3, fontsize=9)
-    ax.grid(alpha=0.3)
-    return fig_to_b64(fig)
 
 
 def plot_monthly_ic(monthly_ic: pd.Series) -> str:

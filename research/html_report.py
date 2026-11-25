@@ -424,28 +424,6 @@ def base_js(charts_js: str = "") -> str:
             f"}});")
 
 
-def chart_js_line(canvas_id: str, datasets: list, y_fmt: str = "value", title: str = "") -> str:
-    """Chart.js 折线图初始化 JS 代码块（统一折线图配置，时间轴 x）。
-
-    datasets: [{label, data: [[x, y], ...], borderColor, ...}]
-    """
-    cfg = {
-        "type": "line",
-        "data": {"datasets": datasets},
-        "options": {
-            "responsive": True,
-            "maintainAspectRatio": False,
-            "plugins": {"legend": {"labels": {"boxWidth": 12, "font": {"size": 11}}}},
-            "scales": {
-                "x": {"type": "time", "time": {"unit": "month"}, "grid": {"display": False}},
-                "y": {"ticks": {"callback": "v=>v.toFixed(2)"}},
-            },
-        },
-    }
-    cfg_json = json.dumps(cfg, ensure_ascii=False, separators=(",", ":"))
-    return f"makeChart('{canvas_id}', {cfg_json});\n"
-
-
 def render_table(
     df: pd.DataFrame,
     pct_cols: list[str] | None = None,

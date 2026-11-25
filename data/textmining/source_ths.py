@@ -21,7 +21,6 @@ import json
 import logging
 import re
 import time
-from typing import Iterable
 
 import pandas as pd
 import requests
@@ -128,41 +127,3 @@ def fetch_ths_reports(
     raise RuntimeError(f"同花顺研报抓取失败 {code6}: {last_err}") from last_err
 
 
-def fetch_ths_reports_batch(
-    codes: Iterable[str],
-    timeout: float = 60.0,
-    retries: int = 2,
-    sleep_s: float = 0.4,
-    max_codes: int | None = None,
-    progress: bool = True,
-) -> pd.DataFrame:
-    """批量抓取多只股票的研报，合并为一个 DataFrame。
-
-    Parameters
-    ----------
-    codes : Iterable[str]
-        标准代码列表。
-    max_codes : int | None
-        最多抓取 N 只（调试用），None 为全量。
-    progress : bool
-        是否打印进度（tqdm 不可用时退化 print）。
-    """
-    codes = list(codes)
-    if max_codes is not None:
-        codes = codes[:max_codes]
-    frames: list[pd.DataFrame] = []
-    with requests.Session() as s:
-        for i, c in enumerate(codes):
-            try:
-                df = fetch_ths_reports(c, timeout=timeout, retries=retries,
-                                       sleep_s=sleep_s, session=s)
-                frames.append(df)
-            except Exception as e:  # noqa: BLE001
-                log.warning("[ths] %s 失败: %s: %s", c, type(e).__name__, str(e)[:80])
-            if progress and (i + 1) % 10 == 0:
-                log.info("[ths] %d/%d", i + 1, len(codes))
-    if not frames:
-        return pd.DataFrame(columns=["code", "date", "title", "summary", "rating",
-                                     "org", "analyst", "source", "title_raw"])
-    out = pd.concat(frames, ignore_index=True)
-    return out.sort_values(["code", "date"]).reset_index(drop=True)

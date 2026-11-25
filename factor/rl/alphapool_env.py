@@ -115,10 +115,6 @@ FIELD_IDS = KIND_IDS["field"]
 CONST_IDS = KIND_IDS["const"]
 
 
-def token_count() -> int:
-    return N_ACTIONS
-
-
 def op_name_win(tid: int) -> tuple[str, Optional[int]]:
     return TOKEN_SPACE[tid][1]          # ("Mean", 20) 或 ("Abs", None)
 

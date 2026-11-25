@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import logging
 
-import numpy as np
 import pandas as pd
 
 log = logging.getLogger("data_quality")
@@ -105,25 +104,6 @@ def check_adjust_factor_jumps(cache, codes, cal=None) -> pd.DataFrame:
             rows.append({"date": d, "code": c,
                          "prev": float(backward.loc[d, c] / (1 + s[c])),
                          "curr": float(backward.loc[d, c]), "jump": float(s[c])})
-    return pd.DataFrame(rows)
-
-
-def check_price_anomalies(cache, codes, cal) -> pd.DataFrame:
-    """价格异常：close<=0 与单日 |收益|>30%（涨跌停外）的明细。"""
-    kline = cache.get_daily_kline(codes, cal[0], cal[-1])
-    if kline.empty:
-        return pd.DataFrame(columns=["date", "code", "close", "ret"])
-    close = kline["close"].unstack("code")
-    ret = close.pct_change()
-    bad_price = (close <= 0).stack()
-    bad_ret = (ret.abs() > 0.30).stack()
-    rows = []
-    for idx in bad_price[bad_price].index:
-        rows.append({"date": idx[0], "code": idx[1], "close": float(close.loc[idx[0], idx[1]]), "ret": np.nan})
-    for idx in bad_ret[bad_ret].index:
-        rows.append({"date": idx[0], "code": idx[1],
-                     "close": float(close.loc[idx[0], idx[1]]),
-                     "ret": float(ret.loc[idx[0], idx[1]])})
     return pd.DataFrame(rows)
 
 
