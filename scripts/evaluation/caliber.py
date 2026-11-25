@@ -173,6 +173,18 @@ SIGNALS: dict[str, dict] = {
         "regen_inputs": ("reports/alla_rolling_ortho920fundind/pred/"
                          "gbdt__h{1,5,10,20}.parquet"),
     },
+    # 2026-11-25 定版（f50 特征预算臂）。面板全链重建后 panels / panels_neu /
+    # panels_neu_fundind 全部到 2026-11-20（fundind 覆盖层此前止 2025-12-31，
+    # 是旧信号 2026 年基本面因子整段 NaN 的根因），selection 按新面板重选。
+    "dingban_f50": {
+        "path": "reports/alla_rolling_ab_f50/pred/defv__h1.parquet",
+        "desc": "ab_f50 · h1/5/10/20 秩平均 ⊕ 慢信号 s0.5（**当前定版**）",
+        "reproducible": True,
+        "construct": ("scripts/evaluation/buffer_arm_920.py --variant defv --sig-only "
+                      "--pred-dir reports/alla_rolling_ab_f50"),
+        "regen_inputs": ("reports/alla_rolling_ab_f50/pred/"
+                         "gbdt__h{1,5,10,20}.parquet"),
+    },
     # ---- 复合信号（多份 pred 面板的加权截面秩平均；无落盘实体，`load_context` 现场构造）
     # 2026-11-10 新增：`yqcore-focus-k15` 从 `ens_h1h5`（只用 h1+h5）升到 h1/h5/h10/h20
     # 集成。依据见 `reports/focus_upgrade/README.md`：只用 h1+h5 时 K 曲线整体落在

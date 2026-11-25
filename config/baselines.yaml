@@ -646,21 +646,13 @@ baselines:
     tier: breadth
     default: true             # 族内默认档 = **判改进基线**（v2-dingban 2026-11-12 并入本条）
     created: "2026-11-10"
-    updated: "2026-11-12"
+    updated: "2026-11-25"
+    revision: 2               # rev1 = 旧面板 + 80 席（21.81% / 1.0081），数字见 metrics 的 rev1_* 行
     status: production
-    label: "YQ 核心 · 广度档（Breadth）：920 defv + buffer(15/40)，~614 只，大资金（判改进默认基线）"
-    signal_key: dingban_fundind
-    signal_key_local: dingban_fundind_local   # 登记路径本机已缺失，复算走重建代理
-    check_arm: eqw_buf0.15_0.4   # 同上（breadth 的 production 键是缓冲带臂名）
-    check_end: 20260907          # 本机代理信号到 11-04，报数统一截到 882 末日（见 check_note）
-    check_note: >-
-      本机只有重建代理信号 dingban_fundind_local（指纹 44a31b8fc51c；登记路径
-      reports/frontier_audit_920_reval/ 已不存在）。**本条 metrics 全部产自代理数据态**
-      （1864 日、止 2026-09-07）；`--check` 靠条目上的 `check_end: 20260907` 复算同一窗口
-      ⇒ **逐位 PASS（21.81% / 1.008，Δ=0.00）**。若不截断会跑成 1900 日、20.35%，
-      那 1.46pp 全来自窗口末日（2026 年多 36 个交易日），不是实现漂移。
-      ⚠️ 代理数据态与出榜读的 `selection/` 同源，但**不等于**旧登记指纹 2bc26c866512 那份；
-      历史数字（v2-dingban 的 21.57%、36bp 旧基数）只作追溯，不是本条的复现目标。
+    label: "YQ 核心 · 广度档（Breadth）：f50 defv + buffer(15/40)，~630 只，大资金（判改进默认基线）"
+    signal_key: dingban_f50
+    check_arm: eqw_buf0.15_0.4   # breadth 的 production 键是缓冲带臂名
+    check_end: 20261120          # 与 `--end 20261120` 同窗口，逐位 PASS
     window: prod
     signal:
       preproc: ortho_fundind
@@ -669,9 +661,10 @@ baselines:
       horizons: [1, 5, 10, 20]
       slow_blend: 0.5
       slow_panels_subdir: panels_neu
-      selection_dir: reports/alla_rolling_ortho920fundind/selection
+      selection_dir: reports/alla_rolling_ab_f50/selection
       tradable_labels: true
-      n_factors: 920
+      n_factors: 920              # 候选池规模（因子库成员数），不是入模数
+      max_features: 50            # 入模席位数（f50 臂；80 席为 rev1）
     execution:
       strategy: BufferedTopFracLongOnly
       buffer_entry: 0.15
@@ -685,39 +678,55 @@ baselines:
       capital: 1.0e6
       source_script: "scripts/evaluation/yq_core_report.py"
     data_state:
-      registered: "2026-11-09 本机重跑 select(36 份)+predict(4 horizon) 后现场构造的 defv"
+      registered: "2026-11-25 面板全链重建后重跑 select(36 份)+predict(4 horizon)+signal"
       detail: >
-        pred 覆盖 2019-01-02..2026-11-04（1900 日），报数截到 2026-09-07（1864 日）以与
-        focus 档同末日。特征清单 36 份全部重算（含 y2026 四份指纹失配重算）
-        ⇒ **不是**登记指纹 2bc26c866512 那份数据态。
+        panels / panels_neu / panels_neu_fundind 全部重建到 2026-11-20（fundind 覆盖层
+        此前止 2025-12-31，是旧信号 2026 年基本面因子整段 NaN 的根因）；pred 覆盖
+        2018-01-02..2026-11-20（末行非 NaN = 2026-11-20，**无空仓尾巴**）；
+        定版窗口 2019-01-02..2026-11-20（1912 日）。特征预算 80 → 50 席。
       caveats: >
-        ⚠️ 同日 09-07 截断是为了与 focus/solo 同末日；920 侧 pred 实际覆盖到 11-04，
-        差 36 个交易日会让 2026 年混进不同天数、年化虚低 1.4~1.6pp（已实测）。
-        ⚠️ 明日 18:30 出榜读的是 `selection/`，本次重算已覆盖 y2026 四份清单 ⇒
-        若榜单与近日差异明显，先看这里，不要判为策略失效。
+        ⚠️ 末两月全A等权 −14.3%（2026-08-03..11-20）⇒ 全窗口 19.08%，同窗口
+        （…2026-09-07）为 22.61%。两个数都对，回答的是不同区间。
+        ⚠️ 出榜读的是 `selection/`，本次已重选 y2026 四份清单 ⇒ 若榜单与近日差异
+        明显，先看这里，不要判为策略失效。
       data_state_history: >
         2026-11-12：本档同时接过 v2-dingban 的"定版基线"身份（v2 → superseded）。
         旧登记值 21.66%（指纹 2bc26c866512、1876 日、36bp）与 21.57%（32 位哈希同名条目）
         均为**另一个数据态 + 旧成本基数**，只作历史追溯，不再是本档目标值。
+        2026-11-25：rev1（80 席 + 旧面板，21.81% / 1.0081、1864 日）退役为 rev2
+        （f50 + 全链重建面板）。同窗口 22.61% / 1.036 ⇒ 增益 +0.80pp，不是数据态噪声。
     metrics:
-      window_label: "2019-01-02..2026-09-07（1864 日 / 7.38 年）"
-      fingerprint: 44a31b8fc51c
+      window_label: "2019-01-02..2026-11-20（1912 日 / 7.90 年）"
+      fingerprint: 125b876c59cd
       profiles:
         production:
           # 🚨 2026-11-25 掩码作用顺序修正后重算（`panel.where(mask).shift(1)`）。
-          # 上一版 ann 0.21809 / sharpe 1.0130 / max_dd 0.2661 / turnover 0.1708 是
-          # `shift_then_mask` 口径，**不可与新值相减**（Δann +0.004pp、Δsharpe −0.005，
-          # 差异虽在噪声内但口径不同源）。
-          # 更早的 36bp 基数：ann 0.21659 / sharpe 1.0061，只作历史追溯。
+          # rev1 的 ann 0.21809 / sharpe 1.0130 / max_dd 0.2661 / turnover 0.1708 是
+          # `shift_then_mask` 口径，**不可与新值相减**；更早的 36bp 基数 0.21659 / 1.0061
+          # 只作历史追溯。
           eqw_buf0.15_0.4:
+            ann: 0.190765
+            sharpe: 0.870563
+            sharpe_arith: 0.907457
+            sharpe_t_stat: 2.4786        # NW 校正，过 1.96，余量 26%
+            turnover: 0.174147
+            cost_bp: 1135.2
+            max_dd: 0.280225
+            n_active: 630
+            years_to_prove_arith: 4.7
+          # rev1（80 席 + 旧面板、止 2026-09-07、1864 日）：同窗口对照用
+          rev1_eqw_buf0.15_0.4:
             ann: 0.218115
             sharpe: 1.0081
             sharpe_arith: 1.0212
-            sharpe_t_stat: 2.8027        # NW 校正，过 1.96，余量 43%
+            sharpe_t_stat: 2.8027
             turnover: 0.1682
             cost_bp: 1028.2
             max_dd: 0.2733
             n_active: 614
+            data_state: "rev1（80 席 + 旧面板）"
+          # 同窗口（…2026-09-07）复算 rev2：证明 +0.80pp 来自 f50+新面板而非窗口
+          rev2_same_window: {ann: 0.226120, sharpe: 1.0360, data_state: "rev2 面板、--end 20260907"}
           # 集中化对照（同信号、同窗口，仅换持仓宽度）——这条是本档存在的理由
           # ⚠️ 以下三行仍属 36bp 旧基数，只可用于「同基数下横向比较宽度」，不得与上方相减
           topk25_buf2: {ann: 0.1936, sharpe: 0.819, max_dd: 0.311, turnover: 0.616, cost_base: "36bp 旧口径"}
@@ -726,56 +735,62 @@ baselines:
       # 与上面 production profile 的区别只在「资金 / 整手」两项，信号与成本完全相同。
       product_line:
         view: native
+        data_state: "rev2（2026-11-25 全链重建；窗口与 metrics 一致，截到 2026-09-07）"
         capital: 2000000.0
         lot_size: 100
         price_panel: "close_raw.ffill().shift(1)"
-        ann: 0.20000
-        sharpe: 1.0269
-        sharpe_arith: 1.0344
-        sharpe_t_stat: 2.8537
-        max_dd: 0.2466
-        calmar: 0.8113
-        turnover: 0.1687
-        invest_mean: 0.8994          # 整手实投率（引擎算，非折算）
-        invest_min: 0.8082
-        nhold_mean: 605.0
-        nhold_min: 457
+        ann: 0.203962
+        sharpe: 1.033288
+        sharpe_arith: 1.040079
+        sharpe_t_stat: 2.824112
+        max_dd: 0.258238
+        calmar: 0.789821
+        turnover: 0.171006
+        invest_mean: 0.899418        # 整手实投率（引擎算，非折算）
+        invest_min: 0.821285
+        nhold_mean: 618.6
+        nhold_min: 478
         caveat: >
-          🚨 这是**本档资金下限**（200 万，605 只 × 3.3 万 ⇒ 整手吃掉 1.8pp）的可达成值，
-          不是本档的典型值：`grid_lot.csv` 里 500 万 21.02%、200 万 19.84%（36bp 基数），
-          真实区间 ≥1500 万时整手损耗消失。对外报「广度档能拿到多少」应同时给
-          「200 万 = 20.00%（下限）/ 500 万+ = 21%+」两个数，只报一个会误导。
+          🚨 这是**本档资金下限**（200 万，619 只 × 3.2 万 ⇒ 整手吃掉约 1.4pp）的可达成值，
+          不是本档的典型值；真实区间 ≥1500 万时整手损耗消失。对外报「广度档能拿到多少」
+          应同时给「200 万 = 20.40% / ≥1500 万 ≈ 21%+」两个数。
+          ⚠️ native 用 `close_raw.shift(1)`（T+1 收盘）而非 open，与 production profile
+          的 19.08% 不是同一成交价口径，**不可相减**。
       # 容量上限 = 单票 ADV × 参与率 / 单票权重。**产品线按此分界，不按收益**。
       capacity:
         participation_assumed: 0.10
         weight_median: 0.0014
-        adv_median: 49500000.0
-        adv_p10: 15300000.0
-        capacity_median: 3448000000.0
-        capacity_p10: 971000000.0
-        source: "python -m scripts.evaluation.yq_core_report --view capacity"
-    fingerprint: 44a31b8fc51c
+        adv_median: 47000000.0
+        adv_p10: 14000000.0
+        capacity_median: 3323000000.0
+        capacity_p10: 944000000.0
+        source: "python -m scripts.evaluation.yq_core_report --view capacity --tag rev2"
+    fingerprint: 125b876c59cd
     reproducible_local: true
     regen_cmd: >
       ① 重构造定版信号（重建面板后必跑）：
-         /d/Python/Python312/python -m scripts.evaluation.buffer_arm_920
-         --pred-dir reports/alla_rolling_ortho920fundind --variant defv
-         --save-sig reports/alla_rolling_ortho920fundind/pred/defv__h1.parquet --sig-only
-      ② 报数（两档一起，保证同末日）：
-         /d/Python/Python312/python -m scripts.evaluation.yq_core_report --view uniform
-    source: "reports/yq_core/report.json（--view uniform = 1e6 无整手；产品线口径见 report_native.json）"
+         D:/miniconda3/envs/yuriquant/python.exe -m scripts.evaluation.buffer_arm_920
+         --pred-dir reports/alla_rolling_ab_f50 --variant defv
+         --save-sig reports/alla_rolling_ab_f50/pred/defv__h1.parquet --sig-only
+      ② 报数：
+         D:/miniconda3/envs/yuriquant/python.exe -m scripts.evaluation.caliber
+         --signal dingban_f50 --window prod --profile production --buffer 0.15:0.40
+         --end 20261120 --json reports/signal_ic_compare/caliber_f50_new.json
+    source: "reports/signal_ic_compare/caliber_f50_new.json（production 1e6 无整手）；产品线见 reports/yq_core/report_rev2.json"
     verified_local: true
     notes: >
       🔑 **本档是判「改进 vs 基线」的默认对象**（族内 `default: true`）：
-      `caliber --check --baseline-id yqcore-breadth` 复算的就是本条 `production` 的
-      21.81% / 1.013（1e6 无整手）。产品线报数（2e6 + 整手）另计 20.00% / 1.027，
+      `caliber --check --baseline-id yqcore-breadth --signal dingban_f50` 复算的就是
+      本条 `production` 的 19.08% / 0.871（1e6 无整手、窗口 …2026-11-20）。
+      产品线报数（2e6 + 整手、截到 2026-09-07）另计 20.40% / 1.033，
       **两个数都对，回答的是不同问题**（可判改进 vs 实盘可达成）。
-      适用 **≥ 200 万**。选它的理由：same-window 回撤 26.6% vs focus 档 38.2%（低 11.6pp），
-      代价是年化少 7.8pp（21.81 vs 29.60）、换手低 5.1 倍（17.1% vs 87.6%）
+      适用 **≥ 200 万**。选它的理由：回撤 28.0% vs focus 档 38.2%，换手 17.4% vs 87.6%
       ⇒ 容量与可操作性远好于 focus，且它是唯一能装 ≥1500 万的档。
       🚨 **alpha 宽度是这条档位的硬约束**：它靠"很多名字各有一点优势"累积，任何把持仓
       压到 100 只以内的操作都会立刻损失 2~5pp（见 metrics 里的 topk25/topk45 对照），
       所以**不要用它做小资金集中**，那是 focus 档的场景。
+      ⚠️ rev2（2026-11-25）把特征预算从 80 收到 50、并把面板重建到 2026-11-20：
+      同窗口（…2026-09-07）21.81% → 22.61%，全窗口 19.08%（末两月全A等权 −14.3%）。
       ⚠️ 与已退休的 v2-dingban 的关系：同一条策略，只差资金/整手/末日；pipeline 里
       若还有地方报"定版 21.5~21.6%"，那说的是 v2 的 36bp 旧基数，不是本档。
 

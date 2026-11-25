@@ -22,8 +22,8 @@
   2023-08-28 前千1 + 滑点 10bp 双边）；成交 ``T+1 open``
 - 信号：``yqcore-focus-k15`` / ``yqcore-focus-k8`` → ``gbdt_mid13``（**复合信号**：
   gbdt h1:h5:h10:h20 = 2:1:1:2 秩平均，无落盘实体，由 ``caliber.load_context`` 现场构造）；
-  ``yqcore-breadth`` → ``dingban_fundind_local``（登记路径本机缺失，走重建代理；
-  这条是**换数据态**，与 v2 登记的 21.57% 不可逐位比）
+  ``yqcore-breadth`` → ``dingban_f50``（f50 臂落盘信号，本机可复现；
+  换过数据态，与 rev1 的 21.81% 不可逐位比）
 - 整手：``price_panel = close_raw.ffill().shift(1)``（``shift(1)`` 是无前视的关键），
   `lot_size=100`；实投率由引擎算，不是事后折算
 

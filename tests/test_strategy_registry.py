@@ -126,7 +126,7 @@ def test_focus_tier_params():
 
 def test_wide_tier_params():
     t = get_tier("yqcore-breadth")
-    assert t.signal_key == "dingban_fundind"
+    assert t.signal_key == "dingban_f50"
     assert t.strategy == "BufferedTopFracLongOnly"
     assert set(t.params) == {"frac_entry", "frac_exit"}
     assert 0 < t.params["frac_entry"] <= t.params["frac_exit"] <= 1
@@ -198,11 +198,13 @@ def test_build_returns_runnable_signal_and_fresh_instance():
     assert s1._prev is not s2._prev
 
 
-def test_wide_uses_local_proxy_signal():
-    """wide 的登记 pred 本机缺失，`build` 必须给代理键，否则脚本读不到面板。"""
+def test_wide_signal_is_registered_and_readable():
+    """breadth 的信号键必须已登记且本机可读（无代理键回落）。"""
+    from scripts.evaluation.caliber import SIGNALS
+
     sig, _ = build("yqcore-breadth")
-    assert sig == "dingban_fundind_local"
-    assert get_tier("yqcore-breadth").signal_key == "dingban_fundind"
+    assert sig == get_tier("yqcore-breadth").signal_key == "dingban_f50"
+    assert SIGNALS[sig]["reproducible"] is True
 
 
 def test_overrides_apply():
