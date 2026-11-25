@@ -1,6 +1,6 @@
 # scripts 入口索引
 
-> 自动生成（135 个活跃入口）。改脚本 docstring 后运行 `python -m scripts.data_tools.gen_scripts_index` 更新；`--check` 校验是否过期。
+> 自动生成（136 个活跃入口）。改脚本 docstring 后运行 `python -m scripts.data_tools.gen_scripts_index` 更新；`--check` 校验是否过期。
 
 约定：`python -m scripts.<目录>.<文件名>` 运行；`scripts/archive/` 已于 2026-11-18 整体下线（活代码已上移，其余删除）；实验结论查 `reports/README.md` §一「结论速查」，产物落盘规则见其 §1.6。
 
@@ -143,6 +143,7 @@
 
 | 脚本 | 说明 |
 |---|---|
+| `portfolio/breadth_alpha.py` | 广度档的真超额：换掉「上证指数」这个虚高基准（2026-11-25）。 |
 | `portfolio/compare_portfolio_methods.py` | 组合优化方法对比脚本（P2，2026-08-14） |
 | `portfolio/corr_sector.py` | 相关性行业归属面板（"长得像谁"）—— 构建 + 与申万标签的重叠率诊断 |
 | `portfolio/etf_champ_signals.py` | ETF 轮动生产信号板（monthly / balanced） |
