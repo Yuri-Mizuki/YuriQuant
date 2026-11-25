@@ -140,7 +140,8 @@ def test_caliber_run_once_buys_at_next_open():
     ones = pd.DataFrame(1.0, index=days, columns=close.columns)
     ctx = caliber.CaliberContext(
         window="prod", signal="test", begin=str(days[0].date()),
-        pred=pred, close=close, fwd=fwd, mask=mask, amt=ones, vol60=ones,
+        pred=pred, close=close, fwd=fwd, mask=mask, mask_same_day=mask,
+        amt=ones, vol60=ones,
         ret_hist=fwd, fingerprint="unit-test", execution="open", fill=open_)
     bt = VectorBacktest(strategy=TopFracLongOnly(frac=1.0, weight_mode="equal"),
                         rebalance_freq="M", initial_capital=1.0,
@@ -153,6 +154,41 @@ def test_caliber_run_once_buys_at_next_open():
     assert eq.loc[days[0]] == pytest.approx(1.0)
     assert eq.loc[days[1]] == pytest.approx(11.0 / 10.5)
     assert eq.loc[days[2]] == pytest.approx(12.0 / 10.5)
+
+
+def test_run_once_close_uses_same_day_mask():
+    """close 路径必须用 ``mask_same_day``。
+
+    ``mask[T]``（T+1 口径）要求「T+1 也可交易」，用它做 T 日收盘成交 = 拿未来
+    状态剔股。构造：A 在 day0 可交易、day1 不可交易（mask_t1[day0]=False）；
+    同日掩码 day0=True。若用错掩码，day0 不会建仓 ⇒ 净值停在 1.0。
+    """
+    import pandas as pd
+
+    from backtest.costs import TransactionCosts
+    from backtest.engine import VectorBacktest
+    from scripts.evaluation import caliber
+
+    days = pd.bdate_range("2024-01-01", periods=3)
+    close = pd.DataFrame({"A": [10.0, 11.0, 11.0]}, index=days)
+    fwd = close.pct_change(fill_method=None).fillna(0.0)
+    pred = pd.DataFrame({"A": [1.0, 1.0, 1.0]}, index=days)
+    mask_t1 = pd.DataFrame({"A": [False, True, True]}, index=days)
+    mask_same = pd.DataFrame({"A": [True, True, True]}, index=days)
+    ones = pd.DataFrame(1.0, index=days, columns=close.columns)
+    ctx = caliber.CaliberContext(
+        window="prod", signal="test", begin=str(days[0].date()),
+        pred=pred, close=close, fwd=fwd, mask=mask_t1, mask_same_day=mask_same,
+        amt=ones, vol60=ones, ret_hist=fwd, fingerprint="unit-test",
+        execution="close", fill=None)
+    bt = VectorBacktest(strategy=TopFracLongOnly(frac=1.0, weight_mode="equal"),
+                        rebalance_freq="M", initial_capital=1.0,
+                        costs=TransactionCosts(commission_rate=0.0,
+                                               stamp_duty=0.0,
+                                               slippage_bp=0.0,
+                                               commission_min=0.0))
+    eq = caliber.run_once(bt, ctx, "close").equity_curve
+    assert eq.loc[days[1]] == pytest.approx(1.1)
 
 
 def test_all_build_execution_split_callers_pass_signal_days():

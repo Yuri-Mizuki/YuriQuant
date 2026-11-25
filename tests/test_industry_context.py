@@ -77,7 +77,7 @@ class TestAggIndustry:
     def test_winsor_clips_within_industry_only(self):
         """组 0 有一个 1e6 的离群值，组 1 全在正常量级 —— 缩尾只该动组 0。"""
         rng = np.random.default_rng(1)
-        n_ind, m = 2, 200
+        m = 200
         v = np.concatenate([rng.normal(0, 1, m), rng.normal(5, 1, m)])
         v[0] = 1e6
         lbl = np.repeat([0, 1], m)

@@ -291,6 +291,7 @@ def test_execution_open_without_fill_raises():
     ctx = CaliberContext(window="prod", signal="x", begin="20200101",
                          pred=pd.DataFrame(), close=pd.DataFrame(),
                          fwd=pd.DataFrame(), mask=pd.DataFrame(),
+                         mask_same_day=pd.DataFrame(),
                          amt=pd.DataFrame(), vol60=pd.DataFrame(),
                          ret_hist=pd.DataFrame(), fingerprint="t",
                          execution="open", fill=None)
@@ -359,3 +360,31 @@ def test_weighted_rank_average_weights_and_nan():
     out = weighted_rank_average([a, b_nan])
     assert np.isnan(out.iloc[0, 0]), "任一分量缺失 ⇒ 该格不输出（取交集）"
     assert not np.isnan(out.iloc[0, 1])
+
+
+# ---------------------------------------------------------------------------
+# 掩码作用顺序（2026-11-25 口径修复）
+# ---------------------------------------------------------------------------
+def test_apply_execution_mask_uses_signal_day_mask():
+    """``mask[T]`` 已含「T 日 + 执行日 T+1」两天；执行日 E=T+1 必须读 mask[T]。
+
+    构造：T0 日该股可交易且 T1 也可交易（mask[T0]=True），但 T2 不可交易
+    （mask[T1]=False）。E=T1 应**保留**该股；若在 E 行读 mask[E]=mask[T1] 会误剔。
+    """
+    from scripts.evaluation.caliber import apply_execution_mask
+
+    idx = pd.bdate_range("2024-01-01", periods=3)
+    panel = pd.DataFrame({"a": [1.0, 2.0, 3.0], "b": [3.0, 2.0, 1.0]}, index=idx)
+    mask = pd.DataFrame({"a": [True, False, True], "b": [True, True, True]},
+                        index=idx)
+
+    out = apply_execution_mask(panel, mask)
+
+    # E = idx[1]：装 T0 的信号，a 在 T0 日可交易 ⇒ 保留
+    assert out.loc[idx[1], "a"] == 1.0
+    assert out.loc[idx[1], "b"] == 3.0
+    # 首行（无前一日）为空
+    assert out.iloc[0].isna().all()
+    # 末行装 T1 的信号，而 a 在 T1 不可交易 ⇒ 剔除
+    assert np.isnan(out.loc[idx[2], "a"])
+    assert out.loc[idx[2], "b"] == 2.0
