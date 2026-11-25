@@ -390,7 +390,7 @@ class DataCache:
             fetched = self._ds.get_calendar(begin, end)
             # 合并新旧日历去重后再写盘，避免窄区间查询覆盖丢失全部历史
             merged = sorted(set(existing) | set(fetched))
-            pd.DataFrame({"date": merged}).to_parquet(p, compression="snappy")
+            write_parquet_atomic(pd.DataFrame({"date": merged}), p, compression="snappy")
             self._set_last_date("calendar", merged[-1] if merged else begin)
             cal = merged
         else:
@@ -598,7 +598,7 @@ class DataCache:
         # 每日信息直接覆盖（每日最新）
         df = self._ds.get_code_info(security_type)
         if not df.empty:
-            df.to_parquet(p, compression="snappy")
+            write_parquet_atomic(df, p, compression="snappy")
         return df
 
     # ---- 行业分类（PIT 事件表，刷新策略同指数成分）----
@@ -651,7 +651,7 @@ class DataCache:
 
         if has_local:
             df = merge_fn(pd.read_parquet(p), df)
-        df.to_parquet(p, compression="snappy")
+        write_parquet_atomic(df, p, compression="snappy")
         self._set_refreshed_on(table)
         return df
 
@@ -716,7 +716,7 @@ class DataCache:
                 keep = cached[~cached["code"].isin(codes)]
                 if len(keep):
                     df = pd.concat([keep, df], ignore_index=True)
-        df.to_parquet(p, compression="snappy")
+        write_parquet_atomic(df, p, compression="snappy")
         return df
 
     # 财务三表（利润表/资产负债表/现金流量表）单次请求的代码批量。
@@ -757,7 +757,7 @@ class DataCache:
             keys = [k for k in self._FINANCIAL_KEYS if k in df.columns]
             if keys:
                 df = df.drop_duplicates(subset=keys, keep="last")
-        df.to_parquet(p, compression="snappy")
+        write_parquet_atomic(df, p, compression="snappy")
         return df
 
     def _fetch_batched(self, filename: str, codes: list[str], fetch_fn,

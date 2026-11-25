@@ -13,6 +13,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from stats.hrp import cluster_order, hrp_weights as _solver_hrp
 from strategy.base import Strategy
 
 
@@ -44,59 +45,14 @@ def erc_weights(cov: np.ndarray) -> np.ndarray:
     return w / w.sum()
 
 
-def _quasi_diag(link: np.ndarray) -> list[int]:
-    """把 scipy linkage 矩阵转成 HRP 需要的叶子顺序。"""
-    link = link.astype(int)
-    sort_ix = pd.Series([link[-1, 0], link[-1, 1]])
-    num_items = link[-1, 3]
-    while sort_ix.max() >= num_items:
-        sort_ix.index = range(0, sort_ix.shape[0] * 2, 2)
-        df0 = sort_ix[sort_ix >= num_items]
-        i = df0.index
-        j = df0.values - num_items
-        sort_ix[i] = link[j, 0]
-        df0 = pd.Series(link[j, 1], index=i + 1)
-        sort_ix = pd.concat([sort_ix, df0]).sort_index()
-        sort_ix.index = range(sort_ix.shape[0])
-    return sort_ix.tolist()
-
-
 def hrp_weights(cov: np.ndarray) -> np.ndarray:
-    """层次风险平价（HRP，López de Prado 2016）：单链接聚类 + 递归二分。"""
-    n = cov.shape[0]
-    if n == 1:
-        return np.ones(1)
-    sd = np.sqrt(np.diag(cov))
-    if np.any(sd <= 0):
-        return np.ones(n) / n
-    corr = cov / np.outer(sd, sd)
-    corr = np.nan_to_num(corr, nan=0.0)
-    np.fill_diagonal(corr, 1.0)
-    dist = np.sqrt(np.clip((1.0 - corr) / 2.0, 0.0, 1.0))
-    np.fill_diagonal(dist, 0.0)
-    from scipy.cluster.hierarchy import linkage
-    from scipy.spatial.distance import squareform
+    """HRP 权重，薄封装 :func:`optimize.solver.hrp_weights`（唯一真源）。
 
-    link = linkage(squareform(dist, checks=False), method="single")
-    order = _quasi_diag(link)
-    w = pd.Series(1.0, index=order)
-    clusters = [order]
-    while clusters:
-        new: list[list[int]] = []
-        for c in clusters:
-            if len(c) <= 1:
-                continue
-            half = len(c) // 2
-            c0, c1 = c[:half], c[half:]
-            v0 = float(cov[np.ix_(c0, c0)].sum())
-            v1 = float(cov[np.ix_(c1, c1)].sum())
-            alpha = 1.0 - v0 / (v0 + v1) if (v0 + v1) > 0 else 0.5
-            w[c0] *= alpha
-            w[c1] *= 1.0 - alpha
-            new += [c0, c1]
-        clusters = new
-    out = w.sort_index().to_numpy()
-    return out / out.sum()
+    ETF 侧只需要 ndarray，solver 返回 Series（带 codes 索引），故转一下。
+    此前这里另写了一份（簇方差用 ``Σ 子块求和``），与 solver 版算法不同、
+    数字不可互引；现统一到原文口径（single linkage + IVP 簇方差）。
+    """
+    return _solver_hrp(cov).to_numpy()
 
 
 def _shrunk_cov(cov: np.ndarray, delta: float = 0.2) -> np.ndarray:
@@ -174,18 +130,9 @@ def _hrp_cluster_equal(cov: np.ndarray) -> np.ndarray:
     n = cov.shape[0]
     if n == 1:
         return np.ones(1)
-    sd = np.sqrt(np.diag(cov))
-    if np.any(sd <= 0):
+    if np.any(np.sqrt(np.maximum(np.diag(cov), 0.0)) <= 0):
         return np.ones(n) / n
-    corr = np.nan_to_num(cov / np.outer(sd, sd), nan=0.0)
-    np.fill_diagonal(corr, 1.0)
-    dist = np.sqrt(np.clip((1.0 - corr) / 2.0, 0.0, 1.0))
-    np.fill_diagonal(dist, 0.0)
-    from scipy.cluster.hierarchy import linkage
-    from scipy.spatial.distance import squareform
-
-    link = linkage(squareform(dist, checks=False), method="single")
-    order = _quasi_diag(link)
+    order = cluster_order(cov)
     w = pd.Series(1.0, index=order)
     clusters = [order]
     while clusters:

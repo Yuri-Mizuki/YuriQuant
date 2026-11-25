@@ -486,8 +486,8 @@ def fit_predict_oos(
 
     Args:
         cv_method: 切分方法，见 ``make_folds``。默认 ``forward``（expanding
-            前推，生产唯一合法方法）；研究评估可切 ``purged``/``blocked``
-            做横向对比。
+            前推，生产唯一合法方法）；研究评估可切 ``purged``（``blocked``
+            与它同一实现，仅为兼容旧调用保留）。
 
     Returns:
         date×code 面板：各折测试段为 OOS 预测（已截面标准化），

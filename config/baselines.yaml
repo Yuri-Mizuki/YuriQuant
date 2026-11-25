@@ -23,10 +23,8 @@
 #    focus 87% +0.84pp、breadth 17% +0.15pp）。
 # 5. **数据态必须标注**：v1 的 18.07% 属 income 4383 补齐**前**的 v2 数据态；
 #    同配置当前数据态 ≈ 17.0–17.2%（README:24-26）。**不回退数据换数字。**
-# 6. **掩码口径 = 方案② mask-lag 1**（由莉酱 2026-10-15 拍板）：报数一律
-#    「--mask-lag 1 + T+1 open」可执行口径（现值即此，零改动）；mask-lag 0 +
-#    T 收盘仅研究上限对照，数字不得与报数并列。提频实验先读
-#    `reports/docs/consistency_checks/口径核对_掩码取样日错配.md`（周频 +3.76pp）。
+# 6. **掩码只有一种用法**：`panel.where(mask).shift(1)`（先掩码后位移），`close` 成交用
+#    同日掩码。`--mask-lag` 参数已删除，没有第二套口径。
 # 7. **2026-10-19 执行价口径修复（审计 P0-1）**：`build_execution_split` 必须收
 #    **信号日 T**、引擎 `rebalance_days` 收**执行日 E=T+1**。修复前 9 处调用把 E
 #    同时传给两者 ⇒ fill 落 E+1、`open` 臂实际是 T+1 收盘成交。**修复前所有
@@ -659,7 +657,7 @@ baselines:
       本机只有重建代理信号 dingban_fundind_local（指纹 44a31b8fc51c；登记路径
       reports/frontier_audit_920_reval/ 已不存在）。**本条 metrics 全部产自代理数据态**
       （1864 日、止 2026-09-07）；`--check` 靠条目上的 `check_end: 20260907` 复算同一窗口
-      ⇒ **逐位 PASS（21.81% / 1.013，Δ=0.00）**。若不截断会跑成 1900 日、20.35%，
+      ⇒ **逐位 PASS（21.81% / 1.008，Δ=0.00）**。若不截断会跑成 1900 日、20.35%，
       那 1.46pp 全来自窗口末日（2026 年多 36 个交易日），不是实现漂移。
       ⚠️ 代理数据态与出榜读的 `selection/` 同源，但**不等于**旧登记指纹 2bc26c866512 那份；
       历史数字（v2-dingban 的 21.57%、36bp 旧基数）只作追溯，不是本条的复现目标。
@@ -706,16 +704,19 @@ baselines:
       fingerprint: 44a31b8fc51c
       profiles:
         production:
-          # 🚨 2026-11-12 成本口径修正后重算（往返 36bp→27bp 时变）。旧值 ann 0.21659 /
-          # sharpe 1.0061 / turnover 0.1708 是 36bp 基数，禁止与新值相减。
+          # 🚨 2026-11-25 掩码作用顺序修正后重算（`panel.where(mask).shift(1)`）。
+          # 上一版 ann 0.21809 / sharpe 1.0130 / max_dd 0.2661 / turnover 0.1708 是
+          # `shift_then_mask` 口径，**不可与新值相减**（Δann +0.004pp、Δsharpe −0.005，
+          # 差异虽在噪声内但口径不同源）。
+          # 更早的 36bp 基数：ann 0.21659 / sharpe 1.0061，只作历史追溯。
           eqw_buf0.15_0.4:
-            ann: 0.21809
-            sharpe: 1.0130
-            sharpe_arith: 1.0251
-            sharpe_t_stat: 2.8373        # NW 校正，过 1.96，余量 45%
-            turnover: 0.1708
-            cost_bp: 1034.0
-            max_dd: 0.2661
+            ann: 0.218115
+            sharpe: 1.0081
+            sharpe_arith: 1.0212
+            sharpe_t_stat: 2.8027        # NW 校正，过 1.96，余量 43%
+            turnover: 0.1682
+            cost_bp: 1028.2
+            max_dd: 0.2733
             n_active: 614
           # 集中化对照（同信号、同窗口，仅换持仓宽度）——这条是本档存在的理由
           # ⚠️ 以下三行仍属 36bp 旧基数，只可用于「同基数下横向比较宽度」，不得与上方相减
@@ -837,34 +838,36 @@ baselines:
       fingerprint: 79bdbbcc8fb9
       profiles:
         production:
-          # 🚨 2026-11-12 成本口径修正后重算（往返 36bp→27bp 时变）。旧值 ann 0.28756 /
-          # sharpe 1.0804 / cost_bp 9079 是 36bp 基数（`caliber --check` 当时 Δ+0.84pp FAIL）。
+          # 🚨 2026-11-25 掩码作用顺序修正后重算（`panel.where(mask).shift(1)`）。
+          # 上一版 ann 0.29600 / sharpe 1.1125 / max_dd 0.3822 / cost_bp 7527.5 是
+          # `shift_then_mask` 口径（Δann **+0.53pp**、Δsharpe +0.032，已超 `tol_ann`）。
+          # 更早的 36bp 基数：ann 0.28756 / sharpe 1.0804 / cost_bp 9079，只作追溯。
           topk15_buf2:
-            ann: 0.29600
-            sharpe: 1.1125
-            sharpe_arith: 1.1091
-            sharpe_t_stat: 3.0529        # NW 校正，过 1.96，余量 56%
-            turnover: 0.8763
-            cost_bp: 7527.5
-            max_dd: 0.3822
+            ann: 0.301291
+            sharpe: 1.1444
+            sharpe_arith: 1.1333
+            sharpe_t_stat: 3.1042        # NW 校正，过 1.96，余量 58%
+            turnover: 0.8778
+            cost_bp: 7436.5
+            max_dd: 0.3970
             n_active: 15
-          # K 网格（同信号、同执行层）——**锯齿，不是单调**；全表落在 28.5%~32.0% 噪声带内。
-          # 🔁 2026-11-17 按 **27bp 时变口径**全部重算（旧 36bp 六行已作废，见下方 history）。
+          # K 网格（同信号、同执行层）——**锯齿，不是单调**；全表落在 29.0%~32.5% 噪声带内。
+          # 🔁 2026-11-25 按**掩码顺序修正 + 27bp 时变**全部重算（旧两批已作废）。
           # 🚨 **禁止把 K 的差异当结论**：11 个格的 SR 95%CI 全面重叠（极差 0.124 vs
           # 单个 SE 0.46 ⇒ 效应量仅标准误 1/4）；配对检验 8/8 不显著（最好 p=0.387）；
           # SR~K 秩相关在 1e6(+0.455) 与 1e5 整手(−0.400) 下**方向相反**。
           # ⇒ K 是**资金规模与整手约束的派生量**，不是优化出来的参数。证据见
           # reports/focus_upgrade/README.md §五/§六。
-          k6_buf2:  {ann: 0.328086, sharpe: 1.1302, sharpe_arith: 1.1241, max_dd: 0.3681, turnover: 0.9086, cost_bp: 8962.3}
-          k8_buf2:  {ann: 0.318186, sharpe: 1.1402, sharpe_arith: 1.1310, max_dd: 0.3477, turnover: 0.8952, cost_bp: 8645.2}
-          k10_buf2: {ann: 0.296529, sharpe: 1.0872, sharpe_arith: 1.0901, max_dd: 0.3576, turnover: 0.8860, cost_bp: 7416.0}
-          k12_buf2: {ann: 0.304417, sharpe: 1.1262, sharpe_arith: 1.1199, max_dd: 0.3657, turnover: 0.8835, cost_bp: 7969.7}
-          k18_buf2: {ann: 0.303091, sharpe: 1.1475, sharpe_arith: 1.1359, max_dd: 0.3884, turnover: 0.8692, cost_bp: 7673.9}
-          k20_buf2: {ann: 0.285220, sharpe: 1.0844, sharpe_arith: 1.0870, max_dd: 0.3942, turnover: 0.8624, cost_bp: 7051.6}
-          k22_buf2: {ann: 0.287955, sharpe: 1.1006, sharpe_arith: 1.0995, max_dd: 0.3856, turnover: 0.8578, cost_bp: 7172.4}
-          k25_buf2: {ann: 0.317478, sharpe: 1.2162, sharpe_arith: 1.1884, max_dd: 0.3807, turnover: 0.8497, cost_bp: 7832.6}
-          k28_buf2: {ann: 0.309199, sharpe: 1.1974, sharpe_arith: 1.1741, max_dd: 0.3780, turnover: 0.8349, cost_bp: 7374.7}
-          k30_buf2: {ann: 0.320223, sharpe: 1.2453, sharpe_arith: 1.2105, max_dd: 0.3807, turnover: 0.8305, cost_bp: 7336.7}
+          k6_buf2:  {ann: 0.325329, sharpe: 1.1580, sharpe_arith: 1.1442, max_dd: 0.3866, turnover: 0.9050, cost_bp: 8511.0}
+          k8_buf2:  {ann: 0.309169, sharpe: 1.1289, sharpe_arith: 1.1219, max_dd: 0.3871, turnover: 0.8898, cost_bp: 8030.0}
+          k10_buf2: {ann: 0.295411, sharpe: 1.0945, sharpe_arith: 1.0953, max_dd: 0.3936, turnover: 0.8860, cost_bp: 7234.0}
+          k12_buf2: {ann: 0.304555, sharpe: 1.1411, sharpe_arith: 1.1309, max_dd: 0.3869, turnover: 0.8835, cost_bp: 7742.0}
+          k18_buf2: {ann: 0.304385, sharpe: 1.1697, sharpe_arith: 1.1526, max_dd: 0.3991, turnover: 0.8716, cost_bp: 7552.0}
+          k20_buf2: {ann: 0.289977, sharpe: 1.1215, sharpe_arith: 1.1154, max_dd: 0.4004, turnover: 0.8624, cost_bp: 7057.0}
+          k22_buf2: {ann: 0.296008, sharpe: 1.1452, sharpe_arith: 1.1338, max_dd: 0.3920, turnover: 0.8602, cost_bp: 7267.0}
+          k25_buf2: {ann: 0.316140, sharpe: 1.2285, sharpe_arith: 1.1977, max_dd: 0.3900, turnover: 0.8510, cost_bp: 7761.0}
+          k28_buf2: {ann: 0.308886, sharpe: 1.2086, sharpe_arith: 1.1825, max_dd: 0.3937, turnover: 0.8383, cost_bp: 7327.0}
+          k30_buf2: {ann: 0.318782, sharpe: 1.2530, sharpe_arith: 1.2164, max_dd: 0.3937, turnover: 0.8323, cost_bp: 7268.0}
           # 同 K 对照：rev1 的旧信号（本档升级的理由）——同为 36bp 旧基数
           rev1_ens_h1h5_k15: {ann: 0.2207, sharpe: 0.833, max_dd: 0.379, cost_base: "36bp 旧口径"}
           rev1_ens_h1h5_k25: {ann: 0.2492, sharpe: 0.961, max_dd: 0.387, cost_base: "36bp 旧口径"}
@@ -999,23 +1002,28 @@ baselines:
         # 口径键沿用 production（成本/执行层与同族一致），**资金与整手不同**：
         # 本条是 1e5 + lot100，focus/breadth 是 1e6 无整手。
         production:
-          # 🚨 2026-11-11 成本口径修正后重算（关税 千1→万5、佣金 万3→万1，往返 36bp→27bp 且
-          # 印花税按调仓日时变）。旧值 ann 0.35566 / sharpe 1.2360 / sharpe_arith 1.2029 /
-          # calmar 0.978 / max_dd 0.3636 已作废，**禁止再引用**（同一策略跨成本口径不可并列）。
+          # 🚨 2026-11-25 掩码作用顺序修正后重算（`panel.where(mask).shift(1)`）。
+          # 上一版 ann 0.36575 / sharpe 1.2709 / arith 1.2286 / max_dd 0.3626 /
+          # calmar 1.0087 是 `shift_then_mask` 口径 ⇒ Δann **−2.04pp**、ΔSR −0.050、
+          # 回撤 **+2.8pp**。这是三档里唯一实质变差的一档（6 只持仓、换手 92%，
+          # off-by-one 的抽样噪声被放大到 2pp 量级，见 掩码顺序_offbyone_审计.md）。
+          # 🚨 2026-11-11 成本口径修正（往返 36bp→27bp）：旧 ann 0.35566 / sharpe 1.2360
+          # 更早，禁止与任何新值并列。
           solo_k8_b1.0:
-            ann: 0.36575               # 旧 0.35566（+1.01pp，来自成本下修）
-            sharpe: 1.2709             # 几何口径（年化/年化波动），旧 1.2360
-            sharpe_arith: 1.2286       # 算术口径 mean/std·√252，旧 1.2029
-            sharpe_t_stat: 3.39        # NW 校正（算术 Sharpe × √T）
-            vol: 0.2878
-            max_dd: 0.3626
-            calmar: 1.0087             # 旧 0.978
-            turnover: 0.9236
-            cost_bp: 9749.4            # 全期累计扣费（bp）
+            ann: 0.345373
+            sharpe: 1.2207             # 几何口径（年化/年化波动）
+            sharpe_arith: 1.1914       # 算术口径 mean/std·√252
+            sharpe_t_stat: 3.3132      # NW 校正（算术 Sharpe × √T）
+            vol: 0.2829
+            max_dd: 0.3904
+            calmar: 0.8846
+            turnover: 0.9247
+            cost_bp: 8747.3            # 全期累计扣费（bp）
+            nhold_mean: 5.85           # 名义 k=8，实际平均 5.85 只（行业去重）
+            # ⚠️ 以下字段仍为 2026-11-25 前（shift_then_mask）口径，**未重算**：
             invest_mean: 0.983           # 引擎实测（按当期 capital 取整，利润再投入口径）
             invest_fixed: 0.963          # 利润每月取走、始终 10 万（invest_fixed.csv，年化约 -0.7pp）
             invest_min: 0.895            # 最差单期实投率
-            nhold_mean: 5.88             # 名义 k=8，实际平均 5.88 只（行业去重）
             nhold_le3: 0.043             # 93 期里 4 期只有 3 只（从未 2 只）
             nsector_min: 3               # max_per_sector=1 ⇒ 持仓数 ≡ 行业数
             year_worst: 0.0869           # 最差年 2022 +8.69%

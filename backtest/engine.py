@@ -28,7 +28,8 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
-from backtest.costs import ShortCostModel, TransactionCosts, impact_from_config
+from backtest.calendar import rebalance_days
+from backtest.costs import ShortCostModel, TransactionCosts
 from backtest.metrics import calc_all_metrics, calc_short_metrics, format_metrics
 from config import Config
 from strategy.base import Strategy
@@ -191,17 +192,11 @@ class VectorBacktest:
         self.rebalance_freq = rebalance_freq
         self.initial_capital = float(initial_capital)
         if costs is None:
-            # 费率唯一真源：Config.costs()（config/settings.yaml 顶层 `costs` 段）。
-            # 2026-09-10 由原先的 `backtest` 段收敛而来，勿再读回旧位置。
-            # 2026-10-13：附带挂上逐股冲击模型（impact_model=sqrt 时；默认 none 不启用）。
-            cfg = Config.costs()
-            costs = TransactionCosts(
-                commission_rate=cfg["commission_rate"],
-                commission_min=cfg["commission_min"],
-                stamp_duty=cfg["stamp_duty"],
-                slippage_bp=cfg["slippage_bp"],
-                impact=impact_from_config(cfg),
-            )
+            # 成本唯一真源：backtest.costs.default_costs()（含时变印花税开关）。
+            # 自建 TransactionCosts 会漏调 stamp_duty_schedule，跨 2023-08-28
+            # 政策变更的窗口按单一常数收税 ⇒ 净收益偏乐观。
+            from backtest.costs import default_costs
+            costs = default_costs()
         self.costs = costs
         # 空头腿成本：默认从配置读取并【启用】（修正空头腿乐观偏差）。
         # 显式传 ShortCostModel 可自定义；borrow_rate=0 等价关闭借券费。
@@ -540,31 +535,8 @@ class VectorBacktest:
         )
 
     def _get_rebalance_days(self, dates: pd.DatetimeIndex) -> set:
-        """根据频率返回调仓日集合。"""
-        if self.rebalance_freq == "D":
-            return set(dates)
-        elif self.rebalance_freq == "W":
-            s = pd.Series(dates, index=dates)
-            return set(s.groupby(s.index.to_period("W")).first())
-        elif self.rebalance_freq == "M":
-            s = pd.Series(dates, index=dates)
-            return set(s.groupby(s.index.to_period("M")).first())
-        elif self.rebalance_freq == "2W":
-            # 双周频：按 ISO 周分组后取隔周（自样本首周起算，锚点固定），
-            # 用于降低周频换手（比赛版成本拖累约 5%/年，双周理论减半）。
-            s = pd.Series(dates, index=dates)
-            wk = list(s.groupby(s.index.to_period("W")).first())
-            return set(wk[::2])
-        elif self.rebalance_freq == "2M":
-            # 2026-11-13：每两个自然月的首个交易日（与 caliber.rebalance_dates 逐位一致，
-            # 由 tests/test_caliber.py::test_rebalance_dates_match_engine_for_all_freqs 守）。
-            s = pd.Series(dates, index=dates)
-            return set(s.groupby(s.index.to_period("M").asi8 // 2).first())
-        elif self.rebalance_freq == "Q":
-            s = pd.Series(dates, index=dates)
-            return set(s.groupby(s.index.to_period("Q")).first())
-        else:
-            return set(dates)
+        """根据频率返回调仓日集合（唯一真源：:mod:`backtest.calendar`）。"""
+        return set(rebalance_days(dates, self.rebalance_freq))
 
 
 def build_execution_split(

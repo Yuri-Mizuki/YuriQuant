@@ -81,21 +81,9 @@ def stamp_duty_on(date) -> float:
     return rate
 
 
-def default_one_way_bp() -> float:
-    """配置口径的**平均单边**交易成本（bp）。
-
-    = 佣金 + 滑点 + 印花税/2（印花税仅卖出单边）。``config/settings.yaml``
-    当前取值 1 + 10 + 5/2 = **13.5bp** ⇒ 往返 27bp。
-
-    探针脚本一律引用本函数，不要再写字面量（历史上 13.5 / 36.0 两套
-    都自称「项目统一口径」）。
-    """
-    from config import Config
-
-    c = Config.get()["costs"]
-    return (float(c["commission_rate"]) * 1e4
-            + float(c["slippage_bp"])
-            + float(c["stamp_duty"]) * 1e4 / 2.0)
+#: 单边成本唯一真源在 :func:`config.default_one_way_bp`（此处 re-export，
+#: ``strategy`` 层不能 import ``backtest``，只能引用 config）。
+from config import default_one_way_bp  # noqa: E402,F401
 
 
 @dataclass

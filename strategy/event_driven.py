@@ -27,7 +27,8 @@ open-to-open 的固定日历段，与 ``backtest/`` 引擎的调仓-权重接口
 | 重叠 | 同股在持有窗内再出事件 ⇒ 延长持有，不加仓 |
 | 组合 | 逐日等权持有全部在窗股票；无事件日空仓，收益记 **0**（不是 NaN） |
 | 基准 | 同市值分 5 组，取持仓股当日所在组的等权收益 |
-| 成本 | 单边 13.5bp（往返 27bp），固定值、非时变 |
+| 成本 | 单边 ``default_one_way_bp()``（现 13.5bp，往返 27bp），固定值、非时变 |
+| 指标 | 年化/Sharpe/最大回撤走 ``backtest.metrics``（252 交易日、几何年化） |
 
 边界：回测允许无限资金、无限并发，不扣整手/停牌/ST；这些是实盘出单器的闸门，
 两者口径不同，**不可把出单器的成交数当回测成交数**。
@@ -39,15 +40,17 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from config import Config
+from config import Config, default_one_way_bp
+from stats import PERIODS_PER_YEAR
+from stats.perf import annual_return, max_drawdown, sharpe_ratio
 
 ROOT = Path(__file__).resolve().parents[1]
 BASE_DIR = ROOT / "reports" / "alla_rolling" / "_base"
 
 #: 持有交易日数（与实盘出单器一致；H=20 是唯一经过执行层检验的档）
 HOLD = 20
-#: 单边成本：往返 27bp = 佣金 2bp + 印花 5bp + 滑点 20bp，固定值非时变
-COST_ONE_WAY = 0.00135
+#: 单边成本：引用成本唯一真源（当前 13.5bp ⇒ 往返 27bp）
+COST_ONE_WAY = default_one_way_bp() / 1e4
 #: 主动买入的成交方式（剔除分红送转 / 股权激励实施）
 ACTIVE_REASONS = ("竞价交易", "二级市场买卖", "大宗交易")
 #: 合计增持占总股本下限（%）
@@ -56,7 +59,6 @@ MIN_RATIO = 0.1
 START = "2018-01-01"
 #: 市值分组数
 NQ = 5
-ANNUAL = 250
 
 
 # ---------------------------------------------------------------------------
@@ -165,7 +167,10 @@ def build_positions(ev: pd.DataFrame, cal: pd.DatetimeIndex, hold: int,
             continue
         price_ok = bool(np.isfinite(cv[i0, j]) and np.isfinite(cv[i1, j])
                         and np.isfinite(cv[i0:i1 + 1, j]).all())
-        ok_rows.append(price_ok and bool(mv[i0, j]))
+        # ``tradable_mask[T]`` 已同时编码 T 与 T+1 可交易（``data.tradability``），
+        # 建仓日 i0 的下一交易日是 i1 起算的窗口内部，不该由 i0 行的 mask 判；
+        # 取信号日 T=i0-1。用 ``mask[i0]`` 会把「次日停牌」的样本提前剔除。
+        ok_rows.append(price_ok and bool(mv[i0 - 1, j]))
     ev = ev.loc[np.array(ok_rows)]
 
     rows: list[dict] = []
@@ -305,11 +310,11 @@ def summarize(ret: pd.Series, bench: pd.Series, pos: pd.DataFrame, cal: pd.Datet
     r, b = r.loc[first:], b.loc[first:]
     days = len(r)
     avg_h = float(cnt[cnt > 0].mean()) if (cnt > 0).any() else 1.0
-    # 年化换手（双边）：每日新建仓笔数 / 平均持仓笔数 × 2 × 250
-    ann_turn = float(len(pos) / days / max(avg_h, 1.0) * 2 * ANNUAL)
+    # 年化换手（双边）：每日新建仓笔数 / 平均持仓笔数 × 2 × 年交易日
+    ann_turn = float(len(pos) / days / max(avg_h, 1.0) * 2 * PERIODS_PER_YEAR)
     cost = ann_turn * COST_ONE_WAY
     ex = r - b
-    ann_ex = float(ex.mean() * ANNUAL)
+    ann_ex = float(ex.mean() * PERIODS_PER_YEAR)
     eq = (1 + r).cumprod()
     eqb = (1 + b).cumprod()
     dd = (eq / eq.cummax() - 1.0)
@@ -317,12 +322,12 @@ def summarize(ret: pd.Series, bench: pd.Series, pos: pd.DataFrame, cal: pd.Datet
     yr_b = (1 + b).groupby(b.index.year).prod() - 1.0
     return {
         "days": days,
-        "ann_ret": float(r.mean() * ANNUAL),
+        "ann_ret": float(annual_return(r)),
         "ann_ex": ann_ex,
         "ann_ex_net": ann_ex - cost,
         "t": nw_t(ex.values, lag=5),
-        "sharpe": float(r.mean() / r.std() * np.sqrt(ANNUAL)) if r.std() > 0 else float("nan"),
-        "maxdd": float(dd.min()),
+        "sharpe": float(sharpe_ratio(r)),
+        "maxdd": float(max_drawdown(r)),
         "turnover": ann_turn,
         "cost": cost,
         "yr_pos": f"{int((yr_s - yr_b).gt(0).sum())}/{len(yr_s)}",
@@ -361,7 +366,7 @@ def open_positions(ev: pd.DataFrame, env: dict, hold: int = HOLD) -> list[dict]:
         i0 = int(g["i0"].min())
         entry = float(ov[i0, j])
         last_px = float(cv[last, j])
-        if not (np.isfinite(entry) and entry > 0 and np.isfinite(last_px) and mv[i0, j]):
+        if not (np.isfinite(entry) and entry > 0 and np.isfinite(last_px) and mv[i0 - 1, j]):
             continue
         rows.append({
             "code": code,
@@ -411,7 +416,6 @@ def run(hold: int = HOLD, base_dir: Path | None = None,
     b = bench.reindex(cal).fillna(0.0).loc[s["eq"].index]
     names = (ev.drop_duplicates("code").set_index("code")["name"].to_dict())
 
-    last = len(cal) - 1
     ov = env["open"].values
     col = {c: i for i, c in enumerate(env["close"].columns)}
     trades = []

@@ -237,7 +237,6 @@ def effective_dims(ic: "pd.DataFrame", min_overlap: int = 60) -> float:
         n_eff（≥1，输入列 <2 或无有效序列时 NaN）。
     """
     import numpy as np
-    import pandas as pd
 
     c = ic.corr(min_periods=min_overlap)
     c = c.dropna(axis=0, how="all").dropna(axis=1, how="all").fillna(0.0)

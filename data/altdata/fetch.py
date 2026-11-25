@@ -57,6 +57,7 @@ from data.altdata import cninfo_holder as cninfo
 from data.altdata import source_akshare as src
 from data.altdata import source_cls as cls_src
 from data.altdata import source_news as news_src
+from data.atomic_io import write_parquet_atomic
 
 log = logging.getLogger(__name__)
 
@@ -232,7 +233,7 @@ class AltDataCache:
         return out
 
     def _write(self, table: str, df: pd.DataFrame) -> None:
-        df.to_parquet(self.path(table), compression="snappy", index=False)
+        write_parquet_atomic(df, self.path(table), compression="snappy", index=False)
         # 记录写盘时的 schema 版本，供下次 load 校验
         self._meta.setdefault("schema_versions", {})[table] = SCHEMA_VERSION
         self._save_meta()
@@ -500,7 +501,7 @@ class AltDataCache:
             out = out.sort_values("pub_time").reset_index(drop=True)
         else:
             out = local
-        out.to_parquet(p, compression="snappy", index=False)
+        write_parquet_atomic(out, p, compression="snappy", index=False)
         stat = {"date": p.stem.replace("news_", ""), "before": before,
                 "fetched": int(len(new)), "after": int(len(out)),
                 "added": int(len(out) - before),
@@ -577,7 +578,7 @@ class AltDataCache:
                 merged = part.drop_duplicates(subset="news_id", keep="last")
                 added += len(merged)
             merged = merged.sort_values("pub_time").reset_index(drop=True)
-            merged.to_parquet(p, compression="snappy", index=False)
+            write_parquet_atomic(merged, p, compression="snappy", index=False)
             # 日数按**内容**统计（文件数已不再等于天数）
             by_year[str(ds)[:4]] = int(
                 pd.to_datetime(merged["pub_time"]).dt.strftime("%Y%m%d").nunique())

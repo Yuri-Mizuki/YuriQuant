@@ -41,6 +41,7 @@ from typing import Sequence
 import numpy as np
 import pandas as pd
 
+from backtest import calendar as CAL
 from backtest.metrics import PERIODS_PER_YEAR
 
 __all__ = ["equal_weight_returns", "buy_hold_returns",
@@ -49,9 +50,8 @@ __all__ = ["equal_weight_returns", "buy_hold_returns",
 
 
 def monthly_first_trading_days(idx: pd.DatetimeIndex) -> pd.DatetimeIndex:
-    """每月**第一个**交易日（= 引擎 ``groupby(to_period('M')).first()`` 的调仓日）。"""
-    s = pd.Series(idx, index=idx)
-    return pd.DatetimeIndex(s.groupby(s.index.to_period("M")).first().to_numpy())
+    """每月**第一个**交易日（唯一真源 :func:`backtest.calendar.month_firsts`）。"""
+    return CAL.month_firsts(idx)
 
 
 def equal_weight_returns(close_panel: pd.DataFrame) -> pd.Series:

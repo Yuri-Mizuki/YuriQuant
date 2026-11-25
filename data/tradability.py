@@ -37,11 +37,24 @@
     月频在噪声量级（4 信号 2 正 2 负，均值 +0.29pp）；**周频 4/4 一致为正（+3.76pp）**
     ⇒ 换手越高代价越大。
 
-  - ⚠️ 现行回测（``rolling_grid_alla.py``）正是「**T 日收盘成交 + T+1 掩码**」这一
-    混合口径：成交取 ``close[T]``（h=1 收益面板 ``close.pct_change()`` 未 shift），
-    掩码取 T+1 状态。修正方向**二选一、不可只改一半**：
-      ① 掩码改 T 日（自洽于 T 日成交，但仍不可执行）；
-      ② 成交改 T+1（自洽且可执行，2026-09-15 实测代价 −0.94pp 量级）。
+  - 🚨 **2026-11-25 已全链改对**：此前 ``rolling_grid_alla`` / ``caliber`` 的 close 路径
+    正是「**T 日收盘成交 + T+1 掩码**」这一混合口径，现已一律改用
+    ``execution_lag=0`` 的同日掩码（``caliber`` 走 ``ctx.mask_same_day``、
+    网格走 ``_base/tradable_mask_same_day.parquet``）。新代码不要再把 T+1 掩码
+    套到同日成交上。
+
+🚨 **作用顺序铁律（2026-11-25 修的事故）**：``mask[T]``（lag=1）**已经同时编码了
+「T 日可交易」与「T+1 日可交易」**（``bad`` 里既有 ``susp``/``is_st`` 也有 ``*_next``）。
+T+1 成交时执行日 ``E=T+1``，引擎在 E 行读信号与掩码 ⇒ **必须先掩码、再位移**：
+
+```python
+sig_used = panel.where(mask).shift(1)      # E 行 = panel[T] where mask[T]   ✓
+sig_used = panel.shift(1).where(mask)      # E 行 = panel[T] where mask[E]   ✗ 多看一天
+```
+
+唯一入口是 ``caliber.apply_execution_mask``（先掩码后位移），不要在脚本里重写这一段。
+事故量级随持仓宽度放大（breadth +0.004pp / k15 +0.53pp / k8 −2.04pp），
+逐格 2×2 与 A/B 见 ``reports/docs/consistency_checks/掩码顺序_offbyone_审计.md``。
 
 **历史沿革（2026-09-10 收敛）**：此前 ``build_tradable_mask`` 住在
 ``data/cache_helpers.py``，与 ``data/tradability.py`` 里的另一套并存——同一件事
@@ -56,6 +69,11 @@ from pathlib import Path
 import pandas as pd
 
 from config import Config
+
+#: 判「收盘价贴住涨跌停价」的相对容差。全库唯一取值——降级推断路径
+#: （``alla_daily_rank._limit_from_daily``）也必须引用它，否则状态表断更时
+#: 会换一套剔除标准。
+SEALED_TOL = 1e-6
 
 
 # ---------------------------------------------------------------------------
@@ -154,7 +172,7 @@ def build_tradable_mask(close_adj: pd.DataFrame,
     else:
         raw_next = close_adj.shift(-lag)
 
-    tol = 1e-6
+    tol = SEALED_TOL
     sealed_up = (raw_next >= hi_next * (1 - tol)) & hi_next.notna()
     sealed_dn = (raw_next <= lo_next * (1 + tol)) & lo_next.notna()
 
@@ -162,6 +180,26 @@ def build_tradable_mask(close_adj: pd.DataFrame,
     bad = susp_next | sealed_up | sealed_dn | st_next | susp | is_st
     mask = ~bad
     return mask.fillna(True).astype(bool)
+
+
+def apply_execution_mask(panel: pd.DataFrame, mask: pd.DataFrame) -> pd.DataFrame:
+    """把 T+1 成交口径的掩码作用到信号上：**先掩码、再位移**（唯一实现）。
+
+    ``mask[T]`` = 「T 日与 T+1 日都可交易」（``build_tradable_mask(execution_lag=1)``
+    的 ``bad`` 同时含 ``susp``/``st`` 与 ``*_next``）。执行日 E = T+1，引擎在 E 行
+    读信号，所以 E 行必须装 ``panel[T] where mask[T]``：
+
+        E 行 = panel.where(mask).shift(1)      ✓ 判的是 T 与 E
+        E 行 = panel.shift(1).where(mask)      ✗ 判的是 E 与 E+1（多看一天）
+
+    Args:
+        panel: 信号面板（date × code），T 行 = T 日收盘可得的信号。
+        mask: T+1 成交口径的可交易掩码，``mask[T]`` 覆盖 T 与 T+1 两天。
+
+    Returns:
+        面板，E 行 = ``panel[E-1]``（已按 ``mask[E-1]`` 剔除）。
+    """
+    return panel.where(mask).shift(1)
 
 
 # ---------------------------------------------------------------------------

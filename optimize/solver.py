@@ -38,6 +38,9 @@ from typing import Any, Mapping
 import numpy as np
 import pandas as pd
 
+# HRP 真源在 stats.hrp（strategy 层也要用，不能反向 import optimize）
+from stats.hrp import cluster_order, hrp_weights  # noqa: F401  (re-export)
+
 # cvxpy 采用**真·惰性导入**（2026-09-11）：只在 solve_portfolio 首次被调用时 import。
 # 此前是模块级 try/except —— 名为"延迟导入"实则仍在 `import optimize` 时执行，
 # 实测把包导入从 ~0.2s 拖到 ~11.7s（cvxpy 连带 scipy 全家桶）。宿主引擎只依赖
@@ -71,6 +74,7 @@ __all__ = [
     "bl_posterior",
     "bl_views_from_factor",
     "hrp_weights",
+    "cluster_order",
     "optimize_weights_hrp",
 ]
 
@@ -884,80 +888,8 @@ def bl_views_from_factor(
 
 
 # ===========================================================================
-# HRP（Lopez de Prado 2016）：层次聚类 + 递归二分 + 逆方差，免逆矩阵
+# HRP 的权重构造见 stats.hrp（上方 re-export）
 # ===========================================================================
-def _quasi_diag(link: np.ndarray) -> list[int]:
-    """把层次聚类 linkage 的叶节点重排为「准对角」顺序（聚类块连续）。"""
-    link = link.astype(int)
-    num_items = int(link[-1, 3])
-    sort_ix = [int(link[-1, 0]), int(link[-1, 1])]
-    while max(sort_ix) >= num_items:
-        new_ix: list[int] = []
-        for ix in sort_ix:
-            if ix >= num_items:
-                j = ix - num_items
-                new_ix += [int(link[j, 0]), int(link[j, 1])]
-            else:
-                new_ix.append(ix)
-        sort_ix = new_ix
-    return sort_ix
-
-
-def _cluster_variance(sub_cov: np.ndarray, pos: list[int]) -> float:
-    """簇内方差：用逆方差分配（IVP）加权。"""
-    inv_diag = 1.0 / np.maximum(np.diag(sub_cov), 1e-12)
-    ivp = inv_diag[pos] / inv_diag.sum()
-    return float(ivp @ sub_cov[np.ix_(pos, pos)] @ ivp)
-
-
-def _hrp_recursive(cov: np.ndarray, idx: list[int]) -> dict[int, float]:
-    """递归二分：每层按左右簇方差比例分配权重，叶子返回。"""
-    if len(idx) <= 1:
-        return {idx[0]: 1.0}
-    mid = len(idx) // 2
-    left, right = idx[:mid], idx[mid:]
-    sub = cov[np.ix_(idx, idx)]
-    lv = _cluster_variance(sub, list(range(mid)))
-    rv = _cluster_variance(sub, list(range(mid, len(idx))))
-    alpha = 1.0 - lv / (lv + rv)
-    out: dict[int, float] = {}
-    for k, v in _hrp_recursive(cov, left).items():
-        out[k] = alpha * v
-    for k, v in _hrp_recursive(cov, right).items():
-        out[k] = (1.0 - alpha) * v
-    return out
-
-
-def hrp_weights(
-    cov: np.ndarray,
-    codes=None,
-    linkage_method: str = "ward",
-) -> pd.Series:
-    """HRP 权重（Lopez de Prado 2016）：层次聚类 + 递归二分 + 逆方差。
-
-    优势：全程不需求 Σ⁻¹（病态/奇异协方差免疫，数值稳定），天然非负、
-    权重和 ≈ 1。缺点：不用收益信号（纯风险结构）。
-    """
-    import scipy.cluster.hierarchy as sch
-    from scipy.spatial.distance import squareform
-
-    n = cov.shape[0]
-    std = np.sqrt(np.maximum(np.diag(cov), 0.0))
-    corr = cov / np.outer(std, std)
-    corr = np.nan_to_num(corr, nan=0.0, posinf=0.0, neginf=0.0)
-    dist = np.sqrt(np.clip(0.5 * (1.0 - corr), 0.0, None))  # 相关距离
-    dist = (dist + dist.T) / 2.0
-    np.fill_diagonal(dist, 0.0)
-    link = sch.linkage(squareform(dist), method=linkage_method)
-    order = _quasi_diag(link)
-    w = _hrp_recursive(cov, order)
-    out = np.zeros(n)
-    for pos, wgt in w.items():
-        out[pos] = wgt
-    s = out.sum()
-    if s > 0:
-        out /= s
-    return pd.Series(out, index=codes if codes is not None else range(n))
 
 
 def optimize_weights_hrp(

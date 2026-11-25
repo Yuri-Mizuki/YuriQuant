@@ -30,6 +30,7 @@ from config import Config
 
 from data.textmining.source_ths import fetch_ths_reports, to_code6
 from data.textmining.source_cninfo import fetch_cninfo_announcements
+from data.atomic_io import write_parquet_atomic
 
 log = logging.getLogger(__name__)
 
@@ -93,7 +94,7 @@ class TextMiningCache:
                 combined = pd.concat(frames, ignore_index=True)
                 combined = combined.drop_duplicates(subset=["code", "date", "title"], keep="last")
                 combined = combined.sort_values(["code", "date"]).reset_index(drop=True)
-                combined.to_parquet(p, compression="snappy")
+                write_parquet_atomic(combined, p, compression="snappy")
                 local = combined
         return local
 
@@ -196,7 +197,7 @@ class TextMiningCache:
                 combined = combined.drop_duplicates(
                     subset=["code", "date", "title"], keep="last")
                 combined = combined.sort_values(["code", "date"]).reset_index(drop=True)
-                combined.to_parquet(p, compression="snappy")
+                write_parquet_atomic(combined, p, compression="snappy")
                 local = combined
 
         # 关键：按请求 codes 过滤返回（缓存是全局的，可能含其他股票池的公告；

@@ -31,10 +31,6 @@ import pandas as pd
 __all__ = ["build_signal_frame", "signals_from_rebalances"]
 
 
-class StockNotTradeable(RuntimeError):
-    """股票无可交易记录或价格缺失（不该进信号）。"""
-
-
 def build_signal_frame(
     signal_date,
     target_weights: pd.Series,

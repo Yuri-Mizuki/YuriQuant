@@ -33,6 +33,7 @@ from typing import Any
 
 import pandas as pd
 
+from backtest import calendar as CAL
 from backtest.engine import VectorBacktest
 from optimize.solver import optimize_weights_qp
 from strategy.base import Strategy
@@ -92,12 +93,8 @@ class RebalanceConfig:
 
 
 def _rebalance_days(dates: pd.DatetimeIndex, freq: str) -> list[pd.Timestamp]:
-    """调仓日集合（与 VectorBacktest._get_rebalance_days 同口径，保证两处对齐）。"""
-    if freq == "D":
-        return list(dates)
-    period = "W" if freq == "W" else "M"
-    s = pd.Series(dates, index=dates)
-    return list(s.groupby(s.index.to_period(period)).first())
+    """调仓日集合（唯一真源 :func:`backtest.calendar.rebalance_days`）。"""
+    return list(CAL.rebalance_days(dates, freq))
 
 
 def optimize_rebalance_weights(

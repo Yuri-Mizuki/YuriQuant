@@ -60,6 +60,7 @@ from backtest.engine import BacktestResult, VectorBacktest
 from backtest.metrics import PERIODS_PER_YEAR, calc_all_metrics, sharpe_ratio
 from research.factor_analysis import calc_ic_decay, calc_ic_series, calc_ir, factor_autocorr
 from strategy.examples import TopKLongOnly, TopKLongShort
+from data.atomic_io import write_parquet_atomic
 
 log = logging.getLogger("factor_library")
 
@@ -497,7 +498,7 @@ def _write_parquet_robust(df: pd.DataFrame, path: Path, retries: int = 4) -> Non
     tmp = path.with_suffix(".tmp.parquet")
     for attempt in range(retries):
         try:
-            df.to_parquet(tmp, compression="snappy")
+            write_parquet_atomic(df, tmp, compression="snappy")
             tmp.replace(path)
             return
         except (PermissionError, OSError):

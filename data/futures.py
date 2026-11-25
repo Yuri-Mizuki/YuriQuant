@@ -26,6 +26,7 @@ import numpy as np
 import pandas as pd
 
 from config import Config
+from data.atomic_io import write_parquet_atomic
 
 #: 品种 → 现货指数。IH 标的为上证 50（000016.SH）。
 CFFEX_INDEX = {"IF": "000300.SH", "IH": "000016.SH",
@@ -105,7 +106,7 @@ def load_futures_daily(codes: list[str], begin: int, end: int,
     if len(combined):
         combined = combined[~combined.index.duplicated(keep="last")].sort_index()
         cache_path.parent.mkdir(parents=True, exist_ok=True)
-        combined.to_parquet(cache_path)
+        write_parquet_atomic(combined, cache_path)
     return combined.loc[(slice(pd.Timestamp(str(begin)), pd.Timestamp(str(end))), slice(None)), :]
 
 
@@ -187,7 +188,7 @@ def load_spot(code: str, begin: int = 20150101, cache_dir: Path | None = None,
     df = raw.xs(code, level="code").sort_index()
     df = df[~df.index.duplicated(keep="last")]
     local.parent.mkdir(parents=True, exist_ok=True)
-    df.to_parquet(local)
+    write_parquet_atomic(df, local)
     return df
 
 

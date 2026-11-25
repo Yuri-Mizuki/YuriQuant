@@ -129,6 +129,21 @@ def get_baseline(baseline_id: str, registry: dict | None = None) -> dict:
     raise KeyError(f"未登记的基线 {baseline_id!r}，可选：{ids}")
 
 
+def default_one_way_bp() -> float:
+    """配置口径的**平均单边**交易成本（bp）。
+
+    = 佣金 + 滑点 + 印花税/2（印花税仅卖出单边）。``config/settings.yaml``
+    当前取值 1 + 10 + 5/2 = **13.5bp** ⇒ 往返 27bp。
+
+    探针与策略一律引用本函数，不要再写字面量（历史上 13.5 / 36.0 两套
+    都自称「项目统一口径」）。``backtest.costs`` 对它做 re-export。
+    """
+    c = Config.get()["costs"]
+    return (float(c["commission_rate"]) * 1e4
+            + float(c["slippage_bp"])
+            + float(c["stamp_duty"]) * 1e4 / 2.0)
+
+
 class Config:
     """单例式配置访问器。"""
 

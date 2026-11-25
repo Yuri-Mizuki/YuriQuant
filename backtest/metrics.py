@@ -26,7 +26,6 @@
 """
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
 
 # 年化交易日数（单一真源在 stats/ 包；此处 re-export 保持
@@ -35,191 +34,25 @@ import pandas as pd
 # （2026-08-29 收敛：e2e_backtest.perf_stats 曾用 244，与引擎 252 分裂
 # 导致两族报告差 ~3%）。
 from stats import PERIODS_PER_YEAR  # noqa: F401
+from stats.perf import (  # noqa: F401  (纯计算真源在 stats.perf，此处 re-export)
+    annual_return,
+    annual_return_nan,
+    annual_volatility,
+    calmar_ratio,
+    drawdown_series,
+    information_ratio,
+    max_drawdown,
+    profit_loss_ratio,
+    sharpe_arithmetic,
+    sharpe_arithmetic_nan,
+    sharpe_ratio,
+    sharpe_ratio_nan,
+    sortino_ratio,
+    turnover_rate,
+    win_rate,
+    years_to_prove_from_sharpe,
+)
 from stats.robust_stats import nw_tstat
-
-
-def annual_return(daily_returns: pd.Series, periods_per_year: int = PERIODS_PER_YEAR) -> float:
-    """年化收益率 Annual Return。"""
-    total = (1 + daily_returns).prod() - 1
-    n_years = len(daily_returns) / periods_per_year
-    if n_years <= 0:
-        return 0.0
-    return (1 + total) ** (1 / n_years) - 1
-
-
-def annual_volatility(daily_returns: pd.Series, periods_per_year: int = PERIODS_PER_YEAR) -> float:
-    """年化波动率 Annual Volatility。"""
-    return daily_returns.std() * np.sqrt(periods_per_year)
-
-
-# --- 探针/分场景统计用的 NaN 语义包装 -------------------------------
-# 生产口径（``annual_return`` / ``sharpe_ratio``）对空序列返回 0.0，便于表格
-# 展示；但探针把逐月/逐窗指标再求均值时，0.0 会被当成真实观测。下列包装只
-# 改**退化输入的返回值**（空序列 / 零波动 → NaN），公式与生产完全一致，
-# 供 ``scripts/evaluation/*_probe.py`` 统一 import，禁止再各自复制公式。
-def annual_return_nan(daily_returns: pd.Series,
-                      periods_per_year: int = PERIODS_PER_YEAR) -> float:
-    """空序列返回 NaN 的年化收益（公式同 :func:`annual_return`）。"""
-    r = daily_returns.dropna()
-    return float("nan") if r.empty else annual_return(r, periods_per_year)
-
-
-def sharpe_ratio_nan(daily_returns: pd.Series, rf: float = 0.0,
-                     periods_per_year: int = PERIODS_PER_YEAR) -> float:
-    """空序列或零波动返回 NaN 的几何夏普（公式同 :func:`sharpe_ratio`）。"""
-    r = daily_returns.dropna()
-    if r.empty or annual_volatility(r, periods_per_year) <= 0:
-        return float("nan")
-    return sharpe_ratio(r, rf, periods_per_year)
-
-
-def sharpe_arithmetic_nan(daily_returns: pd.Series, rf: float = 0.0,
-                          periods_per_year: int = PERIODS_PER_YEAR) -> float:
-    """空序列或零波动返回 NaN 的算术夏普（公式同 :func:`sharpe_arithmetic`）。"""
-    r = daily_returns.dropna()
-    if r.empty or float(r.std()) <= 0:
-        return float("nan")
-    return sharpe_arithmetic(r, rf, periods_per_year)
-
-
-def _rf_daily(rf: float, periods_per_year: int) -> float:
-    """年化 rf → 日频 rf（复利折算），用于超额收益序列。"""
-    if rf <= 0:
-        return 0.0
-    return (1 + rf) ** (1 / periods_per_year) - 1
-
-
-def sharpe_ratio(daily_returns: pd.Series, rf: float = 0.0, periods_per_year: int = PERIODS_PER_YEAR) -> float:
-    """夏普比率 Sharpe Ratio。
-
-    rf 按日频复利折算为超额收益序列（(1+r)/(1+rf_daily)-1），再用几何年化口径：
-    Sharpe = 年化超额收益 / 年化波动率。rf=0 时与经典实现完全一致。
-    """
-    rfd = _rf_daily(rf, periods_per_year)
-    excess = (1 + daily_returns) / (1 + rfd) - 1
-    vol = annual_volatility(daily_returns, periods_per_year)
-    if vol == 0:
-        return 0.0
-    return annual_return(excess, periods_per_year) / vol
-
-
-def sharpe_arithmetic(daily_returns: pd.Series, rf: float = 0.0,
-                      periods_per_year: int = PERIODS_PER_YEAR) -> float:
-    """**算术**夏普比率 ``mean(excess)/std(excess)·√N``。
-
-    与 :func:`sharpe_ratio`（几何年化收益 / 年化波动）并列存在，**用途不同**：
-
-    - ``sharpe_ratio``（几何）→ **报数**（生产定版口径，`caliber` 的 ``sharpe``）；
-    - 本函数（算术）→ **换算显著性**。文献的 ``t = SR·√T`` 恒等式只认算术口径
-      （因为 ``t = mean/std·√n`` ≡ ``SR_arith·√(n/252)``）；用几何 SR 套公式会
-      **错配**。2026-10-28 实测 ``v1w-ortho882``：几何 0.589 / 算术 0.675，
-      ``years_to_prove`` 虚高 31%。
-
-    ⚠️ **几何年化收益 ≤ 算术年化收益 恒成立**（波动拖累 ``−b`` 压过 ``exp`` 凸性），
-    其中 ``b = 年化方差/2``、``a = 年化算术收益``。⇒ 偏差方向由**收益符号**决定：
-
-    - ``a > 0``（策略赚钱，本项目主流）：几何 SR 偏小 ⇒ ``|几何| < |算术|``
-      ⇒ 几何口径年数**偏保守（高估）**。实测 ``v1w-ortho882``（vol 24.8% /
-      算术 SR 0.675，``b/a ≈ 0.18``）：几何 0.589 vs 算术 0.675，年数虚高 31%。
-    - ``a < 0``（策略亏钱）：几何更负 ⇒ ``|几何| > |算术|`` ⇒ 几何口径年数**虚短**
-      （实测日均 −0.066% / 日波 1.56%：几何 −0.717 vs 算术 −0.665）。
-    - ``a ≈ 0``（退化）：``b`` 单独主导 ⇒ 几何年化 ≈ ``−b`` 明显为负而算术≈0
-      ⇒ ``|几何| ≫ |算术|``、年数虚短（天文数 → 几百年），此区间无解释力。
-
-    ⇒ **判据：正收益用几何版是保守的，负收益/近零时必须用算术版**；
-    跨策略比较一律用算术版，否则正负两组的「证明年数」不可比。
-
-    **引用任何外部显著性公式前，先确认它要的是哪种 SR。**
-    """
-    rfd = _rf_daily(rf, periods_per_year)
-    excess = (1 + daily_returns.dropna()) / (1 + rfd) - 1
-    sd = float(excess.std())
-    if sd == 0:
-        return 0.0
-    return float(excess.mean() / sd * np.sqrt(periods_per_year))
-
-
-def years_to_prove_from_sharpe(sr: float, z: float = 1.96) -> float:
-    """``(z/|SR|)²`` —— 让 ``t = SR·√T`` 达到 ``z`` 所需的样本年数。
-
-    ``SR=0`` → ``inf``。**必须在算术 SR 上传入才与 t 统计量同口径**；
-    传几何 SR 得到的是**错配**值（正收益时高估年数、负收益/近零时低估，
-    见 :func:`sharpe_arithmetic`）。
-    """
-    return round((z / abs(sr)) ** 2, 1) if sr else float("inf")
-
-
-def sortino_ratio(daily_returns: pd.Series, rf: float = 0.0, periods_per_year: int = PERIODS_PER_YEAR) -> float:
-    """索提诺比率 Sortino Ratio: 只用下行波动。
-
-    下行偏差 = 半方差 downside deviation = sqrt(mean(min(excess, 0)²))，
-    衡量亏损深度（相对目标收益 0）；早期实现误用"负收益日样本的 std"，
-    度量的是亏损日之间的离散度，系统性高估 |Sortino|（实证 ~30%）。
-    rf 按日频折算为超额序列后再计算（与 Sharpe 同口径）。
-    """
-    rfd = _rf_daily(rf, periods_per_year)
-    excess = (1 + daily_returns) / (1 + rfd) - 1
-    ar = annual_return(excess, periods_per_year)
-    dd = float(np.sqrt(np.mean(np.minimum(excess, 0.0) ** 2)))
-    if dd == 0:
-        return 0.0
-    downside_vol = dd * np.sqrt(periods_per_year)
-    return ar / downside_vol
-
-
-def drawdown_series(nav: pd.Series) -> pd.Series:
-    """回撤曲线（≤0）：``nav / nav.cummax() - 1``。全项目唯一实现。"""
-    return nav / nav.cummax() - 1.0
-
-
-def max_drawdown(daily_returns: pd.Series) -> float:
-    """最大回撤 Max Drawdown（正值）。"""
-    return abs(drawdown_series((1 + daily_returns).cumprod()).min())
-
-
-def calmar_ratio(daily_returns: pd.Series, periods_per_year: int = PERIODS_PER_YEAR) -> float:
-    """卡玛比率 Calmar Ratio: 年化收益 / 最大回撤。"""
-    mdd = max_drawdown(daily_returns)
-    if mdd == 0:
-        return 0.0
-    return annual_return(daily_returns, periods_per_year) / mdd
-
-
-def information_ratio(
-    daily_returns: pd.Series,
-    benchmark_returns: pd.Series,
-    periods_per_year: int = PERIODS_PER_YEAR,
-) -> float:
-    """信息比率 Information Ratio。"""
-    excess = daily_returns - benchmark_returns
-    te = excess.std() * np.sqrt(periods_per_year)
-    if te == 0:
-        return 0.0
-    return excess.mean() * periods_per_year / te
-
-
-def win_rate(daily_returns: pd.Series) -> float:
-    """胜率 Win Rate。"""
-    if len(daily_returns) == 0:
-        return 0.0
-    return (daily_returns > 0).sum() / len(daily_returns)
-
-
-def profit_loss_ratio(daily_returns: pd.Series) -> float:
-    """盈亏比 Profit/Loss Ratio: 平均盈利 / 平均亏损。"""
-    wins = daily_returns[daily_returns > 0]
-    losses = daily_returns[daily_returns < 0]
-    if len(losses) == 0 or losses.mean() == 0:
-        return 0.0
-    return wins.mean() / abs(losses.mean())
-
-
-def turnover_rate(weights_history: pd.DataFrame) -> float:
-    """平均换手率 Avg Turnover。"""
-    if len(weights_history) < 2:
-        return 0.0
-    diffs = weights_history.diff().abs().sum(axis=1) / 2
-    return diffs.mean()
 
 
 def calc_short_metrics(

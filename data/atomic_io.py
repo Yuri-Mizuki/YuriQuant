@@ -77,8 +77,7 @@ def write_parquet_atomic(df: pd.DataFrame, path: Path | str, **kwargs) -> None:
     每次**都会被拒），则退回**就地覆写**（``to_parquet`` 直接写目标，不产生任何删除
     操作），并按**时间预算**重试（见 ``FALLBACK_BUDGET``，Defender 扫描 57MB
     parquet 的占用窗口可达数十秒）。代价 = 丢掉"进程被杀不留截断文件"的保证，换来
-    "整批不因单点而中断"。仓库既有同款模式：`alla_daily_rank._atomic_or_direct`
-    （`MEMORY-engineering.md` §B4：「写盘须原子优先 + 占用降级」）。
+    "整批不因单点而中断"。仓库既有同款模式：`alla_daily_rank._atomic_or_direct`。
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)

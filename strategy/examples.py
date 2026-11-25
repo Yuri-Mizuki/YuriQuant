@@ -36,6 +36,23 @@ def rank_desc(vals: pd.Series) -> pd.Series:
     return vals.rank(ascending=False, method="first")
 
 
+def _buffered_pick(ranks: pd.Series, prev: set, n_entry: int,
+                   n_exit: int) -> list:
+    """排名缓冲带选股（两个 Buffered 策略共用的唯一实现）。
+
+    - 现有持仓：排名仍 ≤ ``n_exit`` 则保留；
+    - 空缺由排名 ≤ ``n_entry`` 的非持仓补足；
+    - 保留数超过 ``n_entry``（截面收缩）时按排名裁到 ``n_entry``。
+    """
+    keep = [c for c in prev if c in ranks.index and ranks[c] <= n_exit]
+    cands = [c for c in ranks.sort_values().index
+             if c not in prev and ranks[c] <= n_entry]
+    port = keep + cands[:max(0, n_entry - len(keep))]
+    if len(port) > n_entry:
+        port = sorted(port, key=lambda c: ranks[c])[:n_entry]
+    return port
+
+
 def _top_k_indices(vals: pd.Series, k: int) -> pd.Index:
     """因子值最大的 k 个 index（按值降序返回）；并列时列序靠前者优先。
 
@@ -429,15 +446,7 @@ class BufferedTopFracLongOnly(Strategy):
         n_exit = max(n_entry, min(round(self.frac_exit * n), n))
         # tie 语义：method="first" 按列序确定性打破，与模块内 rank_desc 及
         # strategy.constraints.build_signal_weights 完全一致（本类一直是确定的）。
-        ranks = rank_desc(vals)
-
-        keep = [c for c in self._prev if c in ranks.index and ranks[c] <= n_exit]
-        candidates = [c for c in ranks.sort_values().index
-                      if c not in set(keep) and c not in self._prev and ranks[c] <= n_entry]
-        portfolio = keep + candidates[:max(0, n_entry - len(keep))]
-        if len(portfolio) > n_entry:
-            portfolio = sorted(portfolio, key=lambda c: ranks[c])[:n_entry]
-
+        portfolio = _buffered_pick(rank_desc(vals), self._prev, n_entry, n_exit)
         self._prev = set(portfolio)
         return pd.Series(1.0 / len(portfolio), index=portfolio)
 
@@ -478,13 +487,7 @@ class BufferedTopKLongOnly(Strategy):
             self._prev = set()
             return pd.Series(dtype=float)
         n_exit = max(self.k, int(round(self.k * self.exit_mult)))
-        ranks = rank_desc(vals)
-        keep = [c for c in self._prev if c in ranks.index and ranks[c] <= n_exit]
-        cands = [c for c in ranks.sort_values().index
-                 if c not in self._prev and ranks[c] <= self.k]
-        port = keep + cands[:max(0, self.k - len(keep))]
-        if len(port) > self.k:
-            port = sorted(port, key=lambda c: ranks[c])[:self.k]
+        port = _buffered_pick(rank_desc(vals), self._prev, self.k, n_exit)
         self._prev = set(port)
         return pd.Series(1.0 / max(len(port), 1), index=port)
 
