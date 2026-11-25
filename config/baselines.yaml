@@ -960,13 +960,13 @@ baselines:
     variant: k8
     tier: focus
     created: "2026-11-10"
-    updated: "2026-11-13"
+    updated: "2026-11-25"         # exit_mult 1.0→5.0（缓冲带，见 reports/k8_buffer_scan/）
     status: production
     label: "YQ 核心 · 集中档 K8 版：882 四周期信号 + TopK8 + 每申万一级 ≤1 只（5~600 万）"
     signal_key: gbdt_mid13
     window: prod
     requires_panel: industry      # 申万一级截面（date × code），由调用方注入
-    check_arm: solo_k8_b1.0       # --check 复算时对照 metrics.profiles.production 里的哪条臂
+    check_arm: solo_k8_b5.0       # --check 复算时对照 metrics.profiles.production 里的哪条臂
     check_end: 20260907           # 与同族其余两档同末日
     signal:
       preproc: ortho
@@ -976,7 +976,7 @@ baselines:
     execution:
       strategy: SectorCappedBufferedTopKLongOnly
       k: 8
-      exit_mult: 1.0
+      exit_mult: 5.0            # 2026-11-25 由 1.0 上调：留到前 40 名才卖，换手 92.2%→83.0%
       max_per_sector: 1
       min_sectors: 3            # 行业数硬下限（k=8 上 93 期从未触发 ⇒ 数字与不设时逐位相同）
       gross_exposure: 1.0
@@ -1009,27 +1009,45 @@ baselines:
           # off-by-one 的抽样噪声被放大到 2pp 量级，见 掩码顺序_offbyone_审计.md）。
           # 🚨 2026-11-11 成本口径修正（往返 36bp→27bp）：旧 ann 0.35566 / sharpe 1.2360
           # 更早，禁止与任何新值并列。
+          # ✅ 当前臂 = exit_mult 5.0（2026-11-25 上调，见 reports/k8_buffer_scan/）
+          solo_k8_b5.0:
+            ann: 0.350068
+            sharpe: 1.2289             # 几何口径（年化/年化波动）
+            sharpe_arith: 1.1979       # 算术口径 mean/std·√252
+            sharpe_t_stat: 3.2600      # NW 校正（算术 Sharpe × √T）
+            vol: 0.2849
+            max_dd: 0.4260             # ⚠️ 比 b1.0 恶化 3.6pp（21 相位均值上反而略好：41.6% vs 42.6%）
+            calmar: 0.8218
+            turnover: 0.8443
+            cost_bp: 7995.1            # 全期累计扣费（bp），b1.0 是 8747.3
+            nhold_mean: 6.10           # 名义 k=8，实际平均 6.10 只（行业去重 + 缓冲带留人）
+            invest_mean: 0.9823        # 引擎实测（按当期 capital 取整，利润再投入口径）
+            invest_fixed: 0.9426       # 利润每月取走、始终 10 万（换手降但持仓变多 ⇒ 从 0.963 降）
+            invest_min: 0.9036         # 最差单期实投率
+            nhold_le3: 0.043           # 93 期里 4 期只有 3 只（从未 2 只）
+            nsector_min: 3             # max_per_sector=1 ⇒ 持仓数 ≡ 行业数
+            year_worst: 0.1648         # 最差年 2022 +16.48%
+            years_positive: 8          # 8/8 年正
+            yearly: {2019: 0.2803, 2020: 0.4160, 2021: 0.4197, 2022: 0.1648,
+                     2023: 0.2652, 2024: 0.1965, 2025: 0.7569, 2026: 0.1550}
+            phase_note: >
+              ⚠️ 以上全是 phase=0 单点（与三档登记口径一致）。21 相位均值
+              **ann 26.96% / SR 0.959 / MDD 41.6% / 换手 83.0%**，phase=0 是 21 个里
+              偏乐观的一个（同 b1.0 的 34.54% vs 均值 25.64%）。跨相位配对差
+              +1.32pp（t 2.86，16/21 相位胜）。
+          # ⚠️ 历史臂（exit_mult 1.0），**已非登记配置**，仅留 --check 对照与追溯：
           solo_k8_b1.0:
             ann: 0.345373
-            sharpe: 1.2207             # 几何口径（年化/年化波动）
-            sharpe_arith: 1.1914       # 算术口径 mean/std·√252
-            sharpe_t_stat: 3.3132      # NW 校正（算术 Sharpe × √T）
+            sharpe: 1.2207
+            sharpe_arith: 1.1914
+            sharpe_t_stat: 3.3132
             vol: 0.2829
             max_dd: 0.3904
             calmar: 0.8846
             turnover: 0.9247
-            cost_bp: 8747.3            # 全期累计扣费（bp）
-            nhold_mean: 5.85           # 名义 k=8，实际平均 5.85 只（行业去重）
-            # ⚠️ 以下字段仍为 2026-11-25 前（shift_then_mask）口径，**未重算**：
-            invest_mean: 0.983           # 引擎实测（按当期 capital 取整，利润再投入口径）
-            invest_fixed: 0.963          # 利润每月取走、始终 10 万（invest_fixed.csv，年化约 -0.7pp）
-            invest_min: 0.895            # 最差单期实投率
-            nhold_le3: 0.043             # 93 期里 4 期只有 3 只（从未 2 只）
-            nsector_min: 3               # max_per_sector=1 ⇒ 持仓数 ≡ 行业数
-            year_worst: 0.0869           # 最差年 2022 +8.69%
-            years_positive: 8            # 8/8 年正
-            yearly: {2019: 0.2621, 2020: 0.7317, 2021: 0.4464, 2022: 0.0869,
-                     2023: 0.2030, 2024: 0.1778, 2025: 0.7362, 2026: 0.1866}
+            cost_bp: 8747.3
+            nhold_mean: 5.85
+            note: "2026-11-25 之前的生产配置；21 相位均值 ann 25.64% / SR 0.907"
           # 成本敏感性（P0，2026-11-10）：同臂只换成本模型 ⇒ impact 比固定成本更便宜，
           # 说明 production 对小资金偏保守，收益不靠乐观成本假设。
           # ⚠️ 本条仍是**旧 36bp 基数**下的 impact 旁证，未随 2026-11-11 修正重算。
@@ -1079,25 +1097,25 @@ baselines:
         capital: 100000.0
         lot_size: 100
         price_panel: "close_raw.ffill().shift(1)"
-        ann: 0.3557
-        sharpe: 1.236
-        sharpe_arith: 1.2029
-        sharpe_t_stat: 3.32
-        max_dd: 0.3636
-        calmar: 0.978
-        turnover: 0.9233
-        invest_mean: 0.9829          # 整手实投率（引擎算，非折算）
-        invest_min: 0.8957
-        nhold_mean: 5.88
+        ann: 0.350068
+        sharpe: 1.2289
+        sharpe_arith: 1.1979
+        sharpe_t_stat: 3.2600
+        max_dd: 0.4260
+        calmar: 0.8218
+        turnover: 0.8443
+        invest_mean: 0.9823          # 整手实投率（引擎算，非折算）
+        invest_min: 0.9036
+        nhold_mean: 6.10
         nhold_min: 3
       # 容量上限 = 单票 ADV × 参与率 / 单票权重。**产品线按此分界，不按收益**。
       capacity:
         participation_assumed: 0.10
-        weight_median: 0.1635
-        adv_median: 26400000.0
-        adv_p10: 9980000.0
-        capacity_median: 15950000.0
-        capacity_p10: 5730000.0
+        weight_median: 0.1599        # exit_mult 5.0 后持仓 5.85→6.10 只，权重略降
+        adv_median: 26353525.0
+        adv_p10: 9989362.0
+        capacity_median: 16106640.0
+        capacity_p10: 6136533.0
         source: "python -m scripts.evaluation.yq_core_report --view capacity"
     fingerprint: 79bdbbcc8fb9
     reproducible_local: true
@@ -1127,8 +1145,9 @@ baselines:
       vs solo k6 b1.5），高估约 0.8pp，**已作废，禁止再引用**。
       排除两个平凡解释：① 把「无行业分类（NaN，约 10%）」股票直接排除后 plain 数字**逐位
       不变** ⇒ 不是顺手过滤垃圾股；② 随机标签不会提升、反而 −2.1pp ⇒ 不是「分散」本身。
-      🚨 **实际持仓少于 k**：TopK8 内常有 2~3 只同行业，实测平均 **5.88 只、最少 3 只**；
-      93 期分布 = 3只×4 / 4只×8 / 5只×24 / 6只×24 / 7只×25 / 8只×8（≤3 只占 4.3%）。
+      🚨 **实际持仓少于 k**：TopK8 内常有 2~3 只同行业，`exit_mult=5.0` 下实测平均
+      **6.10 只、最少 3 只**；93 期分布 = 3只×4 / 4只×7 / 5只×16 / 6只×30 / 7只×21 / 8只×15
+      （≤3 只占 4.3%）。b1.0 时是 5.85 只（3/4/5/6/7/8 = 4/8/24/24/25/8）。
       🚨 `max_per_sector=1` ⇒ **持仓数 ≡ 行业数**（每只必属不同行业），故「行业数」不是独立维度，
       它只是「持仓数」的另一种说法。下单前必须看当期实际只数，不能按 k=8 备资金。
       🔑 **行业数地板 `min_sectors`**：k=8 上 **93 期从未触发**（最少也有 3 个行业）⇒ 设为 3 后
