@@ -4,6 +4,7 @@
 > 研究结论的唯一真源是根目录 [`TODO.md`](../TODO.md)（收口结论归档于 [`TODO_ARCHIVE.md`](../TODO_ARCHIVE.md) 三册）。
 > 本文件只做索引：每个目录一行——是什么 / 一句话结论 / 判定。口径、证据、复现命令以各目录 `README.md` 为准。
 > 各子目录如另有 README（如 `textmining/README.md`），以子 README 为准。
+> 索引只收**现存目录**；已消失的目录见 §三「落地目录已清理」（2026-11-25 全量对账后）。
 
 - 判定口径：`采纳`（进生产/定版）/ `判负`（实测无增量或被证伪）/ `归档`（有结论但无后续动作）/ `工具保留`（脚本或表仍有读取方）/ `事故记录`。
 - **成本口径分水岭**：2026-11-11 起 27bp 往返时变成本；36bp / 10bp 旧口径数字一律不可相减、不可引用。
@@ -34,8 +35,6 @@
 | `altf_neu_backfill` | alt 20 因子回填 `panels_neu`，门槛过但入选集逐位不变（死重） | 判负 |
 | `altf_p1`, `altf_p1/model_ablation` | alt 三族 20 因子入库；等权合成稀释，席位 0/36；`model_ablation` 旁路 ΔIC≈0 | 判负 |
 | `alphasage_probe` | AlphaSAGE 编码器 GRU→RGCN 增量不可分辨（ΔIC +0.009 < 0.02），换图仅 +3.3% 成本、不需 GPU | 工具保留 |
-| `blend_verdict_920` | 慢腿 λ 预注册七门裁决：九档无一过门（整轴不可分辨），维持 λ=0.5；λ 是换手旋钮 | 判负 |
-| `blend_weight_920` | 快慢融合 λ 补扫九档：λ≤0.4 是平台、0.5 起单调衰减；0.5 是换手选择非最优点 | 工具保留 |
 | `cheap_lever_scan` | 低成本仍有效：小 buffer entry + 高 h5 权重，四窗口一致 | 采纳 |
 | `consensus_availability` | 分析师一致预期数据不可得，不立项 | 判负 |
 | `cost_penalty_probe` | 成本感知 QP 自救后仍输简单 buffer | 判负 |
@@ -49,7 +48,6 @@
 | `factor_board` | 因子看板 v2：真回测补分层组合业绩，13 逻辑族展示口径，**不构成改进结论** | 工具保留 |
 | `factor_dict_probe` | 飞书因子字典 5 候选：4 个实为同一低波因子，只留 `fd_tcc` + `fd_ent30` | 归档 |
 | `factor_ev_rd` | EV 分母组合层有效（+3.63pp）、研发强度 `rd_to_cap` 最强；研发加回不合格 | 采纳 |
-| `factor_library_backfill` | 全A库 P0+P1 维护：批量补分层回测 / 显著性 / formula 回填（2026-11-05 起） | 进行中 |
 | `factor_pool_composition` | 量价占 86%；非量价 28% 席位只贡献 9.5% gain | 归档 |
 | `factor_half_life` | 周频方向从因子层封死：944 个中性化因子无短周期原料，因子越强周频越吃亏 | 判负 |
 | `focus_holding` | 持仓数 K∈[5,25] 年化无显著差异，等权近最优 | 采纳 |
@@ -61,22 +59,19 @@
 | `four_paths` | 四条提升路径全收口，无一过门槛 | 判负 |
 | `ls_arm_probe_2026-11-24` | 多空口径研究笔记：空头腿年化与 1x/2x 口径（查表题，未跑） | 归档 |
 | `founder_hf_probe_2026-11-24` | 方正高频因子低频化 16 因子 × 因子字典覆盖核对（未跑因子） | 归档 |
-| `frontier_timing_probe` | 择时前沿源 L1：`us_ret1` 是纯择时线首个样本外稳定日度信号 | 归档 |
 | `futures_basis_probe` | 股指期货基差方向预测判负（纯择时线第八篇） | 判负 |
-| `gap_fade_probe_2026-11-24` | 「高开要跑」验证为真；「主力兑现/埋伏」叙事证伪 | 归档 |
-| `hf_minagg_probe` | 华福 1114 高频聚合族：L1 IC 层复现过，L2 策略层判负 | 判负 |
+| `gap_fade_probe_2026-11-24` | 「高开要跑」验证为真；「主力兑现/埋伏」叙事证伪。§四（11-25 补）市场级：**宽定义「缩量低开低走」不显著**，只有深跌 ≤−2.5% 有效且修复在次日日内非隔夜 | 归档 |
 | `hf_vol_timing_probe` | 华福放量/缩量择时：口径复现成立、风控叠加判负；`vr` 成线内最强候选腿 | 归档 |
 | `industry_rotation` | 原 `sue_low` alpha 来自前视 bug，结论已推翻 | 判负 |
 | `legs_combo_probe` | 三腿兑现与组合：同资产主门不过，`vr` 取代 `us_ret1` 成最强腿 | 判负 |
 | `limitup_halfway` | 半路（盘中+5%）：事件研究 +0.96% 是虚高，组合口径为负 | 判负 |
 | `limitup_relay` | 次日接力逐笔 −0.474% / 年化 −71%，9 年全负 | 判负 |
 | `mask_order_audit` | 掩码作用顺序 off-by-one 审计 + 修复 | 事故记录 |
-| `multisrc_timing_probe` | 多源日频择时合成判负；非价格源首出真信号（`margin_buy_mom`） | 判负 |
+| `microcap_ref` | 微盘对照臂：策略年化 3/4 可由小盘 beta 解释，模型净增量仅 +5.85pp 且月度中位为负 | 工具保留 |
+| `breadth_alpha` | 广度档真超额：换掉上证基准后 α +7.67%/年（t 3.02、β 0.82），但最可能是低波+价值溢价而非选股能力 | 工具保留 |
+| `k8_buffer_scan` | k8 缓冲带 21 相位复核（翻了旧判负）：x1.0→x8.0 年化 +1.78pp（t 3.61）、换手 −13pp；**已采纳 x5.0**（+1.32pp、t 2.86、16/21 相位胜，2026-11-25 上线）。**副产品：对外 34.54% 是 21 相位最大值，b1.0 可期望值只有 25.64%、b5.0 是 26.96%** | 采纳（已改配置） |
 | `pool_scope_probe` | 全A信号下沉指数池：同池等权超额大幅衰减 | 工具保留 |
 | `rd_overlay` | `rd_to_cap` 叠加进定版：生产口径复核（27bp + T+1 open + 整手，2026-11-13 起） | 进行中 |
-| `rev_shell_probe` | 周频均值回归壳六门全过 → 采纳候选（≠定版） | 采纳 |
-| `revshell_stitch_probe` | `rev_shell` 组合层缝合判负，壳保持独立候选腿 | 判负 |
-| `sws_timing_probe` | 申万 regime 择时复现判负（纯择时线首篇） | 判负 |
 | `tier_sector_concentration` | 三档形态的行业/个股集中度诊断 | 工具保留 |
 | `valuation_position_rule` | 估值定仓位（PE 分位平滑 + 波动缩放 + 趋势加成） | 工具保留 |
 | `vol_control_review` | 回撤控制六类方法核查，定版回撤拆解 | 归档 |
@@ -85,14 +80,12 @@
 | `rebalance_granularity` | solo 档调仓粒度：换手在赚钱，换手预算收口 | 判负 |
 | `report_replica`, `report_replica/industry_direct`, `report_replica/ic_bridge`, `report_replica/p0a` | 七维共振复现：7 类只做出动量 1 类（子目录为行业直训 / IC 经济桥接 / P0a） | 判负（框架保留） |
 | `frontier_audit_2026-10-19` | h60 预测力存活但组合层无增量；残差无正交信息 | 判负 |
-| `horizon_verdict_920` | h20-only 正式裁决：维持定版 | 判负 |
 | `hp_sensitivity` | 13 配置超参扫描无被漏掉的低垂果实 | 判负 |
 | `impact_cost_probe` | 逐股冲击 vs 固定滑点：1e8 下≈10bp，成本是 AUM 强函数 | 工具保留 |
 | `index_enhance_probe` | 中证500 IC 0.069 但 3–5% TE 净超额仅 1.5~1.9%，2025 −7% | 判负 |
 | `index_rebalance_flow_probe` | ETF 申赎流与指数调样双线判负（纯择时线第九篇） | 判负 |
 | `jq_amount_roll` | 成交金额族加进 gbdt 无增量 | 判负 |
 | `jq_factor_probe` | 285 因子复核：仅成交金额族未被覆盖且本地过线 | 采纳 |
-| `library_metadata_backfill` | registry 元数据回填，`family` 965/965 | 工具保留（治理） |
 | `library_governance` | 因子库治理：register 拆 ingest/evaluate，965 因子有评估 | 工具保留（治理） |
 | `market_direction_probe` | 本机可取 3 个新状态全不通过 | 判负 |
 | `margin_weekly_probe` | 两融日频新造 15 因子：周频匹配没过；附两个强慢因子 | 判负（周频） |
@@ -109,19 +102,6 @@
 | `st_guard` | 状态表断更致 ST 剔除静默失效；回测侧正确、实时链已修 | 事故记录 |
 | `portfolio_weighting` | 优化层空白维：TopK45 + inv_vol + buf1.5 | 采纳 |
 | `pv_marginal` | 量价边际曲线并非平滑见顶 | 归档 |
-| `raft_weight` | RAFT 式样本加权在全A主模型显著为负 | 判负 |
-| `new_source_scan` | 新数据源复核：本地数据已榨干 | 判负 |
-| `intraday_source` | 日内因子可交易性复核判负 | 判负 |
-| `horizon_h40` | 补训 h=40 无新信息（IC 仅 +0.0008） | 判负 |
-| `em_rating_probe` | 卖方评级 8 个构造全部未过预注册 | 判负 |
-| `event_driven_probe` | 事件驱动独立组合九族一次性判生死，`inc_pure` 立项 | 采纳（`inc_pure` 立项） |
-| `event_opt_probe` | `inc_pure` 优化 6 臂 + 5 新事件族：无效或噪声，非独立腿 | 工具保留 |
-| `exec_fill_probe` | `inc_pure` 能买进，但必须买在开盘集合竞价 | 采纳（执行口径） |
-| `exec_fill_probe_h10` | `inc_pure` H=10 对照：可成交性干净、净额更高但容错少（2026-11-16 起） | 进行中 |
-| `event_chain_probe` | 事件链 + 事件前状态双否：增持的来历不解释收益 | 判负 |
-| `event_industry_probe` | 行业密度信号判负，结构性稀释而非调参 | 判负 |
-| `inc_pure_playbook` | `inc_pure` 实盘落地清单 + 出单器（操作手册） | 工具保留 |
-| `event_reach_probe` | 事件族触及度 + 上帝视角天花板：7 族无一过 | 判负 |
 | `regime_probe` | Phase 0 见肉，但条件化最终不立项 | 判负 |
 | `risk_budget` | 风险维度已探：市值中性化 −6.4pp/年，行业中性化近乎免费 | 归档 |
 | `seg_weight_probe` | 华泰学分钟权重：12 段动量信息只在 seg12，判负 | 判负 |
@@ -136,17 +116,13 @@
 | `text_factor_probe` | `txt_*` IR 0.008~0.105；融合增益被安慰剂证伪 | 判负 |
 | `textmining` | 文本因子管线产物目录的分层布局（非实验结论） | 工具保留 |
 | `yq_core` | YQ 核心产品线（solo/focus 合并为「集中档」两版本） | 采纳（产品线） |
-| `vol_target_920` | 目标波动 overlay 在定版底座复验判负 | 判负 |
 | `timing_probe` | 择时族入口：日收益自相关 +0.048、月度方向 0/7，可实现上界≈满仓 | 判负 |
 | `timing_daily_train` | 日频训练 + 月频执行补测判负 | 判负（该格子收口） |
 | `timing_lit_review` | 择时 / 大盘预测外部文献核查，共识与实测一致 | 工具保留 |
 | `kronos_probe` | Kronos 零样本 A 股截面排序判负（DL 择时第一例） | 判负 |
 | `timing_conditioned` | P0 条件化择时 + P1 SOP 收益分解，两者均判负 | 判负（P0、P1 均收口） |
-| `top10_sharpe` | 中国因子十强复现：强的全是换皮 | 判负 |
-| `panel_leak_audit` | 全库 970 面板前视体检：39/965 → 11/970 | 工具保留 |
 | `structural_fake_panels` | 11 个「结构性无救」假面板的归因与处置 | 事故记录 |
 | `strategies` | ETF 策略入口页（`strategy_home.py` 生成） | 工具保留 |
-| `rebuild_impact_920` | 前视修复后定版重测 16.31%→14.96%，人工拍板 | 采纳（门槛未过，人工拍板） |
 | `caliber` | 统一口径基线落盘（`baseline_prod/fair/impact/flat.json`） | 工具保留 |
 | `cpcv_h1` | h=1 CPCV 无偏评估（2026-09-11 重生成） | 工具保留 |
 | `sop_timing` | P1 SOP 收益分解产物；分析合并写 `timing_conditioned/` | 工具保留 |
@@ -201,32 +177,10 @@
 | `intraday_half_life_probe` | 日内因子半衰期单表探针 | 归档 |
 | `member_blend12` | stacking 成员 12 选融合的指标快照 | 判负 |
 | `text_factor_probe_smoke` | `text_factor_probe` 的冒烟子集 | 判负（随父实验） |
-| `ai97_pbo` | AI97 因子集的 PBO / DSR 报告 | 工具保留 |
-| `alphapool_ppo` | AlphaPool PPO 三臂 × 三种子训练/评估记录 | 工具保留 |
-| `gflownet_ckpt` | GFlowNet 因子挖掘的模型权重存档（12 个 `.pt`） | 工具保留 |
-| `batch_920_consolidated` | 920 批次收尾对照表与结果速览 | 归档 |
-| `e2e_backtest` | 批次 7 年化口径重出，HS300 时代链路备份证据 | 归档 |
-| `mf10_t_scan` | MF10 单因子 t 值扫描（hs300 2022–2025） | 归档 |
-| `tabfm_rolling` | TabFM 滚动预测产物（all_a / hs300 / zz1000） | 归档 |
-| `views_arm_920_smoke` | views 臂的 smoke 试跑 | 归档 |
-| `vol_target_920_const` | 目标波动 overlay 的恒定敞口对照臂 | 归档 |
-| `yelaoshi_first_board_2026-10-25` | 首板策略回测产物（脚本已删） | 归档 |
-| `_rebuild_logs` | 前视修复后重建的全程日志 + `HANDOFF.md` | 归档 |
-| `portfolio_phase2`, `portfolio_phase2_full`, `portfolio_phase2_full_parts` | 组合 Phase-2 实验与消融分解臂 | 归档 |
-| `mf_fundind_check` | 批次 14：mf 干净单臂补测不达验收，mf 线收口 | 工具保留 |
-| `frontier_audit_920_reval` | 批次 13 920 复验（A1/A2 三臂全败线封） | 工具保留 |
-| `cvar_arm_920`, `views_arm_920` | 批次 12：CVaR 组合臂（不升级）与观点注入三臂（零增量） | 工具保留 |
-| `alla_rolling_ortho920mf`, `alla_rolling_ortho920fundind_lblco` | 批次 12：市场状态特征（唯一正结果，待拍板）与隔夜标签臂（判负） | 工具保留 |
 | `alla_rolling_jq_base`, `alla_rolling_jq_amt` | 成交金额族 A/B 两臂（结论真源 `jq_amount_roll/README.md`） | 判负 |
 | `alla_rolling_jqs_base`, `alla_rolling_jqs_amt` | 同上两臂的 M 频单轨快照 | 判负（随父实验） |
 | `alla_rolling_macrof`, `alla_rolling_newsf` | altf P1 宏观/新闻族臂（`_base` 已清，pred 保留） | 工具保留 |
 | `alla_rolling_macrof_base`, `alla_rolling_macrof_h20`, `alla_rolling_newsf_h20` | altf P1 旁路特征臂：ΔIC −0.0007 / −0.0005，判负 | 判负 |
-| `alla_rolling_ortho920tl`, `alla_rolling_ortho920v2`, `alla_rolling_ortho920e4`, `alla_rolling_ortho920e4force`, `alla_rolling_ortho920nolabels`, `alla_rolling_ortho920fundind2`, `alla_rolling_ortho920fundind3`, `alla_rolling_ortho920fundind4`, `alla_rolling_ortho920fundind5`, `alla_rolling_ortho920fundind_h40`, `alla_rolling_ortho920fundind_mf`, `alla_rolling_ortho920tl_lblco`, `alla_rolling_ortho920tl_lblgauss`, `alla_rolling_ortho920tl_lblir` | 920 批次治本/消融/标签臂（结论见 `batch_920_consolidated/`） | 归档 |
-| `buffer_arm_920`, `buffer_arm_920v2`, `buffer_arm_920v2_defv`, `buffer_arm_920fundind_defv`, `buffer_arm_920fundind3_defv`, `buffer_arm_920fundind4_defv` | 缓冲带参数扫描臂（见 `batch_920_consolidated/`） | 归档 |
-| `buffer_sweep_p2`, `buffer_sweep_p2_v2` | 缓冲带二阶段网格扫描（每格一目录） | 归档 |
-| `fundamental_blend_920`, `fundamental_blend_920_hd`, `fundamental_blend_920v2`, `fundamental_blend_920v2_T3`, `fundamental_blend_920v2_T6`, `fundamental_blend_920v2_T12`, `fundamental_blend_920fundind`, `fundamental_blend_920fundind2_altnews`, `fundamental_blend_920fundind3`, `fundamental_blend_920fundind4`, `fundamental_blend_920fundind5`, `fundamental_blend_920fundind_full` | 基本面慢腿混入权重臂（见 `batch_920_consolidated/`） | 归档 |
-| `horizon_mix_920`, `horizon_mix_920v2`, `horizon_mix_920fundind`, `horizon_mix_920fundind3`, `horizon_mix_920fundind4`, `horizon_mix_920fundind5` | h1/h5/h20 周期混合权重臂（见 `batch_920_consolidated/`） | 归档 |
-| `stack_blend_920`, `stack_blend_920v2` | stacking 权重混合臂 | 归档 |
 
 ### 1.3 文档与散件
 
@@ -249,6 +203,34 @@
 | 位置 | 说明 |
 |---|---|
 | `logs/` | **不属于任何单一实验**的跨主题运行日志。属于某实验的日志一律放该实验目录内 |
+
+### 1.6 归类约定（**长期规则，新产出必须遵守**）
+
+> 2026-11-25 压缩时误删，同批复原。`scripts/README.md`、`TODO_ARCHIVE.md`、
+> `reports/docs/README.md` 共 5 处引用本节，删了就是死链。
+
+| 产出类型 | 去处 | 命名 |
+|---|---|---|
+| 单次实验的完整产物（回测/评估/合成） | `reports/<实验名>/` | 目录名 = 脚本名去 `run_`/`_run`；同族合并父子目录 |
+| 该实验的运行日志 | **同实验目录内**，不另建 `logs/` | `<脚本名>_run.log`；多臂加 `_placebo.log` |
+| 口径 / 一致性 / 公平性核对报告（.md） | `docs/consistency_checks/` | `<标的>_<核对主题>.md` |
+| 设计文档 / 蓝图 / 方法论 | `docs/design/<主题>/` | — |
+| 研报解读、数据源调研笔记 | `docs/research_notes/` | — |
+| 研报 PDF 文字提取中间产物 | `_tmp/`（可重生成，**当天清**） | 工具 `scripts/data_tools/dump_pdf_text.py` |
+| 跨实验台账 / 全局报告 | 根部（**仅 §1.4 那 2 个**） | 不改名、不移动 |
+| 不属于任何单一实验的日志 | `logs/` | — |
+| 已归档、不再重跑的交付报告 | `archive/` | — |
+| 当日临时 pytest 输出 / smoke JSON / 探针日志 | `_tmp/`，会话结束删除 | 以 `_` 开头 |
+
+三条硬规则：
+
+1. **新实验用工具建目录，别手敲 `mkdir`** ——
+   `python -m scripts.data_tools.new_experiment <名> --desc "<假设>" --script <脚本>`，
+   一条命令建目录 + 四要素模板 + 在 §结论速查 登记 `进行中`。手敲的目录没有判定行，
+   `docs_lint --check` 直接 rc=1。
+2. **临时件带 `_` 前缀且只放 `_tmp/`**，当天清；落根目录的 `_` 文件视为待清理。
+3. **移动前先查引用** —— `grep -rn "<文件名>" --include=*.py --include=*.md .`；
+   有命中就保持原位或同步改代码并跑测试。`reports/` 整体 gitignored，删除不可经 git 恢复。
 
 ## 二、主线实验谱系（读报告前先看这个）
 
@@ -305,6 +287,23 @@ model层 / ML合成，其余已删、可重跑复现——结论见 §三.13~17�
     中性化（已并入 investment_report）。原脚本 2026-11-18 随 `scripts/archive/` 删除；
     `daily_hs300.parquet` 2026-08-26 停更，复现仅限该缓存窗口。
 18. **`intraday_stat_checkup_run.log`** —— 手动控制台重定向日志，结论在同根 `.csv`，无独立价值。
+
+### 落地目录已清理，仅存判定（2026-11-25 全量对账）
+
+全量对账发现索引里有 90 个目录条目指向 `reports/` 下**已不存在**的目录（2026-11-18 起的多轮
+瘦身只删产物、没回头改索引）。这些条目的结论多数已在 `TODO_ARCHIVE.md` 或清理记录里留档，
+索引行已删；**只有本表这 7 条，结论原先只存在于 README 那一行**，迁到这里存档。
+未被本表收录的其余失效目录，判定与结论见 `docs/archive/清理记录_2026-11-25.md` 各期条目。
+
+| 目录 | 结论 | 原判定 |
+|---|---|---|
+| `blend_weight_920` | 快慢融合 λ 补扫九档：λ≤0.4 是平台、0.5 起单调衰减；0.5 是换手选择非最优点 | 工具保留 |
+| `new_source_scan` | 新数据源复核：本地数据已榨干 | 判负 |
+| `vol_target_920` | 目标波动 overlay 在定版底座复验判负 | 判负 |
+| `vol_target_920_const` | 目标波动 overlay 的恒定敞口对照臂 | 归档 |
+| `gflownet_ckpt` | GFlowNet 因子挖掘的模型权重存档（12 个 `.pt`） | 工具保留 |
+| `_rebuild_logs` | 前视修复后重建的全程日志 + `HANDOFF.md` | 归档 |
+| `buffer_sweep_p2`、`buffer_sweep_p2_v2` | 缓冲带二阶段网格扫描（每格一目录） | 归档 |
 
 ---
 
