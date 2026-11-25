@@ -135,7 +135,31 @@ def neg_mktcap(ctx: cal.CaliberContext) -> pd.DataFrame:
     return -cap
 
 
-def run_arm(arm: str) -> dict:
+def run_arm(arm: str, phases: int = 1, **kwargs) -> dict:
+    """``phases>1`` 时跑 21 相位并报均值（单点结论会把抽签最大值当期望值）。"""
+    if phases > 1:
+        rows = []
+        for ph in range(phases):
+            r = run_arm(arm, phases=1, _phase=ph, _quiet=True)
+            rows.append(r)
+            print(f"  phase {ph:2d}  ann {r['ann']:7.2%}  SR {r['sharpe']:6.3f}  "
+                  f"换手 {r['turnover']:6.2%}")
+        d = pd.DataFrame(rows)
+        agg = {c: float(d[c].mean()) for c in
+               ("ann", "sharpe", "max_dd", "calmar", "turnover", "cost_bp",
+                "n_hold_med", "cap_med_yi")}
+        agg.update({"arm": arm, "phases": phases,
+                    "ann_max": float(d["ann"].max()),
+                    "ann_min": float(d["ann"].min()),
+                    "ann_sd": float(d["ann"].std())})
+        print(f"=== {arm}  {phases} 相位均值  ann {agg['ann']:.2%}  "
+              f"SD {agg['ann_sd']:.2%}  SR {agg['sharpe']:.3f}  "
+              f"换手 {agg['turnover']:.2%}")
+        OUT.mkdir(parents=True, exist_ok=True)
+        d.to_csv(OUT / f"phases_{arm}.csv", index=False)
+        pd.DataFrame([agg]).to_csv(OUT / f"stat_{arm}_phases.csv", index=False)
+        return agg
+
     capital, kind = ARMS[arm]
     ctx = lean_ctx()
     pp = price_panel(ctx)
@@ -152,7 +176,8 @@ def run_arm(arm: str) -> dict:
         strategy=strat, rebalance_freq="M", initial_capital=float(capital),
         costs=cal.cost_profile("production"),
     )
-    res = cal.run_once(bt, ctx, "open", signal=signal, price_panel=pp, lot_size=LOT)
+    res = cal.run_once(bt, ctx, "open", signal=signal, price_panel=pp,
+                       lot_size=LOT, phase=int(kwargs.get("_phase", 0)))
 
     nav = res.equity_curve
     # 统一走 caliber.metrics_row（sharpe 是几何口径，t 用算术 NW）
@@ -182,12 +207,14 @@ def run_arm(arm: str) -> dict:
         "cost_bp": m["cost_bp"],
         "impact_bp": m["impact_bp"],
     }
-    print(f"=== {arm}  {rec['window']}  {rec['days']} 日")
-    for k, v in rec.items():
-        if isinstance(v, float):
-            print(f"  {k:12s} {v:,.4f}")
-        else:
-            print(f"  {k:12s} {v}")
+    if not kwargs.get("_quiet"):
+        print(f"=== {arm}  {rec['window']}  {rec['days']} 日")
+    if not kwargs.get("_quiet"):
+        for k, v in rec.items():
+            if isinstance(v, float):
+                print(f"  {k:12s} {v:,.4f}")
+            else:
+                print(f"  {k:12s} {v}")
 
     daily = pd.DataFrame({
         "nav": nav,
@@ -195,8 +222,10 @@ def run_arm(arm: str) -> dict:
         "weight_sum": res.weights_history.sum(axis=1).reindex(nav.index).ffill(),
     })
     OUT.mkdir(parents=True, exist_ok=True)
-    daily.to_csv(OUT / f"daily_{arm}.csv")
-    pd.DataFrame([rec]).to_csv(OUT / f"stat_{arm}.csv", index=False)
+    if not kwargs.get("_quiet"):
+        OUT.mkdir(parents=True, exist_ok=True)
+        daily.to_csv(OUT / f"daily_{arm}.csv")
+        pd.DataFrame([rec]).to_csv(OUT / f"stat_{arm}.csv", index=False)
     return rec
 
 
@@ -248,13 +277,15 @@ def summary() -> int:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--arm", choices=sorted(ARMS))
+    ap.add_argument("--phases", type=int, default=1,
+                    help=">1 时跑多相位并报均值（21 = 全相位）")
     ap.add_argument("--summary", action="store_true")
     a = ap.parse_args()
     if a.summary:
         return summary()
     if not a.arm:
         ap.error("需要 --arm 或 --summary")
-    run_arm(a.arm)
+    run_arm(a.arm, phases=a.phases)
     return 0
 
 

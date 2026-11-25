@@ -1,6 +1,6 @@
 # scripts 入口索引
 
-> 自动生成（136 个活跃入口）。改脚本 docstring 后运行 `python -m scripts.data_tools.gen_scripts_index` 更新；`--check` 校验是否过期。
+> 自动生成（137 个活跃入口）。改脚本 docstring 后运行 `python -m scripts.data_tools.gen_scripts_index` 更新；`--check` 校验是否过期。
 
 约定：`python -m scripts.<目录>.<文件名>` 运行；`scripts/archive/` 已于 2026-11-18 整体下线（活代码已上移，其余删除）；实验结论查 `reports/README.md` §一「结论速查」，产物落盘规则见其 §1.6。
 
@@ -154,6 +154,7 @@
 | `portfolio/etf_rotation_probe.py` | ETF 轮动回测引擎（数据装载 / 面板 / 回测 / 出场调度） |
 | `portfolio/industry_neff_probe.py` | 31 个申万一级的「有效独立方向数」诊断（P0-1） |
 | `portfolio/industry_rotation.py` | 行业池轮动线（独立实验线，不与 ETF 三锋混跑）。 |
+| `portfolio/k8_buffer_scan.py` | k8 缓冲带 `exit_mult` 在**生产口径 + 21 相位**下的复核（2026-11-25）。 |
 | `portfolio/microcap_ref.py` | 微盘对照臂：把「小盘 beta」与「模型 alpha」分开（2026-11-25 建）。 |
 | `portfolio/multi_period_backtest.py` | 多期组合执行回测脚本（P3，2026-08-20） |
 | `portfolio/report_replica.py` | 研报复现线（国泰海通 2026-10-29《七维共振》）· 只做可行的部分。 |
