@@ -118,6 +118,33 @@ conventions:
       capital: 1.0e8
       comparable_to: "仅同 profile 内部；**不可**与 production 并列"
 
+# =============================================================================
+# 组合层 overlay（2026-11-26 新增）
+# =============================================================================
+# overlay **不是新策略、不改信号**：只按日历月缩放组合权重，降仓部分留现金。
+# 参数放这里唯一真源（`scripts/portfolio/topping_overlay.py` 读，不在代码里写死）；
+# 由 `strategy/overlay.py::WeightScaleOverlay` 在策略层施加，换手/成本/整手仍由
+# 回测引擎算。各档位的 overlay 读数登记在该档 `overlays.<id>.metrics` 下。
+# ⚠️ 只能表达**事前已知**规则；依赖自身已实现收益的规则（如断路器）不能用。
+overlays:
+  topping-guard:
+    label: "过热降仓（R2，周频决策）"
+    created: "2026-11-26"
+    freq: W                   # 周五收盘判、下周一开盘生效（月频选项：M）
+    trigger_styles: [liquidity, nl_size, momentum, beta]
+    lookback_months: 12
+    min_periods: 24
+    quantile: 0.90
+    weight: 0.80
+    cost_bp: 13.5
+    evidence: "reports/topping_risk/README.md"
+    note: >
+      任一触发风格的 12 月收益在其**扩张分位**（只用 t 及之前数据）>90% ⇒ 次周
+      组合权重乘 0.8。周频（周五收盘 → 下周一）在生产口径下比月频更好：
+      k15 24.85%→25.35% / Sharpe 1.003→1.021（phase 0），21 相位月频为
+      年化 −0.33pp、周频 +0.14pp，Sharpe +0.056→+0.073，MDD 保护完全一致。
+      证据 reports/topping_risk/README.md。
+
 baselines:
 
   # ---------------------------------------------------------------------------
@@ -646,7 +673,7 @@ baselines:
     tier: breadth
     default: true             # 族内默认档 = **判改进基线**（v2-dingban 2026-11-12 并入本条）
     created: "2026-11-10"
-    updated: "2026-11-25"
+    updated: "2026-11-26"
     revision: 2               # rev1 = 旧面板 + 80 席（21.81% / 1.0081），数字见 metrics 的 rev1_* 行
     status: production
     label: "YQ 核心 · 广度档（Breadth）：f50 defv + buffer(15/40)，~630 只，大资金（判改进默认基线）"
@@ -700,20 +727,31 @@ baselines:
       fingerprint: 125b876c59cd
       profiles:
         production:
-          # 🚨 2026-11-25 掩码作用顺序修正后重算（`panel.where(mask).shift(1)`）。
-          # rev1 的 ann 0.21809 / sharpe 1.0130 / max_dd 0.2661 / turnover 0.1708 是
-          # `shift_then_mask` 口径，**不可与新值相减**；更早的 36bp 基数 0.21659 / 1.0061
-          # 只作历史追溯。
+          # 🚨 2026-11-26 起**登记读数 = 生产读数**：含组合层 `topping-guard`（周频）。
+          # 2026-11-25 掩码作用顺序修正后（`panel.where(mask).shift(1)`）的无 overlay
+          # 对照见下方 `base_no_overlay`；rev1 的 ann 0.21809 / sharpe 1.0130 是
+          # `shift_then_mask` 口径，更早的 36bp 基数 0.21659 / 1.0061 只作历史追溯。
           eqw_buf0.15_0.4:
+            ann: 0.189560
+            sharpe: 0.918460
+            sharpe_arith: 0.945237
+            sharpe_t_stat: 2.5845        # NW 校正，过 1.96
+            turnover: 0.132372
+            cost_bp: 1309.7
+            max_dd: 0.229830
+            n_active: 630
+            years_to_prove_arith: 4.7
+            overlay: topping-guard
+          # 无 overlay 对照（2026-11-25 的登记值；同窗口 2019-01-02..2026-11-20）
+          base_no_overlay:
             ann: 0.190765
             sharpe: 0.870563
             sharpe_arith: 0.907457
-            sharpe_t_stat: 2.4786        # NW 校正，过 1.96，余量 26%
+            sharpe_t_stat: 2.4786
             turnover: 0.174147
             cost_bp: 1135.2
             max_dd: 0.280225
             n_active: 630
-            years_to_prove_arith: 4.7
           # rev1（80 席 + 旧面板、止 2026-09-07、1864 日）：同窗口对照用
           rev1_eqw_buf0.15_0.4:
             ann: 0.218115
@@ -735,20 +773,20 @@ baselines:
       # 与上面 production profile 的区别只在「资金 / 整手」两项，信号与成本完全相同。
       product_line:
         view: native
-        data_state: "rev2（2026-11-25 全链重建；窗口与 metrics 一致，截到 2026-09-07）"
+        data_state: "rev2（2026-11-25 全链重建；窗口与 metrics 一致，截到 2026-09-07）；2026-11-26 含 topping-guard"
         capital: 2000000.0
         lot_size: 100
         price_panel: "close_raw.ffill().shift(1)"
-        ann: 0.203962
-        sharpe: 1.033288
-        sharpe_arith: 1.040079
-        sharpe_t_stat: 2.824112
-        max_dd: 0.258238
-        calmar: 0.789821
-        turnover: 0.171006
-        invest_mean: 0.899418        # 整手实投率（引擎算，非折算）
-        invest_min: 0.821285
-        nhold_mean: 618.6
+        ann: 0.202300
+        sharpe: 1.098230
+        sharpe_arith: 1.093200
+        sharpe_t_stat: 2.973600
+        max_dd: 0.206600
+        calmar: 0.979100
+        turnover: 0.130600
+        invest_mean: 0.841400        # 整手实投率（引擎算，非折算）
+        invest_min: 0.698100
+        nhold_mean: 618.5
         nhold_min: 478
         caveat: >
           🚨 这是**本档资金下限**（200 万，619 只 × 3.2 万 ⇒ 整手吃掉约 1.4pp）的可达成值，
@@ -775,14 +813,16 @@ baselines:
       ② 报数：
          D:/miniconda3/envs/yuriquant/python.exe -m scripts.evaluation.caliber
          --signal dingban_f50 --window prod --profile production --buffer 0.15:0.40
-         --end 20261120 --json reports/signal_ic_compare/caliber_f50_new.json
-    source: "reports/signal_ic_compare/caliber_f50_new.json（production 1e6 无整手）；产品线见 reports/yq_core/report_rev2.json"
+         --end 20261120 --overlay topping-guard
+         --json reports/signal_ic_compare/caliber_f50_overlay.json
+    source: "caliber --check --overlay topping-guard（production 1e6 无整手）；产品线见 reports/yq_core/report_native.json（native，含 overlay）"
     verified_local: true
     notes: >
       🔑 **本档是判「改进 vs 基线」的默认对象**（族内 `default: true`）：
-      `caliber --check --baseline-id yqcore-breadth --signal dingban_f50` 复算的就是
-      本条 `production` 的 19.08% / 0.871（1e6 无整手、窗口 …2026-11-20）。
-      产品线报数（2e6 + 整手、截到 2026-09-07）另计 20.40% / 1.033，
+      `caliber --check --baseline-id yqcore-breadth --overlay topping-guard` 复算的就是
+      本条 `production` 的 18.96% / 0.918（1e6 无整手、窗口 …2026-11-20、含周频 overlay）。
+      **不加 `--overlay` 若跑出的是 19.08% / 0.871（无 overlay 对照），不是登记值。**
+      产品线报数（2e6 + 整手、截到 2026-09-07、含 overlay）另计 20.23% / 1.098，
       **两个数都对，回答的是不同问题**（可判改进 vs 实盘可达成）。
       适用 **≥ 200 万**。选它的理由：回撤 28.0% vs focus 档 38.2%，换手 17.4% vs 87.6%
       ⇒ 容量与可操作性远好于 focus，且它是唯一能装 ≥1500 万的档。
@@ -794,18 +834,34 @@ baselines:
       ⚠️ 与已退休的 v2-dingban 的关系：同一条策略，只差资金/整手/末日；pipeline 里
       若还有地方报"定版 21.5~21.6%"，那说的是 v2 的 36bp 旧基数，不是本档。
 
+    # ---- 组合层 overlay 读数（不是新档位、不改信号；参数见顶部 `overlays:`）----
+    overlays:
+      topping-guard:
+        metrics:
+          profiles:
+            production:
+              # 与上方 `eqw_buf0.15_0.4` 同一行（production 1e6 无整手、窗口 …2026-11-20）。
+              ann: 0.189560
+              sharpe: 0.918460
+        source: "caliber --check --baseline-id yqcore-breadth --overlay topping-guard"
+        note: >
+          周频版（周五收盘判、下周一开盘），2026-11-26 起并入上方 `metrics.production`。
+          全窗口（…2026-11-20）对照无 overlay 的 19.08% / 0.871 ⇒ 年化 −0.12pp、
+          Sharpe +0.048。同窗口截到 2026-09-07 时为 22.48% / 1.096（对照无 overlay
+          22.61% / 1.036；周频月频对照见 reports/topping_risk/README.md）。
+
   - id: yqcore-focus-k15
     family: yqcore
     group: yqcore-focus           # 方案名：get_tier('yqcore-focus') 返回本版本（default_variant）
     variant: k15
     default_variant: true
     tier: focus
-    revision: 2               # rev1（2026-11-10）= ens_h1h5 + K25；数字见下方 history
+    revision: 3               # rev3（2026-11-25）= 信号迁 f50；rev2 = gbdt_mid13(882)；rev1 = ens_h1h5 + K25
     created: "2026-11-10"
-    updated: "2026-11-12"
+    updated: "2026-11-26"     # 登记读数并入 topping-guard（周频）
     status: production
-    label: "YQ 核心 · 集中档（Focus）：882 四周期融合（2:1:1:2）+ TopK15 + buffer(×2)，容量中间台阶"
-    signal_key: gbdt_mid13
+    label: "YQ 核心 · 集中档（Focus）：f50 四周期融合（2:1:1:2）+ TopK15 + buffer(×2)，容量中间台阶"
+    signal_key: gbdt_mid13_f50
     check_arm: topk15_buf2        # --check 复算时对照 metrics.profiles.production 里的哪条臂
     check_end: 20260907           # 与同族其余两档同末日
     window: prod
@@ -813,16 +869,16 @@ baselines:
       preproc: ortho
       ensemble: composite           # 复合信号：多份 pred 秩平均，无落盘实体
       components:
-        gbdt_h1: 2.0
-        gbdt_h5: 1.0
-        gbdt_h10: 1.0
-        gbdt_h20: 2.0
+        gbdt_h1_f50: 2.0
+        gbdt_h5_f50: 1.0
+        gbdt_h10_f50: 1.0
+        gbdt_h20_f50: 2.0
       weights_rationale: >
         h1 / h20 各占 1/3、两个中期（h5、h10）合计 1/3。中期占 0（1+20 = 28.90）
         与占 1/2（avg4 = 28.24）都偏低、占 1/3 偏高（≈29.5），但「选 h5 还是 h10」
         差 1.5pp 且无机制 ⇒ 在两者间均分，不引入这个自由度。
-      panel_source: reports/alla_rolling_ortho/pred
-      n_factors: 882
+      panel_source: reports/alla_rolling_ab_f50/pred
+      n_factors: 50
     execution:
       strategy: BufferedTopKLongOnly
       k: 15
@@ -836,8 +892,12 @@ baselines:
       capital: 1.0e6
       source_script: "scripts/evaluation/yq_core_report.py"
     data_state:
-      registered: "882 ortho 四周期 pred，止 2026-09-07"
+      registered: "ab_f50 四周期 pred（feature budget 50），止 2026-11-20；报数截 2026-09-07"
       caveats: >
+        🔑 2026-11-25 由 882 迁 f50：21 相位均值 k15 +2.14pp（配对 t 2.34，14/21 相位胜）
+        胜 882，代价 MDD +1.8pp；证据 `reports/focus_signal_compare/README.md`。
+        🚨 复合信号无落盘实体：`caliber.load_context` 每次现场构造（~1s），指纹是
+        **构造后**面板的指纹，与任一分量不同。
         ⚠️ pred 面板末日 2026-09-07（比 920 线早 36 个交易日）⇒ 与 v1w-ortho882-2019
         的 23.57%（锚点 buf15/40，1864 日同窗口）同源可比。
         🚨 复合信号无落盘实体：`caliber.load_context` 每次现场构造（~1s），指纹是
@@ -850,22 +910,42 @@ baselines:
         等于把 focus 变成 solo）。⇒ **本档不提供独立 alpha，它的存在理由是容量台阶**。
     metrics:
       window_label: "2019-01-02..2026-09-07（1864 日 / 7.38 年）"
-      fingerprint: 79bdbbcc8fb9
+      fingerprint: f951536586ba
       profiles:
         production:
-          # 🚨 2026-11-25 掩码作用顺序修正后重算（`panel.where(mask).shift(1)`）。
-          # 上一版 ann 0.29600 / sharpe 1.1125 / max_dd 0.3822 / cost_bp 7527.5 是
-          # `shift_then_mask` 口径（Δann **+0.53pp**、Δsharpe +0.032，已超 `tol_ann`）。
-          # 更早的 36bp 基数：ann 0.28756 / sharpe 1.0804 / cost_bp 9079，只作追溯。
+          # rev3（2026-11-25 迁 f50）：uniform 1e6 无整手、production 成本、时变印花税。
+          # rev2（882）的 0.301291 / 1.1444 已作废 —— 该数据态在本机复现不出
+          # （重训 882 相位 0 只有 24.71%），见 reports/focus_signal_compare/README.md。
+          # 🚨 2026-11-26 起**登记读数 = 生产读数**：含组合层 topping-guard（周频）。
+          # 无 overlay 对照见下方 base_no_overlay（rev3 首版 25.56% / 0.962）。
           topk15_buf2:
-            ann: 0.301291
-            sharpe: 1.1444
-            sharpe_arith: 1.1333
-            sharpe_t_stat: 3.1042        # NW 校正，过 1.96，余量 58%
-            turnover: 0.8778
-            cost_bp: 7436.5
-            max_dd: 0.3970
+            ann: 0.253526
+            sharpe: 1.020677
+            sharpe_arith: 1.034935
+            sharpe_t_stat: 2.8276        # NW 校正，过 1.96
+            turnover: 0.563981
+            cost_bp: 5780.9
+            max_dd: 0.355284
             n_active: 15
+            overlay: topping-guard
+          # 无 overlay 对照（rev3，uniform 1e6 无整手，同窗口)
+          base_no_overlay:
+            ann: 0.255593
+            sharpe: 0.9622
+            sharpe_arith: 0.9910
+            sharpe_t_stat: 2.6607
+            turnover: 0.8670
+            cost_bp: 6060.8
+            max_dd: 0.4246
+            n_active: 15
+          # 21 相位均值（判方案用这个，不拿 phase 0 单点；同 tests 的相位纪律）
+          phase_mean:
+            n_phase: 21
+            ann: 0.2487
+            sharpe: 0.9201
+            max_dd: 0.4324
+            turnover: 0.8760
+            source: "reports/focus_signal_compare/summary.csv"
           # K 网格（同信号、同执行层）——**锯齿，不是单调**；全表落在 29.0%~32.5% 噪声带内。
           # 🔁 2026-11-25 按**掩码顺序修正 + 27bp 时变**全部重算（旧两批已作废）。
           # 🚨 **禁止把 K 的差异当结论**：11 个格的 SR 95%CI 全面重叠（极差 0.124 vs
@@ -893,17 +973,17 @@ baselines:
         capital: 500000.0
         lot_size: 100
         price_panel: "close_raw.ffill().shift(1)"
-        ann: 0.29400
-        sharpe: 1.1139
-        sharpe_arith: 1.1100
-        sharpe_t_stat: 3.0533
-        max_dd: 0.3799
-        calmar: 0.7739
-        turnover: 0.8693
-        invest_mean: 0.9921          # 整手实投率（引擎算，非折算）
-        invest_min: 0.9735
+        ann: 0.248200
+        sharpe: 1.010600
+        sharpe_arith: 1.026500
+        sharpe_t_stat: 2.802900
+        max_dd: 0.352900
+        calmar: 0.703300
+        turnover: 0.558200
+        invest_mean: 0.931900        # 整手实投率（引擎算，非折算）
+        invest_min: 0.791600
         nhold_mean: 15.0
-        nhold_min: 15
+        nhold_min: 14
       # 容量上限 = 单票 ADV × 参与率 / 单票权重。**产品线按此分界，不按收益**。
       capacity:
         participation_assumed: 0.10
@@ -928,8 +1008,9 @@ baselines:
     fingerprint: 79bdbbcc8fb9
     reproducible_local: true
     regen_cmd: >
-      /d/Python/Python312/python -m scripts.evaluation.yq_core_report --view uniform --tiers yqcore-focus-k15
-    source: "reports/yq_core/report.json（--view uniform = 1e6 无整手；产品线口径见 report_native.json）"
+      D:/miniconda3/envs/yuriquant/python.exe -m scripts.evaluation.yq_core_report
+      --view uniform --tiers yqcore-focus-k15 --overlay topping-guard
+    source: "yq_core_report --view uniform --overlay topping-guard（1e6 无整手）；产品线口径见 report_native.json（native，含 overlay）"
     verified_local: true
     history:
       - revision: 1
@@ -969,16 +1050,34 @@ baselines:
       ⚠️ 成交额分位仅 **0.186**、股价中位 21.1 元 ⇒ 组合系统性偏小盘；15 只等权意味
       单票 6.7%，一只暴雷 −6.7%。回测的 ST/退市掩码挡不住突发财务造假。
 
+    # ---- 组合层 overlay 读数（不是新档位、不改信号；参数见顶部 `overlays:`）----
+    overlays:
+      topping-guard:
+        metrics:
+          profiles:
+            production:
+              # phase 0（与上方 topk15_buf2 同 ctx、同指纹 f951536586ba，只多一层 overlay）
+              # 周频：月频选股日 ∪ 周频倍率变化日（额外 46 个调仓日）。
+              ann: 0.253526
+              sharpe: 1.020677
+        source: "caliber --check --baseline-id yqcore-focus-k15 --signal gbdt_mid13_f50 --end 20260907 --overlay topping-guard"
+        note: >
+          周频版（周五收盘判、下周一开盘）。同口径对照无 overlay 的 25.56% / 0.962
+          ⇒ 年化 −0.21pp、Sharpe +0.059（月频版为 −0.71pp / +0.041，MDD 两者同为
+          35.53%）。21 相位均值：周频年化 +0.14pp、Sharpe +0.073，月频 −0.33pp /
+          +0.056；证据 reports/topping_risk/README.md。
+
   - id: yqcore-focus-k8
     family: yqcore
-    group: yqcore-focus           # 与 -k15 同一方案（同信号 79bdbbcc8fb9），执行层更集中
+    group: yqcore-focus           # 与 -k15 同一方案（同信号 gbdt_mid13_f50），执行层更集中
     variant: k8
     tier: focus
+    revision: 3               # rev3（2026-11-25）= 信号迁 f50（-k15 同批）
     created: "2026-11-10"
-    updated: "2026-11-25"         # exit_mult 1.0→5.0（缓冲带，见 reports/k8_buffer_scan/）
+    updated: "2026-11-26"         # 登记读数并入 topping-guard（周频）；exit_mult 仍 5.0
     status: production
-    label: "YQ 核心 · 集中档 K8 版：882 四周期信号 + TopK8 + 每申万一级 ≤1 只（5~600 万）"
-    signal_key: gbdt_mid13
+    label: "YQ 核心 · 集中档 K8 版：f50 四周期信号 + TopK8 + 每申万一级 ≤1 只（5~600 万）"
+    signal_key: gbdt_mid13_f50
     window: prod
     requires_panel: industry      # 申万一级截面（date × code），由调用方注入
     check_arm: solo_k8_b5.0       # --check 复算时对照 metrics.profiles.production 里的哪条臂
@@ -987,7 +1086,8 @@ baselines:
       preproc: ortho
       ensemble: "h1:h5:h10:h20 = 2:1:1:2 秩平均"
       horizons: [1, 5, 10, 20]
-      n_factors: 882
+      n_factors: 50
+      panel_source: reports/alla_rolling_ab_f50/pred
     execution:
       strategy: SectorCappedBufferedTopKLongOnly
       k: 8
@@ -1012,7 +1112,7 @@ baselines:
         整手本身会丢 0.78pp（实投 97.8%）。要横向比收益请用 yqcore-focus-k15 的 1e6 数字。
     metrics:
       window_label: "2019-01-02..2026-09-07（1864 日 / 7.38 年）"
-      fingerprint: 79bdbbcc8fb9
+      fingerprint: f951536586ba
       profiles:
         # 口径键沿用 production（成本/执行层与同族一致），**资金与整手不同**：
         # 本条是 1e5 + lot100，focus/breadth 是 1e6 无整手。
@@ -1025,31 +1125,48 @@ baselines:
           # 🚨 2026-11-11 成本口径修正（往返 36bp→27bp）：旧 ann 0.35566 / sharpe 1.2360
           # 更早，禁止与任何新值并列。
           # ✅ 当前臂 = exit_mult 5.0（2026-11-25 上调，见 reports/k8_buffer_scan/）
+          # rev3（2026-11-25 迁 f50）：以下为 f50 信号 + native(1e5/整手) 实测。
+          # 🚨 2026-11-26 起**登记读数 = 生产读数**：含组合层 topping-guard（周频）。
+          # 无 overlay 对照见下方 base_no_overlay（32.47% / 1.173）。
+          # rev2（882）的 0.350068 / 1.2289 作废：该数据态本机复现不出。
           solo_k8_b5.0:
-            ann: 0.350068
-            sharpe: 1.2289             # 几何口径（年化/年化波动）
-            sharpe_arith: 1.1979       # 算术口径 mean/std·√252
-            sharpe_t_stat: 3.2600      # NW 校正（算术 Sharpe × √T）
-            vol: 0.2849
-            max_dd: 0.4260             # ⚠️ 比 b1.0 恶化 3.6pp（21 相位均值上反而略好：41.6% vs 42.6%）
-            calmar: 0.8218
-            turnover: 0.8443
-            cost_bp: 7995.1            # 全期累计扣费（bp），b1.0 是 8747.3
-            nhold_mean: 6.10           # 名义 k=8，实际平均 6.10 只（行业去重 + 缓冲带留人）
-            invest_mean: 0.9823        # 引擎实测（按当期 capital 取整，利润再投入口径）
-            invest_fixed: 0.9426       # 利润每月取走、始终 10 万（换手降但持仓变多 ⇒ 从 0.963 降）
-            invest_min: 0.9036         # 最差单期实投率
-            nhold_le3: 0.043           # 93 期里 4 期只有 3 只（从未 2 只）
+            ann: 0.320543
+            sharpe: 1.242829           # 几何口径（年化/年化波动）
+            sharpe_arith: 1.208203     # 算术口径 mean/std·√252
+            sharpe_t_stat: 3.2912      # NW 校正（算术 Sharpe × √T）
+            vol: 0.2579
+            max_dd: 0.3554
+            calmar: 0.9020
+            turnover: 0.5468
+            cost_bp: 7518.8            # 全期累计扣费（bp）
+            nhold_mean: 6.18           # 名义 k=8，实际平均 6.18 只（行业去重 + 缓冲带留人）
+            invest_mean: 0.9264        # 引擎实测（按当期 capital 取整，利润再投入口径）
+            invest_min: 0.7872         # 最差单期实投率
             nsector_min: 3             # max_per_sector=1 ⇒ 持仓数 ≡ 行业数
-            year_worst: 0.1648         # 最差年 2022 +16.48%
-            years_positive: 8          # 8/8 年正
-            yearly: {2019: 0.2803, 2020: 0.4160, 2021: 0.4197, 2022: 0.1648,
-                     2023: 0.2652, 2024: 0.1965, 2025: 0.7569, 2026: 0.1550}
-            phase_note: >
-              ⚠️ 以上全是 phase=0 单点（与三档登记口径一致）。21 相位均值
-              **ann 26.96% / SR 0.959 / MDD 41.6% / 换手 83.0%**，phase=0 是 21 个里
-              偏乐观的一个（同 b1.0 的 34.54% vs 均值 25.64%）。跨相位配对差
-              +1.32pp（t 2.86，16/21 相位胜）。
+            year_worst: 0.0581         # 最差年 2026 +5.81%（截至 09-07，非完整年）
+            years_positive: 8
+            yearly: {2019: 0.4613, 2020: 0.1589, 2021: 0.7036, 2022: 0.2014,
+                     2023: 0.1463, 2024: 0.1638, 2025: 0.5982, 2026: 0.0581}
+            overlay: topping-guard
+          # 无 overlay 对照（2026-11-25 的登记值，同窗口同资金）
+          base_no_overlay:
+            ann: 0.324707
+            sharpe: 1.1729
+            sharpe_arith: 1.1556
+            sharpe_t_stat: 3.1068
+            vol: 0.2768
+            max_dd: 0.4253
+            calmar: 0.7634
+            turnover: 0.8388
+            cost_bp: 7933.0
+          # 21 相位均值（判方案用这个，不拿 phase 0 单点）
+          phase_mean:
+            n_phase: 21
+            ann: 0.2697
+            sharpe: 0.9655
+            max_dd: 0.4292
+            turnover: 0.8363
+            source: "reports/focus_signal_compare/summary.csv"
           # ⚠️ 历史臂（exit_mult 1.0），**已非登记配置**，仅留 --check 对照与追溯：
           solo_k8_b1.0:
             ann: 0.345373
@@ -1112,16 +1229,16 @@ baselines:
         capital: 100000.0
         lot_size: 100
         price_panel: "close_raw.ffill().shift(1)"
-        ann: 0.350068
-        sharpe: 1.2289
-        sharpe_arith: 1.1979
-        sharpe_t_stat: 3.2600
-        max_dd: 0.4260
-        calmar: 0.8218
-        turnover: 0.8443
-        invest_mean: 0.9823          # 整手实投率（引擎算，非折算）
-        invest_min: 0.9036
-        nhold_mean: 6.10
+        ann: 0.320543
+        sharpe: 1.242829
+        sharpe_arith: 1.208203
+        sharpe_t_stat: 3.291200
+        max_dd: 0.355400
+        calmar: 0.902000
+        turnover: 0.546800
+        invest_mean: 0.926400          # 整手实投率（引擎算，非折算）
+        invest_min: 0.787200
+        nhold_mean: 6.18
         nhold_min: 3
       # 容量上限 = 单票 ADV × 参与率 / 单票权重。**产品线按此分界，不按收益**。
       capacity:
@@ -1137,8 +1254,9 @@ baselines:
     regen_cmd: >
       ① 消融/安慰剂/滚动重估（本档全部判定依据）：
          （脚本已删，2026-11-19；产物见 reports/focus_micro/）
-      ② 产品线口径（10 万 + 整手，report_native.json 里本档那一行）：
-         /d/Python/Python312/python -m scripts.evaluation.yq_core_report --view native --tiers yqcore-focus-k8
+      ② 产品线口径（10 万 + 整手，report_native.json 里本档那一行；含 overlay）：
+         /d/miniconda3/envs/yuriquant/python.exe -m scripts.evaluation.yq_core_report
+         --view native --tiers yqcore-focus-k8 --overlay topping-guard
     source: "reports/focus_micro/grid.csv + reports/yq_core/report_native.json"
     verified_local: true
     notes: >
@@ -1189,3 +1307,19 @@ baselines:
       A vs B 日收益相关 **0.924**、年化差 7.4pp、配对 t **1.81 < 2.0** ⇒ **不可分辨**。
       ⇒ 本档与 focus 的差别是"浓度/容量取舍"，不是两套 alpha；不要按收益差 7pp
       去论证"行业去重很强"（相位均值只有 1.39pp，见上）。
+
+    # ---- 组合层 overlay 读数（不是新档位、不改信号；参数见顶部 `overlays:`）----
+    overlays:
+      topping-guard:
+        metrics:
+          profiles:
+            production:
+              # phase 0（与上方 solo_k8_b5.0 同 ctx、同指纹 f951536586ba，只多一层 overlay）
+              ann: 0.320543
+              sharpe: 1.242829
+        source: "caliber --check --baseline-id yqcore-focus-k8 --signal gbdt_mid13_f50 --end 20260907 --overlay topping-guard"
+        note: >
+          周频版（周五收盘判、下周一开盘）。同口径对照无 overlay 的 32.47% / 1.173
+          ⇒ 年化 −0.42pp、Sharpe +0.070（月频版为 −0.74pp / +0.059，MDD 同为
+          35.53%）。21 相位均值：周频年化 +0.09pp、Sharpe +0.073，月频 −0.39pp /
+          +0.057；证据 reports/topping_risk/README.md。

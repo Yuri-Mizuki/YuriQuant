@@ -788,6 +788,8 @@ def build_alpha_payload(key: str) -> dict:
 def render_alpha_detail(p: dict) -> str:
     e = CATALOG[p["tier"]]
     badge, desc = ALPHA_META.get(p["tier"], ("股票线", ""))
+    ov = (f'<span class="tag">生产 overlay：{p["overlay"]}（周频）</span>'
+          if p.get("overlay") else "")
     return f"""
 {_nav("home", p["generated"])}
 <div class="sh-head">
@@ -797,6 +799,7 @@ def render_alpha_detail(p: dict) -> str:
     <span class="tag">窗口 {p['window']}</span>
     <span class="tag">成本：{p['cost_note']}</span>
     <span class="tag">信号 {p['signal']}</span>
+    {ov}
   </div>
 </div>
 {yd.render_backtest_body(p, with_nav=False, with_cross=False)}

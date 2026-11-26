@@ -136,6 +136,28 @@ SIGNALS: dict[str, dict] = {
         "desc": "882 ortho · gbdt 单周期 h20（长周期选择器；单用 K≤30 都只有 ~23%）",
         "reproducible": True,
     },
+    # f50 臂（feature budget 50）四周期：2026-11-25 focus 集中档迁 f50 后登记的基座。
+    # 与 882 臂同选择器/同 gbdt 超参，只换特征预算与数据态 ⇒ 两臂可做同口径对照。
+    "gbdt_h1_f50": {
+        "path": "reports/alla_rolling_ab_f50/pred/gbdt__h1.parquet",
+        "desc": "ab_f50 · gbdt 单周期 h1",
+        "reproducible": True,
+    },
+    "gbdt_h5_f50": {
+        "path": "reports/alla_rolling_ab_f50/pred/gbdt__h5.parquet",
+        "desc": "ab_f50 · gbdt 单周期 h5",
+        "reproducible": True,
+    },
+    "gbdt_h10_f50": {
+        "path": "reports/alla_rolling_ab_f50/pred/gbdt__h10.parquet",
+        "desc": "ab_f50 · gbdt 单周期 h10",
+        "reproducible": True,
+    },
+    "gbdt_h20_f50": {
+        "path": "reports/alla_rolling_ab_f50/pred/gbdt__h20.parquet",
+        "desc": "ab_f50 · gbdt 单周期 h20",
+        "reproducible": True,
+    },
     "ens_all": {
         "path": "reports/alla_rolling_ortho/pred/ens_all__h1.parquet",
         "desc": "882 ortho · 全模型族集成",
@@ -201,6 +223,14 @@ SIGNALS: dict[str, dict] = {
                        "gbdt_h10": 1.0, "gbdt_h20": 2.0},
         "desc": ("882 ortho · gbdt h1:h5:h10:h20 = 2:1:1:2 秩平均"
                  "（h1/h20 各 1/3，两个中期合计 1/3）"),
+        "reproducible": True,
+    },
+    # focus 集中档 2026-11-25 迁 f50（21 相位均值：k15 +2.14pp t 2.34、k8 +4.09pp t 3.01
+    # 胜 882；证据 reports/focus_signal_compare/README.md）。
+    "gbdt_mid13_f50": {
+        "components": {"gbdt_h1_f50": 2.0, "gbdt_h5_f50": 1.0,
+                       "gbdt_h10_f50": 1.0, "gbdt_h20_f50": 2.0},
+        "desc": "ab_f50 · gbdt h1:h5:h10:h20 = 2:1:1:2 秩平均（focus 登记信号）",
         "reproducible": True,
     },
 }
@@ -597,7 +627,8 @@ def run_once(bt: VectorBacktest, ctx: CaliberContext, execution: str,
              signal: pd.DataFrame | None = None,
              price_panel: pd.DataFrame | None = None,
              lot_size: int | None = None,
-             freq: str = "M", phase: int = 0):
+             freq: str = "M", phase: int = 0,
+             signal_days: pd.DatetimeIndex | None = None):
     """按成交价口径执行一次回测。
 
     ``close``：T 收盘成交，用**同日掩码**（``ctx.mask_same_day``）。
@@ -629,14 +660,23 @@ def run_once(bt: VectorBacktest, ctx: CaliberContext, execution: str,
             bt.rebalance_freq = freq
         return bt.run(panel, ctx.fwd, executable_mask=ctx.mask_same_day,
                       adv_panel=ctx.amt, vol_panel=ctx.vol60,
-                      price_panel=price_panel, lot_size=lot_size)
+                      price_panel=price_panel, lot_size=lot_size,
+                      rebalance_days=None if signal_days is None
+                      else set(signal_days))
     if ctx.fill is None:
         raise ValueError(
             f"execution={execution!r} 需要 ctx.fill；请用 "
             f"load_context(..., execution={execution!r}) 加载成交价面板。")
     sig_used = apply_execution_mask(panel, ctx.mask)
-    rb_signal = set(rebalance_dates(ctx.pred.index, freq=freq, phase=phase))
-    rb_exec = next_day_rebalance(ctx.pred.index, freq=freq, phase=phase)
+    if signal_days is None:
+        rb_signal = set(rebalance_dates(ctx.pred.index, freq=freq, phase=phase))
+        rb_exec = next_day_rebalance(ctx.pred.index, freq=freq, phase=phase)
+    else:
+        # 显式调仓日（周频 overlay：月频选股日 ∪ 周频倍率变化日）。
+        pos = {d: i for i, d in enumerate(ctx.pred.index)}
+        rb_signal = {pd.Timestamp(d) for d in signal_days}
+        rb_exec = {ctx.pred.index[pos[t] + 1] for t in rb_signal
+                   if t in pos and pos[t] + 1 < len(ctx.pred.index)}
     split = build_execution_split(ctx.fill, ctx.close, rb_signal)
     return bt.run(sig_used, ctx.fwd, horizon=1, rebalance_days=rb_exec,
                   execution_split=split,
@@ -651,7 +691,8 @@ def evaluate_strategy(strategy, ctx: CaliberContext, cost: TransactionCosts,
                       yearly: bool = False,
                       price_panel: pd.DataFrame | None = None,
                       lot_size: int | None = None,
-                      freq: str = "M", phase: int = 0) -> dict:
+                      freq: str = "M", phase: int = 0,
+                      signal_days: pd.DatetimeIndex | None = None) -> dict:
     """在统一口径下回测一个 ``Strategy``（真正走引擎的选股路径）。
 
     Args:
@@ -666,7 +707,8 @@ def evaluate_strategy(strategy, ctx: CaliberContext, cost: TransactionCosts,
     bt = VectorBacktest(strategy=strategy, rebalance_freq=freq,
                         initial_capital=float(capital), costs=cost)
     res = run_once(bt, ctx, ex, signal=signal, freq=freq, phase=phase,
-                   price_panel=price_panel, lot_size=lot_size)
+                   price_panel=price_panel, lot_size=lot_size,
+                   signal_days=signal_days)
     out = metrics_row(res, capital)
     if yearly:
         dr = res.daily_returns
@@ -761,7 +803,8 @@ def _arm_strategies(buffer: str, eqw_topk: str) -> list[tuple[str, object]]:
 def _check(signal: str, window: str, prof_name: str, cost_kind: str,
            execution: str, capital: float, buffer: str,
            tol_ann: float, tol_sharpe: float,
-           baseline_id: str = "", end: int | None = None) -> int:
+           baseline_id: str = "", end: int | None = None,
+           overlay: str = "") -> int:
     """复算登记表中该 (signal, window) 的基线，核对年化/Sharpe。
 
     ``baseline_id`` 非空时**按 id 精确匹配**，绕过 (signal_key, window) 匹配，
@@ -810,7 +853,12 @@ def _check(signal: str, window: str, prof_name: str, cost_kind: str,
     print(describe(ctx, cost_kind, capital, prof_name))
     registered: dict = {}
     if hit:
-        mreg = hit[0].get("metrics", {}) or {}
+        if overlay:
+            # overlay 读数登记在条目的 `overlays.<id>.metrics` 下（不是新档位，
+            # 不改信号；结构与 metrics 相同，支持 profiles / arms 两种写法）。
+            mreg = ((hit[0].get("overlays") or {}).get(overlay) or {}).get("metrics", {}) or {}
+        else:
+            mreg = hit[0].get("metrics", {}) or {}
         registered = ((mreg.get("profiles", {}) or {}).get(prof_name)
                       or mreg.get("arms", {}) or {})
     else:
@@ -846,10 +894,22 @@ def _check(signal: str, window: str, prof_name: str, cost_kind: str,
             "rebalance_freq", "M") or "M"
         tag = (hit[0].get("check_arm") if hit else None) or baseline_id
         arms = [(tag, spec.build(**kw))]
+    ov_days = None
+    if overlay:
+        # 组合层 overlay：只缩权重，换手/成本/整手仍由引擎算（见 strategy/overlay.py）。
+        # 周频 overlay 需要「月频选股日 ∪ 周频倍率变化日」的显式调仓计划。
+        from scripts.portfolio.topping_overlay import (
+            overlay_plan, wrap as _wrap_overlay)
+        ov_days, inner_exec = overlay_plan(ctx.pred.index, freq=freq,
+                                           overlay_id=overlay,
+                                           execution=execution)
+        arms = [(f"{tag}+{overlay}",
+                 _wrap_overlay(strat, overlay, inner_dates=inner_exec))
+                for tag, strat in arms]
     for tag, strat in arms:
         m = evaluate_strategy(strat, ctx, cost, capital, execution=execution,
                               price_panel=price_panel, lot_size=lot_size,
-                              freq=freq)
+                              freq=freq, signal_days=ov_days)
         line = (f"  {tag:<18s} 年化 {m['ann']*100:6.2f}%  Sharpe {m['sharpe']:.3f}  "
                 f"换手 {m['turnover']:.3f}  成本 {m['cost_bp']:.0f}bp  活跃 {m['n_active']:.0f}只")
         print(line)
@@ -907,6 +967,9 @@ def main() -> int:
                          "（yqcore 两档固定截 20260907）")
     ap.add_argument("--tol-ann", type=float, default=0.005)
     ap.add_argument("--tol-sharpe", type=float, default=0.02)
+    ap.add_argument("--overlay", default="",
+                    help="配合 --check --baseline-id：套组合层 overlay 后复算"
+                         "（参数在 config/baselines.yaml 的 overlays 段，如 topping-guard）")
     ap.add_argument("--json", default="", help="把结果另存为 JSON（相对 ROOT）")
     args = ap.parse_args()
 
@@ -935,7 +998,7 @@ def main() -> int:
         # 早退：--check 自己会复算目标臂，别再按 --buffer 跑一遍（原来跑两遍，耗时翻倍）
         return _check(args.signal, args.window, prof_name, cost_kind, execution,
                       capital, args.buffer, args.tol_ann, args.tol_sharpe,
-                      args.baseline_id, args.end)
+                      args.baseline_id, args.end, args.overlay)
     out = {}
     for tag, strat in _arm_strategies(args.buffer, ""):
         m = evaluate_strategy(strat, ctx, cost, capital, execution=execution)

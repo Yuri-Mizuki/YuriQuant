@@ -51,7 +51,7 @@ LO, HI = "2019-01-02", "2026-09-07"
 COST_SIDE = 0.00135  # 与生产档一致的 13.5bp 单边
 
 
-def _month_last(idx: pd.DatetimeIndex) -> pd.Series:
+def month_last(idx: pd.DatetimeIndex) -> pd.Series:
     """每个自然月的**实际最后交易日**（``resample("ME")`` 给的是日历月末，会错位）。"""
     per = idx.to_period("M")
     return pd.Series(idx, index=per).groupby(level=0).last()
@@ -61,7 +61,7 @@ def to_monthly(daily: pd.Series) -> pd.Series:
     """日收益 → 月收益，索引换成实际最后交易日。"""
     per = daily.index.to_period("M")
     m = (1 + daily.fillna(0.0)).groupby(per).prod() - 1
-    m.index = _month_last(daily.index).reindex(m.index).to_numpy()
+    m.index = month_last(daily.index).reindex(m.index).to_numpy()
     m.index = pd.DatetimeIndex(m.index)
     return m
 
@@ -77,7 +77,7 @@ def eqw_monthly(grid: pd.DatetimeIndex) -> tuple[pd.Series, float]:
     """
     px = pd.read_parquet(cal.BASE_DIR / "close_adj.parquet").loc[LO:HI].ffill()
     last = px.groupby(px.index.to_period("M")).last()
-    last.index = _month_last(px.index).reindex(last.index).to_numpy()
+    last.index = month_last(px.index).reindex(last.index).to_numpy()
     last.index = pd.DatetimeIndex(last.index)
     r = last.pct_change(fill_method=None).replace([np.inf, -np.inf], np.nan)
     bench = r.mean(axis=1)

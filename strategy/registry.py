@@ -253,7 +253,7 @@ TIERS: dict[str, TierSpec] = {
     ),
     "yqcore-focus-k15": TierSpec(
         name="yqcore-focus-k15",
-        label="集中档 · **K15 版（默认）** · 882 四周期融合信号 + buffer(×2)",
+        label="集中档 · **K15 版（默认）** · f50 四周期融合信号 + buffer(×2)",
         **tier_wiring("yqcore-focus-k15"),
         min_capital=6.0e6,
         max_capital=1.5e7,
@@ -280,7 +280,7 @@ TIERS: dict[str, TierSpec] = {
     ),
     "yqcore-focus-k8": TierSpec(
         name="yqcore-focus-k8",
-        label="集中档 · **K8 版** · 882 四周期信号 + TopK8 + 每申万一级 ≤1 只",
+        label="集中档 · **K8 版** · f50 四周期信号 + TopK8 + 每申万一级 ≤1 只",
         **tier_wiring("yqcore-focus-k8"),
         panel_arg="sectors",
         min_capital=5.0e4,

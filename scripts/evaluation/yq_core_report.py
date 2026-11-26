@@ -33,6 +33,7 @@
     python -m scripts.evaluation.yq_core_report --view uniform     # 跨档可比（历史口径）
     python -m scripts.evaluation.yq_core_report --view stress      # 统一 10 万极限压力
     python -m scripts.evaluation.yq_core_report --tiers yqcore-focus-k8
+    python -m scripts.evaluation.yq_core_report --overlay topping-guard   # 生产读数（含组合层 overlay）
 """
 from __future__ import annotations
 
@@ -86,8 +87,13 @@ def panel_for(name: str, ctx: cal.CaliberContext) -> pd.DataFrame:
 
 
 def run_tier(name: str, cost, capital: float, lot_size: int | None,
-             want_curve: bool = True) -> tuple[dict, pd.Series | None]:
-    """跑一个档位。返回 (指标记录, 日收益序列或 None)。"""
+             want_curve: bool = True, overlay: str = "") -> tuple[dict, pd.Series | None]:
+    """跑一个档位。返回 (指标记录, 日收益序列或 None)。
+
+    ``overlay`` 非空时套 ``config/baselines.yaml::overlays.<id>`` 的组合层规则
+    （只缩权重，换手/成本/整手仍由引擎算；周频规则走「月频选股日 ∪ 周频倍率
+    变化日」的显式调仓计划，与 ``caliber --overlay`` 同一实现）。
+    """
     spec = get_tier(name)
     ctx = cal.load_context(signal=spec.runnable_signal, window="prod",
                            end=END_ALIGN, execution="open")
@@ -96,10 +102,18 @@ def run_tier(name: str, cost, capital: float, lot_size: int | None,
         overrides[spec.panel] = panel_for(spec.panel, ctx)
     strat = spec.build(**overrides)
 
+    signal_days = None
+    if overlay:
+        from scripts.portfolio.topping_overlay import overlay_plan, wrap as wrap_overlay
+        signal_days, inner_exec = overlay_plan(
+            ctx.pred.index, freq="M", overlay_id=overlay, execution="open")
+        strat = wrap_overlay(strat, overlay, inner_dates=inner_exec)
+
     px = price_panel(ctx) if lot_size else None
     bt = cal.VectorBacktest(strategy=strat, rebalance_freq="M",
                             initial_capital=float(capital), costs=cost)
-    res = cal.run_once(bt, ctx, "open", price_panel=px, lot_size=lot_size)
+    res = cal.run_once(bt, ctx, "open", price_panel=px, lot_size=lot_size,
+                       signal_days=signal_days)
     m = cal.metrics_row(res, capital)
 
     # 实投率（整手欠配的真实度量；未启用整手时恒 1）
@@ -112,6 +126,7 @@ def run_tier(name: str, cost, capital: float, lot_size: int | None,
     rec = {
         "tier": name,
         "label": spec.label,
+        "overlay": overlay or None,
         "signal_key": spec.signal_key,
         "signal_used": spec.runnable_signal,
         "signal_fingerprint": ctx.fingerprint,
@@ -257,6 +272,9 @@ def main(argv: list[str] | None = None) -> int:
                          " | grid=资金×档位网格 | capacity=各档容量上限")
     ap.add_argument("--out", default="reports/yq_core")
     ap.add_argument("--tag", default="", help="产物后缀（避免覆盖主报告）")
+    ap.add_argument("--overlay", default="",
+                    help="套组合层 overlay 后报数（参数在 config/baselines.yaml 的"
+                         " overlays 段，如 topping-guard）")
     args = ap.parse_args(argv)
 
     names = ([x.strip() for x in args.tiers.split(",") if x.strip()]
@@ -302,7 +320,7 @@ def main(argv: list[str] | None = None) -> int:
         cap = float(uni_cap) if uni_cap is not None else NATIVE_CAPITAL[n]
         lot = LOT if use_lot else None
         print(describe(n))
-        r, dr = run_tier(n, cost, cap, lot)
+        r, dr = run_tier(n, cost, cap, lot, overlay=args.overlay)
         recs.append(r)
         if dr is not None:
             curves[n] = (1 + dr).cumprod()
@@ -323,6 +341,7 @@ def main(argv: list[str] | None = None) -> int:
         "lot_size": LOT if use_lot else None,
         "price_panel": "close_raw.ffill().shift(1)" if use_lot else None,
         "end_align": END_ALIGN,
+        "overlay": args.overlay or None,
         "generated_by": "scripts/evaluation/yq_core_report.py",
         "tiers": {r["tier"]: r for r in recs},
     }

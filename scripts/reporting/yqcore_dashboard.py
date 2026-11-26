@@ -338,6 +338,7 @@ def build_backtest_payload(prod_dir: Path = PROD_DIR, base_dir: Path = BASE_DIR,
         "trade_note": ("T+1 开盘成交 · 整手 100 股进引擎 · "
                        "price_panel=close_raw.ffill().shift(1)"),
         "profile": bt["meta"].get("profile"),
+        "overlay": bt["meta"].get("overlay"),
         "kpi": bt["kpi"],
         "meta_tiers": {t: {"ann": v.get("ann"), "sharpe": v.get("sharpe"),
                            "sharpe_arith": v.get("sharpe_arith"),

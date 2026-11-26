@@ -38,10 +38,14 @@ from scripts.evaluation import caliber as cal  # noqa: E402
 from strategy.registry import get_tier  # noqa: E402
 
 END = 20260907
-CAPS = {"yqcore-breadth": (2.0e6, 100), "yqcore-focus-k8": (1.0e5, 100)}
+CAPS = {"yqcore-breadth": (2.0e6, 100), "yqcore-focus-k15": (5.0e5, 100),
+        "yqcore-focus-k8": (1.0e5, 100)}
 B = 3000
 OUT = ROOT / "reports" / "style_exposure"
 RNG = np.random.default_rng(20261125)
+#: f50 数据态复合信号（集中档；882 ortho pred 本机已不存在）
+F50_COMPOSITE = (ROOT / "reports" / "alla_rolling_ab_f50" / "pred"
+                 / "gbdt_mid13__h1.parquet")
 
 
 def _lean_amount() -> pd.DataFrame:
@@ -66,17 +70,22 @@ def panel_for(name: str, ctx: cal.CaliberContext) -> pd.DataFrame:
     return ind.reindex(index=ctx.pred.index, columns=ctx.pred.columns)
 
 
-def lean_context(signal: str, end: int = END) -> cal.CaliberContext:
+def lean_context(signal: str, end: int = END,
+                 pred_path: Path | None = None) -> cal.CaliberContext:
     """只装 ``run_once(open)`` 真正用到的面板（省掉 ADV/vol60/ret_hist，本机省 ~1G）。
 
     生产成本模型无 impact 项 ⇒ ``amt`` / ``vol60`` 不会被引擎读取；``ret_hist``
     只有 QP 类组合构造用。pred / close / mask / fill / fwd 五块与
     :func:`caliber.load_context` 同源同截断。
+
+    ``pred_path`` 显式指定信号面板（f50 数据态用：集中档的 882 ortho pred
+    本机已不存在，改读 ``ab_f50/pred/gbdt_mid13__h1.parquet``）。
     """
     close_full = pd.read_parquet(cal.BASE_DIR / "close_adj.parquet")
     mask_full = pd.read_parquet(cal.BASE_DIR / "tradable_mask.parquet")
     spec = cal.SIGNALS[signal]
-    pred_full = (cal._composite_panel(signal) if spec.get("components")
+    pred_full = (pd.read_parquet(pred_path) if pred_path is not None
+                 else cal._composite_panel(signal) if spec.get("components")
                  else pd.read_parquet(cal.ROOT / spec["path"]))
     fill_full = pd.read_parquet(cal.BASE_DIR / "open_adj.parquet")
 
@@ -98,11 +107,12 @@ def lean_context(signal: str, end: int = END) -> cal.CaliberContext:
         execution="open", fill=fill)
 
 
-def last_weights(tier: str, lot_on: bool = True) -> tuple[pd.Series, pd.Timestamp]:
+def last_weights(tier: str, lot_on: bool = True,
+                 pred_path: Path | None = None) -> tuple[pd.Series, pd.Timestamp]:
     capital, lot = CAPS[tier]
     lot = lot if lot_on else None
     spec = get_tier(tier)
-    ctx = lean_context(spec.runnable_signal)
+    ctx = lean_context(spec.runnable_signal, pred_path=pred_path)
     overrides = {}
     if spec.panel is not None:
         overrides[spec.panel] = panel_for(spec.panel, ctx)
@@ -136,8 +146,9 @@ def load_exposures(date: pd.Timestamp) -> pd.DataFrame:
     return pd.DataFrame(cols)
 
 
-def probe(tier: str, lot_on: bool = True) -> pd.DataFrame:
-    w, date = last_weights(tier, lot_on)
+def probe(tier: str, lot_on: bool = True,
+          pred_path: Path | None = None) -> pd.DataFrame:
+    w, date = last_weights(tier, lot_on, pred_path)
     ex_all = load_exposures(date)          # 全市场截面（零分布抽样池）
     ex = ex_all.reindex(index=w.index)     # 只用于陈列持仓
     print(f"=== {tier}  调仓日 {date.date()}  持仓 {len(w)} 只")
@@ -209,11 +220,14 @@ def main() -> int:
     ap.add_argument("--tier")
     ap.add_argument("--summary", action="store_true")
     ap.add_argument("--no-lot", action="store_true")
+    ap.add_argument("--f50", action="store_true",
+                    help="集中档读 ab_f50 的 gbdt_mid13 复合面板（f50 数据态）")
     a = ap.parse_args()
     if a.summary:
         return summary()
     OUT.mkdir(parents=True, exist_ok=True)
-    df = probe(a.tier, not a.no_lot)
+    pred_path = F50_COMPOSITE if (a.f50 and a.tier != "yqcore-breadth") else None
+    df = probe(a.tier, not a.no_lot, pred_path)
     df.to_csv(OUT / f"snap_{a.tier}.csv", index=False)
     return 0
 

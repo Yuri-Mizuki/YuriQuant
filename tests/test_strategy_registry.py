@@ -95,7 +95,7 @@ def test_group_invariants_catch_missing_default(monkeypatch):
 def test_solo_tier_params():
     """solo = 行业去重档；param 与 `SectorCappedBufferedTopKLongOnly` 的签名对得上。"""
     t = get_tier("yqcore-focus-k8")
-    assert t.signal_key == "gbdt_mid13"
+    assert t.signal_key == "gbdt_mid13_f50"
     assert t.strategy == "SectorCappedBufferedTopKLongOnly"
     # 值来自登记表（下面有专测「改登记表就跟着变」），此处钉**键集**：
     # 缺一个就会悄悄落回构造器缺省值（k 缺省 45、exit_mult 缺省 1.5）。
@@ -110,7 +110,7 @@ def test_solo_requires_explicit_panel():
     with pytest.raises(TypeError, match="industry"):
         build("yqcore-focus-k8")
     sig, st = build("yqcore-focus-k8", industry=pd.DataFrame({"a": ["x"]}))
-    assert sig == "gbdt_mid13"
+    assert sig == "gbdt_mid13_f50"
     assert st.k == 8 and st.max_per_sector == 1
     # 面板名会被映射到构造器参数 sectors
     assert st.sectors.shape == (1, 1)
@@ -118,7 +118,7 @@ def test_solo_requires_explicit_panel():
 
 def test_focus_tier_params():
     t = get_tier("yqcore-focus-k15")
-    assert t.signal_key == "gbdt_mid13"
+    assert t.signal_key == "gbdt_mid13_f50"
     assert t.strategy == "BufferedTopKLongOnly"
     assert set(t.params) == {"k", "exit_mult"}
     assert t.params["k"] >= 1 and t.params["exit_mult"] >= 1.0
@@ -192,7 +192,7 @@ def test_orphan_registration_raises():
 def test_build_returns_runnable_signal_and_fresh_instance():
     """返回的信号键必须是本机可读的那个；两次 build 不能共享状态（缓冲带有 _prev）。"""
     sig, s1 = build("yqcore-focus-k15")
-    assert sig == "gbdt_mid13"
+    assert sig == "gbdt_mid13_f50"
     _, s2 = build("yqcore-focus-k15")
     assert s1 is not s2
     assert s1._prev is not s2._prev
@@ -210,7 +210,7 @@ def test_wide_signal_is_registered_and_readable():
 def test_overrides_apply():
     base_k = get_tier("yqcore-focus-k15").params["k"]      # 登记值，不在测试里写死
     sig, s = build("yqcore-focus-k15", k=25)
-    assert sig == "gbdt_mid13"
+    assert sig == "gbdt_mid13_f50"
     assert s.k == 25
     assert get_tier("yqcore-focus-k15").params["k"] == base_k   # 原件不被改
 
